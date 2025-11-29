@@ -16,6 +16,44 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+def detect_geometry_column(
+    file_path: str | Path,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> str | None:
+    """
+    Detect the primary geometry column from GeoParquet metadata.
+
+    Args:
+        file_path: Path to the GeoParquet file
+        conn: Optional existing DuckDB connection
+
+    Returns:
+        The primary geometry column name, or None if not found
+    """
+    file_path = str(Path(file_path).resolve())
+    close_conn = False
+
+    if conn is None:
+        conn = duckdb.connect(":memory:")
+        close_conn = True
+
+    try:
+        result = conn.execute(
+            "SELECT value FROM parquet_kv_metadata(?) WHERE key = 'geo'", [file_path]
+        ).fetchone()
+
+        if result:
+            geo_meta = json.loads(result[0])
+            return geo_meta.get("primary_column")
+    except Exception:
+        pass
+    finally:
+        if close_conn:
+            conn.close()
+
+    return None
+
+
 class CRSMismatchError(Exception):
     """Raised when two datasets have different coordinate reference systems."""
 

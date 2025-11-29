@@ -12,15 +12,13 @@ from ftw_dataset_tools.api.geo import CRSMismatchError
 @click.argument("fields_file", type=click.Path(exists=True))
 @click.option(
     "--grid-geom-col",
-    default="geom",
-    show_default=True,
-    help="Column name for grid geometry.",
+    default=None,
+    help="Column name for grid geometry (auto-detected from GeoParquet metadata if not specified).",
 )
 @click.option(
     "--fields-geom-col",
-    default="geometry",
-    show_default=True,
-    help="Column name for fields geometry.",
+    default=None,
+    help="Column name for fields geometry (auto-detected from GeoParquet metadata if not specified).",
 )
 @click.option(
     "--grid-bbox-col",
@@ -47,6 +45,12 @@ from ftw_dataset_tools.api.geo import CRSMismatchError
     help="Name for the new coverage percentage column.",
 )
 @click.option(
+    "--min-coverage",
+    type=float,
+    default=None,
+    help="Exclude grid cells with coverage below this percentage (e.g., 0.01 to remove cells with 0%%).",
+)
+@click.option(
     "--reproject",
     "reproject_to_4326",
     is_flag=True,
@@ -56,12 +60,13 @@ from ftw_dataset_tools.api.geo import CRSMismatchError
 def add_field_stats_cmd(
     grid_file: str,
     fields_file: str,
-    grid_geom_col: str,
-    fields_geom_col: str,
+    grid_geom_col: str | None,
+    fields_geom_col: str | None,
     grid_bbox_col: str | None,
     fields_bbox_col: str | None,
     output_file: str | None,
     coverage_col: str,
+    min_coverage: float | None,
     reproject_to_4326: bool,
 ) -> None:
     """Add field coverage statistics to each grid cell.
@@ -114,6 +119,7 @@ def add_field_stats_cmd(
                 grid_bbox_col=grid_bbox_col,
                 fields_bbox_col=fields_bbox_col,
                 coverage_col=coverage_col,
+                min_coverage=min_coverage,
                 reproject_to_4326=reproject_to_4326,
                 on_progress=on_progress,
             )

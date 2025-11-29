@@ -11,7 +11,12 @@ from typing import TYPE_CHECKING
 
 import duckdb
 
-from ftw_dataset_tools.api.geo import CRSMismatchError, detect_crs, reproject
+from ftw_dataset_tools.api.geo import (
+    CRSMismatchError,
+    detect_crs,
+    detect_geometry_column,
+    reproject,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -155,11 +160,12 @@ def add_field_stats(
     grid_file: str | Path,
     fields_file: str | Path,
     output_file: str | Path | None = None,
-    grid_geom_col: str = "geom",
-    fields_geom_col: str = "geometry",
+    grid_geom_col: str | None = None,
+    fields_geom_col: str | None = None,
     grid_bbox_col: str | None = None,
     fields_bbox_col: str | None = None,
     coverage_col: str = "field_coverage_pct",
+    min_coverage: float | None = None,
     reproject_to_4326: bool = False,
     on_progress: Callable[[str], None] | None = None,
 ) -> FieldStatsResult:
@@ -173,11 +179,15 @@ def add_field_stats(
         grid_file: Path to parquet file containing grid geometries (e.g., MGRS cells)
         fields_file: Path to parquet file containing field boundary polygons
         output_file: Output file path. If None, updates grid_file in place.
-        grid_geom_col: Column name for grid geometry (default: "geom")
-        fields_geom_col: Column name for fields geometry (default: "geometry")
+        grid_geom_col: Column name for grid geometry (auto-detected from GeoParquet
+            metadata if None, falls back to "geometry")
+        fields_geom_col: Column name for fields geometry (auto-detected from GeoParquet
+            metadata if None, falls back to "geometry")
         grid_bbox_col: Column name for grid bbox (auto-detected if None)
         fields_bbox_col: Column name for fields bbox (auto-detected if None)
         coverage_col: Name for the new coverage column (default: "field_coverage_pct")
+        min_coverage: If set, exclude grid cells with coverage below this percentage
+            (e.g., 0.01 to exclude cells with 0% coverage)
         reproject_to_4326: If True, reproject both inputs to EPSG:4326 before processing
         on_progress: Optional callback for progress messages
 
@@ -200,6 +210,15 @@ def add_field_stats(
     def log(msg: str) -> None:
         if on_progress:
             on_progress(msg)
+
+    # Auto-detect geometry columns from GeoParquet metadata
+    if grid_geom_col is None:
+        grid_geom_col = detect_geometry_column(grid_path) or "geometry"
+        log(f"Detected grid geometry column: {grid_geom_col}")
+
+    if fields_geom_col is None:
+        fields_geom_col = detect_geometry_column(fields_path) or "geometry"
+        log(f"Detected fields geometry column: {fields_geom_col}")
 
     # Check CRS compatibility
     grid_crs = detect_crs(grid_path, grid_geom_col)
@@ -290,6 +309,16 @@ def add_field_stats(
         )
 
         conn.execute(f"CREATE TABLE result AS {query}")
+
+        # Filter by min_coverage if specified
+        if min_coverage is not None:
+            before_count = conn.execute("SELECT COUNT(*) FROM result").fetchone()[0]
+            conn.execute(f"""
+                DELETE FROM result WHERE "{coverage_col}" < {min_coverage}
+            """)
+            after_count = conn.execute("SELECT COUNT(*) FROM result").fetchone()[0]
+            removed = before_count - after_count
+            log(f"Filtered out {removed:,} cells with coverage < {min_coverage}%")
 
         # Calculate summary statistics
         stats = conn.execute(f"""
