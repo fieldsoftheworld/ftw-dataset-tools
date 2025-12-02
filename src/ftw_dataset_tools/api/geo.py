@@ -54,6 +54,73 @@ def detect_geometry_column(
     return None
 
 
+def has_bbox_column(
+    file_path: str | Path,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> bool:
+    """
+    Check if file has a bbox column defined in GeoParquet metadata.
+
+    Checks for bbox in the geometry column's covering metadata.
+
+    Args:
+        file_path: Path to the GeoParquet file
+        conn: Optional existing DuckDB connection
+
+    Returns:
+        True if bbox column exists in metadata, False otherwise
+    """
+    return get_bbox_column_name(file_path, conn) is not None
+
+
+def get_bbox_column_name(
+    file_path: str | Path,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> str | None:
+    """
+    Get the bbox column name from GeoParquet metadata.
+
+    Args:
+        file_path: Path to the GeoParquet file
+        conn: Optional existing DuckDB connection
+
+    Returns:
+        The bbox column name, or None if not found
+    """
+    file_path = str(Path(file_path).resolve())
+    close_conn = False
+
+    if conn is None:
+        conn = duckdb.connect(":memory:")
+        close_conn = True
+
+    try:
+        result = conn.execute(
+            "SELECT value FROM parquet_kv_metadata(?) WHERE key = 'geo'", [file_path]
+        ).fetchone()
+
+        if result:
+            geo_meta = json.loads(result[0])
+            primary_col = geo_meta.get("primary_column")
+            if primary_col:
+                columns = geo_meta.get("columns", {})
+                col_meta = columns.get(primary_col, {})
+                # Get bbox column name from covering.bbox.xmin[0]
+                covering = col_meta.get("covering", {})
+                bbox_info = covering.get("bbox", {})
+                if bbox_info:
+                    # The column name is the first element of any bbox field
+                    xmin_info = bbox_info.get("xmin", [])
+                    if xmin_info and len(xmin_info) > 0:
+                        return xmin_info[0]
+        return None
+    except Exception:
+        return None
+    finally:
+        if close_conn:
+            conn.close()
+
+
 class CRSMismatchError(Exception):
     """Raised when two datasets have different coordinate reference systems."""
 
