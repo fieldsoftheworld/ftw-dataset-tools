@@ -123,7 +123,16 @@ def _build_coverage_query(
     fields_bbox_col: str | None,
     coverage_col: str,
 ) -> str:
-    """Build the coverage calculation SQL query."""
+    """Build the coverage calculation SQL query.
+
+    Uses ST_MakeValid to repair any invalid geometries before spatial operations,
+    preventing TopologyException errors from self-intersecting or otherwise
+    invalid input geometries.
+    """
+    # Use ST_MakeValid to handle invalid geometries
+    valid_grid_geom = f'ST_MakeValid(g."{grid_geom_col}")'
+    valid_fields_geom = f'ST_MakeValid(f."{fields_geom_col}")'
+
     # Build JOIN condition
     if grid_bbox_col and fields_bbox_col:
         join_condition = f"""
@@ -131,16 +140,16 @@ def _build_coverage_query(
             AND g."{grid_bbox_col}".xmax >= f."{fields_bbox_col}".xmin
             AND g."{grid_bbox_col}".ymin <= f."{fields_bbox_col}".ymax
             AND g."{grid_bbox_col}".ymax >= f."{fields_bbox_col}".ymin
-            AND ST_Intersects(g."{grid_geom_col}", f."{fields_geom_col}")
+            AND ST_Intersects({valid_grid_geom}, {valid_fields_geom})
         """
     else:
-        join_condition = f'ST_Intersects(g."{grid_geom_col}", f."{fields_geom_col}")'
+        join_condition = f"ST_Intersects({valid_grid_geom}, {valid_fields_geom})"
 
     return f"""
     WITH intersections AS (
         SELECT
             g.rowid as grid_rowid,
-            ST_Intersection(g."{grid_geom_col}", f."{fields_geom_col}") as intersect_geom
+            ST_Intersection({valid_grid_geom}, {valid_fields_geom}) as intersect_geom
         FROM grid_table g
         JOIN fields_table f ON {join_condition}
     ),
@@ -154,7 +163,7 @@ def _build_coverage_query(
     SELECT
         g.*,
         COALESCE(
-            ROUND(100.0 * ST_Area(c.total_coverage) / ST_Area(g."{grid_geom_col}"), 2),
+            ROUND(100.0 * ST_Area(c.total_coverage) / ST_Area({valid_grid_geom}), 2),
             0.0
         ) as "{coverage_col}"
     FROM grid_table g
