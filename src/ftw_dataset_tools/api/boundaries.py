@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import duckdb
 from geoparquet_io.core.add_bbox_column import add_bbox_column
+from geoparquet_io.core.common import check_bbox_structure
 
 from ftw_dataset_tools.api.geo import detect_crs, detect_geometry_column
 
@@ -90,13 +91,16 @@ def _extract_boundaries(
     count = count_result[0] if count_result else 0
 
     # Add bbox column and proper GeoParquet metadata using geoparquet-io
-    with Path(os.devnull).open("w") as devnull, contextlib.redirect_stdout(devnull):
-        add_bbox_column(
-            str(output_path),
-            str(output_path),
-            compression="ZSTD",
-            compression_level=16,
-        )
+    # Only add if not already present (check_bbox_structure checks for column in schema)
+    bbox_info = check_bbox_structure(str(output_path), verbose=False)
+    if not bbox_info["has_bbox_column"]:
+        with Path(os.devnull).open("w") as devnull, contextlib.redirect_stdout(devnull):
+            add_bbox_column(
+                str(output_path),
+                str(output_path),
+                compression="ZSTD",
+                compression_level=16,
+            )
 
     return count
 
@@ -105,7 +109,6 @@ def create_boundaries(
     input_path: str | Path,
     output_dir: str | Path | None = None,
     output_prefix: str = "boundary_lines_",
-    geom_col: str | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> CreateBoundariesResult:
     """
@@ -117,8 +120,7 @@ def create_boundaries(
     Args:
         input_path: Path to a parquet file or directory containing parquet files
         output_dir: Output directory. If None, writes to same directory as input files.
-        output_prefix: Prefix for output filenames (default: "boundary_line_")
-        geom_col: Geometry column name (auto-detected if None)
+        output_prefix: Prefix for output filenames (default: "boundary_lines_")
         on_progress: Optional callback for progress messages
 
     Returns:
@@ -126,7 +128,7 @@ def create_boundaries(
 
     Raises:
         FileNotFoundError: If input path doesn't exist
-        ValueError: If no valid parquet files found
+        ValueError: If no valid parquet files found or no geometry column detected
     """
     input_path = Path(input_path).resolve()
 
@@ -160,10 +162,12 @@ def create_boundaries(
     for parquet_file in parquet_files:
         log(f"Checking: {parquet_file.name}")
 
-        # Detect geometry column
-        file_geom_col = geom_col
+        # Detect geometry column from GeoParquet metadata
+        file_geom_col = detect_geometry_column(parquet_file)
         if file_geom_col is None:
-            file_geom_col = detect_geometry_column(parquet_file) or "geometry"
+            skipped.append((parquet_file, "no geometry column found in GeoParquet metadata"))
+            log("  Skipping: no geometry column found in GeoParquet metadata")
+            continue
 
         # Check CRS and warn if not lat/long
         crs_info = detect_crs(parquet_file, file_geom_col)

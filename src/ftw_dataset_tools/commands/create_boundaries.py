@@ -22,16 +22,10 @@ from ftw_dataset_tools.api import boundaries
     show_default=True,
     help="Prefix for output filenames.",
 )
-@click.option(
-    "--geom-col",
-    default=None,
-    help="Geometry column name (auto-detected from GeoParquet metadata if not specified).",
-)
 def create_boundaries_cmd(
     input_path: str,
     output_dir: str | None,
     output_prefix: str,
-    geom_col: str | None,
 ) -> None:
     """Convert polygon geometries to boundary lines using ST_Boundary.
 
@@ -71,7 +65,6 @@ def create_boundaries_cmd(
                 input_path=input_path,
                 output_dir=output_dir,
                 output_prefix=output_prefix,
-                geom_col=geom_col,
                 on_progress=on_progress,
             )
 
