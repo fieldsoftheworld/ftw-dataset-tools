@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -11,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import duckdb
 import geopandas as gpd
+from geoparquet_io.core.add_bbox_column import add_bbox_column
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -372,6 +375,16 @@ def reproject(
     else:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         gdf_reprojected.to_parquet(out_path)
+
+    # Add bbox column for efficient spatial queries
+    log("Adding bbox column...")
+    with Path(os.devnull).open("w") as devnull, contextlib.redirect_stdout(devnull):
+        add_bbox_column(
+            str(out_path),
+            str(out_path),
+            compression="ZSTD",
+            compression_level=16,
+        )
 
     return ReprojectResult(
         output_path=out_path,

@@ -3,7 +3,7 @@
 import click
 
 from ftw_dataset_tools import __version__
-from ftw_dataset_tools.commands.add_field_stats import add_field_stats
+from ftw_dataset_tools.commands.create_chips import create_chips
 from ftw_dataset_tools.commands.create_ftw_grid import create_ftw_grid
 from ftw_dataset_tools.commands.get_grid import get_grid
 from ftw_dataset_tools.commands.reproject import reproject
@@ -18,15 +18,15 @@ def cli() -> None:
 
     \b
     - Creating FTW grids
+    - Creating chip definitions with field coverage statistics
     - Subsetting grids based on fiboa field boundaries
-    - Adding field coverage statistics to grids
     - Reprojecting GeoParquet files
     - Pulling GeoTIFF images for training data
     """
 
 
 # Register commands
-cli.add_command(add_field_stats)
+cli.add_command(create_chips)
 cli.add_command(create_ftw_grid)
 cli.add_command(get_grid)
 cli.add_command(reproject)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,8 +20,13 @@ from ftw_dataset_tools.api.geo import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+# Default FTW grid source on Source Cooperative
+DEFAULT_FTW_GRID_SOURCE = (
+    "s3://us-west-2.opendata.source.coop/ftw/ftw-grid/v0.1/partitioned/by_gzd/gzd=*/*.parquet"
+)
+
 # Re-export for convenience
-__all__ = ["CRSMismatchError", "FieldStatsResult", "add_field_stats"]
+__all__ = ["DEFAULT_FTW_GRID_SOURCE", "CRSMismatchError", "FieldStatsResult", "add_field_stats"]
 
 
 @dataclass
@@ -157,8 +161,8 @@ def _build_coverage_query(
 
 
 def add_field_stats(
-    grid_file: str | Path,
     fields_file: str | Path,
+    grid_file: str | Path | None = None,
     output_file: str | Path | None = None,
     grid_geom_col: str | None = None,
     fields_geom_col: str | None = None,
@@ -167,6 +171,7 @@ def add_field_stats(
     coverage_col: str = "field_coverage_pct",
     min_coverage: float | None = None,
     reproject_to_4326: bool = False,
+    grid_source: str = DEFAULT_FTW_GRID_SOURCE,
     on_progress: Callable[[str], None] | None = None,
 ) -> FieldStatsResult:
     """
@@ -175,10 +180,14 @@ def add_field_stats(
     This function computes what percentage of each grid cell is covered by
     field boundary polygons using DuckDB's spatial extension.
 
+    If no grid file is provided, fetches grid cells from the FTW grid on
+    Source Cooperative, filtered by the bounds of the fields file.
+
     Args:
-        grid_file: Path to parquet file containing grid geometries (e.g., MGRS cells)
         fields_file: Path to parquet file containing field boundary polygons
-        output_file: Output file path. If None, updates grid_file in place.
+        grid_file: Path to parquet file containing grid geometries (e.g., MGRS cells).
+            If None, fetches from grid_source filtered by fields file bounds.
+        output_file: Output file path. If None, creates chips_<fields_basename>.parquet.
         grid_geom_col: Column name for grid geometry (auto-detected from GeoParquet
             metadata if None, falls back to "geometry")
         fields_geom_col: Column name for fields geometry (auto-detected from GeoParquet
@@ -189,6 +198,8 @@ def add_field_stats(
         min_coverage: If set, exclude grid cells with coverage below this percentage
             (e.g., 0.01 to exclude cells with 0% coverage)
         reproject_to_4326: If True, reproject both inputs to EPSG:4326 before processing
+        grid_source: URL/path to fetch grid from when grid_file is None
+            (default: FTW grid on Source Coop)
         on_progress: Optional callback for progress messages
 
     Returns:
@@ -199,79 +210,154 @@ def add_field_stats(
         CRSMismatchError: If input files have different CRS and reproject_to_4326 is False
         duckdb.Error: If there are issues with the spatial queries
     """
-    grid_path = Path(grid_file).resolve()
     fields_path = Path(fields_file).resolve()
 
-    if not grid_path.exists():
-        raise FileNotFoundError(f"Grid file not found: {grid_path}")
     if not fields_path.exists():
         raise FileNotFoundError(f"Fields file not found: {fields_path}")
+
+    grid_path: Path | None = None
+    if grid_file is not None:
+        grid_path = Path(grid_file).resolve()
+        if not grid_path.exists():
+            raise FileNotFoundError(f"Grid file not found: {grid_path}")
 
     def log(msg: str) -> None:
         if on_progress:
             on_progress(msg)
 
-    # Auto-detect geometry columns from GeoParquet metadata
-    if grid_geom_col is None:
-        grid_geom_col = detect_geometry_column(grid_path) or "geometry"
-        log(f"Detected grid geometry column: {grid_geom_col}")
-
+    # Auto-detect fields geometry column from GeoParquet metadata
     if fields_geom_col is None:
         fields_geom_col = detect_geometry_column(fields_path) or "geometry"
         log(f"Detected fields geometry column: {fields_geom_col}")
-
-    # Check CRS compatibility
-    grid_crs = detect_crs(grid_path, grid_geom_col)
-    fields_crs = detect_crs(fields_path, fields_geom_col)
-
-    log(f"Grid CRS: {grid_crs}")
-    log(f"Fields CRS: {fields_crs}")
 
     # Track temp files for cleanup
     temp_files: list[Path] = []
 
     try:
-        if not grid_crs.is_equivalent_to(fields_crs):
-            if reproject_to_4326:
-                log("CRS mismatch detected, reprojecting to EPSG:4326...")
-
-                # Reproject grid if needed
-                if grid_crs.authority_code != "EPSG:4326":
-                    grid_temp = Path(tempfile.mktemp(suffix=".parquet"))
-                    temp_files.append(grid_temp)
-                    reproject(grid_path, grid_temp, "EPSG:4326", on_progress)
-                    grid_path = grid_temp
-                    log(f"Reprojected grid to: {grid_temp}")
-
-                # Reproject fields if needed
-                if fields_crs.authority_code != "EPSG:4326":
-                    fields_temp = Path(tempfile.mktemp(suffix=".parquet"))
-                    temp_files.append(fields_temp)
-                    reproject(fields_path, fields_temp, "EPSG:4326", on_progress)
-                    fields_path = fields_temp
-                    log(f"Reprojected fields to: {fields_temp}")
-            else:
-                raise CRSMismatchError(
-                    crs1=str(grid_crs),
-                    crs2=str(fields_crs),
-                    file1=str(grid_file),
-                    file2=str(fields_file),
-                )
-
-        # Create DuckDB connection and load spatial extension
+        # Create DuckDB connection and load extensions
         conn = duckdb.connect(":memory:")
         conn.execute("INSTALL spatial; LOAD spatial;")
+
+        # Load fields table first (needed for bounds calculation if fetching grid from S3)
+        log("Loading fields data...")
+        conn.execute(f"CREATE TABLE fields_table AS SELECT * FROM '{fields_path}'")
+        fields_count = conn.execute("SELECT COUNT(*) FROM fields_table").fetchone()[0]
+        log(f"Loaded {fields_count:,} field polygons")
+
+        # Handle grid loading - either from local file or S3
+        if grid_path is not None:
+            # Local grid file provided
+            if grid_geom_col is None:
+                grid_geom_col = detect_geometry_column(grid_path) or "geometry"
+                log(f"Detected grid geometry column: {grid_geom_col}")
+
+            # Check CRS compatibility
+            grid_crs = detect_crs(grid_path, grid_geom_col)
+            fields_crs = detect_crs(fields_path, fields_geom_col)
+
+            log(f"Grid CRS: {grid_crs}")
+            log(f"Fields CRS: {fields_crs}")
+
+            if not grid_crs.is_equivalent_to(fields_crs):
+                if reproject_to_4326:
+                    log("CRS mismatch detected, reprojecting to EPSG:4326...")
+
+                    # Reproject grid if needed
+                    if grid_crs.authority_code != "EPSG:4326":
+                        grid_temp = Path(tempfile.mktemp(suffix=".parquet"))
+                        temp_files.append(grid_temp)
+                        reproject(grid_path, grid_temp, "EPSG:4326", on_progress)
+                        grid_path = grid_temp
+                        log(f"Reprojected grid to: {grid_temp}")
+
+                    # Reproject fields if needed - need to reload fields table
+                    if fields_crs.authority_code != "EPSG:4326":
+                        fields_temp = Path(tempfile.mktemp(suffix=".parquet"))
+                        temp_files.append(fields_temp)
+                        reproject(fields_path, fields_temp, "EPSG:4326", on_progress)
+                        fields_path = fields_temp
+                        log(f"Reprojected fields to: {fields_temp}")
+                        # Reload fields table with reprojected data
+                        conn.execute("DROP TABLE fields_table")
+                        conn.execute(f"CREATE TABLE fields_table AS SELECT * FROM '{fields_path}'")
+                else:
+                    raise CRSMismatchError(
+                        crs1=str(grid_crs),
+                        crs2=str(fields_crs),
+                        file1=str(grid_file),
+                        file2=str(fields_file),
+                    )
+
+            log("Loading grid data...")
+            conn.execute(f"CREATE TABLE grid_table AS SELECT * FROM '{grid_path}'")
+        else:
+            # Fetch grid from S3 based on fields bounds
+            # First check that fields file is in EPSG:4326 (required for S3 grid)
+            fields_crs = detect_crs(fields_path, fields_geom_col)
+            if (
+                fields_crs.authority_code is None
+                or fields_crs.authority_code.upper() != "EPSG:4326"
+            ):
+                raise ValueError(
+                    f"Fields file must be in EPSG:4326 when using remote grid, "
+                    f"but has CRS '{fields_crs}'.\n"
+                    f"Please reproject first with:\n"
+                    f"  ftwd reproject {fields_file} --target-crs EPSG:4326"
+                )
+
+            log("Fetching grid from Source Coop...")
+
+            # Load httpfs for S3 access
+            conn.execute("INSTALL httpfs; LOAD httpfs;")
+            conn.execute("SET s3_region = 'us-west-2';")
+
+            # Compute bounds from fields geometry
+            bounds_result = conn.execute(f"""
+                SELECT
+                    MIN(ST_XMin("{fields_geom_col}")) as xmin,
+                    MIN(ST_YMin("{fields_geom_col}")) as ymin,
+                    MAX(ST_XMax("{fields_geom_col}")) as xmax,
+                    MAX(ST_YMax("{fields_geom_col}")) as ymax
+                FROM fields_table
+            """).fetchone()
+            xmin, ymin, xmax, ymax = bounds_result
+            log(f"Fields bounds: [{xmin:.6f}, {ymin:.6f}, {xmax:.6f}, {ymax:.6f}]")
+
+            # Fetch grid cells that intersect the bounding box
+            log("Fetching grid cells by bounding box...")
+            conn.execute(f"""
+                CREATE TABLE grid_table AS
+                SELECT *
+                FROM '{grid_source}'
+                WHERE bbox.xmin <= {xmax}
+                  AND bbox.xmax >= {xmin}
+                  AND bbox.ymin <= {ymax}
+                  AND bbox.ymax >= {ymin}
+            """)
+
+            # Auto-detect grid geometry column from the fetched data
+            if grid_geom_col is None:
+                grid_geom_col = "geometry"
+                log(f"Using grid geometry column: {grid_geom_col}")
+
+        # Get grid count
+        grid_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
+        log(f"Loaded {grid_count:,} grid cells")
 
         # Auto-detect bbox columns if not specified
         detected_grid_bbox = grid_bbox_col
         detected_fields_bbox = fields_bbox_col
 
         if detected_grid_bbox is None:
-            detected_grid_bbox = detect_bbox_column(conn, str(grid_path), grid_geom_col)
+            if grid_path is not None:
+                detected_grid_bbox = detect_bbox_column(conn, str(grid_path), grid_geom_col)
+            else:
+                # For S3 source, we know the bbox column is "bbox"
+                detected_grid_bbox = "bbox"
             if detected_grid_bbox:
                 log(f"Detected grid bbox column: {detected_grid_bbox}")
             else:
-                log(f"Warning: {grid_path.name} has no bbox column, spatial queries may be slower")
+                log("Warning: grid has no bbox column, spatial queries may be slower")
 
         if detected_fields_bbox is None:
             detected_fields_bbox = detect_bbox_column(conn, str(fields_path), fields_geom_col)
@@ -287,16 +373,6 @@ def add_field_stats(
             log("Using bbox optimization for spatial joins")
         else:
             log("Bbox optimization disabled (missing bbox columns)")
-
-        # Load parquet files as tables
-        log("Loading data...")
-        conn.execute(f"CREATE TABLE grid_table AS SELECT * FROM '{grid_path}'")
-        conn.execute(f"CREATE TABLE fields_table AS SELECT * FROM '{fields_path}'")
-
-        # Get row counts
-        grid_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
-        fields_count = conn.execute("SELECT COUNT(*) FROM fields_table").fetchone()[0]
-        log(f"Loaded {grid_count:,} grid cells and {fields_count:,} field polygons")
 
         # Build and execute coverage query
         log("Calculating coverage...")
@@ -332,30 +408,17 @@ def add_field_stats(
 
         total_grids, grids_with_coverage, avg_coverage, max_coverage = stats
 
-        # Determine output path - use original grid_file path, not potentially temp grid_path
-        original_grid_path = Path(grid_file).resolve()
-        out_path = Path(output_file).resolve() if output_file else original_grid_path
+        # Determine output path
+        # Default: chips_<fields_basename>.parquet in same directory as fields file
+        if output_file:
+            out_path = Path(output_file).resolve()
+        else:
+            out_path = fields_path.parent / f"chips_{fields_path.stem}.parquet"
 
         # Write output
         log(f"Writing output to: {out_path}")
-
-        if out_path == original_grid_path:
-            # Write to temp file first, then replace
-            with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-                tmp_path = tmp.name
-
-            try:
-                conn.execute(f"COPY result TO '{tmp_path}' (FORMAT PARQUET)")
-                shutil.move(tmp_path, out_path)
-            except Exception:
-                tmp_path_obj = Path(tmp_path)
-                if tmp_path_obj.exists():
-                    tmp_path_obj.unlink()
-                raise
-        else:
-            # Write directly to output path
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            conn.execute(f"COPY result TO '{out_path}' (FORMAT PARQUET)")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        conn.execute(f"COPY result TO '{out_path}' (FORMAT PARQUET)")
 
         conn.close()
 

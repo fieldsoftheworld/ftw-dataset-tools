@@ -1,4 +1,4 @@
-"""CLI command for adding field coverage statistics to grid cells."""
+"""CLI command for creating chip definitions with field coverage statistics."""
 
 import click
 from tqdm import tqdm
@@ -7,9 +7,14 @@ from ftw_dataset_tools.api import field_stats
 from ftw_dataset_tools.api.geo import CRSMismatchError
 
 
-@click.command("add-field-stats")
-@click.argument("grid_file", type=click.Path(exists=True))
+@click.command("create-chips")
 @click.argument("fields_file", type=click.Path(exists=True))
+@click.option(
+    "--grid-file",
+    type=click.Path(exists=True),
+    default=None,
+    help="Grid file. If not specified, fetches from FTW grid on Source Coop.",
+)
 @click.option(
     "--grid-geom-col",
     default=None,
@@ -36,7 +41,7 @@ from ftw_dataset_tools.api.geo import CRSMismatchError
     "output_file",
     type=click.Path(),
     default=None,
-    help="Output file path. If not specified, updates input file in place.",
+    help="Output file path. If not specified, creates chips_<fields_basename>.parquet.",
 )
 @click.option(
     "--coverage-col",
@@ -57,9 +62,9 @@ from ftw_dataset_tools.api.geo import CRSMismatchError
     default=False,
     help="Reproject both inputs to EPSG:4326 if CRS don't match.",
 )
-def add_field_stats_cmd(
-    grid_file: str,
+def create_chips_cmd(
     fields_file: str,
+    grid_file: str | None,
     grid_geom_col: str | None,
     fields_geom_col: str | None,
     grid_bbox_col: str | None,
@@ -69,27 +74,33 @@ def add_field_stats_cmd(
     min_coverage: float | None,
     reproject_to_4326: bool,
 ) -> None:
-    """Add field coverage statistics to each grid cell.
+    """Create chip definitions with field coverage statistics.
 
     Calculates what percentage of each grid cell is covered by field boundary
     polygons using DuckDB's spatial extension.
 
-    The grid and fields files must have the same CRS. If they don't match,
-    use --reproject to automatically reproject both to EPSG:4326.
+    If no grid file is provided, fetches grid cells from the FTW grid on
+    Source Cooperative, filtered by the bounds of the fields file.
+
+    When using a local grid file, the grid and fields files must have the same
+    CRS. If they don't match, use --reproject to automatically reproject both
+    to EPSG:4326.
 
     \b
-    GRID_FILE: Parquet file containing grid geometries (e.g., MGRS cells)
     FIELDS_FILE: Parquet file containing field boundary polygons
 
     \b
     Examples:
-        ftwd add-field-stats grid.parquet fields.parquet
-        ftwd add-field-stats grid.parquet fields.parquet -o output.parquet
-        ftwd add-field-stats grid.parquet fields.parquet --reproject
-        ftwd add-field-stats grid.parquet fields.parquet --coverage-col pct_fields
+        ftwd create-chips fields.parquet
+        ftwd create-chips fields.parquet --grid-file grid.parquet
+        ftwd create-chips fields.parquet -o output.parquet
+        ftwd create-chips fields.parquet --reproject
     """
-    click.echo(f"Grid file: {grid_file}")
     click.echo(f"Fields file: {fields_file}")
+    if grid_file:
+        click.echo(f"Grid file: {grid_file}")
+    else:
+        click.echo("Grid source: FTW grid on Source Coop (fetching by bounds)")
 
     # Progress callback that prints messages
     def on_progress(msg: str) -> None:
@@ -111,8 +122,8 @@ def add_field_stats_cmd(
             pbar.update(10)
 
             result = field_stats.add_field_stats(
-                grid_file=grid_file,
                 fields_file=fields_file,
+                grid_file=grid_file,
                 output_file=output_file,
                 grid_geom_col=grid_geom_col,
                 fields_geom_col=fields_geom_col,
@@ -148,7 +159,10 @@ def add_field_stats_cmd(
             )
         )
         raise SystemExit(1) from e
+    except ValueError as e:
+        click.echo(click.style(f"\nError: {e}", fg="red"))
+        raise SystemExit(1) from e
 
 
 # Alias for registration
-add_field_stats = add_field_stats_cmd
+create_chips = create_chips_cmd
