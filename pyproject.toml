@@ -20,7 +20,7 @@ classifiers = [
 ]
 dependencies = [
     "click>=8.1.0",
-    "duckdb>=1.0.0",
+    "duckdb>=1.4.1",
     "geopandas>=1.0.0",
     "geoparquet-io>=0.4.0",
     "numpy>=1.24.0",

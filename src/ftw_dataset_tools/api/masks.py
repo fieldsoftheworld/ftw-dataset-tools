@@ -18,7 +18,7 @@ from rasterio import features
 from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 
-from ftw_dataset_tools.api.geo import detect_geometry_column
+from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -273,7 +273,7 @@ def _process_single_grid_cell(args: tuple) -> tuple[MaskResult | None, tuple[str
 
         # Create DuckDB connection for this process
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL spatial; LOAD spatial;")
+        ensure_spatial_loaded(conn)
 
         try:
             result = _create_single_mask(
@@ -366,7 +366,7 @@ def create_masks(
 
     # Create DuckDB connection
     conn = duckdb.connect(":memory:")
-    conn.execute("INSTALL spatial; LOAD spatial;")
+    ensure_spatial_loaded(conn)
 
     # Get total grid count (before filtering)
     total_count_result = conn.execute(f"SELECT COUNT(*) FROM '{chips_path}'").fetchone()

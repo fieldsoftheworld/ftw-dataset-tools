@@ -1,4 +1,4 @@
-"""Geospatial utilities for CRS detection and reprojection."""
+"""Geospatial utilities for CRS detection, reprojection, and GeoParquet I/O."""
 
 from __future__ import annotations
 
@@ -17,6 +17,71 @@ from geoparquet_io.core.add_bbox_column import add_bbox_column
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+
+def ensure_spatial_loaded(conn: duckdb.DuckDBPyConnection) -> None:
+    """
+    Ensure the DuckDB spatial extension is installed and loaded.
+
+    Args:
+        conn: DuckDB connection to configure
+    """
+    conn.execute("INSTALL spatial; LOAD spatial;")
+
+
+def write_geoparquet(
+    output_path: str | Path,
+    conn: duckdb.DuckDBPyConnection | None = None,
+    query: str | None = None,
+    gdf: gpd.GeoDataFrame | None = None,
+    compression: str = "ZSTD",
+    compression_level: int = 16,
+) -> Path:
+    """
+    Write a proper GeoParquet file with bbox column and metadata.
+
+    Accepts either a DuckDB query or a GeoDataFrame as input. Uses geoparquet-io
+    to ensure the output follows GeoParquet best practices.
+
+    Args:
+        output_path: Path to write the output file
+        conn: DuckDB connection (required if using query)
+        query: SQL query to execute and write results from
+        gdf: GeoDataFrame to write (alternative to query)
+        compression: Compression type (default: ZSTD)
+        compression_level: Compression level (default: 16)
+
+    Returns:
+        Path to the written file
+
+    Raises:
+        ValueError: If neither query nor gdf is provided, or if query is provided without conn
+    """
+    if query is None and gdf is None:
+        raise ValueError("Either query or gdf must be provided")
+    if query is not None and conn is None:
+        raise ValueError("conn is required when using query")
+
+    out_path = Path(output_path).resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if gdf is not None:
+        # Write GeoDataFrame using geopandas
+        gdf.to_parquet(out_path)
+    else:
+        # Write from DuckDB query
+        conn.execute(f"COPY ({query}) TO '{out_path}' (FORMAT PARQUET)")
+
+    # Add bbox column and proper GeoParquet metadata using geoparquet-io
+    with Path(os.devnull).open("w") as devnull, contextlib.redirect_stdout(devnull):
+        add_bbox_column(
+            str(out_path),
+            str(out_path),
+            compression=compression,
+            compression_level=compression_level,
+        )
+
+    return out_path
 
 
 def detect_geometry_column(
@@ -366,25 +431,14 @@ def reproject(
             tmp_path = Path(tmp.name)
 
         try:
-            gdf_reprojected.to_parquet(tmp_path)
+            write_geoparquet(tmp_path, gdf=gdf_reprojected)
             shutil.move(tmp_path, out_path)
         except Exception:
             if tmp_path.exists():
                 tmp_path.unlink()
             raise
     else:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        gdf_reprojected.to_parquet(out_path)
-
-    # Add bbox column for efficient spatial queries
-    log("Adding bbox column...")
-    with Path(os.devnull).open("w") as devnull, contextlib.redirect_stdout(devnull):
-        add_bbox_column(
-            str(out_path),
-            str(out_path),
-            compression="ZSTD",
-            compression_level=16,
-        )
+        write_geoparquet(out_path, gdf=gdf_reprojected)
 
     return ReprojectResult(
         output_path=out_path,

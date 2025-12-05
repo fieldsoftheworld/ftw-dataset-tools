@@ -5,6 +5,7 @@ import click
 from ftw_dataset_tools import __version__
 from ftw_dataset_tools.commands.create_boundaries import create_boundaries
 from ftw_dataset_tools.commands.create_chips import create_chips
+from ftw_dataset_tools.commands.create_dataset import create_dataset
 from ftw_dataset_tools.commands.create_ftw_grid import create_ftw_grid
 from ftw_dataset_tools.commands.create_masks import create_masks
 from ftw_dataset_tools.commands.get_grid import get_grid
@@ -19,17 +20,18 @@ def cli() -> None:
     This tool provides commands for:
 
     \b
+    - Creating complete training datasets from field boundaries (create-dataset)
     - Creating FTW grids
     - Creating chip definitions with field coverage statistics
-    - Subsetting grids based on fiboa field boundaries
+    - Creating boundary lines and raster masks
     - Reprojecting GeoParquet files
-    - Pulling GeoTIFF images for training data
     """
 
 
 # Register commands
 cli.add_command(create_boundaries)
 cli.add_command(create_chips)
+cli.add_command(create_dataset)
 cli.add_command(create_ftw_grid)
 cli.add_command(create_masks)
 cli.add_command(get_grid)

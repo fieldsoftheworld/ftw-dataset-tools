@@ -14,7 +14,9 @@ from ftw_dataset_tools.api.geo import (
     CRSMismatchError,
     detect_crs,
     detect_geometry_column,
+    ensure_spatial_loaded,
     reproject,
+    write_geoparquet,
 )
 
 if TYPE_CHECKING:
@@ -234,9 +236,9 @@ def add_field_stats(
     temp_files: list[Path] = []
 
     try:
-        # Create DuckDB connection and load extensions
+        # Create DuckDB connection and load spatial extension
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL spatial; LOAD spatial;")
+        ensure_spatial_loaded(conn)
 
         # Load fields table first (needed for bounds calculation if fetching grid from S3)
         log("Loading fields data...")
@@ -415,10 +417,9 @@ def add_field_stats(
         else:
             out_path = fields_path.parent / f"chips_{fields_path.stem}.parquet"
 
-        # Write output
+        # Write output with proper GeoParquet metadata
         log(f"Writing output to: {out_path}")
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        conn.execute(f"COPY result TO '{out_path}' (FORMAT PARQUET)")
+        write_geoparquet(out_path, conn=conn, query="SELECT * FROM result")
 
         conn.close()
 

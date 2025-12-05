@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
-from geoparquet_io.core.add_bbox_column import add_bbox_column
-from geoparquet_io.core.common import check_bbox_structure
 
-from ftw_dataset_tools.api.geo import detect_crs, detect_geometry_column
+from ftw_dataset_tools.api.geo import (
+    detect_crs,
+    detect_geometry_column,
+    ensure_spatial_loaded,
+    write_geoparquet,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -78,31 +79,18 @@ def _extract_boundaries(
 ) -> int:
     """Extract boundaries from polygons and write to output file."""
     # Create boundary lines using ST_Boundary
-    conn.execute(f"""
-        COPY (
-            SELECT * EXCLUDE ("{geom_col}"),
-                   ST_Boundary("{geom_col}") AS "{geom_col}"
-            FROM '{input_path}'
-        ) TO '{output_path}' (FORMAT PARQUET)
-    """)
+    query = f"""
+        SELECT * EXCLUDE ("{geom_col}"),
+               ST_Boundary("{geom_col}") AS "{geom_col}"
+        FROM '{input_path}'
+    """
+
+    # Write with proper GeoParquet metadata
+    write_geoparquet(output_path, conn=conn, query=query)
 
     # Get count
     count_result = conn.execute(f"SELECT COUNT(*) FROM '{output_path}'").fetchone()
-    count = count_result[0] if count_result else 0
-
-    # Add bbox column and proper GeoParquet metadata using geoparquet-io
-    # Only add if not already present (check_bbox_structure checks for column in schema)
-    bbox_info = check_bbox_structure(str(output_path), verbose=False)
-    if not bbox_info["has_bbox_column"]:
-        with Path(os.devnull).open("w") as devnull, contextlib.redirect_stdout(devnull):
-            add_bbox_column(
-                str(output_path),
-                str(output_path),
-                compression="ZSTD",
-                compression_level=16,
-            )
-
-    return count
+    return count_result[0] if count_result else 0
 
 
 def create_boundaries(
@@ -152,9 +140,9 @@ def create_boundaries(
 
     log(f"Found {len(parquet_files)} parquet file(s) to check")
 
-    # Create DuckDB connection
+    # Create DuckDB connection with spatial extension
     conn = duckdb.connect(":memory:")
-    conn.execute("INSTALL spatial; LOAD spatial;")
+    ensure_spatial_loaded(conn)
 
     processed: list[BoundaryResult] = []
     skipped: list[tuple[Path, str]] = []
