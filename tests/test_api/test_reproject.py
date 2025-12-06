@@ -159,12 +159,12 @@ class TestRoundtripReprojection:
 
         # Should match within ~1e-6 degrees (sub-meter precision)
         tolerance = 1e-6
-        assert (
-            abs(final_lon - original_lon) < tolerance
-        ), f"Longitude changed: {original_lon} -> {final_lon}"
-        assert (
-            abs(final_lat - original_lat) < tolerance
-        ), f"Latitude changed: {original_lat} -> {final_lat}"
+        assert abs(final_lon - original_lon) < tolerance, (
+            f"Longitude changed: {original_lon} -> {final_lon}"
+        )
+        assert abs(final_lat - original_lat) < tolerance, (
+            f"Latitude changed: {original_lat} -> {final_lat}"
+        )
 
 
 class TestPolygonReprojection:
