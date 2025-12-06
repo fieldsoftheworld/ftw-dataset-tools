@@ -18,6 +18,8 @@ from geoparquet_io.core.add_bbox_column import add_bbox_column
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    import pyproj
+
 
 def ensure_spatial_loaded(conn: duckdb.DuckDBPyConnection) -> None:
     """
@@ -72,14 +74,15 @@ def write_geoparquet(
         # Write from DuckDB query
         conn.execute(f"COPY ({query}) TO '{out_path}' (FORMAT PARQUET)")
 
-    # Add bbox column and proper GeoParquet metadata using geoparquet-io
-    with Path(os.devnull).open("w") as devnull, contextlib.redirect_stdout(devnull):
-        add_bbox_column(
-            str(out_path),
-            str(out_path),
-            compression=compression,
-            compression_level=compression_level,
-        )
+    # Add bbox column only if the file doesn't already have one
+    if not has_bbox_column(out_path):
+        with Path(os.devnull).open("w") as devnull, contextlib.redirect_stdout(devnull):
+            add_bbox_column(
+                str(out_path),
+                str(out_path),
+                compression=compression,
+                compression_level=compression_level,
+            )
 
     return out_path
 
@@ -187,6 +190,45 @@ def get_bbox_column_name(
     finally:
         if close_conn:
             conn.close()
+
+
+def format_crs(crs: pyproj.CRS | None) -> str:
+    """
+    Format a CRS object as a concise authority:code string.
+
+    Args:
+        crs: A pyproj CRS object (from geopandas GeoDataFrame.crs)
+
+    Returns:
+        A string like "EPSG:4326" or "unknown" if CRS cannot be determined
+    """
+    if crs is None:
+        return "unknown"
+
+    # Try to get authority:code format
+    try:
+        authority = crs.to_authority()
+        if authority:
+            return f"{authority[0]}:{authority[1]}"
+    except Exception:
+        pass
+
+    # Fallback: try to get EPSG code
+    try:
+        epsg = crs.to_epsg()
+        if epsg:
+            return f"EPSG:{epsg}"
+    except Exception:
+        pass
+
+    # Last resort: return name if available
+    try:
+        if crs.name:
+            return crs.name
+    except Exception:
+        pass
+
+    return "unknown"
 
 
 class CRSMismatchError(Exception):
@@ -406,7 +448,7 @@ def reproject(
 
     # Get source CRS
     source_crs = gdf.crs
-    source_crs_str = str(source_crs) if source_crs else "unknown"
+    source_crs_str = format_crs(source_crs)
     log(f"Source CRS: {source_crs_str}")
     log(f"Target CRS: {target_crs}")
 
