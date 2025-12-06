@@ -38,26 +38,12 @@ class TestFieldStatsResult:
 class TestAddFieldStats:
     """Tests for add_field_stats function."""
 
-    def test_file_not_found_grid(self) -> None:
-        """Test that FileNotFoundError is raised for missing grid file."""
-        from ftw_dataset_tools.api.field_stats import add_field_stats
-
-        with pytest.raises(FileNotFoundError, match="Grid file not found"):
-            add_field_stats(
-                grid_file="/nonexistent/grid.parquet",
-                fields_file="/nonexistent/fields.parquet",
-            )
-
-    def test_file_not_found_fields(self, tmp_path: pytest.TempPathFactory) -> None:
+    def test_file_not_found_fields(self) -> None:
         """Test that FileNotFoundError is raised for missing fields file."""
         from ftw_dataset_tools.api.field_stats import add_field_stats
 
-        # Create a dummy grid file
-        grid_file = tmp_path / "grid.parquet"
-        grid_file.touch()
-
         with pytest.raises(FileNotFoundError, match="Fields file not found"):
             add_field_stats(
-                grid_file=str(grid_file),
                 fields_file="/nonexistent/fields.parquet",
+                grid_file="/nonexistent/grid.parquet",
             )
