@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
-import geopandas as gpd
 from geoparquet_io.core.add_bbox_column import add_bbox_column
 
 if TYPE_CHECKING:
@@ -31,46 +30,32 @@ def ensure_spatial_loaded(conn: duckdb.DuckDBPyConnection) -> None:
 
 def write_geoparquet(
     output_path: str | Path,
-    conn: duckdb.DuckDBPyConnection | None = None,
-    query: str | None = None,
-    gdf: gpd.GeoDataFrame | None = None,
+    conn: duckdb.DuckDBPyConnection,
+    query: str,
     compression: str = "ZSTD",
     compression_level: int = 16,
 ) -> Path:
     """
     Write a proper GeoParquet file with bbox column and metadata.
 
-    Accepts either a DuckDB query or a GeoDataFrame as input. Uses geoparquet-io
-    to ensure the output follows GeoParquet best practices.
+    Executes a DuckDB query and writes the results to a GeoParquet file.
+    Uses geoparquet-io to ensure the output follows GeoParquet best practices.
 
     Args:
         output_path: Path to write the output file
-        conn: DuckDB connection (required if using query)
+        conn: DuckDB connection
         query: SQL query to execute and write results from
-        gdf: GeoDataFrame to write (alternative to query)
         compression: Compression type (default: ZSTD)
         compression_level: Compression level (default: 16)
 
     Returns:
         Path to the written file
-
-    Raises:
-        ValueError: If neither query nor gdf is provided, or if query is provided without conn
     """
-    if query is None and gdf is None:
-        raise ValueError("Either query or gdf must be provided")
-    if query is not None and conn is None:
-        raise ValueError("conn is required when using query")
-
     out_path = Path(output_path).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if gdf is not None:
-        # Write GeoDataFrame using geopandas
-        gdf.to_parquet(out_path)
-    else:
-        # Write from DuckDB query
-        conn.execute(f"COPY ({query}) TO '{out_path}' (FORMAT PARQUET)")
+    # Write from DuckDB query
+    conn.execute(f"COPY ({query}) TO '{out_path}' (FORMAT PARQUET)")
 
     # Add bbox column and proper GeoParquet metadata using geoparquet-io
     with Path(os.devnull).open("w") as devnull, contextlib.redirect_stdout(devnull):
@@ -375,7 +360,7 @@ def reproject(
     on_progress: Callable[[str], None] | None = None,
 ) -> ReprojectResult:
     """
-    Reproject a GeoParquet file to a different CRS using geopandas.
+    Reproject a GeoParquet file to a different CRS using DuckDB.
 
     Args:
         input_file: Path to input GeoParquet file
@@ -398,51 +383,78 @@ def reproject(
         if on_progress:
             on_progress(msg)
 
-    # Read with geopandas
-    log("Loading data...")
-    gdf = gpd.read_parquet(input_path)
-    count = len(gdf)
-    log(f"Loaded {count:,} features")
+    # Set up DuckDB connection
+    conn = duckdb.connect(":memory:")
+    ensure_spatial_loaded(conn)
 
-    # Get source CRS
-    source_crs = gdf.crs
-    source_crs_str = str(source_crs) if source_crs else "unknown"
-    log(f"Source CRS: {source_crs_str}")
-    log(f"Target CRS: {target_crs}")
+    try:
+        # Detect geometry column
+        geom_col = detect_geometry_column(input_path, conn) or "geometry"
+        log(f"Geometry column: {geom_col}")
 
-    # Reproject using geopandas
-    log("Reprojecting...")
-    gdf_reprojected = gdf.to_crs(target_crs)
+        # Detect source CRS from GeoParquet metadata
+        crs_info = detect_crs(input_path, geom_col, conn)
+        source_crs = crs_info.authority_code or "EPSG:4326"
+        log(f"Source CRS: {source_crs}")
+        log(f"Target CRS: {target_crs}")
 
-    # Determine output path
-    if output_file:
-        out_path = Path(output_file).resolve()
-    else:
-        # Generate output name: input_4326.parquet
-        target_suffix = target_crs.replace(":", "_").lower()
-        out_path = input_path.parent / f"{input_path.stem}_{target_suffix}.parquet"
+        # Get feature count
+        count = conn.execute(f"SELECT COUNT(*) FROM '{input_path}'").fetchone()[0]
+        log(f"Features: {count:,}")
 
-    # Write output
-    log(f"Writing output to: {out_path}")
+        # Check if there's an existing bbox column to exclude
+        # (geoparquet-io will add a fresh one)
+        bbox_col = get_bbox_column_name(input_path, conn)
+        exclude_cols = [geom_col]
+        if bbox_col:
+            exclude_cols.append(bbox_col)
+        exclude_clause = ", ".join(exclude_cols)
 
-    if out_path == input_path:
-        # Write to temp file first, then replace
-        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
+        # Build SQL query with ST_Transform
+        # Use always_xy := true since GeoParquet uses lon/lat (x/y) axis order
+        log("Reprojecting...")
+        query = f"""
+            SELECT
+                * EXCLUDE ({exclude_clause}),
+                ST_Transform(
+                    {geom_col},
+                    '{source_crs}',
+                    '{target_crs}',
+                    always_xy := true
+                ) AS {geom_col}
+            FROM '{input_path}'
+        """
 
-        try:
-            write_geoparquet(tmp_path, gdf=gdf_reprojected)
-            shutil.move(tmp_path, out_path)
-        except Exception:
-            if tmp_path.exists():
-                tmp_path.unlink()
-            raise
-    else:
-        write_geoparquet(out_path, gdf=gdf_reprojected)
+        # Determine output path
+        if output_file:
+            out_path = Path(output_file).resolve()
+        else:
+            # Generate output name: input_4326.parquet
+            target_suffix = target_crs.replace(":", "_").lower()
+            out_path = input_path.parent / f"{input_path.stem}_{target_suffix}.parquet"
 
-    return ReprojectResult(
-        output_path=out_path,
-        source_crs=source_crs_str,
-        target_crs=target_crs,
-        feature_count=count,
-    )
+        log(f"Writing output to: {out_path}")
+
+        if out_path == input_path:
+            # Write to temp file first, then replace
+            with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+
+            try:
+                write_geoparquet(tmp_path, conn=conn, query=query)
+                shutil.move(tmp_path, out_path)
+            except Exception:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+                raise
+        else:
+            write_geoparquet(out_path, conn=conn, query=query)
+
+        return ReprojectResult(
+            output_path=out_path,
+            source_crs=source_crs,
+            target_crs=target_crs,
+            feature_count=count,
+        )
+    finally:
+        conn.close()
