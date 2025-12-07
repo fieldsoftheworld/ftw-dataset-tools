@@ -1,6 +1,7 @@
 """CLI command for creating complete training datasets from field boundaries."""
 
 import sys
+from pathlib import Path
 
 import click
 
@@ -13,9 +14,8 @@ from ftw_dataset_tools.api import dataset
     "-o",
     "--output-dir",
     type=click.Path(),
-    default="./dataset",
-    show_default=True,
-    help="Output directory for all generated files.",
+    default=None,
+    help="Output directory for all generated files. Defaults to {input_stem}-dataset/",
 )
 @click.option(
     "--field-dataset",
@@ -51,7 +51,7 @@ from ftw_dataset_tools.api import dataset
 )
 def create_dataset_cmd(
     fields_file: str,
-    output_dir: str,
+    output_dir: str | None,
     field_dataset: str | None,
     min_coverage: float,
     resolution: float,
@@ -71,7 +71,7 @@ def create_dataset_cmd(
 
     \b
     Output structure:
-        dataset/
+        {name}-dataset/
         ├── {dataset}_fields.parquet
         ├── {dataset}_chips.parquet
         ├── {dataset}_boundary_lines.parquet
@@ -89,6 +89,11 @@ def create_dataset_cmd(
         ftwd create-dataset fields.parquet --field-dataset austria -o ./austria_dataset
         ftwd create-dataset fields.parquet --min-coverage 1.0 --resolution 5.0
     """
+    # Derive output directory from input filename if not specified
+    if output_dir is None:
+        input_stem = Path(fields_file).stem
+        output_dir = f"{input_stem}-dataset"
+
     click.echo(click.style("Creating dataset from fields file", fg="cyan", bold=True))
     click.echo(f"Input: {fields_file}")
     click.echo(f"Output: {output_dir}")
