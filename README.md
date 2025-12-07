@@ -21,29 +21,181 @@ uv sync --dev
 ```bash
 # Show available commands
 ftwd --help
+```
 
-# Add field coverage statistics to a grid
-ftwd add-field-stats grid.parquet fields.parquet
+### create-dataset
+
+Create a complete training dataset from a single fields file. This is the main command that orchestrates the entire pipeline.
+
+```bash
+# Basic usage - creates output in {input_stem}-dataset/
+ftwd create-dataset austria_fields.parquet
+
+# Specify output directory and dataset name
+ftwd create-dataset fields.parquet --field-dataset austria -o ./austria_dataset
+
+# Custom options
+ftwd create-dataset fields.parquet --min-coverage 1.0 --resolution 5.0 --workers 8
+```
+
+**Options:**
+- `-o, --output-dir` - Output directory (defaults to `{input_stem}-dataset/`)
+- `--field-dataset` - Dataset name for output filenames (defaults to input filename stem)
+- `--min-coverage` - Minimum coverage percentage to include grids (default: 0.01)
+- `--resolution` - Pixel resolution in meters for masks (default: 10.0)
+- `--workers` - Number of parallel workers (default: half of CPUs)
+- `--skip-reproject` - Fail if input is not EPSG:4326 instead of auto-reprojecting
+
+**Output structure:**
+```
+{name}-dataset/
+├── {dataset}_fields.parquet
+├── {dataset}_chips.parquet
+├── {dataset}_boundary_lines.parquet
+└── label_masks/
+    ├── instance/
+    ├── semantic_2class/
+    └── semantic_3class/
+```
+
+### create-chips
+
+Create chip definitions with field coverage statistics. Calculates what percentage of each grid cell is covered by field boundary polygons.
+
+```bash
+# Fetch grid from FTW grid on Source Coop
+ftwd create-chips fields.parquet
+
+# Use local grid file
+ftwd create-chips fields.parquet --grid-file grid.parquet
+
+# Filter by minimum coverage
+ftwd create-chips fields.parquet --min-coverage 0.01
+
+# Reproject if CRS don't match
+ftwd create-chips fields.parquet --reproject
+```
+
+**Options:**
+- `--grid-file` - Local grid file (if not specified, fetches from FTW grid on Source Coop)
+- `-o, --output` - Output file path (defaults to `chips_<fields_basename>.parquet`)
+- `--coverage-col` - Name for coverage column (default: `field_coverage_pct`)
+- `--min-coverage` - Exclude grid cells below this coverage percentage
+- `--reproject` - Reproject both inputs to EPSG:4326 if CRS don't match
+- `--grid-geom-col`, `--fields-geom-col` - Geometry column names (auto-detected)
+- `--grid-bbox-col`, `--fields-bbox-col` - Bbox column names (auto-detected)
+
+### create-masks
+
+Create raster masks from vector boundaries for each grid cell. Outputs Cloud Optimized GeoTIFFs (COGs).
+
+```bash
+# Create semantic 2-class masks
+ftwd create-masks chips.parquet fields.parquet boundary_lines.parquet --field-dataset austria
+
+# Create instance masks
+ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset france --mask-type instance
+
+# Custom settings
+ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spain --min-coverage 1.0 --resolution 5.0
+```
+
+**Options:**
+- `-o, --output-dir` - Output directory (default: `./masks`)
+- `--field-dataset` - Dataset name for output filenames (required)
+- `--mask-type` - Type of mask: `instance`, `semantic_2_class`, or `semantic_3_class` (default: `semantic_2_class`)
+- `--grid-id-col` - Column name for grid cell ID (default: `id`)
+- `--coverage-col` - Column name for coverage percentage (default: `field_coverage_pct`)
+- `--min-coverage` - Minimum coverage to process (default: 0.01)
+- `--resolution` - Pixel resolution in CRS units (default: 10.0)
+- `--workers` - Number of parallel workers (default: half of CPUs)
+
+### create-boundaries
+
+Convert polygon geometries to boundary lines using ST_Boundary.
+
+```bash
+# Single file
+ftwd create-boundaries fields.parquet
+
+# Process entire directory
+ftwd create-boundaries ./data/
+
+# Custom output
+ftwd create-boundaries fields.parquet -o ./output/ --prefix lines_
+```
+
+**Options:**
+- `-o, --output-dir` - Output directory (defaults to same directory as input)
+- `--prefix` - Prefix for output filenames (default: `boundary_lines_`)
+
+### create-ftw-grid
+
+Create a hierarchical FTW grid from 1km MGRS cells.
+
+```bash
+# Single file
+ftwd create-ftw-grid mgrs_1km.parquet
+
+# Custom grid size
+ftwd create-ftw-grid mgrs_1km.parquet --km-size 4
+
+# Process partitioned folder
+ftwd create-ftw-grid ./mgrs_partitioned/ -o ./ftw_output/
+```
+
+**Options:**
+- `-o, --output` - Output path (required for folder input)
+- `--km-size` - Grid cell size in km (default: 2). Must divide 100 evenly (1, 2, 4, 5, 10, 20, 25, 50, 100)
+
+**Output columns:**
+- `gzd` - Grid Zone Designator
+- `mgrs_10km` - 10km MGRS code from source
+- `id` - Unique FTW grid cell ID (e.g., `ftw-33UXPA0410`)
+- `geometry` - Unioned polygon of child cells
+
+### get-grid
+
+Fetch FTW grid cells from cloud source that cover the input file's extent.
+
+```bash
+# Basic usage
+ftwd get-grid fields.parquet
+
+# Precise geometry matching (slower)
+ftwd get-grid fields.parquet --precise
+
+# Custom output
+ftwd get-grid fields.parquet -o custom_grid.parquet
+```
+
+**Options:**
+- `-o, --output` - Output file path (defaults to `<input>_grid.parquet`)
+- `--precise` - Use geometry union for precise matching (excludes grids in bbox gaps)
+- `--grid-source` - URL/path to the grid source
+
+### reproject
+
+Reproject a GeoParquet file to a different CRS.
+
+```bash
+# Reproject to EPSG:4326 (default)
+ftwd reproject input.parquet
+
+# Custom target CRS
+ftwd reproject input.parquet --target-crs EPSG:32610
+
+# Overwrite in place
+ftwd reproject input.parquet --overwrite
 
 # Specify output file
-ftwd add-field-stats grid.parquet fields.parquet -o output.parquet
+ftwd reproject input.parquet -o output.parquet
 ```
 
-## Python API
-
-```python
-from ftw_dataset_tools import add_field_stats
-
-result = add_field_stats(
-    grid_file="grid.parquet",
-    fields_file="fields.parquet",
-    output_file="output.parquet",
-)
-
-print(f"Total cells: {result.total_cells}")
-print(f"Cells with coverage: {result.cells_with_coverage}")
-print(f"Average coverage: {result.average_coverage}%")
-```
+**Options:**
+- `-o, --output` - Output file path (defaults to `<input>_<crs>.parquet`)
+- `--overwrite` - Overwrite input file in place
+- `--target-crs` - Target CRS in format `EPSG:XXXX` (default: `EPSG:4326`)
 
 ## Development
 
