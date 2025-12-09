@@ -16,6 +16,11 @@ from ftw_dataset_tools.api.geo import (
     validate_crs_match,
 )
 from ftw_dataset_tools.api.grid import CRSError, GetGridResult, get_grid
+from ftw_dataset_tools.api.stac import (
+    STACGenerationResult,
+    generate_stac_catalog,
+    get_temporal_extent_from_year,
+)
 
 __all__ = [
     "CRSError",
@@ -27,10 +32,13 @@ __all__ = [
     "InvalidKmSizeError",
     "MultipleGZDError",
     "ReprojectResult",
+    "STACGenerationResult",
     "add_field_stats",
     "create_ftw_grid",
     "detect_crs",
+    "generate_stac_catalog",
     "get_grid",
+    "get_temporal_extent_from_year",
     "reproject",
     "validate_crs_match",
 ]

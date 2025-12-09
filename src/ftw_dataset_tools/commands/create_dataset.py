@@ -49,6 +49,12 @@ from ftw_dataset_tools.api import dataset
     default=False,
     help="Fail if input is not EPSG:4326 instead of auto-reprojecting.",
 )
+@click.option(
+    "--year",
+    type=int,
+    default=None,
+    help="Year for temporal extent (required if fields lack determination_datetime column).",
+)
 def create_dataset_cmd(
     fields_file: str,
     output_dir: str | None,
@@ -57,6 +63,7 @@ def create_dataset_cmd(
     resolution: float,
     num_workers: int | None,
     skip_reproject: bool,
+    year: int | None,
 ) -> None:
     """Create a complete training dataset from a fields file.
 
@@ -66,12 +73,23 @@ def create_dataset_cmd(
     - Chips file with field coverage statistics
     - Boundary lines file
     - All three mask types (instance, semantic_2class, semantic_3class)
+    - STAC static catalog with items for each chip
 
     If the input file is not in EPSG:4326, it will be automatically reprojected.
+
+    For temporal extent, uses determination_datetime from fiboa if present,
+    otherwise requires --year to specify the year range.
 
     \b
     Output structure:
         {name}-dataset/
+        ├── catalog.json
+        ├── source/
+        │   └── collection.json
+        ├── chips/
+        │   ├── collection.json
+        │   ├── items.parquet
+        │   └── {grid_id}/
         ├── {dataset}_fields.parquet
         ├── {dataset}_chips.parquet
         ├── {dataset}_boundary_lines.parquet
@@ -85,9 +103,9 @@ def create_dataset_cmd(
 
     \b
     Examples:
-        ftwd create-dataset austria_fields.parquet
-        ftwd create-dataset fields.parquet --field-dataset austria -o ./austria_dataset
-        ftwd create-dataset fields.parquet --min-coverage 1.0 --resolution 5.0
+        ftwd create-dataset austria_fields.parquet --year 2023
+        ftwd create-dataset fields.parquet --field-dataset austria -o ./austria_dataset --year 2022
+        ftwd create-dataset fields.parquet --min-coverage 1.0 --resolution 5.0 --year 2024
     """
     # Derive output directory from input filename if not specified
     if output_dir is None:
@@ -142,6 +160,7 @@ def create_dataset_cmd(
             resolution=resolution,
             num_workers=num_workers,
             skip_reproject=skip_reproject,
+            year=year,
             on_progress=on_progress,
             on_mask_progress=on_mask_progress,
             on_mask_start=on_mask_start,
@@ -176,6 +195,15 @@ def create_dataset_cmd(
             if mask_type in result.masks_results:
                 count = result.masks_results[mask_type].total_created
                 click.echo(f"    {mask_type}: {mask_dir} ({count:,} files)")
+
+        if result.stac_result:
+            click.echo("")
+            click.echo("STAC Catalog:")
+            click.echo(f"  Catalog: {result.stac_result.catalog_path}")
+            click.echo(f"  Source collection: {result.stac_result.source_collection_path}")
+            click.echo(f"  Chips collection: {result.stac_result.chips_collection_path}")
+            click.echo(f"  Items: {result.stac_result.total_items:,}")
+            click.echo(f"  Items parquet: {result.stac_result.items_parquet_path}")
 
     except KeyboardInterrupt:
         sys.stdout.write("\n")

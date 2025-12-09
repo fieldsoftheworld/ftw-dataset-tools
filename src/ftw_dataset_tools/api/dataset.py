@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ftw_dataset_tools.api import boundaries, field_stats, masks
+from ftw_dataset_tools.api import boundaries, field_stats, masks, stac
 from ftw_dataset_tools.api.geo import detect_crs, detect_geometry_column, reproject
 from ftw_dataset_tools.api.masks import MaskType
 
@@ -30,6 +30,7 @@ class CreateDatasetResult:
     chips_result: field_stats.FieldStatsResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
+    stac_result: stac.STACGenerationResult | None = None
 
     @property
     def total_masks_created(self) -> int:
@@ -45,6 +46,7 @@ def create_dataset(
     resolution: float = 10.0,
     num_workers: int | None = None,
     skip_reproject: bool = False,
+    year: int | None = None,
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int], None] | None = None,
@@ -57,6 +59,7 @@ def create_dataset(
     2. Create chips with field coverage statistics
     3. Create boundary lines from polygons
     4. Create all three mask types (instance, semantic_2class, semantic_3class)
+    5. Generate STAC static catalog
 
     Args:
         fields_file: Path to input GeoParquet file with field polygons
@@ -66,6 +69,7 @@ def create_dataset(
         resolution: Pixel resolution in meters for masks (default: 10.0)
         num_workers: Number of parallel workers for mask creation
         skip_reproject: If True, fail instead of reprojecting non-4326 inputs
+        year: Year for temporal extent (required if fields lack determination_datetime)
         on_progress: Optional callback for progress messages
         on_mask_progress: Optional callback (current, total) for mask creation progress
         on_mask_start: Optional callback (total_grids, filtered_grids) for mask start
@@ -76,6 +80,7 @@ def create_dataset(
     Raises:
         FileNotFoundError: If input file doesn't exist
         ValueError: If input CRS is not EPSG:4326 and skip_reproject is True
+        ValueError: If year not provided and no determination_datetime column
     """
     fields_path = Path(fields_file).resolve()
     out_dir = Path(output_dir).resolve()
@@ -92,6 +97,21 @@ def create_dataset(
             on_progress(msg)
 
     log(f"Creating dataset '{field_dataset}' from {fields_path.name}")
+
+    # Early validation: Check temporal extent availability
+    # This avoids processing the entire dataset only to fail at STAC generation
+    log("Checking temporal extent availability...")
+    datetime_col = stac.detect_datetime_column(fields_path)
+    if datetime_col:
+        log(f"Found '{datetime_col}' column for temporal extent")
+    elif year is not None:
+        log(f"Using --year {year} for temporal extent")
+    else:
+        raise ValueError(
+            "Cannot determine temporal extent for STAC catalog. "
+            "Either provide --year parameter or ensure fields file has "
+            "'determination_datetime' column."
+        )
 
     # Create output directory structure
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -201,6 +221,20 @@ def create_dataset(
         masks_results[subdir_name] = mask_result
         log(f"Created {mask_result.total_created} {mask_type.value} masks")
 
+    # Step 5: Generate STAC catalog
+    log("Generating STAC catalog...")
+    stac_result = stac.generate_stac_catalog(
+        output_dir=out_dir,
+        field_dataset=field_dataset,
+        fields_file=output_fields_path,
+        chips_file=chips_path,
+        boundary_lines_file=boundary_lines_path,
+        mask_dirs=mask_subdirs,
+        year=year,
+        on_progress=log,
+    )
+    log(f"Created STAC catalog with {stac_result.total_items} items")
+
     log("Dataset creation complete!")
 
     return CreateDatasetResult(
@@ -215,4 +249,5 @@ def create_dataset(
         chips_result=chips_result,
         boundaries_result=boundaries_result,
         masks_results=masks_results,
+        stac_result=stac_result,
     )
