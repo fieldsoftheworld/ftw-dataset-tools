@@ -12,8 +12,7 @@ import numpy as np
 from ftw_dataset_tools.api.geo import write_geoparquet
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from typing import Sequence
+    from collections.abc import Callable, Sequence
 
 
 SPLIT_TYPE_CHOICES: tuple[str, ...] = (
@@ -135,7 +134,7 @@ def _assign_random_uniform(
 ) -> np.ndarray:
     """Assign splits randomly and uniformly across all chips."""
     n_chips = len(gdf)
-    train_pct, val_pct, test_pct = split_percents
+    train_pct, val_pct = split_percents[0], split_percents[1]
 
     # Set random seed
     np.random.seed(random_seed)
@@ -162,7 +161,7 @@ def _assign_block3x3(
     random_seed: int,
 ) -> np.ndarray:
     """Assign splits using 3x3 block pattern.
-    
+
     Groups chips into 3x3 blocks based on their grid coordinates (extracted from chip ID),
     then randomly assigns each block to train/val/test. This ensures spatial coherence
     within each split.
@@ -173,45 +172,45 @@ def _assign_block3x3(
     chip_ids = gdf["id"].astype(str)
     eastings = chip_ids.str[-4:-2].astype(int)
     northings = chip_ids.str[-2:].astype(int)
-    
+
     # Extract the full MGRS grid identifier (zone + band + 100km grid square)
     # This is characters 4-9 of the chip ID (after "ftw-")
     # Example: ftw-36NXF6658 -> 36NXF
     mgrs_grids = chip_ids.str[4:9]
-    
+
     # Create 3x3 block IDs by dividing coordinates by 3 (integer division)
     # This groups coordinates 0-2, 3-5, 6-8, etc. into the same block
     block_east = eastings // 3
     block_north = northings // 3
-    
+
     # Create unique block identifier combining MGRS grid and block coordinates
     block_ids = mgrs_grids + "_" + block_east.astype(str) + "_" + block_north.astype(str)
-    
+
     # Get unique blocks and their counts
     unique_blocks = block_ids.unique()
     n_blocks = len(unique_blocks)
-    
+
     # Set random seed
     np.random.seed(random_seed)
-    
+
     # Calculate number of blocks for each split
-    train_pct, val_pct, test_pct = split_percents
+    train_pct, val_pct = split_percents[0], split_percents[1]
     n_train = int(n_blocks * train_pct / 100)
     n_val = int(n_blocks * val_pct / 100)
     n_test = n_blocks - n_train - n_val  # Remainder goes to test
-    
+
     # Create block split labels
     block_splits = np.array(
         ["train"] * n_train + ["val"] * n_val + ["test"] * n_test
     )
-    
+
     # Shuffle block assignments randomly
     np.random.shuffle(block_splits)
-    
+
     # Create mapping from block ID to split
-    block_to_split = dict(zip(unique_blocks, block_splits))
-    
+    block_to_split = dict(zip(unique_blocks, block_splits, strict=True))
+
     # Map each chip to its block's split assignment
     chip_splits = block_ids.map(block_to_split).values
-    
+
     return chip_splits
