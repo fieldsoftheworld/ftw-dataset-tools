@@ -107,6 +107,8 @@ def create_dataset(
     if split_type not in splits.SPLIT_TYPE_CHOICES:
         raise ValueError(f"split_type must be one of: {splits.SPLIT_TYPE_CHOICES_STR}")
 
+    # Validate at API layer to protect against invalid input from direct programmatic usage
+    # (CLI also validates for immediate user feedback, but API may be called directly)
     split_percents = splits.validate_split_percents(split_percents)
     log(f"Using split percents (train/val/test): {split_percents}")
 

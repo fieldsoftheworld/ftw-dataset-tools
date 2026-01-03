@@ -169,6 +169,7 @@ def create_dataset_cmd(
             click.echo(f"  Processing {filtered_grids:,} grids")
 
     try:
+        # Validate at CLI layer for immediate user feedback with proper Click error formatting
         try:
             validated_split_percents = splits.validate_split_percents(split_percents)
         except ValueError as err:

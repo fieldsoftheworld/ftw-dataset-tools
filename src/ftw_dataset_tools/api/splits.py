@@ -69,18 +69,27 @@ def assign_splits(
 
     Args:
         chips_file: Path to chips parquet file
-        split_type: Split strategy ('random-uniform' or 'block3x3')
-        split_percents: Tuple of (train_pct, val_pct, test_pct) summing to 100
-        random_seed: Random seed for reproducibility (used for random-uniform)
+        split_type: Split strategy (required). Must be one of: 'random-uniform' (random
+            individual chip assignment) or 'block3x3' (3x3 spatial block assignment)
+        split_percents: Tuple of (train_pct, val_pct, test_pct) summing to 100.
+            Default: (80, 10, 10)
+        random_seed: Random seed for reproducibility. Default: 42
         on_progress: Optional callback for progress messages
 
     Returns:
         CreateSplitsResult with statistics about the split assignment
 
     Raises:
-        ValueError: If split_type is not supported
+        ValueError: If split_type is not supported or required 'id' column is missing
         FileNotFoundError: If chips_file doesn't exist
     """
+    # Validate split_type early before any processing
+    if split_type not in SPLIT_TYPE_CHOICES:
+        raise ValueError(
+            f"Unsupported split_type: {split_type}. "
+            f"Must be one of: {SPLIT_TYPE_CHOICES_STR}"
+        )
+
     chips_path = Path(chips_file).resolve()
 
     if not chips_path.exists():
@@ -95,6 +104,13 @@ def assign_splits(
     # Read chips geoparquet
     gdf = gpd.read_parquet(chips_path)
     n_chips = len(gdf)
+
+    # Validate required columns
+    if "id" not in gdf.columns:
+        raise ValueError(
+            f"Chips file must contain an 'id' column. "
+            f"Found columns: {list(gdf.columns)}"
+        )
 
     if split_type == "random-uniform":
         splits = _assign_random_uniform(gdf, split_percents, random_seed)
@@ -166,12 +182,35 @@ def _assign_block3x3(
     then randomly assigns each block to train/val/test. This ensures spatial coherence
     within each split.
     """
-    # Extract easting and northing from chip IDs (last 4 digits: EENN)
-    # IDs follow format: ftw-<zone><band><grid><easting><northing>
-    # Example: ftw-36NXF6658 -> zone=36N, grid=XF, easting=66, northing=58
+    # Validate chip ID format
+    # IDs should follow format: ftw-<zone><band><grid><easting><northing>
+    # Example: ftw-36NXF6658 (minimum length 13)
     chip_ids = gdf["id"].astype(str)
-    eastings = chip_ids.str[-4:-2].astype(int)
-    northings = chip_ids.str[-2:].astype(int)
+    min_length = chip_ids.str.len().min()
+    if min_length < 13:
+        raise ValueError(
+            f"Invalid chip ID format: IDs must be at least 13 characters (e.g., 'ftw-36NXF6658'). "
+            f"Found chip ID with length {min_length}"
+        )
+
+    # Validate prefix
+    if not all(chip_ids.str.startswith("ftw-")):
+        invalid_ids = chip_ids[~chip_ids.str.startswith("ftw-")].tolist()
+        raise ValueError(
+            f"Invalid chip ID format: IDs must start with 'ftw-'. "
+            f"Found invalid IDs: {invalid_ids[:5]}"  # Show first 5 for brevity
+        )
+
+    # Extract easting and northing from chip IDs (last 4 digits: EENN)
+    # Example: ftw-36NXF6658 -> zone=36N, grid=XF, easting=66, northing=58
+    try:
+        eastings = chip_ids.str[-4:-2].astype(int)
+        northings = chip_ids.str[-2:].astype(int)
+    except (ValueError, TypeError) as e:
+        raise ValueError(
+            f"Invalid chip ID format: Unable to extract numeric easting/northing from last 4 characters. "
+            f"Expected format: ftw-<zone><band><grid><EENN>. Error: {e}"
+        ) from e
 
     # Extract the full MGRS grid identifier (zone + band + 100km grid square)
     # This is characters 4-9 of the chip ID (after "ftw-")
