@@ -28,19 +28,28 @@ ftwd --help
 Create a complete training dataset from a single fields file. This is the main command that orchestrates the entire pipeline.
 
 ```bash
-# Basic usage - creates output in {input_stem}-dataset/
-ftwd create-dataset austria_fields.parquet
+# Basic usage with required split-type
+ftwd create-dataset austria_fields.parquet --split-type random-uniform
 
 # Specify output directory and dataset name
-ftwd create-dataset fields.parquet --field-dataset austria -o ./austria_dataset
+ftwd create-dataset fields.parquet --field-dataset austria --split-type block3x3 -o ./austria_dataset
+
+# Custom split percentages
+ftwd create-dataset fields.parquet --split-type random-uniform --split-percents 70 20 10
+
+# If fields lack determination_datetime column, specify year
+ftwd create-dataset fields.parquet --split-type block3x3 --year 2023
 
 # Custom options
-ftwd create-dataset fields.parquet --min-coverage 1.0 --resolution 5.0 --workers 8
+ftwd create-dataset fields.parquet --split-type block3x3 --min-coverage 1.0 --resolution 5.0 --workers 8
 ```
 
 **Options:**
+- `--split-type` - **Required.** Split strategy: `random-uniform` (random assignment of chips) or `block3x3` (3x3 blocks of chips assigned together for spatial coherence)
+- `--split-percents` - Train/val/test split percentages as three integers that sum to 100 (default: 80 10 10)
 - `-o, --output-dir` - Output directory (defaults to `{input_stem}-dataset/`)
 - `--field-dataset` - Dataset name for output filenames (defaults to input filename stem)
+- `--year` - Year for temporal extent (only required if fields lack `determination_datetime` column)
 - `--min-coverage` - Minimum coverage percentage to include grids (default: 0.01)
 - `--resolution` - Pixel resolution in meters for masks (default: 10.0)
 - `--workers` - Number of parallel workers (default: half of CPUs)
@@ -49,13 +58,20 @@ ftwd create-dataset fields.parquet --min-coverage 1.0 --resolution 5.0 --workers
 **Output structure:**
 ```
 {name}-dataset/
-├── {dataset}_fields.parquet
-├── {dataset}_chips.parquet
-├── {dataset}_boundary_lines.parquet
+├── {dataset}_fields.parquet          # Field boundaries in EPSG:4326
+├── {dataset}_chips.parquet           # Grid cells with coverage stats and split assignments
+├── {dataset}_boundary_lines.parquet  # Polygon boundaries as lines
+├── catalog.json                      # STAC catalog
+├── source/
+│   └── collection.json              # STAC collection for source data
+├── chips/
+│   ├── collection.json              # STAC collection for chips
+│   ├── items.parquet                # STAC items as parquet
+│   └── {grid_id}/                   # Individual STAC item JSON files
 └── label_masks/
-    ├── instance/
-    ├── semantic_2class/
-    └── semantic_3class/
+    ├── instance/                    # Instance segmentation masks
+    ├── semantic_2class/            # 2-class semantic masks (field/boundary)
+    └── semantic_3class/            # 3-class semantic masks (field/boundary/background)
 ```
 
 ### create-chips
