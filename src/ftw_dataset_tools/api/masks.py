@@ -127,8 +127,7 @@ def _create_single_mask(
     # Ensure minimum dimensions
     if width < 1 or height < 1:
         raise ValueError(
-            f"Grid cell too small for resolution {resolution}m: "
-            f"calculated {width}x{height} pixels"
+            f"Grid cell too small for resolution {resolution}m: calculated {width}x{height} pixels"
         )
 
     # Create transform

@@ -220,7 +220,7 @@ def _create_ftw_grid_single(
         log,
     )
 
-    total_cells, kmsq_count = result
+    total_cells, _kmsq_count = result
 
     # Determine output path
     if output_file:
