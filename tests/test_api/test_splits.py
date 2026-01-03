@@ -42,6 +42,25 @@ class TestAssignSplits:
                 split_type="random-uniform",
             )
 
+    def test_empty_chips_file(self, tmp_path: Path) -> None:
+        """Test that empty chips file raises an error."""
+        chips_file = tmp_path / "chips.parquet"
+
+        # Create empty GeoDataFrame
+        gdf = gpd.GeoDataFrame(
+            {"id": [], "geometry": []},
+            crs="EPSG:4326",
+        )
+        gdf.to_parquet(chips_file)
+
+        with pytest.raises(ValueError, match=r"Chips file is empty.*Cannot assign splits"):
+            assign_splits(
+                chips_file=chips_file,
+                split_type="random-uniform",
+                split_percents=(80, 10, 10),
+                random_seed=42,
+            )
+
     def test_random_uniform_split_basic(self, tmp_path: Path) -> None:
         """Test basic random-uniform split assignment."""
         # Create test chips
@@ -112,12 +131,13 @@ class TestAssignSplits:
         # Check that all chips in each block have the same split
         for block_east in range(3):
             for block_north in range(3):
-                block_mask = (
-                    (updated_gdf["block_east"] == block_east)
-                    & (updated_gdf["block_north"] == block_north)
+                block_mask = (updated_gdf["block_east"] == block_east) & (
+                    updated_gdf["block_north"] == block_north
                 )
                 block_splits = updated_gdf[block_mask]["split"]
-                assert len(block_splits.unique()) == 1, f"Block ({block_east}, {block_north}) has mixed splits"
+                assert len(block_splits.unique()) == 1, (
+                    f"Block ({block_east}, {block_north}) has mixed splits"
+                )
 
     def test_block3x3_invalid_chip_id_format(self, tmp_path: Path) -> None:
         """Test that malformed chip IDs raise an error in block3x3."""

@@ -80,14 +80,14 @@ def assign_splits(
         CreateSplitsResult with statistics about the split assignment
 
     Raises:
-        ValueError: If split_type is not supported or required 'id' column is missing
+        ValueError: If split_type is not supported, required 'id' column is missing,
+            or chips file is empty
         FileNotFoundError: If chips_file doesn't exist
     """
     # Validate split_type early before any processing
     if split_type not in SPLIT_TYPE_CHOICES:
         raise ValueError(
-            f"Unsupported split_type: {split_type}. "
-            f"Must be one of: {SPLIT_TYPE_CHOICES_STR}"
+            f"Unsupported split_type: {split_type}. Must be one of: {SPLIT_TYPE_CHOICES_STR}"
         )
 
     chips_path = Path(chips_file).resolve()
@@ -105,11 +105,16 @@ def assign_splits(
     gdf = gpd.read_parquet(chips_path)
     n_chips = len(gdf)
 
+    # Validate non-empty dataframe
+    if n_chips == 0:
+        raise ValueError(
+            "Chips file is empty (contains 0 rows). Cannot assign splits to an empty dataset."
+        )
+
     # Validate required columns
     if "id" not in gdf.columns:
         raise ValueError(
-            f"Chips file must contain an 'id' column. "
-            f"Found columns: {list(gdf.columns)}"
+            f"Chips file must contain an 'id' column. Found columns: {list(gdf.columns)}"
         )
 
     if split_type == "random-uniform":
@@ -161,9 +166,7 @@ def _assign_random_uniform(
     n_test = n_chips - n_train - n_val  # Remainder goes to test to ensure exact total
 
     # Create split labels
-    splits = np.array(
-        ["train"] * n_train + ["val"] * n_val + ["test"] * n_test
-    )
+    splits = np.array(["train"] * n_train + ["val"] * n_val + ["test"] * n_test)
 
     # Shuffle randomly
     np.random.shuffle(splits)
@@ -239,9 +242,7 @@ def _assign_block3x3(
     n_test = n_blocks - n_train - n_val  # Remainder goes to test
 
     # Create block split labels
-    block_splits = np.array(
-        ["train"] * n_train + ["val"] * n_val + ["test"] * n_test
-    )
+    block_splits = np.array(["train"] * n_train + ["val"] * n_val + ["test"] * n_test)
 
     # Shuffle block assignments randomly
     np.random.shuffle(block_splits)

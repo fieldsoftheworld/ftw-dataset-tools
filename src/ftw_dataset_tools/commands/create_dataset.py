@@ -209,7 +209,9 @@ def create_dataset_cmd(
             click.echo(f"  Cells with coverage: {result.chips_result.cells_with_coverage:,}")
 
         if result.splits_result:
-            click.echo(f"  Splits: {result.splits_result.train_count} train, {result.splits_result.val_count} val, {result.splits_result.test_count} test")
+            click.echo(
+                f"  Splits: {result.splits_result.train_count} train, {result.splits_result.val_count} val, {result.splits_result.test_count} test"
+            )
 
         click.echo(f"  Total masks created: {result.total_masks_created:,}")
 
