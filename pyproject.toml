@@ -80,6 +80,9 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["ftw_dataset_tools"]
 
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # unused imports in __init__.py
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
@@ -89,6 +92,10 @@ line-ending = "auto"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "network: marks tests requiring network access (deselect with '-m \"not network\"')",
+]
 
 [tool.coverage.run]
 source = ["src/ftw_dataset_tools"]
@@ -101,10 +108,17 @@ exclude_lines = [
     "if TYPE_CHECKING:",
 ]
 
+[tool.vulture]
+min_confidence = 80
+paths = ["src/ftw_dataset_tools", "tests"]
+sort_by_size = true
+verbose = false
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.5.0",
     "pytest>=9.0.1",
     "pytest-cov>=7.0.0",
     "ruff>=0.14.7",
+    "vulture>=2.14",
 ]
