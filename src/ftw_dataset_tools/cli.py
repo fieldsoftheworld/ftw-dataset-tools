@@ -3,6 +3,7 @@
 import click
 
 from ftw_dataset_tools import __version__
+from ftw_dataset_tools.commands.add_field_stats import add_field_stats
 from ftw_dataset_tools.commands.create_boundaries import create_boundaries
 from ftw_dataset_tools.commands.create_chips import create_chips
 from ftw_dataset_tools.commands.create_dataset import create_dataset
@@ -29,6 +30,7 @@ def cli() -> None:
 
 
 # Register commands
+cli.add_command(add_field_stats)
 cli.add_command(create_boundaries)
 cli.add_command(create_chips)
 cli.add_command(create_dataset)
