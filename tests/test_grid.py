@@ -236,7 +236,7 @@ class TestGetGridDynamic:
         assert result.grid_count > 0
         # Should cover the full polygon extent
         gdf = gpd.read_parquet(output_path)
-        assert len(gdf) > 50  # ~100 1km tiles for 10km x 10km area
+        assert len(gdf) > 50  # At least 50 1km tiles for 10km x 10km area
 
     def test_precision_affects_tile_count(self, sample_polygon_file: Path, tmp_path: Path):
         """Higher precision should generate more tiles."""
