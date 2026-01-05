@@ -448,8 +448,8 @@ def _generate_mgrs_grid(
 
     Args:
         bounds: Bounding box as (xmin, ymin, xmax, ymax) in WGS84
-        precision: MGRS precision level (0=100km, 1=10km, 2=1km, 3=100m).
-                   Default is 2 (1km tiles).
+        precision: MGRS precision level (0=100km, 1=10km, 2=1km,
+                   3=100m, 4=10m, 5=1m). Default is 2 (1km tiles).
         on_progress: Optional callback for progress messages.
 
     Returns:
