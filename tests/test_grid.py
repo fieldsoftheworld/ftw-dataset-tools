@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import pytest
 from shapely.geometry import Point, Polygon, box
 
 from ftw_dataset_tools.api.grid import (
-    CRSError,
     DYNAMIC_GRID,
+    CRSError,
     GetGridResult,
     get_grid,
     mgrs_tile_to_polygon,
     parse_mgrs_tile,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestParseMgrsTile:
@@ -70,7 +73,7 @@ class TestParseMgrsTile:
         """Parse lowercase input (should be case-insensitive)."""
         result = parse_mgrs_tile("33uup5081")
         assert result is not None
-        gzd, square_id, numeric = result
+        gzd, square_id, _numeric = result
         assert gzd == "33U"
         assert square_id == "UP"
 
@@ -306,13 +309,13 @@ class TestGetGridRemote:
     def test_dynamic_matches_remote(self, sample_input_file: Path, tmp_path: Path):
         """Dynamic generation should match remote Source Coop tiles."""
         # Fetch from remote
-        result_remote = get_grid(
+        get_grid(
             sample_input_file,
             output_file=tmp_path / "remote.parquet",
         )
 
         # Generate dynamically
-        result_dynamic = get_grid(
+        get_grid(
             sample_input_file,
             output_file=tmp_path / "dynamic.parquet",
             grid_source=DYNAMIC_GRID,
@@ -363,13 +366,13 @@ class TestGetGridRemote:
         gdf.to_parquet(input_path)
 
         # Fetch from remote
-        result_remote = get_grid(
+        get_grid(
             input_path,
             output_file=tmp_path / "remote.parquet",
         )
 
         # Generate dynamically
-        result_dynamic = get_grid(
+        get_grid(
             input_path,
             output_file=tmp_path / "dynamic.parquet",
             grid_source=DYNAMIC_GRID,
