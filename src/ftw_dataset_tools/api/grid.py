@@ -84,7 +84,7 @@ def get_grid(
                  use bounding box only (faster but may include extra grids).
                  Ignored when grid_source=DYNAMIC_GRID.
         precision: MGRS precision level for dynamic generation (0=100km, 1=10km,
-                   2=1km, 3=100m). Default is 2 (1km tiles). Only used when
+                   2=1km, 3=100m, 4=10m, 5=1m). Default is 2 (1km tiles). Only used when
                    grid_source=DYNAMIC_GRID.
         on_progress: Optional callback for progress messages
 
