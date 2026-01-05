@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+import math
 from typing import TYPE_CHECKING
 
 import duckdb
@@ -412,8 +413,6 @@ def _mgrs_tile_to_polygon_fallback(
         # Approximate degrees per meter at this latitude
         # 1 degree latitude ≈ 111,000 meters
         # 1 degree longitude ≈ 111,000 * cos(lat) meters
-        import math
-
         meters_per_deg_lat = 111_000
         meters_per_deg_lon = 111_000 * math.cos(math.radians(lat_sw))
 
