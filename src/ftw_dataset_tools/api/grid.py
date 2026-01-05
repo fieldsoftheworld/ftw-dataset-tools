@@ -157,8 +157,7 @@ def _get_grid_dynamic(
 
     # Load input and compute bounds
     gdf_input = gpd.read_parquet(input_path)
-    total_bounds = gdf_input.total_bounds  # (minx, miny, maxx, maxy)
-    bounds = (total_bounds[0], total_bounds[1], total_bounds[2], total_bounds[3])
+    bounds = tuple(gdf_input.total_bounds)  # (minx, miny, maxx, maxy)
 
     log(f"Loaded {len(gdf_input):,} features")
 
