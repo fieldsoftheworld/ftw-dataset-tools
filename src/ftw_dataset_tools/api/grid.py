@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-import math
 from typing import TYPE_CHECKING
 
 import duckdb
