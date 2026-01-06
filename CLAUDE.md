@@ -119,6 +119,7 @@ raise BadParameter("Invalid value for --option")
 ### DuckDB (SQL engine)
 - Primary data processing engine for Parquet files
 - Spatial extension for geometry operations
+- Reading/writing GeoParquet files
 
 ```python
 import duckdb
@@ -129,16 +130,8 @@ con.load_extension("spatial")
 con.execute("SELECT * FROM read_parquet('file.parquet')")
 ```
 
-### GeoPandas (Vector operations)
-- Reading/writing GeoParquet files
-- Geometry operations
-
-```python
-import geopandas as gpd
-
-gdf = gpd.read_parquet(file_path)
-gdf.to_parquet(output_path)
-```
+By default use DuckDB and not GeoPandas for spatial operations. If users
+want a dataframe abstraction then you can bring in https://ibis-project.org/
 
 ### Rasterio (Raster operations)
 - Reading/writing raster files (GeoTIFF)
@@ -452,6 +445,5 @@ git commit -m "Brief description of change"
 
 ### Working with GeoParquet Files
 
-1. Use `geopandas.read_parquet()` to read
-2. Use `gdf.to_parquet()` to write
-3. Use DuckDB for SQL-based operations on large files
+1. Use [geoparquet-io](https://geoparquet.org/geoparquet-io/) so that writing follows best practices.
+2. Don't reinvent any capability that geoparquet-io already has.
