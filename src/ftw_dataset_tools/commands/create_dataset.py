@@ -191,10 +191,10 @@ def create_dataset_cmd(
         click.echo(f"  Chips: {result.chips_file}")
         click.echo(f"  Boundary lines: {result.boundary_lines_file}")
         click.echo("  Masks:")
-        for mask_type, mask_dir in result.mask_dirs.items():
-            if mask_type in result.masks_results:
-                count = result.masks_results[mask_type].total_created
-                click.echo(f"    {mask_type}: {mask_dir} ({count:,} files)")
+        if result.chips_base_dir:
+            click.echo(f"    Location: {result.chips_base_dir}/{{grid_id}}/")
+        for mask_type, mask_result in result.masks_results.items():
+            click.echo(f"    {mask_type}: {mask_result.total_created:,} files")
 
         if result.stac_result:
             click.echo("")
