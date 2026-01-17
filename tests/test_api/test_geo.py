@@ -327,3 +327,143 @@ class TestWriteGeoparquetIntegration:
         assert bbox["ymin"] == 20
         assert bbox["xmax"] == 30
         assert bbox["ymax"] == 40
+
+
+class TestDetectCRS:
+    """Tests for detect_crs function."""
+
+    def test_detect_crs_epsg_4326(self, sample_geoparquet_4326: Path) -> None:
+        """Test detecting EPSG:4326 CRS."""
+        from ftw_dataset_tools.api.geo import detect_crs
+
+        crs_info = detect_crs(sample_geoparquet_4326)
+        assert crs_info.authority_code == "EPSG:4326"
+
+    def test_detect_crs_epsg_3035(self, sample_geoparquet_3035: Path) -> None:
+        """Test detecting EPSG:3035 CRS."""
+        from ftw_dataset_tools.api.geo import detect_crs
+
+        crs_info = detect_crs(sample_geoparquet_3035)
+        assert crs_info.authority == "EPSG"
+        assert crs_info.code == "3035"
+
+    def test_detect_crs_with_existing_connection(self, sample_geoparquet_4326: Path) -> None:
+        """Test detect_crs with a provided DuckDB connection."""
+        import duckdb
+
+        from ftw_dataset_tools.api.geo import detect_crs
+
+        conn = duckdb.connect(":memory:")
+        crs_info = detect_crs(sample_geoparquet_4326, conn=conn)
+        assert crs_info.authority_code == "EPSG:4326"
+        conn.close()
+
+
+class TestCRSInfo:
+    """Tests for CRSInfo dataclass."""
+
+    def test_authority_code_property(self) -> None:
+        """Test authority_code combines authority and code."""
+        from ftw_dataset_tools.api.geo import CRSInfo
+
+        crs = CRSInfo(authority="EPSG", code="4326", wkt=None, projjson=None)
+        assert crs.authority_code == "EPSG:4326"
+
+    def test_authority_code_none_when_missing(self) -> None:
+        """Test authority_code is None when components missing."""
+        from ftw_dataset_tools.api.geo import CRSInfo
+
+        crs = CRSInfo(authority=None, code="4326", wkt=None, projjson=None)
+        assert crs.authority_code is None
+
+    def test_is_equivalent_to_same_authority(self) -> None:
+        """Test CRS equivalence with same authority code."""
+        from ftw_dataset_tools.api.geo import CRSInfo
+
+        crs1 = CRSInfo(authority="EPSG", code="4326", wkt=None, projjson=None)
+        crs2 = CRSInfo(authority="epsg", code="4326", wkt=None, projjson=None)
+        assert crs1.is_equivalent_to(crs2)
+
+    def test_is_equivalent_to_different(self) -> None:
+        """Test CRS non-equivalence with different codes."""
+        from ftw_dataset_tools.api.geo import CRSInfo
+
+        crs1 = CRSInfo(authority="EPSG", code="4326", wkt=None, projjson=None)
+        crs2 = CRSInfo(authority="EPSG", code="3035", wkt=None, projjson=None)
+        assert not crs1.is_equivalent_to(crs2)
+
+    def test_str_representation(self) -> None:
+        """Test string representation of CRSInfo."""
+        from ftw_dataset_tools.api.geo import CRSInfo
+
+        crs = CRSInfo(authority="EPSG", code="4326", wkt=None, projjson=None)
+        assert str(crs) == "EPSG:4326"
+
+
+class TestDetectGeometryColumn:
+    """Tests for detect_geometry_column function."""
+
+    def test_detect_geometry_column_default(self, sample_geoparquet_4326: Path) -> None:
+        """Test detecting default geometry column name."""
+        from ftw_dataset_tools.api.geo import detect_geometry_column
+
+        geom_col = detect_geometry_column(sample_geoparquet_4326)
+        assert geom_col == "geometry"
+
+    def test_detect_geometry_column_nonexistent_file(self) -> None:
+        """Test with nonexistent file returns None."""
+        from ftw_dataset_tools.api.geo import detect_geometry_column
+
+        result = detect_geometry_column(Path("/nonexistent/file.parquet"))
+        # Should handle gracefully
+        assert result is None
+
+
+class TestHasBboxColumn:
+    """Tests for has_bbox_column function."""
+
+    def test_has_bbox_column_without_bbox(self, sample_geoparquet_4326: Path) -> None:
+        """Test file without bbox column returns False."""
+        from ftw_dataset_tools.api.geo import has_bbox_column
+
+        # Standard geopandas output doesn't have bbox column
+        assert has_bbox_column(sample_geoparquet_4326) is False
+
+    def test_has_bbox_column_with_bbox(self, tmp_path: Path) -> None:
+        """Test file with bbox column returns True."""
+        import geoparquet_io as gpio
+
+        from ftw_dataset_tools.api.geo import has_bbox_column
+
+        # Create file and add bbox
+        gdf = gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326")
+        path = tmp_path / "with_bbox.parquet"
+        gdf.to_parquet(path)
+        gpio.read(str(path)).add_bbox().write(str(path))
+
+        assert has_bbox_column(path) is True
+
+
+class TestGetBboxColumnName:
+    """Tests for get_bbox_column_name function."""
+
+    def test_get_bbox_column_name_returns_none(self, sample_geoparquet_4326: Path) -> None:
+        """Test returns None when no bbox column exists."""
+        from ftw_dataset_tools.api.geo import get_bbox_column_name
+
+        result = get_bbox_column_name(sample_geoparquet_4326)
+        assert result is None
+
+    def test_get_bbox_column_name_returns_name(self, tmp_path: Path) -> None:
+        """Test returns bbox column name when it exists."""
+        import geoparquet_io as gpio
+
+        from ftw_dataset_tools.api.geo import get_bbox_column_name
+
+        gdf = gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326")
+        path = tmp_path / "with_bbox.parquet"
+        gdf.to_parquet(path)
+        gpio.read(str(path)).add_bbox().write(str(path))
+
+        result = get_bbox_column_name(path)
+        assert result == "bbox"

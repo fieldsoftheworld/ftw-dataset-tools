@@ -1,5 +1,7 @@
 """Tests for the add-field-stats CLI command."""
 
+from pathlib import Path
+
 from click.testing import CliRunner
 
 from ftw_dataset_tools.cli import cli
@@ -31,6 +33,44 @@ class TestAddFieldStatsCommand:
             cli, ["add-field-stats", "/nonexistent/grid.parquet", "/nonexistent/fields.parquet"]
         )
         assert result.exit_code != 0
+
+    def test_valid_input(
+        self, sample_grid_geoparquet: Path, sample_fields_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        """Test add-field-stats with valid input files."""
+        output_file = tmp_path / "chips.parquet"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "add-field-stats",
+                str(sample_grid_geoparquet),
+                str(sample_fields_geoparquet),
+                "-o",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code == 0
+        assert output_file.exists()
+
+    def test_output_option(
+        self, sample_grid_geoparquet: Path, sample_fields_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        """Test -o / --output option."""
+        output_file = tmp_path / "custom_output.parquet"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "add-field-stats",
+                str(sample_grid_geoparquet),
+                str(sample_fields_geoparquet),
+                "--output",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code == 0
+        assert output_file.exists()
 
 
 class TestCli:
