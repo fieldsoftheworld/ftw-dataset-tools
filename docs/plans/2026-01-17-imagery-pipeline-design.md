@@ -22,7 +22,7 @@ Two new CLI commands plus integration into existing workflow:
 
 All files include year for consistency:
 
-```
+```text
 {dataset}-chips/
 ├── collection.json
 ├── items.parquet
@@ -122,7 +122,7 @@ After selection, parent chip item updated with:
 
 ### `ftwd select-images`
 
-```
+```bash
 ftwd select-images <catalog-path> \
   --year 2024 \
   --stac-host earthsearch \
@@ -143,7 +143,7 @@ ftwd select-images <catalog-path> \
 
 ### `ftwd refine-cloud-cover`
 
-```
+```bash
 ftwd refine-cloud-cover <catalog-path> \
   --cloud-cover-pixel 0 \
   --update-items \
@@ -156,7 +156,7 @@ ftwd refine-cloud-cover <catalog-path> \
 
 ### `ftwd download-images`
 
-```
+```bash
 ftwd download-images <catalog-path> \
   --bands red,green,blue,nir \
   --resume \
@@ -166,7 +166,7 @@ ftwd download-images <catalog-path> \
 
 ### `ftwd create-dataset` (updated)
 
-```
+```bash
 ftwd create-dataset <input-file> <output-dir> \
   --name my-dataset \
   --year 2024 \
@@ -291,7 +291,7 @@ Downloaded on first use to `~/.cache/ftw-tools/crop_calendar/`:
 
 Structured for future extraction to ftw-common:
 
-```
+```text
 src/ftw_dataset_tools/
 ├── api/
 │   ├── imagery/                  # New module - future ftw-common candidate

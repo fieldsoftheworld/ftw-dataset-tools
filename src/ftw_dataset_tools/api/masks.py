@@ -59,14 +59,25 @@ def get_mask_output_path(
     Args:
         grid_id: The grid cell ID
         mask_type: Type of mask
-        chip_dirs: Optional dict mapping grid_id to chip directory
-        output_dir: Fallback output directory
+        chip_dirs: Optional dict mapping grid_id to chip directory.
+                   If provided, grid_id MUST exist in the mapping.
+        output_dir: Fallback output directory (used when chip_dirs is None)
         field_dataset: Dataset name (used in filename when chip_dirs is None)
 
     Returns:
         Full path for the mask file
+
+    Raises:
+        KeyError: If chip_dirs is provided but grid_id is not in the mapping.
+                  Callers should handle/skip grid cells not present in chip_dirs.
     """
-    if chip_dirs is not None and grid_id in chip_dirs:
+    if chip_dirs is not None:
+        if grid_id not in chip_dirs:
+            raise KeyError(
+                f"Grid ID '{grid_id}' not found in chip_dirs mapping for mask type "
+                f"'{mask_type.value}'. Caller should skip this grid cell or ensure "
+                f"chip_dirs contains all expected grid IDs."
+            )
         # Co-located with STAC item: simple filename
         return chip_dirs[grid_id] / get_mask_filename(grid_id, mask_type)
     else:
