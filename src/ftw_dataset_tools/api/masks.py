@@ -46,6 +46,34 @@ def get_mask_filename(grid_id: str, mask_type: MaskType) -> str:
     return f"{grid_id}_{mask_type.value}.tif"
 
 
+def get_mask_output_path(
+    grid_id: str,
+    mask_type: MaskType,
+    chip_dirs: dict[str, Path] | None,
+    output_dir: Path,
+    field_dataset: str,
+) -> Path:
+    """
+    Get the output path for a mask file.
+
+    Args:
+        grid_id: The grid cell ID
+        mask_type: Type of mask
+        chip_dirs: Optional dict mapping grid_id to chip directory
+        output_dir: Fallback output directory
+        field_dataset: Dataset name (used in filename when chip_dirs is None)
+
+    Returns:
+        Full path for the mask file
+    """
+    if chip_dirs is not None and grid_id in chip_dirs:
+        # Co-located with STAC item: simple filename
+        return chip_dirs[grid_id] / get_mask_filename(grid_id, mask_type)
+    else:
+        # Legacy: dataset prefix in filename
+        return output_dir / f"{field_dataset}_{grid_id}_{mask_type.value}.tif"
+
+
 @dataclass
 class MaskResult:
     """Result of a single mask creation."""

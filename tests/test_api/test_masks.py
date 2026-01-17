@@ -27,6 +27,47 @@ class TestMaskFilenameConvention:
         assert filename == "grid_001_semantic_3_class.tif"
 
 
+class TestMaskOutputPath:
+    """Tests for mask output path generation."""
+
+    def test_output_path_with_chip_dirs(self) -> None:
+        """Test mask path uses chip_dirs when provided."""
+        from pathlib import Path
+
+        from ftw_dataset_tools.api.masks import MaskType, get_mask_output_path
+
+        chip_dirs = {
+            "grid_001": Path("/output/chips/grid_001"),
+            "grid_002": Path("/output/chips/grid_002"),
+        }
+
+        path = get_mask_output_path(
+            grid_id="grid_001",
+            mask_type=MaskType.INSTANCE,
+            chip_dirs=chip_dirs,
+            output_dir=Path("/output/masks"),
+            field_dataset="test_dataset",
+        )
+
+        assert path == Path("/output/chips/grid_001/grid_001_instance.tif")
+
+    def test_output_path_without_chip_dirs(self) -> None:
+        """Test mask path uses output_dir with dataset prefix when chip_dirs is None."""
+        from pathlib import Path
+
+        from ftw_dataset_tools.api.masks import MaskType, get_mask_output_path
+
+        path = get_mask_output_path(
+            grid_id="grid_001",
+            mask_type=MaskType.INSTANCE,
+            chip_dirs=None,
+            output_dir=Path("/output/masks"),
+            field_dataset="test_dataset",
+        )
+
+        assert path == Path("/output/masks/test_dataset_grid_001_instance.tif")
+
+
 class TestCreateMasksChipDirs:
     """Tests for chip_dirs parameter in create_masks."""
 
