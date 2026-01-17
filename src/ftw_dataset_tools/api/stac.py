@@ -476,9 +476,6 @@ def generate_stac_catalog(
     chips_file = Path(chips_file)
     boundary_lines_file = Path(boundary_lines_file)
 
-    # TODO: Task 7 will implement chips_base_dir logic
-    _ = chips_base_dir  # Placeholder until Task 7 implementation
-
     def log(msg: str) -> None:
         if on_progress:
             on_progress(msg)
@@ -512,11 +509,20 @@ def generate_stac_catalog(
     log("Creating STAC items...")
     items = []
     for chip_info in chip_infos:
+        # Determine chip directory if using new structure
+        chip_dir = None
+        if chips_base_dir is not None:
+            chip_dir = chips_base_dir / chip_info.grid_id
+            if not chip_dir.exists():
+                # Skip chips without directories (no masks generated)
+                continue
+
         item = _create_chip_item(
             chip_info=chip_info,
             field_dataset=field_dataset,
             temporal_extent=temporal_extent,
-            mask_dirs=mask_dirs,
+            chip_dir=chip_dir,
+            mask_dirs=mask_dirs if chip_dir is None else None,
         )
         if item:
             items.append(item)
