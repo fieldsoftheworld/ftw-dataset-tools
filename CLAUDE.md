@@ -4,7 +4,7 @@ This file contains project-specific instructions for Claude Code when working in
 
 ## Project Overview
 
-ftw-dataset-tools (ftwd) is a Python CLI tool for creating the Fields of the World (FTW) benchmark dataset. It uses Click for CLI, DuckDB for data processing, GeoPandas for vector operations, Rasterio for raster operations, and follows modern Python packaging standards.
+ftw-dataset-tools (ftwd) is a Python CLI tool for creating the Fields of the World (FTW) benchmark dataset. It uses Click for CLI, DuckDB for data processing, geoparquet-io for GeoParquet I/O, Rasterio for raster operations, and follows modern Python packaging standards.
 
 **Entry point**: `ftwd` command defined in `src/ftw_dataset_tools/cli.py`
 
@@ -66,8 +66,7 @@ src/ftw_dataset_tools/
 │   ├── create_masks.py      # Raster mask generation
 │   ├── create_boundaries.py # Vector to boundary line conversion
 │   ├── create_ftw_grid.py   # Hierarchical grid creation
-│   ├── get_grid.py          # Grid cell retrieval
-│   └── reproject.py         # CRS transformation
+│   └── get_grid.py          # Grid cell retrieval
 └── api/
     ├── __init__.py
     ├── dataset.py       # Dataset creation logic
@@ -130,8 +129,27 @@ con.load_extension("spatial")
 con.execute("SELECT * FROM read_parquet('file.parquet')")
 ```
 
-By default use DuckDB and not GeoPandas for spatial operations. If users
-want a dataframe abstraction then you can bring in https://ibis-project.org/
+**IMPORTANT:** Use DuckDB for data processing/queries and geoparquet-io for reading/writing GeoParquet files. Do NOT use GeoPandas or pandas for file I/O - they are only acceptable for specific transformations that geoparquet-io doesn't support.
+
+### geoparquet-io (GeoParquet I/O)
+- **Primary library for reading/writing GeoParquet files**
+- Use the fluent API for all GeoParquet operations
+- Preferred over GeoPandas for vector I/O
+
+```python
+import geoparquet_io as gpio
+
+# Read, transform, and write GeoParquet
+gpio.read('input.parquet') \
+    .add_bbox() \
+    .reproject('EPSG:4326') \
+    .write('output.parquet')
+
+# Simple read and add bbox
+gpio.read('input.parquet').add_bbox().write('output.parquet')
+```
+
+**Do NOT use GeoPandas or pandas for GeoParquet I/O.** Always prefer geoparquet-io.
 
 ### Rasterio (Raster operations)
 - Reading/writing raster files (GeoTIFF)
@@ -445,5 +463,27 @@ git commit -m "Brief description of change"
 
 ### Working with GeoParquet Files
 
-1. Use [geoparquet-io](https://geoparquet.org/geoparquet-io/) so that writing follows best practices.
-2. Don't reinvent any capability that geoparquet-io already has.
+**Always use geoparquet-io** for reading and writing GeoParquet files:
+
+```python
+import geoparquet_io as gpio
+
+# Read and write with best practices (bbox, proper metadata)
+gpio.read('input.parquet').add_bbox().write('output.parquet')
+
+# Reproject
+gpio.read('input.parquet').reproject('EPSG:4326').write('output.parquet')
+
+# Chain multiple operations
+gpio.read('input.parquet') \
+    .add_bbox() \
+    .reproject('EPSG:4326') \
+    .write('output.parquet')
+```
+
+**Do NOT use:**
+- `geopandas.read_parquet()` / `gdf.to_parquet()` - use `gpio.read()` / `.write()` instead
+- `pandas.read_parquet()` - use `gpio.read()` instead
+- Internal geoparquet-io modules - use the fluent API (`gpio.read()...`)
+
+**Exception:** GeoPandas is acceptable for in-memory geometry transformations that require GeoDataFrame methods not available in geoparquet-io or DuckDB.
