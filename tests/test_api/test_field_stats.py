@@ -1,8 +1,80 @@
 """Tests for the field_stats API."""
 
+from pathlib import Path
+
+import duckdb
+import geopandas as gpd
+import geoparquet_io as gpio
 import pytest
+from shapely.geometry import box
 
 from ftw_dataset_tools.api.field_stats import FieldStatsResult
+
+
+class TestDetectBboxColumn:
+    """Tests for detect_bbox_column function."""
+
+    def test_returns_none_without_bbox(self, sample_geoparquet_4326: Path) -> None:
+        """Test returns None when no bbox column."""
+        from ftw_dataset_tools.api.field_stats import detect_bbox_column
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+
+        result = detect_bbox_column(conn, sample_geoparquet_4326, "geometry")
+        assert result is None
+        conn.close()
+
+    def test_returns_bbox_column_name(self, tmp_path: Path) -> None:
+        """Test returns bbox column name when present."""
+        from ftw_dataset_tools.api.field_stats import detect_bbox_column
+
+        # Create file with bbox
+        gdf = gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326")
+        path = tmp_path / "with_bbox.parquet"
+        gdf.to_parquet(path)
+        gpio.read(str(path)).add_bbox().write(str(path))
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+
+        result = detect_bbox_column(conn, path, "geometry")
+        assert result == "bbox"
+        conn.close()
+
+
+class TestBuildCoverageQuery:
+    """Tests for _build_coverage_query function."""
+
+    def test_query_with_bbox_optimization(self) -> None:
+        """Test query includes bbox conditions when columns provided."""
+        from ftw_dataset_tools.api.field_stats import _build_coverage_query
+
+        query = _build_coverage_query(
+            grid_geom_col="geometry",
+            fields_geom_col="geometry",
+            grid_bbox_col="bbox",
+            fields_bbox_col="bbox",
+            coverage_col="coverage",
+        )
+
+        assert "bbox" in query.lower()
+        assert "st_intersects" in query.lower()
+
+    def test_query_without_bbox_optimization(self) -> None:
+        """Test query works without bbox columns."""
+        from ftw_dataset_tools.api.field_stats import _build_coverage_query
+
+        query = _build_coverage_query(
+            grid_geom_col="geometry",
+            fields_geom_col="geometry",
+            grid_bbox_col=None,
+            fields_bbox_col=None,
+            coverage_col="coverage",
+        )
+
+        assert "st_intersects" in query.lower()
+        assert "coverage" in query.lower()
 
 
 class TestFieldStatsResult:
