@@ -93,3 +93,77 @@ class TestCreateDatasetInputValidation:
 
         with pytest.raises(ValueError, match="EPSG:4326 is required"):
             create_dataset(fields_file, year=2023, skip_reproject=True)
+
+
+class TestCreateDatasetResultProperties:
+    """Tests for CreateDatasetResult dataclass properties."""
+
+    def test_total_masks_created_empty(self) -> None:
+        """Test total_masks_created with empty masks_results."""
+        from ftw_dataset_tools.api.dataset import CreateDatasetResult
+
+        result = CreateDatasetResult(
+            output_dir=Path("/tmp"),
+            field_dataset="test",
+            fields_file=Path("/tmp/fields.parquet"),
+            chips_file=Path("/tmp/chips.parquet"),
+            boundary_lines_file=Path("/tmp/boundary_lines.parquet"),
+            masks_results={},
+        )
+        assert result.total_masks_created == 0
+
+    def test_result_optional_fields(self) -> None:
+        """Test CreateDatasetResult optional fields have correct defaults."""
+        from ftw_dataset_tools.api.dataset import CreateDatasetResult
+
+        result = CreateDatasetResult(
+            output_dir=Path("/tmp"),
+            field_dataset="test",
+            fields_file=Path("/tmp/fields.parquet"),
+            chips_file=Path("/tmp/chips.parquet"),
+            boundary_lines_file=Path("/tmp/boundary_lines.parquet"),
+        )
+        assert result.chips_base_dir is None
+        assert result.was_reprojected is False
+        assert result.source_crs is None
+        assert result.chips_result is None
+        assert result.boundaries_result is None
+        assert result.stac_result is None
+
+
+class TestCreateDatasetSignature:
+    """Tests for create_dataset function signature."""
+
+    def test_function_accepts_all_parameters(self) -> None:
+        """Test that create_dataset accepts all expected parameters."""
+        import inspect
+
+        from ftw_dataset_tools.api.dataset import create_dataset
+
+        sig = inspect.signature(create_dataset)
+        param_names = list(sig.parameters.keys())
+
+        assert "fields_file" in param_names
+        assert "output_dir" in param_names
+        assert "field_dataset" in param_names
+        assert "min_coverage" in param_names
+        assert "resolution" in param_names
+        assert "num_workers" in param_names
+        assert "skip_reproject" in param_names
+        assert "year" in param_names
+        assert "on_progress" in param_names
+        assert "on_mask_progress" in param_names
+        assert "on_mask_start" in param_names
+
+    def test_default_values(self) -> None:
+        """Test that default parameter values are correct."""
+        import inspect
+
+        from ftw_dataset_tools.api.dataset import create_dataset
+
+        sig = inspect.signature(create_dataset)
+
+        assert sig.parameters["output_dir"].default == "./dataset"
+        assert sig.parameters["min_coverage"].default == 0.01
+        assert sig.parameters["resolution"].default == 10.0
+        assert sig.parameters["skip_reproject"].default is False

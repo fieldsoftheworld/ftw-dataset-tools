@@ -190,3 +190,199 @@ class TestCreateMasksChipDirs:
         assert "chip_dirs" in sig.parameters
         # Should be optional (has default None)
         assert sig.parameters["chip_dirs"].default is None
+
+
+class TestMaskOutputPathEdgeCases:
+    """Tests for get_mask_output_path edge cases."""
+
+    def test_chip_dirs_missing_grid_id_raises_keyerror(self) -> None:
+        """Test KeyError when grid_id not in chip_dirs."""
+        from ftw_dataset_tools.api.masks import MaskType, get_mask_output_path
+
+        chip_dirs = {
+            "grid_001": Path("/output/chips/grid_001"),
+        }
+
+        with pytest.raises(KeyError, match="grid_002"):
+            get_mask_output_path(
+                grid_id="grid_002",  # Not in chip_dirs
+                mask_type=MaskType.INSTANCE,
+                chip_dirs=chip_dirs,
+                output_dir=Path("/output/masks"),
+                field_dataset="test_dataset",
+            )
+
+
+class TestCreateMasksIntegration:
+    """Integration tests for create_masks function."""
+
+    def test_create_masks_with_real_data(
+        self,
+        sample_chips_with_coverage: Path,
+        sample_boundaries_geoparquet: Path,
+        sample_boundary_lines_geoparquet: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Test create_masks with real GeoParquet fixtures."""
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        output_dir = tmp_path / "masks"
+
+        result = create_masks(
+            chips_file=sample_chips_with_coverage,
+            boundaries_file=sample_boundaries_geoparquet,
+            boundary_lines_file=sample_boundary_lines_geoparquet,
+            output_dir=output_dir,
+            field_dataset="test_dataset",
+            mask_type=MaskType.SEMANTIC_2_CLASS,
+            min_coverage=0.0,  # Include all grids
+            num_workers=1,
+        )
+
+        assert result.total_created > 0
+        assert result.field_dataset == "test_dataset"
+        assert output_dir.exists()
+
+    def test_create_masks_with_progress_callbacks(
+        self,
+        sample_chips_with_coverage: Path,
+        sample_boundaries_geoparquet: Path,
+        sample_boundary_lines_geoparquet: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Test progress callbacks are invoked."""
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        output_dir = tmp_path / "masks"
+        on_start_calls: list[tuple[int, int]] = []
+        on_progress_calls: list[tuple[int, int]] = []
+
+        def on_start(total_grids: int, filtered_grids: int) -> None:
+            on_start_calls.append((total_grids, filtered_grids))
+
+        def on_progress(current: int, total: int) -> None:
+            on_progress_calls.append((current, total))
+
+        create_masks(
+            chips_file=sample_chips_with_coverage,
+            boundaries_file=sample_boundaries_geoparquet,
+            boundary_lines_file=sample_boundary_lines_geoparquet,
+            output_dir=output_dir,
+            field_dataset="test_dataset",
+            mask_type=MaskType.SEMANTIC_2_CLASS,
+            min_coverage=0.0,
+            num_workers=1,
+            on_start=on_start,
+            on_progress=on_progress,
+        )
+
+        assert len(on_start_calls) == 1
+        assert on_start_calls[0][0] == 3  # Total grids
+        assert len(on_progress_calls) > 0
+
+    def test_create_masks_min_coverage_filter(
+        self,
+        sample_chips_with_coverage: Path,
+        sample_boundaries_geoparquet: Path,
+        sample_boundary_lines_geoparquet: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Test min_coverage filters out low-coverage grids."""
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        output_dir = tmp_path / "masks"
+        on_start_calls: list[tuple[int, int]] = []
+
+        def on_start(total_grids: int, filtered_grids: int) -> None:
+            on_start_calls.append((total_grids, filtered_grids))
+
+        create_masks(
+            chips_file=sample_chips_with_coverage,
+            boundaries_file=sample_boundaries_geoparquet,
+            boundary_lines_file=sample_boundary_lines_geoparquet,
+            output_dir=output_dir,
+            field_dataset="test_dataset",
+            mask_type=MaskType.SEMANTIC_2_CLASS,
+            min_coverage=10.0,  # Only include grids with coverage >= 10%
+            num_workers=1,
+            on_start=on_start,
+        )
+
+        # With min_coverage=10, should filter to 2 grids (50% and 25%)
+        assert len(on_start_calls) == 1
+        total, filtered = on_start_calls[0]
+        assert total == 3  # Total grids in file
+        assert filtered == 2  # Filtered grids (50%, 25%)
+
+    def test_create_masks_instance_type(
+        self,
+        sample_chips_with_coverage: Path,
+        sample_boundaries_geoparquet: Path,
+        sample_boundary_lines_geoparquet: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Test create_masks with instance mask type."""
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        output_dir = tmp_path / "masks"
+
+        result = create_masks(
+            chips_file=sample_chips_with_coverage,
+            boundaries_file=sample_boundaries_geoparquet,
+            boundary_lines_file=sample_boundary_lines_geoparquet,
+            output_dir=output_dir,
+            field_dataset="test_dataset",
+            mask_type=MaskType.INSTANCE,
+            min_coverage=0.0,
+            num_workers=1,
+        )
+
+        assert result.total_created > 0
+        # Check mask files have instance suffix
+        mask_files = list(output_dir.glob("*_instance.tif"))
+        assert len(mask_files) > 0
+
+    def test_create_masks_semantic_3class_type(
+        self,
+        sample_chips_with_coverage: Path,
+        sample_boundaries_geoparquet: Path,
+        sample_boundary_lines_geoparquet: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Test create_masks with semantic 3-class mask type."""
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        output_dir = tmp_path / "masks"
+
+        result = create_masks(
+            chips_file=sample_chips_with_coverage,
+            boundaries_file=sample_boundaries_geoparquet,
+            boundary_lines_file=sample_boundary_lines_geoparquet,
+            output_dir=output_dir,
+            field_dataset="test_dataset",
+            mask_type=MaskType.SEMANTIC_3_CLASS,
+            min_coverage=0.0,
+            num_workers=1,
+        )
+
+        assert result.total_created > 0
+
+
+class TestBoundaryLinesFileNotFound:
+    """Test for missing boundary lines file error."""
+
+    def test_boundary_lines_file_not_found(self, tmp_path: Path) -> None:
+        """Test FileNotFoundError for missing boundary lines file."""
+        from ftw_dataset_tools.api.masks import create_masks
+
+        chips = tmp_path / "chips.parquet"
+        boundaries = tmp_path / "boundaries.parquet"
+        chips.touch()
+        boundaries.touch()
+
+        with pytest.raises(FileNotFoundError, match="Boundary lines file not found"):
+            create_masks(
+                chips_file=str(chips),
+                boundaries_file=str(boundaries),
+                boundary_lines_file="/nonexistent/boundary_lines.parquet",
+            )

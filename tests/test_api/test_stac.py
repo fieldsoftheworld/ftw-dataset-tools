@@ -230,3 +230,137 @@ class TestGenerateStacCatalogSignature:
 
         sig = inspect.signature(generate_stac_catalog)
         assert "chips_base_dir" in sig.parameters
+
+
+class TestTemporalExtentFromData:
+    """Tests for get_temporal_extent_from_data function."""
+
+    def test_extracts_datetime_range(self, tmp_path: Path) -> None:
+        """Test extracting min/max datetime from data."""
+        from ftw_dataset_tools.api.stac import get_temporal_extent_from_data
+
+        gdf = gpd.GeoDataFrame(
+            {
+                "id": [1, 2, 3],
+                "determination_datetime": [
+                    datetime(2023, 3, 15),
+                    datetime(2023, 6, 20),
+                    datetime(2023, 9, 10),
+                ],
+            },
+            geometry=[box(0, 0, 1, 1), box(1, 1, 2, 2), box(2, 2, 3, 3)],
+            crs="EPSG:4326",
+        )
+        path = tmp_path / "with_datetime.parquet"
+        gdf.to_parquet(path)
+
+        start, end = get_temporal_extent_from_data(path, "determination_datetime")
+
+        assert start.year == 2023
+        assert start.month == 3
+        assert end.year == 2023
+        assert end.month == 9
+        assert start.tzinfo is not None
+        assert end.tzinfo is not None
+
+
+class TestGetDatasetBounds:
+    """Tests for _get_dataset_bounds function."""
+
+    def test_calculates_bounds(self, sample_geoparquet_4326: Path) -> None:
+        """Test calculating spatial bounds from geometry."""
+        from ftw_dataset_tools.api.stac import _get_dataset_bounds
+
+        bounds = _get_dataset_bounds(sample_geoparquet_4326)
+
+        assert len(bounds) == 4
+        assert bounds[0] <= bounds[2]  # xmin <= xmax
+        assert bounds[1] <= bounds[3]  # ymin <= ymax
+
+    def test_bounds_match_data(self, tmp_path: Path) -> None:
+        """Test that bounds match the actual data extent."""
+        from ftw_dataset_tools.api.stac import _get_dataset_bounds
+
+        gdf = gpd.GeoDataFrame(
+            {"id": [1, 2]},
+            geometry=[box(10.0, 50.0, 11.0, 51.0), box(12.0, 52.0, 13.0, 53.0)],
+            crs="EPSG:4326",
+        )
+        path = tmp_path / "bounds_test.parquet"
+        gdf.to_parquet(path)
+
+        bounds = _get_dataset_bounds(path)
+
+        assert bounds[0] == 10.0  # xmin
+        assert bounds[1] == 50.0  # ymin
+        assert bounds[2] == 13.0  # xmax
+        assert bounds[3] == 53.0  # ymax
+
+
+class TestExtractChipsInfo:
+    """Tests for _extract_chips_info function."""
+
+    def test_extracts_chip_info(self, sample_grid_geoparquet: Path) -> None:
+        """Test extracting chip info from parquet file."""
+        from ftw_dataset_tools.api.stac import _extract_chips_info
+
+        chips = _extract_chips_info(sample_grid_geoparquet)
+
+        assert len(chips) == 2
+        assert chips[0].grid_id == "grid_001"
+        assert chips[1].grid_id == "grid_002"
+        assert "type" in chips[0].geometry
+        assert len(chips[0].bbox) == 4
+
+
+class TestCreateRootCatalog:
+    """Tests for _create_root_catalog function."""
+
+    def test_creates_catalog_with_name(self) -> None:
+        """Test creating root catalog with dataset name."""
+        from ftw_dataset_tools.api.stac import _create_root_catalog
+
+        catalog = _create_root_catalog("test_dataset")
+
+        assert catalog.id == "test_dataset"
+        assert "test_dataset" in catalog.description
+
+    def test_creates_catalog_with_custom_description(self) -> None:
+        """Test creating root catalog with custom description."""
+        from ftw_dataset_tools.api.stac import _create_root_catalog
+
+        catalog = _create_root_catalog("test_dataset", "Custom description")
+
+        assert catalog.description == "Custom description"
+
+
+class TestChipInfo:
+    """Tests for ChipInfo dataclass."""
+
+    def test_chip_info_fields(self) -> None:
+        """Test ChipInfo has expected fields."""
+        from ftw_dataset_tools.api.stac import ChipInfo
+
+        chip = ChipInfo(
+            grid_id="grid_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+        )
+
+        assert chip.grid_id == "grid_001"
+        assert chip.geometry["type"] == "Polygon"
+        assert chip.bbox == (0.0, 0.0, 1.0, 1.0)
+        assert chip.properties == {}  # Default
+
+    def test_chip_info_with_properties(self) -> None:
+        """Test ChipInfo with custom properties."""
+        from ftw_dataset_tools.api.stac import ChipInfo
+
+        chip = ChipInfo(
+            grid_id="grid_001",
+            geometry={"type": "Point", "coordinates": [0, 0]},
+            bbox=(0.0, 0.0, 0.0, 0.0),
+            properties={"coverage": 50.0},
+        )
+
+        assert chip.properties["coverage"] == 50.0
