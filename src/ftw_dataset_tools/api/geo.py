@@ -477,16 +477,29 @@ def reproject(
     # Writing to file serializes as standard WKB which add_bbox() can parse.
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-        tmp_path = Path(tmp.name)
+    # Use atomic write pattern to protect against partial writes, especially
+    # when out_path equals the input file (in-place reprojection)
+    tmp_path = None
+    tmp_out_path = None
     try:
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
         # Write reprojected data to temp file
         table.reproject(target_crs).write(str(tmp_path))
-        # Read back and add bbox, write to final destination
-        gpio.read(str(tmp_path)).add_bbox().write(str(out_path))
+
+        # Read back and add bbox, write to a second temp file for atomic replacement
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp_out:
+            tmp_out_path = Path(tmp_out.name)
+        gpio.read(str(tmp_path)).add_bbox().write(str(tmp_out_path))
+
+        # Atomically replace the output file
+        tmp_out_path.replace(out_path)
+        tmp_out_path = None  # Mark as moved, no cleanup needed
     finally:
-        if tmp_path.exists():
+        if tmp_path and tmp_path.exists():
             tmp_path.unlink()
+        if tmp_out_path and tmp_out_path.exists():
+            tmp_out_path.unlink()
 
     log(f"Wrote output to: {out_path}")
 
