@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
-from geoparquet_io.core.add_bbox_column import add_bbox_column
-from geoparquet_io.core.common import write_parquet_with_metadata
+import geoparquet_io as gpio
 
 from ftw_dataset_tools.api.geo import get_bbox_column_name, has_bbox_column
 
@@ -291,25 +288,15 @@ def _create_ftw_grid_partitioned(
             gzd_folder.mkdir(parents=True, exist_ok=True)
             out_file = gzd_folder / f"ftw_{gzd}.parquet"
 
-            # Write output
-            write_parquet_with_metadata(
-                conn,
-                "SELECT * FROM ftw_grid",
-                str(out_file),
-                compression="ZSTD",
-                compression_level=16,
-            )
+            # Get result as Arrow table and write with gpio
+            arrow_table = conn.execute("SELECT * FROM ftw_grid").fetch_arrow_table()
             conn.close()
 
-            # Add bbox if input doesn't have one (suppress stdout from library)
+            # Create gpio.Table and write with bbox if needed
+            table = gpio.Table(arrow_table)
             if not has_bbox_column(input_file):
-                with Path(os.devnull).open("w") as devnull, contextlib.redirect_stdout(devnull):
-                    add_bbox_column(
-                        str(out_file),
-                        str(out_file),
-                        compression="ZSTD",
-                        compression_level=16,
-                    )
+                table = table.add_bbox()
+            table.write(str(out_file))
 
             total_cells += cells
             gzds_processed.append(gzd)
@@ -544,25 +531,12 @@ def _write_output(
     log(f"Writing output to: {out_path}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Check if input has bbox - if so, we'll include it in output
-    input_has_bbox = has_bbox_column(input_path)
+    # Get result as Arrow table
+    arrow_table = conn.execute("SELECT * FROM ftw_grid").fetch_arrow_table()
 
-    # Write initial file with proper metadata
-    write_parquet_with_metadata(
-        conn,
-        "SELECT * FROM ftw_grid",
-        str(out_path),
-        compression="ZSTD",
-        compression_level=16,
-    )
-
-    # Add bbox column if input didn't have one
-    if not input_has_bbox:
+    # Create gpio.Table and write with bbox if needed
+    table = gpio.Table(arrow_table)
+    if not has_bbox_column(input_path):
         log("Adding bbox column...")
-        with Path(os.devnull).open("w") as devnull, contextlib.redirect_stdout(devnull):
-            add_bbox_column(
-                str(out_path),
-                str(out_path),
-                compression="ZSTD",
-                compression_level=16,
-            )
+        table = table.add_bbox()
+    table.write(str(out_path))

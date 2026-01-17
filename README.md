@@ -174,28 +174,13 @@ ftwd get-grid fields.parquet -o custom_grid.parquet
 - `--precise` - Use geometry union for precise matching (excludes grids in bbox gaps)
 - `--grid-source` - URL/path to the grid source
 
-### reproject
+### Reprojection
 
-Reproject a GeoParquet file to a different CRS.
+For reprojecting GeoParquet files to a different CRS, use [geoparquet-io](https://geoparquet.io/):
 
 ```bash
-# Reproject to EPSG:4326 (default)
-ftwd reproject input.parquet
-
-# Custom target CRS
-ftwd reproject input.parquet --target-crs EPSG:32610
-
-# Overwrite in place
-ftwd reproject input.parquet --overwrite
-
-# Specify output file
-ftwd reproject input.parquet -o output.parquet
+gpio reproject input.parquet -o output.parquet --target-crs EPSG:4326
 ```
-
-**Options:**
-- `-o, --output` - Output file path (defaults to `<input>_<crs>.parquet`)
-- `--overwrite` - Overwrite input file in place
-- `--target-crs` - Target CRS in format `EPSG:XXXX` (default: `EPSG:4326`)
 
 ## Development
 

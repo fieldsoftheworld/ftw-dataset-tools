@@ -583,7 +583,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1.0" },
     { name = "duckdb", specifier = ">=1.4.1" },
     { name = "geopandas", specifier = ">=1.0.0" },
-    { name = "geoparquet-io", specifier = ">=0.6.0" },
+    { name = "geoparquet-io", specifier = ">=0.8.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.5.0" },
     { name = "pystac", specifier = ">=1.10.0" },
@@ -700,7 +700,7 @@ wheels = [
 
 [[package]]
 name = "geoparquet-io"
-version = "0.6.0"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -709,17 +709,19 @@ dependencies = [
     { name = "fsspec" },
     { name = "geoarrow-pyarrow" },
     { name = "jsonschema" },
+    { name = "mercantile" },
     { name = "obstore" },
     { name = "pandas" },
     { name = "psutil" },
     { name = "pyarrow" },
+    { name = "pyproj" },
     { name = "pystac" },
     { name = "rich" },
     { name = "s3fs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/59/60/a73e6eeb31fc4966522ff95711af158eb69d754d07cbd34a4aabfcbf4f86/geoparquet_io-0.6.0.tar.gz", hash = "sha256:a25b8d5684470c81de2e2b4c876f1d808132621d9f028457486c7dc20880a03d", size = 693718 }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/f9/05baa2855ae0f8285ac85110c56e307ecddafd9f8b802f7d4b1faed3a250/geoparquet_io-0.8.0.tar.gz", hash = "sha256:38952c8b734f02895b96122e3bf902160cc406cb23e0f5d86c0f1b4cd9686282", size = 1007593 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/47/1e/1528d48f8230b86e31226658f56a1f4dfdc451cfd9fa94766255b15cae3c/geoparquet_io-0.6.0-py3-none-any.whl", hash = "sha256:c6c1f1b85a995f599b0f3fa9ac85d8fd5b18ef32ca7233b34e99865d307788fd", size = 147316 },
+    { url = "https://files.pythonhosted.org/packages/f3/d7/eb785ce86c02116be7d0952e8ca229edee725de69d9eb75d4be8950bb380/geoparquet_io-0.8.0-py3-none-any.whl", hash = "sha256:8c7c60c22669dcc922174d024e816d7895a20e9ebe8e2013852a62e2338fde7f", size = 260113 },
 ]
 
 [[package]]
@@ -804,6 +806,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979 },
+]
+
+[[package]]
+name = "mercantile"
+version = "1.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d2/c6/87409bcb26fb68c393fa8cf58ba09363aa7298cfb438a0109b5cb14bc98b/mercantile-1.2.1.tar.gz", hash = "sha256:fa3c6db15daffd58454ac198b31887519a19caccee3f9d63d17ae7ff61b3b56b", size = 26352 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b2/d6/de0cc74f8d36976aeca0dd2e9cbf711882ff8e177495115fd82459afdc4d/mercantile-1.2.1-py3-none-any.whl", hash = "sha256:30f457a73ee88261aab787b7069d85961a5703bb09dc57a170190bc042cd023f", size = 14779 },
 ]
 
 [[package]]
