@@ -122,3 +122,16 @@ class TestChipItemAssetHrefs:
         )
 
         assert item is None
+
+
+class TestGenerateStacCatalogSignature:
+    """Tests for generate_stac_catalog function signature."""
+
+    def test_accepts_chips_base_dir_parameter(self) -> None:
+        """Test that generate_stac_catalog accepts chips_base_dir parameter."""
+        import inspect
+
+        from ftw_dataset_tools.api.stac import generate_stac_catalog
+
+        sig = inspect.signature(generate_stac_catalog)
+        assert "chips_base_dir" in sig.parameters

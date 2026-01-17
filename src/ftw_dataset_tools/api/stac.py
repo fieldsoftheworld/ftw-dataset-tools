@@ -444,7 +444,8 @@ def generate_stac_catalog(
     fields_file: Path | str,
     chips_file: Path | str,
     boundary_lines_file: Path | str,
-    mask_dirs: dict[str, Path],
+    chips_base_dir: Path | None = None,
+    mask_dirs: dict[str, Path] | None = None,
     year: int | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> STACGenerationResult:
@@ -457,7 +458,10 @@ def generate_stac_catalog(
         fields_file: Path to fields parquet file
         chips_file: Path to chips parquet file
         boundary_lines_file: Path to boundary lines parquet file
-        mask_dirs: Dict mapping mask type name to directory path
+        chips_base_dir: Base directory containing chip subdirectories with co-located masks.
+                        If provided, expects structure: {chips_base_dir}/{grid_id}/{grid_id}_*.tif
+        mask_dirs: Legacy - Dict mapping mask type name to directory path.
+                   Ignored if chips_base_dir is provided.
         year: Optional year for temporal extent (required if no determination_datetime)
         on_progress: Optional callback for progress messages
 
@@ -471,6 +475,9 @@ def generate_stac_catalog(
     fields_file = Path(fields_file)
     chips_file = Path(chips_file)
     boundary_lines_file = Path(boundary_lines_file)
+
+    # TODO: Task 7 will implement chips_base_dir logic
+    _ = chips_base_dir  # Placeholder until Task 7 implementation
 
     def log(msg: str) -> None:
         if on_progress:
