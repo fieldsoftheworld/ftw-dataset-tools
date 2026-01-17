@@ -32,6 +32,20 @@ class MaskType(str, Enum):
     SEMANTIC_3_CLASS = "semantic_3_class"
 
 
+def get_mask_filename(grid_id: str, mask_type: MaskType) -> str:
+    """
+    Generate mask filename for a grid cell.
+
+    Args:
+        grid_id: The grid cell ID
+        mask_type: Type of mask
+
+    Returns:
+        Filename like "{grid_id}_{mask_type.value}.tif"
+    """
+    return f"{grid_id}_{mask_type.value}.tif"
+
+
 @dataclass
 class MaskResult:
     """Result of a single mask creation."""
