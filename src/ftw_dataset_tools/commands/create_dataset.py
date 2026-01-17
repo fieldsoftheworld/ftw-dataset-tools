@@ -80,23 +80,23 @@ def create_dataset_cmd(
     For temporal extent, uses determination_datetime from fiboa if present,
     otherwise requires --year to specify the year range.
 
-    \b
-    Output structure:
+    Output structure::
+
         {name}-dataset/
         ├── catalog.json
-        ├── source/
+        ├── {name}-source/
         │   └── collection.json
-        ├── chips/
+        ├── {name}-chips/
         │   ├── collection.json
         │   ├── items.parquet
         │   └── {grid_id}/
-        ├── {dataset}_fields.parquet
-        ├── {dataset}_chips.parquet
-        ├── {dataset}_boundary_lines.parquet
-        └── label_masks/
-            ├── instance/
-            ├── semantic_2class/
-            └── semantic_3class/
+        │       ├── {grid_id}.json
+        │       ├── {grid_id}_instance.tif
+        │       ├── {grid_id}_semantic_2_class.tif
+        │       └── {grid_id}_semantic_3_class.tif
+        ├── {name}_fields.parquet
+        ├── {name}_chips.parquet
+        └── {name}_boundary_lines.parquet
 
     \b
     FIELDS_FILE: GeoParquet file with field boundary polygons
