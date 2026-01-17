@@ -32,18 +32,39 @@ class MaskType(str, Enum):
     SEMANTIC_3_CLASS = "semantic_3_class"
 
 
-def get_mask_filename(grid_id: str, mask_type: MaskType) -> str:
+def get_mask_filename(grid_id: str, mask_type: MaskType, year: int | None = None) -> str:
     """
     Generate mask filename for a grid cell.
 
     Args:
-        grid_id: The grid cell ID
+        grid_id: The grid cell ID (e.g., "ftw-34UFF1628")
         mask_type: Type of mask
+        year: Optional year to include in filename (e.g., 2024)
 
     Returns:
-        Filename like "{grid_id}_{mask_type.value}.tif"
+        Filename like "{grid_id}_{year}_{mask_type.value}.tif" if year provided,
+        otherwise "{grid_id}_{mask_type.value}.tif"
     """
+    if year is not None:
+        return f"{grid_id}_{year}_{mask_type.value}.tif"
     return f"{grid_id}_{mask_type.value}.tif"
+
+
+def get_item_id(grid_id: str, year: int | None = None) -> str:
+    """
+    Generate STAC item ID for a grid cell.
+
+    Args:
+        grid_id: The grid cell ID (e.g., "ftw-34UFF1628")
+        year: Optional year to include in item ID (e.g., 2024)
+
+    Returns:
+        Item ID like "{grid_id}_{year}" if year provided,
+        otherwise "{grid_id}"
+    """
+    if year is not None:
+        return f"{grid_id}_{year}"
+    return grid_id
 
 
 def get_mask_output_path(
@@ -52,6 +73,7 @@ def get_mask_output_path(
     chip_dirs: dict[str, Path] | None,
     output_dir: Path,
     field_dataset: str,
+    year: int | None = None,
 ) -> Path:
     """
     Get the output path for a mask file.
@@ -59,29 +81,34 @@ def get_mask_output_path(
     Args:
         grid_id: The grid cell ID
         mask_type: Type of mask
-        chip_dirs: Optional dict mapping grid_id to chip directory.
-                   If provided, grid_id MUST exist in the mapping.
+        chip_dirs: Optional dict mapping item_id (grid_id or grid_id_year) to chip directory.
+                   If provided, the item_id MUST exist in the mapping.
         output_dir: Fallback output directory (used when chip_dirs is None)
         field_dataset: Dataset name (used in filename when chip_dirs is None)
+        year: Optional year for year-based naming convention
 
     Returns:
         Full path for the mask file
 
     Raises:
-        KeyError: If chip_dirs is provided but grid_id is not in the mapping.
+        KeyError: If chip_dirs is provided but item_id is not in the mapping.
                   Callers should handle/skip grid cells not present in chip_dirs.
     """
+    item_id = get_item_id(grid_id, year)
+
     if chip_dirs is not None:
-        if grid_id not in chip_dirs:
+        if item_id not in chip_dirs:
             raise KeyError(
-                f"Grid ID '{grid_id}' not found in chip_dirs mapping for mask type "
+                f"Item ID '{item_id}' not found in chip_dirs mapping for mask type "
                 f"'{mask_type.value}'. Caller should skip this grid cell or ensure "
-                f"chip_dirs contains all expected grid IDs."
+                f"chip_dirs contains all expected item IDs."
             )
         # Co-located with STAC item: simple filename
-        return chip_dirs[grid_id] / get_mask_filename(grid_id, mask_type)
+        return chip_dirs[item_id] / get_mask_filename(grid_id, mask_type, year)
     else:
         # Legacy: dataset prefix in filename
+        if year is not None:
+            return output_dir / f"{field_dataset}_{grid_id}_{year}_{mask_type.value}.tif"
         return output_dir / f"{field_dataset}_{grid_id}_{mask_type.value}.tif"
 
 
@@ -368,6 +395,7 @@ def create_masks(
     resolution: float = 10.0,
     num_workers: int | None = None,
     chip_dirs: dict[str, Path] | None = None,
+    year: int | None = None,
     on_progress: Callable[[int, int], None] | None = None,
     on_start: Callable[[int, int], None] | None = None,
 ) -> CreateMasksResult:
@@ -386,9 +414,11 @@ def create_masks(
         min_coverage: Minimum coverage percentage to process (default: 0.01)
         resolution: Pixel resolution in CRS units (default: 10.0 meters)
         num_workers: Number of parallel workers (default: number of CPUs)
-        chip_dirs: Optional dict mapping grid_id to output directory.
+        chip_dirs: Optional dict mapping item_id (grid_id or grid_id_year) to output directory.
                    If provided, masks are written to chip-specific directories.
                    If None, all masks go to output_dir with dataset prefix in filename.
+        year: Optional year for year-based naming convention (e.g., 2024).
+              When provided, item IDs and filenames include the year.
         on_progress: Optional callback (current, total) for progress updates
         on_start: Optional callback (total_grids, filtered_grids) called before processing
 
@@ -516,6 +546,7 @@ def create_masks(
             chip_dirs=chip_dirs,
             output_dir=output_path,
             field_dataset=field_dataset,
+            year=year,
         )
 
         # Ensure parent directory exists when using chip_dirs

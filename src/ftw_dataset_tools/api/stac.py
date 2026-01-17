@@ -52,7 +52,20 @@ class ChipInfo:
     grid_id: str
     geometry: dict  # GeoJSON geometry
     bbox: tuple[float, float, float, float]  # xmin, ymin, xmax, ymax
+    year: int | None = None  # Optional year for year-based naming
     properties: dict = field(default_factory=dict)
+
+    @property
+    def item_id(self) -> str:
+        """Get the STAC item ID, including year if set."""
+        if self.year is not None:
+            return f"{self.grid_id}_{self.year}"
+        return self.grid_id
+
+    @property
+    def dir_name(self) -> str:
+        """Get the directory name for this chip, including year if set."""
+        return self.item_id
 
 
 def detect_datetime_column(file_path: str | Path) -> str | None:
@@ -159,6 +172,7 @@ def _extract_chips_info(
     chips_file: Path,
     grid_id_col: str = "id",
     geom_col: str = "geometry",
+    year: int | None = None,
 ) -> list[ChipInfo]:
     """
     Extract chip information from chips parquet file.
@@ -167,6 +181,7 @@ def _extract_chips_info(
         chips_file: Path to chips parquet file
         grid_id_col: Column name for grid ID
         geom_col: Column name for geometry
+        year: Optional year for year-based naming convention
 
     Returns:
         List of ChipInfo objects
@@ -195,6 +210,7 @@ def _extract_chips_info(
                     grid_id=str(grid_id),
                     geometry=geometry,
                     bbox=(xmin, ymin, xmax, ymax),
+                    year=year,
                 )
             )
         return chips
@@ -280,7 +296,7 @@ def _create_chip_item(
     Create a STAC Item for a single chip.
 
     Args:
-        chip_info: ChipInfo with geometry and bbox
+        chip_info: ChipInfo with geometry and bbox (includes optional year)
         field_dataset: Dataset name
         temporal_extent: Tuple of (start, end) datetime
         chip_dir: Directory containing co-located masks (new structure)
@@ -290,6 +306,8 @@ def _create_chip_item(
         pystac Item, or None if no mask files exist
     """
     grid_id = chip_info.grid_id
+    item_id = chip_info.item_id  # Includes year if set
+    year = chip_info.year
 
     # Check which mask files exist
     mask_assets = {}
@@ -302,7 +320,11 @@ def _create_chip_item(
     for mask_name, mask_type in mask_type_map.items():
         if chip_dir is not None:
             # New structure: masks co-located with item
-            mask_filename = f"{grid_id}_{mask_type.value}.tif"
+            # Filename includes year if year is set
+            if year is not None:
+                mask_filename = f"{grid_id}_{year}_{mask_type.value}.tif"
+            else:
+                mask_filename = f"{grid_id}_{mask_type.value}.tif"
             mask_path = chip_dir / mask_filename
             if mask_path.exists():
                 mask_assets[f"{mask_name}_mask"] = Asset(
@@ -313,7 +335,10 @@ def _create_chip_item(
                 )
         elif mask_dirs is not None and mask_name in mask_dirs:
             # Legacy structure: masks in type-based directories
-            mask_filename = f"{field_dataset}_{grid_id}_{mask_type.value}.tif"
+            if year is not None:
+                mask_filename = f"{field_dataset}_{grid_id}_{year}_{mask_type.value}.tif"
+            else:
+                mask_filename = f"{field_dataset}_{grid_id}_{mask_type.value}.tif"
             mask_path = mask_dirs[mask_name] / mask_filename
             if mask_path.exists():
                 rel_path = f"../../label_masks/{mask_name}/{mask_filename}"
@@ -328,16 +353,23 @@ def _create_chip_item(
     if not mask_assets:
         return None
 
+    # Build properties
+    properties = {
+        "start_datetime": temporal_extent[0].isoformat(),
+        "end_datetime": temporal_extent[1].isoformat(),
+    }
+
+    # Add FTW extension properties if year is set
+    if year is not None:
+        properties["ftw:calendar_year"] = year
+
     # Create item with datetime range
     item = Item(
-        id=grid_id,
+        id=item_id,  # Use item_id which includes year if set
         geometry=chip_info.geometry,
         bbox=list(chip_info.bbox),
         datetime=None,  # Use start/end instead
-        properties={
-            "start_datetime": temporal_extent[0].isoformat(),
-            "end_datetime": temporal_extent[1].isoformat(),
-        },
+        properties=properties,
     )
 
     # Add mask assets
@@ -500,9 +532,9 @@ def generate_stac_catalog(
     log("Calculating spatial extent...")
     spatial_extent = _get_dataset_bounds(fields_file)
 
-    # Extract chip info
+    # Extract chip info (pass year for year-based naming)
     log("Extracting chip information...")
-    chip_infos = _extract_chips_info(chips_file)
+    chip_infos = _extract_chips_info(chips_file, year=year)
     log(f"Found {len(chip_infos)} chips")
 
     # Create items for each chip
@@ -512,7 +544,8 @@ def generate_stac_catalog(
         # Determine chip directory if using new structure
         chip_dir = None
         if chips_base_dir is not None:
-            chip_dir = chips_base_dir / chip_info.grid_id
+            # Use dir_name which includes year if set
+            chip_dir = chips_base_dir / chip_info.dir_name
             if not chip_dir.exists():
                 # Skip chips without directories (no masks generated)
                 continue

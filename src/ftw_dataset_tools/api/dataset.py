@@ -16,7 +16,7 @@ from ftw_dataset_tools.api.geo import (
     ensure_spatial_loaded,
     reproject,
 )
-from ftw_dataset_tools.api.masks import MaskType
+from ftw_dataset_tools.api.masks import MaskType, get_item_id
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -206,12 +206,14 @@ def create_dataset(
     conn.close()
 
     # Create chip directories and build mapping
+    # Directory names include year if provided (e.g., ftw-34UFF1628_2024)
     chip_dirs: dict[str, Path] = {}
     for (grid_id,) in grid_ids:
         grid_id_str = str(grid_id)
-        chip_dir = chips_base_dir / grid_id_str
+        item_id = get_item_id(grid_id_str, year)
+        chip_dir = chips_base_dir / item_id
         chip_dir.mkdir(exist_ok=True)
-        chip_dirs[grid_id_str] = chip_dir
+        chip_dirs[item_id] = chip_dir
 
     log(f"Created {len(chip_dirs)} chip directories")
 
@@ -235,6 +237,7 @@ def create_dataset(
             resolution=resolution,
             num_workers=num_workers,
             chip_dirs=chip_dirs,
+            year=year,
             on_progress=on_mask_progress,
             on_start=on_mask_start,
         )

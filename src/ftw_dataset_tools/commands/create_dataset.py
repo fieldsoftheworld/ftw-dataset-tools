@@ -1,11 +1,21 @@
 """CLI command for creating complete training datasets from field boundaries."""
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
+from typing import Literal
 
 import click
+import pystac
+from tqdm import tqdm
 
 from ftw_dataset_tools.api import dataset
+from ftw_dataset_tools.api.imagery import (
+    download_and_clip_scene,
+    select_scenes_for_chip,
+)
+from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 
 
 @click.command("create-dataset")
@@ -55,6 +65,39 @@ from ftw_dataset_tools.api import dataset
     default=None,
     help="Year for temporal extent (required if fields lack determination_datetime column).",
 )
+@click.option(
+    "--select-images",
+    is_flag=True,
+    default=False,
+    help="Run image selection after mask creation.",
+)
+@click.option(
+    "--download-images",
+    is_flag=True,
+    default=False,
+    help="Download images after selection (implies --select-images).",
+)
+@click.option(
+    "--stac-host",
+    type=click.Choice(["earthsearch", "mspc"]),
+    default="earthsearch",
+    show_default=True,
+    help="STAC host to query for imagery.",
+)
+@click.option(
+    "--cloud-cover-scene",
+    type=int,
+    default=10,
+    show_default=True,
+    help="Maximum scene-level cloud cover percentage.",
+)
+@click.option(
+    "--buffer-days",
+    type=int,
+    default=14,
+    show_default=True,
+    help="Days to search around crop calendar dates.",
+)
 def create_dataset_cmd(
     fields_file: str,
     output_dir: str | None,
@@ -64,6 +107,11 @@ def create_dataset_cmd(
     num_workers: int | None,
     skip_reproject: bool,
     year: int | None,
+    select_images: bool,
+    download_images: bool,
+    stac_host: str,
+    cloud_cover_scene: int,
+    buffer_days: int,
 ) -> None:
     """Create a complete training dataset from a fields file.
 
@@ -205,6 +253,51 @@ def create_dataset_cmd(
             click.echo(f"  Items: {result.stac_result.total_items:,}")
             click.echo(f"  Items parquet: {result.stac_result.items_parquet_path}")
 
+        # Image selection and download
+        if select_images or download_images:
+            if year is None:
+                raise click.ClickException(
+                    "--year is required when using --select-images or --download-images"
+                )
+
+            click.echo("")
+            click.echo(click.style("Selecting imagery...", fg="cyan", bold=True))
+
+            # Get chips collection path
+            chips_collection_path = Path(result.stac_result.chips_collection_path)
+            catalog_dir = chips_collection_path.parent
+
+            # Run image selection
+            image_stats = _run_image_selection(
+                catalog_dir=catalog_dir,
+                year=year,
+                stac_host=stac_host,
+                cloud_cover_scene=cloud_cover_scene,
+                buffer_days=buffer_days,
+            )
+
+            click.echo(f"  Selected: {image_stats['successful']}")
+            click.echo(f"  Skipped: {image_stats['skipped']}")
+            if image_stats["failed"]:
+                click.echo(click.style(f"  Failed: {image_stats['failed']}", fg="yellow"))
+
+            # Download if requested
+            if download_images:
+                click.echo("")
+                click.echo(click.style("Downloading imagery...", fg="cyan", bold=True))
+
+                download_stats = _run_image_download(
+                    catalog_dir=catalog_dir,
+                    bands=["red", "green", "blue", "nir"],
+                    resolution=resolution,
+                )
+
+                click.echo(f"  Downloaded: {download_stats['successful']}")
+                if download_stats["skipped"]:
+                    click.echo(f"  Skipped: {download_stats['skipped']}")
+                if download_stats["failed"]:
+                    click.echo(click.style(f"  Failed: {download_stats['failed']}", fg="yellow"))
+
     except KeyboardInterrupt:
         sys.stdout.write("\n")
         click.echo(click.style("Interrupted by user.", fg="yellow"))
@@ -215,6 +308,227 @@ def create_dataset_cmd(
     except ValueError as e:
         click.echo(click.style(f"\nError: {e}", fg="red"))
         raise SystemExit(1) from e
+
+
+def _run_image_selection(
+    catalog_dir: Path,
+    year: int,
+    stac_host: str,
+    cloud_cover_scene: int,
+    buffer_days: int,
+) -> dict:
+    """Run image selection for all chips in a catalog."""
+    # Find all chip items (parent items, not child S2 items)
+    chip_items = []
+    for subdir in catalog_dir.iterdir():
+        if subdir.is_dir() and not subdir.name.startswith("."):
+            for json_file in subdir.glob("*.json"):
+                # Skip child items
+                if "_planting_s2" in json_file.name or "_harvest_s2" in json_file.name:
+                    continue
+                try:
+                    item = pystac.Item.from_file(str(json_file))
+                    chip_items.append((item, json_file))
+                except Exception:
+                    pass
+
+    successful = 0
+    skipped = 0
+    failed = 0
+
+    with tqdm(total=len(chip_items), desc="Selecting imagery", unit="chip", leave=False) as pbar:
+        for item, item_path in chip_items:
+            bbox = tuple(item.bbox) if item.bbox else None
+
+            if bbox is None:
+                skipped += 1
+                pbar.update(1)
+                continue
+
+            try:
+                result = select_scenes_for_chip(
+                    chip_id=item.id,
+                    bbox=bbox,
+                    year=year,
+                    stac_host=stac_host,
+                    cloud_cover_scene=cloud_cover_scene,
+                    buffer_days=buffer_days,
+                )
+
+                if result.success:
+                    # Create child STAC items
+                    _create_child_items_inline(
+                        chip_dir=item_path.parent,
+                        parent_item=item,
+                        result=result,
+                        year=year,
+                        stac_host=stac_host,
+                        cloud_cover_scene=cloud_cover_scene,
+                        buffer_days=buffer_days,
+                    )
+                    successful += 1
+                else:
+                    skipped += 1
+
+            except Exception:
+                failed += 1
+
+            pbar.update(1)
+
+    return {"successful": successful, "skipped": skipped, "failed": failed}
+
+
+def _create_child_items_inline(
+    chip_dir: Path,
+    parent_item: pystac.Item,
+    result,
+    year: int,
+    stac_host: str,
+    cloud_cover_scene: int,
+    buffer_days: int,
+) -> None:
+    """Create child STAC items for planting and harvest scenes (inline version)."""
+    # Update parent item with FTW properties
+    parent_item.properties["ftw:calendar_year"] = year
+    parent_item.properties["ftw:planting_day"] = result.crop_calendar.planting_day
+    parent_item.properties["ftw:harvest_day"] = result.crop_calendar.harvest_day
+    parent_item.properties["ftw:stac_host"] = stac_host
+    parent_item.properties["ftw:cloud_cover_scene_threshold"] = cloud_cover_scene
+    parent_item.properties["ftw:buffer_days"] = buffer_days
+
+    # Set temporal extent from selected scenes
+    if result.planting_scene and result.harvest_scene:
+        parent_item.properties["start_datetime"] = result.planting_scene.datetime.isoformat()
+        parent_item.properties["end_datetime"] = result.harvest_scene.datetime.isoformat()
+
+    # Save updated parent
+    parent_path = chip_dir / f"{parent_item.id}.json"
+    parent_item.save_object(str(parent_path))
+
+    # Create child items for each season
+    for scene, season in [(result.planting_scene, "planting"), (result.harvest_scene, "harvest")]:
+        if scene:
+            child_id = f"{parent_item.id}_{season}_s2"
+            child_item = pystac.Item(
+                id=child_id,
+                geometry=parent_item.geometry,
+                bbox=parent_item.bbox,
+                datetime=scene.datetime,
+                properties={
+                    "ftw:season": season,
+                    "ftw:source": "sentinel-2",
+                    "ftw:calendar_year": year,
+                },
+            )
+
+            # Copy relevant band assets
+            for band in ["red", "green", "blue", "nir", "scl", "visual"]:
+                if band in scene.item.assets:
+                    child_item.assets[band] = scene.item.assets[band].clone()
+
+            if "cloud" in scene.item.assets:
+                child_item.assets["cloud_probability"] = scene.item.assets["cloud"].clone()
+
+            # Add links
+            child_item.add_link(
+                pystac.Link(
+                    rel="derived_from",
+                    target=f"./{parent_item.id}.json",
+                    media_type="application/json",
+                )
+            )
+
+            if scene.stac_url:
+                child_item.add_link(
+                    pystac.Link(rel="via", target=scene.stac_url, media_type="application/json")
+                )
+
+            if scene.cloud_cover < 0.1:
+                child_item.properties["eo:cloud_cover"] = scene.cloud_cover
+
+            child_path = chip_dir / f"{child_id}.json"
+            child_item.save_object(str(child_path))
+
+
+def _run_image_download(
+    catalog_dir: Path,
+    bands: list[str],
+    resolution: float,
+) -> dict:
+    """Run image download for all S2 child items in a catalog."""
+    # Find all child S2 items
+    child_items = []
+    for subdir in catalog_dir.iterdir():
+        if subdir.is_dir() and not subdir.name.startswith("."):
+            for json_file in subdir.glob("*_s2.json"):
+                try:
+                    item = pystac.Item.from_file(str(json_file))
+                    if item.id.endswith("_planting_s2") or item.id.endswith("_harvest_s2"):
+                        child_items.append((item, json_file))
+                except Exception:
+                    pass
+
+    successful = 0
+    skipped = 0
+    failed = 0
+
+    with tqdm(
+        total=len(child_items), desc="Downloading imagery", unit="scene", leave=False
+    ) as pbar:
+        for item, item_path in child_items:
+            bbox = tuple(item.bbox) if item.bbox else None
+
+            if bbox is None or "clipped" in item.assets:
+                skipped += 1
+                pbar.update(1)
+                continue
+
+            # Determine season from item ID
+            if item.id.endswith("_planting_s2"):
+                season: Literal["planting", "harvest"] = "planting"
+            else:
+                season = "harvest"
+
+            # Construct output filename
+            base_id = item.id.replace("_planting_s2", "").replace("_harvest_s2", "")
+            output_filename = f"{base_id}_{season}_image_s2.tif"
+            output_path = item_path.parent / output_filename
+
+            try:
+                scene = SelectedScene(
+                    item=item,
+                    season=season,
+                    cloud_cover=item.properties.get("eo:cloud_cover", 0.0),
+                    datetime=item.datetime,
+                    stac_url=item.get_self_href() or "",
+                )
+
+                result = download_and_clip_scene(
+                    scene=scene,
+                    bbox=bbox,
+                    output_path=output_path,
+                    bands=bands,
+                    resolution=resolution,
+                )
+
+                if result.success:
+                    item.assets["clipped"] = pystac.Asset(
+                        href=f"./{output_filename}",
+                        media_type="image/tiff; application=geotiff; profile=cloud-optimized",
+                        title=f"Clipped {len(bands)}-band image ({','.join(bands)})",
+                        roles=["data"],
+                    )
+                    item.save_object(str(item_path))
+                    successful += 1
+                else:
+                    failed += 1
+
+            except Exception:
+                failed += 1
+
+            pbar.update(1)
+
+    return {"successful": successful, "skipped": skipped, "failed": failed}
 
 
 # Alias for registration
