@@ -64,12 +64,13 @@ def write_geoparquet(
     if gdf is not None:
         # Write GeoDataFrame, then add bbox via gpio
         gdf.to_parquet(out_path)
-        if not has_bbox_column(out_path):
-            gpio.read(str(out_path)).add_bbox().write(str(out_path))
     else:
-        # Get Arrow table from DuckDB and write via gpio with bbox
-        arrow_table = conn.execute(query).fetch_arrow_table()
-        gpio.Table(arrow_table).add_bbox().write(str(out_path))
+        # Write from DuckDB query - COPY exports geometry as WKB
+        conn.execute(f"COPY ({query}) TO '{out_path}' (FORMAT PARQUET)")
+
+    # Add bbox column using gpio fluent API if not already present
+    if not has_bbox_column(out_path):
+        gpio.read(str(out_path)).add_bbox().write(str(out_path))
 
     return out_path
 
@@ -461,11 +462,12 @@ def reproject(
         out_path = input_path.parent / f"{input_path.stem}_{target_suffix}.parquet"
 
     # Handle in-place overwrite with temp file
+    # Note: add_bbox() after reproject() recalculates bbox in new CRS
     if out_path == input_path:
         with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
             tmp_path = Path(tmp.name)
         try:
-            table.reproject(target_crs).write(str(tmp_path))
+            table.reproject(target_crs).add_bbox().write(str(tmp_path))
             shutil.move(tmp_path, out_path)
         except Exception:
             if tmp_path.exists():
@@ -473,7 +475,7 @@ def reproject(
             raise
     else:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        table.reproject(target_crs).write(str(out_path))
+        table.reproject(target_crs).add_bbox().write(str(out_path))
 
     log(f"Writing output to: {out_path}")
 

@@ -59,7 +59,8 @@ class TestReproject:
         assert result.target_crs == "EPSG:4326"
         assert result.feature_count == 100
         mock_table.reproject.assert_called_once_with("EPSG:4326")
-        mock_reprojected.write.assert_called_once()
+        mock_reprojected.add_bbox.assert_called_once()
+        mock_reprojected.add_bbox.return_value.write.assert_called_once()
 
     @patch("ftw_dataset_tools.api.geo.gpio")
     def test_reproject_with_string_crs(self, mock_gpio: MagicMock, tmp_path: Path) -> None:
