@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,8 +69,18 @@ def write_geoparquet(
         conn.execute(f"COPY ({query}) TO '{out_path}' (FORMAT PARQUET)")
 
     # Add bbox column using gpio fluent API if not already present
+    # Use temp-file + atomic-rename pattern to prevent corruption on partial writes
     if not has_bbox_column(out_path):
-        gpio.read(str(out_path)).add_bbox().write(str(out_path))
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+            gpio.read(str(out_path)).add_bbox().write(str(tmp_path))
+            shutil.move(str(tmp_path), str(out_path))
+        except Exception:
+            if tmp_path and tmp_path.exists():
+                tmp_path.unlink()
+            raise
 
     return out_path
 
@@ -477,7 +488,7 @@ def reproject(
         if tmp_path.exists():
             tmp_path.unlink()
 
-    log(f"Writing output to: {out_path}")
+    log(f"Wrote output to: {out_path}")
 
     return ReprojectResult(
         output_path=out_path,
