@@ -328,6 +328,7 @@ def create_masks(
     min_coverage: float = 0.01,
     resolution: float = 10.0,
     num_workers: int | None = None,
+    chip_dirs: dict[str, Path] | None = None,  # noqa: ARG001 - used in Task 3
     on_progress: Callable[[int, int], None] | None = None,
     on_start: Callable[[int, int], None] | None = None,
 ) -> CreateMasksResult:
@@ -346,6 +347,9 @@ def create_masks(
         min_coverage: Minimum coverage percentage to process (default: 0.01)
         resolution: Pixel resolution in CRS units (default: 10.0 meters)
         num_workers: Number of parallel workers (default: number of CPUs)
+        chip_dirs: Optional dict mapping grid_id to output directory.
+                   If provided, masks are written to chip-specific directories.
+                   If None, all masks go to output_dir with dataset prefix in filename.
         on_progress: Optional callback (current, total) for progress updates
         on_start: Optional callback (total_grids, filtered_grids) called before processing
 

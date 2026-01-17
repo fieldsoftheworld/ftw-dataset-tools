@@ -25,3 +25,18 @@ class TestMaskFilenameConvention:
 
         filename = get_mask_filename("grid_001", MaskType.SEMANTIC_3_CLASS)
         assert filename == "grid_001_semantic_3_class.tif"
+
+
+class TestCreateMasksChipDirs:
+    """Tests for chip_dirs parameter in create_masks."""
+
+    def test_create_masks_accepts_chip_dirs_parameter(self) -> None:
+        """Test that create_masks signature accepts chip_dirs parameter."""
+        import inspect
+
+        from ftw_dataset_tools.api.masks import create_masks
+
+        sig = inspect.signature(create_masks)
+        assert "chip_dirs" in sig.parameters
+        # Should be optional (has default None)
+        assert sig.parameters["chip_dirs"].default is None
