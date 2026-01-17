@@ -3,6 +3,101 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import geopandas as gpd
+from shapely.geometry import box
+
+
+class TestTemporalExtent:
+    """Tests for temporal extent functions."""
+
+    def test_get_temporal_extent_from_year(self) -> None:
+        """Test temporal extent from year."""
+        from ftw_dataset_tools.api.stac import get_temporal_extent_from_year
+
+        start, end = get_temporal_extent_from_year(2023)
+
+        assert start == datetime(2023, 1, 1, 0, 0, 0, tzinfo=UTC)
+        assert end == datetime(2023, 12, 31, 23, 59, 59, tzinfo=UTC)
+
+    def test_get_temporal_extent_from_year_timezone_aware(self) -> None:
+        """Test temporal extent datetimes are timezone aware."""
+        from ftw_dataset_tools.api.stac import get_temporal_extent_from_year
+
+        start, end = get_temporal_extent_from_year(2024)
+
+        assert start.tzinfo is not None
+        assert end.tzinfo is not None
+
+
+class TestDetectDatetimeColumn:
+    """Tests for detect_datetime_column function."""
+
+    def test_returns_none_for_no_datetime(self, sample_geoparquet_4326: Path) -> None:
+        """Test returns None when no datetime column exists."""
+        from ftw_dataset_tools.api.stac import detect_datetime_column
+
+        result = detect_datetime_column(sample_geoparquet_4326)
+        assert result is None
+
+    def test_detects_determination_datetime(self, tmp_path: Path) -> None:
+        """Test detects determination_datetime column."""
+        from ftw_dataset_tools.api.stac import detect_datetime_column
+
+        gdf = gpd.GeoDataFrame(
+            {"id": [1], "determination_datetime": [datetime(2023, 6, 15)]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        )
+        path = tmp_path / "with_datetime.parquet"
+        gdf.to_parquet(path)
+
+        result = detect_datetime_column(path)
+        assert result == "determination_datetime"
+
+
+class TestSTACGenerationResult:
+    """Tests for STACGenerationResult dataclass."""
+
+    def test_dataclass_fields(self) -> None:
+        """Test STACGenerationResult has expected fields."""
+        from ftw_dataset_tools.api.stac import STACGenerationResult
+
+        result = STACGenerationResult(
+            catalog_path=Path("/tmp/catalog.json"),
+            source_collection_path=Path("/tmp/source/collection.json"),
+            chips_collection_path=Path("/tmp/chips/collection.json"),
+            items_parquet_path=Path("/tmp/chips/items.parquet"),
+            total_items=100,
+            temporal_extent=(
+                datetime(2023, 1, 1, tzinfo=UTC),
+                datetime(2023, 12, 31, tzinfo=UTC),
+            ),
+        )
+        assert result.total_items == 100
+        assert result.catalog_path.name == "catalog.json"
+
+
+class TestGetMaskTitle:
+    """Tests for _get_mask_title helper."""
+
+    def test_instance_title(self) -> None:
+        """Test instance mask title."""
+        from ftw_dataset_tools.api.stac import _get_mask_title
+
+        assert _get_mask_title("instance") == "Instance segmentation mask"
+
+    def test_semantic_2class_title(self) -> None:
+        """Test semantic 2-class mask title."""
+        from ftw_dataset_tools.api.stac import _get_mask_title
+
+        assert "Binary" in _get_mask_title("semantic_2class")
+
+    def test_unknown_returns_formatted(self) -> None:
+        """Test unknown mask type returns formatted string."""
+        from ftw_dataset_tools.api.stac import _get_mask_title
+
+        assert "custom" in _get_mask_title("custom")
+
 
 class TestChipItemAssetHrefs:
     """Tests for STAC item asset href generation."""
