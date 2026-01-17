@@ -356,7 +356,7 @@ def create_masks(
     min_coverage: float = 0.01,
     resolution: float = 10.0,
     num_workers: int | None = None,
-    chip_dirs: dict[str, Path] | None = None,  # noqa: ARG001 - used in Task 3
+    chip_dirs: dict[str, Path] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
     on_start: Callable[[int, int], None] | None = None,
 ) -> CreateMasksResult:
@@ -499,8 +499,17 @@ def create_masks(
     work_items = []
     for grid_id, minx, miny, maxx, maxy in grid_cells:
         grid_id_str = str(grid_id)
-        mask_filename = f"{field_dataset}_{grid_id_str}_{mask_type.value}.tif"
-        mask_path = output_path / mask_filename
+        mask_path = get_mask_output_path(
+            grid_id=grid_id_str,
+            mask_type=mask_type,
+            chip_dirs=chip_dirs,
+            output_dir=output_path,
+            field_dataset=field_dataset,
+        )
+
+        # Ensure parent directory exists when using chip_dirs
+        if chip_dirs is not None:
+            mask_path.parent.mkdir(parents=True, exist_ok=True)
 
         work_items.append(
             (

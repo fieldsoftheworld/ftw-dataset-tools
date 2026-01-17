@@ -22,7 +22,6 @@ repos:
     rev: 'v2.3'
     hooks:
       - id: vulture
-        args: [--ignore-names, chip_dirs]
 
   - repo: local
     hooks:
