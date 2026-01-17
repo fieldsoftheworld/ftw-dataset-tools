@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -461,21 +460,22 @@ def reproject(
         target_suffix = target_crs.replace(":", "_").lower()
         out_path = input_path.parent / f"{input_path.stem}_{target_suffix}.parquet"
 
-    # Handle in-place overwrite with temp file
-    # Note: add_bbox() after reproject() recalculates bbox in new CRS
-    if out_path == input_path:
-        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
-        try:
-            table.reproject(target_crs).add_bbox().write(str(tmp_path))
-            shutil.move(tmp_path, out_path)
-        except Exception:
-            if tmp_path.exists():
-                tmp_path.unlink()
-            raise
-    else:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        table.reproject(target_crs).add_bbox().write(str(out_path))
+    # Reproject and write to temp file, then add bbox
+    # Note: We write first, then read back to add bbox because gpio's add_bbox()
+    # has trouble parsing the in-memory geometry format from reproject().
+    # Writing to file serializes as standard WKB which add_bbox() can parse.
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        # Write reprojected data to temp file
+        table.reproject(target_crs).write(str(tmp_path))
+        # Read back and add bbox, write to final destination
+        gpio.read(str(tmp_path)).add_bbox().write(str(out_path))
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
     log(f"Writing output to: {out_path}")
 
