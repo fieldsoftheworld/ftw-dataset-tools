@@ -10,7 +10,6 @@ from ftw_dataset_tools.commands.create_dataset import create_dataset
 from ftw_dataset_tools.commands.create_ftw_grid import create_ftw_grid
 from ftw_dataset_tools.commands.create_masks import create_masks
 from ftw_dataset_tools.commands.get_grid import get_grid
-from ftw_dataset_tools.commands.reproject import reproject
 
 
 @click.group()
@@ -25,7 +24,6 @@ def cli() -> None:
     - Creating FTW grids
     - Creating chip definitions with field coverage statistics
     - Creating boundary lines and raster masks
-    - Reprojecting GeoParquet files
     """
 
 
@@ -37,7 +35,6 @@ cli.add_command(create_dataset)
 cli.add_command(create_ftw_grid)
 cli.add_command(create_masks)
 cli.add_command(get_grid)
-cli.add_command(reproject)
 
 
 if __name__ == "__main__":
