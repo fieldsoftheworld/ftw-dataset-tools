@@ -1,5 +1,114 @@
 """Tests for the masks API."""
 
+from pathlib import Path
+
+import pytest
+
+
+class TestMaskType:
+    """Tests for MaskType enum."""
+
+    def test_instance_value(self) -> None:
+        """Test INSTANCE mask type value."""
+        from ftw_dataset_tools.api.masks import MaskType
+
+        assert MaskType.INSTANCE.value == "instance"
+
+    def test_semantic_2_class_value(self) -> None:
+        """Test SEMANTIC_2_CLASS mask type value."""
+        from ftw_dataset_tools.api.masks import MaskType
+
+        assert MaskType.SEMANTIC_2_CLASS.value == "semantic_2_class"
+
+    def test_semantic_3_class_value(self) -> None:
+        """Test SEMANTIC_3_CLASS mask type value."""
+        from ftw_dataset_tools.api.masks import MaskType
+
+        assert MaskType.SEMANTIC_3_CLASS.value == "semantic_3_class"
+
+
+class TestMaskResult:
+    """Tests for MaskResult dataclass."""
+
+    def test_dataclass_fields(self) -> None:
+        """Test MaskResult has expected fields."""
+        from ftw_dataset_tools.api.masks import MaskResult
+
+        result = MaskResult(
+            grid_id="grid_001",
+            output_path=Path("/tmp/mask.tif"),
+            width=512,
+            height=512,
+        )
+        assert result.grid_id == "grid_001"
+        assert result.width == 512
+        assert result.height == 512
+
+
+class TestCreateMasksResult:
+    """Tests for CreateMasksResult dataclass."""
+
+    def test_total_created(self) -> None:
+        """Test total_created property."""
+        from ftw_dataset_tools.api.masks import CreateMasksResult, MaskResult
+
+        result = CreateMasksResult(
+            masks_created=[
+                MaskResult("a", Path("a.tif"), 512, 512),
+                MaskResult("b", Path("b.tif"), 512, 512),
+            ],
+            masks_skipped=[],
+            field_dataset="test",
+        )
+        assert result.total_created == 2
+
+    def test_total_skipped(self) -> None:
+        """Test total_skipped property."""
+        from ftw_dataset_tools.api.masks import CreateMasksResult
+
+        result = CreateMasksResult(
+            masks_created=[],
+            masks_skipped=[("grid_001", "error1"), ("grid_002", "error2")],
+            field_dataset="test",
+        )
+        assert result.total_skipped == 2
+
+
+class TestCreateMasksInputValidation:
+    """Tests for create_masks input validation."""
+
+    def test_chips_file_not_found(self, tmp_path: Path) -> None:
+        """Test FileNotFoundError for missing chips file."""
+        from ftw_dataset_tools.api.masks import create_masks
+
+        boundaries = tmp_path / "boundaries.parquet"
+        boundary_lines = tmp_path / "boundary_lines.parquet"
+        boundaries.touch()
+        boundary_lines.touch()
+
+        with pytest.raises(FileNotFoundError, match="Chips file not found"):
+            create_masks(
+                chips_file="/nonexistent/chips.parquet",
+                boundaries_file=str(boundaries),
+                boundary_lines_file=str(boundary_lines),
+            )
+
+    def test_boundaries_file_not_found(self, tmp_path: Path) -> None:
+        """Test FileNotFoundError for missing boundaries file."""
+        from ftw_dataset_tools.api.masks import create_masks
+
+        chips = tmp_path / "chips.parquet"
+        boundary_lines = tmp_path / "boundary_lines.parquet"
+        chips.touch()
+        boundary_lines.touch()
+
+        with pytest.raises(FileNotFoundError, match="Boundaries file not found"):
+            create_masks(
+                chips_file=str(chips),
+                boundaries_file="/nonexistent/boundaries.parquet",
+                boundary_lines_file=str(boundary_lines),
+            )
+
 
 class TestMaskFilenameConvention:
     """Tests for mask filename generation."""
