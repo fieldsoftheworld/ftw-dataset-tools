@@ -61,6 +61,8 @@ DEFAULT_CLOUD_COVER_SCENE = 10  # Maximum scene-level cloud cover percentage
 DEFAULT_CLOUD_COVER_PIXEL = 0  # Maximum pixel-level cloud cover percentage
 DEFAULT_BUFFER_DAYS = 14  # Days to search around crop calendar dates
 DEFAULT_STAC_HOST = "earthsearch"
+DEFAULT_NUM_BUFFER_EXPANSIONS = 3  # Number of times to expand buffer for cloudy chips
+DEFAULT_BUFFER_EXPANSION_SIZE = 14  # Days to add on each buffer expansion
 
 # Hybrid cloud filtering thresholds
 # Skip pixel check if scene cloud cover is below this (too clear to matter)

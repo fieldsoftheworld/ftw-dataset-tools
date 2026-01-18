@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC
 from pathlib import Path
 from typing import Literal
 
@@ -12,6 +13,7 @@ import pystac
 from tqdm import tqdm
 
 from ftw_dataset_tools.api.imagery import (
+    ImageryProgressBar,
     SceneSelectionResult,
     select_scenes_for_chip,
 )
@@ -25,6 +27,134 @@ def _extract_year_from_chip_id(chip_id: str) -> int | None:
     return None
 
 
+def _has_existing_scenes(item: pystac.Item) -> bool:
+    """Check if item already has planting and harvest scene links."""
+    has_planting = any(link.rel == "ftw:planting" for link in item.links)
+    has_harvest = any(link.rel == "ftw:harvest" for link in item.links)
+    return has_planting and has_harvest
+
+
+def _get_imagery_stats(chip_items: list[pystac.Item]) -> dict:
+    """Gather imagery selection statistics from chip items."""
+    stats = {
+        "total": len(chip_items),
+        "with_imagery": 0,
+        "without_imagery": 0,
+        "planting_cloud_covers": [],
+        "harvest_cloud_covers": [],
+    }
+
+    for item in chip_items:
+        if _has_existing_scenes(item):
+            stats["with_imagery"] += 1
+            # Get cloud cover values
+            planting_cc = item.properties.get("ftw:planting_cloud_cover")
+            harvest_cc = item.properties.get("ftw:harvest_cloud_cover")
+            if planting_cc is not None:
+                stats["planting_cloud_covers"].append(planting_cc)
+            if harvest_cc is not None:
+                stats["harvest_cloud_covers"].append(harvest_cc)
+        else:
+            stats["without_imagery"] += 1
+
+    return stats
+
+
+def _clear_chip_selections(catalog_dir: Path, item: pystac.Item) -> dict:
+    """Clear imagery selections for a single chip.
+
+    Returns dict with counts of deleted items.
+    """
+    from datetime import datetime
+
+    chip_dir = catalog_dir / item.id
+    deleted = {"stac_items": 0, "geotiffs": 0}
+
+    # Delete planting and harvest child STAC items and their GeoTIFFs
+    for season in ["planting", "harvest"]:
+        child_json = chip_dir / f"{item.id}_{season}_s2.json"
+        if child_json.exists():
+            child_json.unlink()
+            deleted["stac_items"] += 1
+
+        # Delete associated GeoTIFFs (e.g., ftw-xxx_planting_image_s2.tif)
+        for tif in chip_dir.glob(f"{item.id}_{season}_*.tif"):
+            tif.unlink()
+            deleted["geotiffs"] += 1
+
+    # Remove ftw:planting and ftw:harvest links from parent item
+    original_link_count = len(item.links)
+    item.links = [link for link in item.links if link.rel not in ("ftw:planting", "ftw:harvest")]
+
+    # Extract calendar year before removing properties (needed to restore datetime)
+    calendar_year = item.properties.get("ftw:calendar_year")
+
+    # Remove ftw: properties related to imagery selection
+    props_to_remove = [
+        "ftw:calendar_year",
+        "ftw:planting_day",
+        "ftw:harvest_day",
+        "ftw:stac_host",
+        "ftw:cloud_cover_scene_threshold",
+        "ftw:buffer_days",
+        "ftw:pixel_check",
+        "ftw:num_buffer_expansions",
+        "ftw:buffer_expansion_size",
+        "ftw:planting_buffer_used",
+        "ftw:harvest_buffer_used",
+        "ftw:expansions_performed",
+        "ftw:planting_cloud_cover",
+        "ftw:harvest_cloud_cover",
+    ]
+    for prop in props_to_remove:
+        item.properties.pop(prop, None)
+
+    # Remove planting_image and harvest_image assets if they exist
+    item.assets.pop("planting_image", None)
+    item.assets.pop("harvest_image", None)
+
+    # Restore datetime - STAC requires either datetime or both start/end_datetime
+    # Remove the selection-set temporal range and restore a single datetime
+    item.properties.pop("start_datetime", None)
+    item.properties.pop("end_datetime", None)
+
+    # Set datetime to Jan 1 of the calendar year if known, otherwise current date
+    if calendar_year:
+        restored_dt = datetime(calendar_year, 1, 1, 0, 0, 0, tzinfo=UTC)
+    else:
+        restored_dt = datetime.now(UTC)
+    item.properties["datetime"] = restored_dt.isoformat()
+
+    # Save updated parent item if we removed links or need to restore datetime
+    if len(item.links) < original_link_count or calendar_year:
+        parent_path = chip_dir / f"{item.id}.json"
+        item.save_object(dest_href=str(parent_path))
+
+    return deleted
+
+
+def _extract_year_from_item(item: pystac.Item) -> int | None:
+    """Extract year from item's temporal properties."""
+    # Try start_datetime first
+    start_dt = item.properties.get("start_datetime")
+    if start_dt:
+        try:
+            from datetime import datetime
+
+            if isinstance(start_dt, str):
+                # Parse ISO format datetime
+                dt = datetime.fromisoformat(start_dt.replace("Z", "+00:00"))
+                return dt.year
+        except (ValueError, TypeError):
+            pass
+
+    # Try datetime property
+    if item.datetime:
+        return item.datetime.year
+
+    return None
+
+
 @click.command("select-images")
 @click.argument("input_path", type=click.Path(exists=True))
 @click.option(
@@ -32,13 +162,6 @@ def _extract_year_from_chip_id(chip_id: str) -> int | None:
     type=int,
     default=None,
     help="Calendar year for the crop cycle. If not provided, extracted from chip IDs.",
-)
-@click.option(
-    "--stac-host",
-    type=click.Choice(["earthsearch", "mspc"]),
-    default="earthsearch",
-    show_default=True,
-    help="STAC host to query for imagery.",
 )
 @click.option(
     "--cloud-cover-scene",
@@ -55,10 +178,10 @@ def _extract_year_from_chip_id(chip_id: str) -> int | None:
     help="Days to search around crop calendar dates.",
 )
 @click.option(
-    "--pixel-check",
-    is_flag=True,
-    default=False,
-    help="Enable pixel-level cloud filtering using cloud mask COGs.",
+    "--pixel-check/--no-pixel-check",
+    default=True,
+    show_default=True,
+    help="Enable/disable pixel-level cloud filtering using SCL band.",
 )
 @click.option(
     "--cloud-cover-pixel",
@@ -68,13 +191,6 @@ def _extract_year_from_chip_id(chip_id: str) -> int | None:
     help="Maximum pixel-level cloud cover when --pixel-check is enabled.",
 )
 @click.option(
-    "--s2-collection",
-    type=click.Choice(["c1", "l2a"]),
-    default="c1",
-    show_default=True,
-    help="Sentinel-2 collection (earthsearch only). c1=Collection-1, l2a=L2A.",
-)
-@click.option(
     "--on-missing",
     type=click.Choice(["skip", "fail", "best-available"]),
     default="skip",
@@ -82,10 +198,30 @@ def _extract_year_from_chip_id(chip_id: str) -> int | None:
     help="How to handle chips with no cloud-free scenes.",
 )
 @click.option(
+    "--num-buffer-expansions",
+    type=int,
+    default=3,
+    show_default=True,
+    help="Number of times to expand search window for chips without cloud-free scenes.",
+)
+@click.option(
+    "--buffer-expansion-size",
+    type=int,
+    default=14,
+    show_default=True,
+    help="Days to add to search window on each expansion.",
+)
+@click.option(
     "--resume",
     is_flag=True,
     default=False,
     help="Resume from previous run using progress file.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Overwrite existing imagery selections (by default, chips with scenes are skipped).",
 )
 @click.option(
     "--output-report",
@@ -100,36 +236,57 @@ def _extract_year_from_chip_id(chip_id: str) -> int | None:
     default=False,
     help="Show detailed STAC query information and results.",
 )
+@click.option(
+    "--show-stats",
+    is_flag=True,
+    default=False,
+    help="Show imagery selection statistics without processing.",
+)
+@click.option(
+    "--clear-selections",
+    is_flag=True,
+    default=False,
+    help="Remove all imagery selections (STAC items, GeoTIFFs, and links).",
+)
 def select_images_cmd(
     input_path: str,
     year: int | None,
-    stac_host: Literal["earthsearch", "mspc"],
     cloud_cover_scene: int,
     buffer_days: int,
     pixel_check: bool,
     cloud_cover_pixel: float,
-    s2_collection: str,
     on_missing: Literal["skip", "fail", "best-available"],
+    num_buffer_expansions: int,
+    buffer_expansion_size: int,
     resume: bool,  # noqa: ARG001 - planned feature
+    force: bool,
     output_report: str | None,
     verbose: bool,
+    show_stats: bool,
+    clear_selections: bool,
 ) -> None:
     """Select optimal Sentinel-2 imagery for chips.
 
-    Queries STAC catalogs to find cloud-free Sentinel-2 scenes for each chip
-    based on crop calendar dates (planting and harvest). Creates child STAC items
-    with remote asset links.
+    Queries EarthSearch STAC catalog to find cloud-free Sentinel-2 scenes for each
+    chip based on crop calendar dates (planting and harvest). Creates child STAC
+    items with remote asset links.
+
+    By default, chips that already have imagery selections are skipped.
+    Use --force to overwrite existing selections.
 
     \b
-    INPUT_PATH: Either a STAC catalog directory (containing collection.json)
-                or a single chip JSON file for testing.
+    INPUT_PATH: One of:
+                - Dataset directory (containing *-chips/ subdirectory with collection.json)
+                - Chips collection directory (containing collection.json directly)
+                - Single chip JSON file for testing
 
     \b
     Examples:
-        ftwd select-images ./my-dataset-chips
+        ftwd select-images ./my-dataset              # Dataset directory
+        ftwd select-images ./my-dataset-chips        # Chips collection directory
         ftwd select-images ./chips/ftw-34UFF1628_2024/ftw-34UFF1628_2024.json -v
-        ftwd select-images ./chips --year 2023 --stac-host mspc
-        ftwd select-images ./chips --cloud-cover-scene 5 --pixel-check
+        ftwd select-images ./chips --year 2023 --cloud-cover-scene 5
+        ftwd select-images ./chips --force  # Overwrite existing selections
     """
     input_path_obj = Path(input_path)
 
@@ -148,14 +305,30 @@ def select_images_cmd(
 
         click.echo(f"Single chip: {item.id}")
     else:
-        # Catalog directory
-        catalog_dir = input_path_obj
-        collection_file = catalog_dir / "collection.json"
+        # Catalog directory - check for collection.json here or in a chips subdirectory
+        collection_file = input_path_obj / "collection.json"
 
-        if not collection_file.exists():
-            raise click.ClickException(f"No collection.json found in {input_path}")
+        if collection_file.exists():
+            # collection.json directly in input path (chips directory)
+            catalog_dir = input_path_obj
+        else:
+            # Look for *-chips subdirectory with collection.json (dataset directory)
+            chips_dirs = list(input_path_obj.glob("*-chips"))
+            chips_dir_with_collection = None
+            for chips_dir in chips_dirs:
+                if (chips_dir / "collection.json").exists():
+                    chips_dir_with_collection = chips_dir
+                    break
 
-        click.echo(f"Catalog: {input_path}")
+            if chips_dir_with_collection:
+                catalog_dir = chips_dir_with_collection
+                collection_file = catalog_dir / "collection.json"
+            else:
+                raise click.ClickException(
+                    f"No collection.json found in {input_path} or in any *-chips subdirectory"
+                )
+
+        click.echo(f"Catalog: {catalog_dir}")
 
         # Load collection to find items
         collection = pystac.Collection.from_file(str(collection_file))
@@ -173,86 +346,133 @@ def select_images_cmd(
         if not chip_items:
             raise click.ClickException("No chip items found in catalog")
 
+    # Handle --show-stats mode
+    if show_stats:
+        stats = _get_imagery_stats(chip_items)
+        click.echo(f"\nImagery Selection Statistics for {catalog_dir}")
+        click.echo("=" * 50)
+        click.echo(f"Total chips: {stats['total']}")
+        click.echo(f"With imagery: {stats['with_imagery']}")
+        click.echo(f"Without imagery: {stats['without_imagery']}")
+
+        if stats["planting_cloud_covers"]:
+            p_max = max(stats["planting_cloud_covers"])
+            p_avg = sum(stats["planting_cloud_covers"]) / len(stats["planting_cloud_covers"])
+            click.echo(f"\nPlanting cloud cover: max {p_max:.1f}%, avg {p_avg:.1f}%")
+
+        if stats["harvest_cloud_covers"]:
+            h_max = max(stats["harvest_cloud_covers"])
+            h_avg = sum(stats["harvest_cloud_covers"]) / len(stats["harvest_cloud_covers"])
+            click.echo(f"Harvest cloud cover: max {h_max:.1f}%, avg {h_avg:.1f}%")
+
+        return
+
+    # Handle --clear-selections mode
+    if clear_selections:
+        stats = _get_imagery_stats(chip_items)
+
+        if stats["with_imagery"] == 0:
+            click.echo("No chips have imagery selections to clear.")
+            return
+
+        click.echo(click.style("\nWARNING: This will permanently delete:", fg="red", bold=True))
+        click.echo(f"  - {stats['with_imagery']} planting scene STAC items")
+        click.echo(f"  - {stats['with_imagery']} harvest scene STAC items")
+        click.echo("  - Any downloaded GeoTIFF imagery files")
+        click.echo("  - Imagery links from parent chip items")
+        click.echo("")
+
+        if not click.confirm("Are you sure you want to proceed?"):
+            click.echo("Aborted.")
+            return
+
+        # Clear selections
+        total_stac = 0
+        total_tifs = 0
+        chips_cleared = 0
+
+        with tqdm(total=len(chip_items), desc="Clearing selections", unit="chip") as pbar:
+            for item in chip_items:
+                if _has_existing_scenes(item):
+                    deleted = _clear_chip_selections(catalog_dir, item)
+                    total_stac += deleted["stac_items"]
+                    total_tifs += deleted["geotiffs"]
+                    chips_cleared += 1
+                pbar.update(1)
+
+        click.echo("")
+        click.echo(click.style("Cleared imagery selections:", fg="green"))
+        click.echo(f"  Chips processed: {chips_cleared}")
+        click.echo(f"  STAC items deleted: {total_stac}")
+        click.echo(f"  GeoTIFF files deleted: {total_tifs}")
+        return
+
     if year:
         click.echo(f"Year: {year} (from --year option)")
     else:
         click.echo("Year: (extracted from chip IDs)")
-    click.echo(f"STAC host: {stac_host}")
-    click.echo(f"Cloud cover threshold: {cloud_cover_scene}%")
+    click.echo(f"Cloud cover scene threshold: {cloud_cover_scene}%")
     if pixel_check:
-        click.echo(f"Pixel-level check enabled (threshold: {cloud_cover_pixel}%)")
+        click.echo(f"Pixel-level check: enabled (threshold: {cloud_cover_pixel}%)")
+    else:
+        click.echo("Pixel-level check: disabled")
+    click.echo(
+        f"Buffer: {buffer_days} days (expand by {buffer_expansion_size}d x{num_buffer_expansions})"
+    )
     if verbose:
         click.echo("Verbose mode: ON")
 
     click.echo(f"\nFound {len(chip_items)} chips to process")
 
-    # Track results
+    # Track results for detailed reporting
     successful: list[str] = []
     skipped: list[dict] = []
     failed: list[dict] = []
 
-    # Progress callback - only output if verbose
-    def on_progress(msg: str) -> None:
-        if verbose:
-            click.echo(f"  {msg}")
-
-    # Helper to format progress bar status
-    def _format_status(
-        ok: int, skip: int, fail: int, last_result: SceneSelectionResult | None
-    ) -> dict:
-        status = {"ok": ok, "skip": skip, "fail": fail}
-        if last_result and last_result.success:
-            p_cc = last_result.planting_scene.cloud_cover if last_result.planting_scene else 0
-            h_cc = last_result.harvest_scene.cloud_cover if last_result.harvest_scene else 0
-            status["last"] = f"P:{p_cc:.0f}%/H:{h_cc:.0f}%"
-        return status
-
-    # Process each chip
-    with tqdm(total=len(chip_items), desc="Selecting imagery", unit="chip") as pbar:
-        last_result: SceneSelectionResult | None = None
-        pbar.set_postfix(_format_status(0, 0, 0, None))
-
+    # Process each chip with unified progress display
+    with ImageryProgressBar(total=len(chip_items), leave=True, verbose=verbose) as progress:
         for item in chip_items:
             chip_id = item.id
+            progress.start_chip(chip_id)
             bbox = tuple(item.bbox) if item.bbox else None
 
             if bbox is None:
                 skipped.append({"chip": chip_id, "reason": "No bbox in item"})
-                pbar.set_postfix(
-                    _format_status(len(successful), len(skipped), len(failed), last_result)
-                )
-                pbar.update(1)
+                progress.mark_skipped("No bbox in item")
+                continue
+
+            # Skip chips that already have scene selections (unless --force)
+            if not force and _has_existing_scenes(item):
+                skipped.append({"chip": chip_id, "reason": "Already has imagery selections"})
+                progress.mark_skipped("Already has imagery selections", was_existing=True)
                 continue
 
             # Determine the year for this chip
             chip_year = year
             if chip_year is None:
+                # Try extracting from chip ID first (e.g., ftw-34UFF1628_2024)
                 chip_year = _extract_year_from_chip_id(chip_id)
-                if chip_year is None:
-                    skipped.append(
-                        {
-                            "chip": chip_id,
-                            "reason": "No year provided and could not extract from chip ID",
-                        }
-                    )
-                    pbar.set_postfix(
-                        _format_status(len(successful), len(skipped), len(failed), last_result)
-                    )
-                    pbar.update(1)
-                    continue
+            if chip_year is None:
+                # Try extracting from item's temporal properties
+                chip_year = _extract_year_from_item(item)
+            if chip_year is None:
+                reason = "No year provided and could not extract from chip ID or item properties"
+                skipped.append({"chip": chip_id, "reason": reason})
+                progress.mark_skipped(reason)
+                continue
 
             try:
                 result = select_scenes_for_chip(
                     chip_id=chip_id,
                     bbox=bbox,
                     year=chip_year,
-                    stac_host=stac_host,
                     cloud_cover_scene=cloud_cover_scene,
                     buffer_days=buffer_days,
                     pixel_check=pixel_check,
                     cloud_cover_pixel=cloud_cover_pixel,
-                    s2_collection=s2_collection,
-                    on_progress=on_progress,
+                    num_buffer_expansions=num_buffer_expansions,
+                    buffer_expansion_size=buffer_expansion_size,
+                    on_progress=progress.on_progress,
                 )
 
                 if result.success:
@@ -262,13 +482,14 @@ def select_images_cmd(
                         parent_item=item,
                         result=result,
                         year=chip_year,
-                        stac_host=stac_host,
                         cloud_cover_scene=cloud_cover_scene,
                         buffer_days=buffer_days,
                         pixel_check=pixel_check,
+                        num_buffer_expansions=num_buffer_expansions,
+                        buffer_expansion_size=buffer_expansion_size,
                     )
                     successful.append(chip_id)
-                    last_result = result
+                    progress.mark_success(result)
                 else:
                     if on_missing == "fail":
                         raise click.ClickException(
@@ -281,30 +502,50 @@ def select_images_cmd(
                             "candidates_checked": result.candidates_checked,
                         }
                     )
+                    progress.mark_skipped(result.skipped_reason or "Unknown reason")
 
+            except click.ClickException:
+                raise
             except Exception as e:
                 if on_missing == "fail":
                     raise
                 failed.append({"chip": chip_id, "error": str(e)})
+                progress.mark_failed(str(e))
 
-            pbar.set_postfix(
-                _format_status(len(successful), len(skipped), len(failed), last_result)
-            )
-            pbar.update(1)
+    # Categorize skipped items
+    already_has = [s for s in skipped if s["reason"] == "Already has imagery selections"]
+    no_scenes = [s for s in skipped if "No cloud-free" in s.get("reason", "")]
+    other_skipped = [s for s in skipped if s not in already_has and s not in no_scenes]
+
+    # Get final stats
+    final_stats = _get_imagery_stats(chip_items)
 
     # Print summary
     click.echo("\n" + "=" * 50)
     click.echo("Summary:")
-    click.echo(f"  Successful: {len(successful)}")
-    click.echo(f"  Skipped: {len(skipped)}")
+    click.echo(f"  Newly selected: {len(successful)}")
+    click.echo(f"  Already had imagery: {len(already_has)}")
+    click.echo(f"  No cloud-free scenes: {len(no_scenes)}")
+    if other_skipped:
+        click.echo(f"  Other skipped: {len(other_skipped)}")
     click.echo(f"  Failed: {len(failed)}")
+    click.echo("")
+    click.echo(f"  Total with imagery: {final_stats['with_imagery']}/{final_stats['total']}")
+    click.echo(f"  Still without imagery: {final_stats['without_imagery']}")
 
-    if skipped:
-        click.echo(click.style(f"\n{len(skipped)} chips skipped:", fg="yellow"))
-        for s in skipped[:5]:
+    if no_scenes:
+        click.echo(click.style(f"\n{len(no_scenes)} chips without cloud-free scenes:", fg="yellow"))
+        for s in no_scenes[:5]:
             click.echo(f"  - {s['chip']}: {s['reason']}")
-        if len(skipped) > 5:
-            click.echo(f"  ... and {len(skipped) - 5} more")
+        if len(no_scenes) > 5:
+            click.echo(f"  ... and {len(no_scenes) - 5} more")
+
+    if other_skipped:
+        click.echo(click.style(f"\n{len(other_skipped)} chips skipped (other):", fg="yellow"))
+        for s in other_skipped[:5]:
+            click.echo(f"  - {s['chip']}: {s['reason']}")
+        if len(other_skipped) > 5:
+            click.echo(f"  ... and {len(other_skipped) - 5} more")
 
     if failed:
         click.echo(click.style(f"\n{len(failed)} chips failed:", fg="red"))
@@ -322,10 +563,12 @@ def select_images_cmd(
             "failed": failed,
             "parameters": {
                 "year": year if year else "extracted_from_chip_ids",
-                "stac_host": stac_host,
                 "cloud_cover_scene": cloud_cover_scene,
                 "buffer_days": buffer_days,
                 "pixel_check": pixel_check,
+                "cloud_cover_pixel": cloud_cover_pixel,
+                "num_buffer_expansions": num_buffer_expansions,
+                "buffer_expansion_size": buffer_expansion_size,
             },
         }
         report_path = Path(output_report)
@@ -343,10 +586,11 @@ def _create_child_items(
     parent_item: pystac.Item,
     result: SceneSelectionResult,
     year: int,
-    stac_host: str,
     cloud_cover_scene: int,
     buffer_days: int,
     pixel_check: bool,
+    num_buffer_expansions: int,
+    buffer_expansion_size: int,
 ) -> None:
     """Create child STAC items for planting and harvest scenes."""
     chip_dir = catalog_dir / parent_item.id
@@ -355,10 +599,16 @@ def _create_child_items(
     parent_item.properties["ftw:calendar_year"] = year
     parent_item.properties["ftw:planting_day"] = result.crop_calendar.planting_day
     parent_item.properties["ftw:harvest_day"] = result.crop_calendar.harvest_day
-    parent_item.properties["ftw:stac_host"] = stac_host
+    parent_item.properties["ftw:stac_host"] = "earthsearch"  # Always earthsearch
     parent_item.properties["ftw:cloud_cover_scene_threshold"] = cloud_cover_scene
     parent_item.properties["ftw:buffer_days"] = buffer_days
     parent_item.properties["ftw:pixel_check"] = pixel_check
+    parent_item.properties["ftw:num_buffer_expansions"] = num_buffer_expansions
+    parent_item.properties["ftw:buffer_expansion_size"] = buffer_expansion_size
+    # Track actual buffer used for each season
+    parent_item.properties["ftw:planting_buffer_used"] = result.planting_buffer_used
+    parent_item.properties["ftw:harvest_buffer_used"] = result.harvest_buffer_used
+    parent_item.properties["ftw:expansions_performed"] = result.expansions_performed
 
     # Set temporal extent from selected scenes
     if result.planting_scene and result.harvest_scene:

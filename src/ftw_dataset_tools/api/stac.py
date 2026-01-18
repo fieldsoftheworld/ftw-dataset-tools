@@ -30,6 +30,7 @@ __all__ = [
     "STACGenerationResult",
     "generate_stac_catalog",
     "get_temporal_extent_from_year",
+    "get_year_from_datetime_column",
 ]
 
 
@@ -128,6 +129,45 @@ def get_temporal_extent_from_data(
             return (min_dt, max_dt)
 
         raise ValueError(f"Could not extract datetime range from column '{datetime_col}'")
+    finally:
+        conn.close()
+
+
+def get_year_from_datetime_column(
+    file_path: str | Path,
+    datetime_col: str = "determination_datetime",
+) -> int | None:
+    """
+    Extract year from datetime column using the most common year.
+
+    This is useful for image selection where we need a single year
+    to query crop calendar and STAC catalogs.
+
+    Args:
+        file_path: Path to parquet file
+        datetime_col: Name of datetime column
+
+    Returns:
+        Most common year in the column, or None if extraction fails
+    """
+    conn = duckdb.connect(":memory:")
+    try:
+        # Get the most common year (mode) from the datetime column
+        result = conn.execute(f"""
+            SELECT EXTRACT(YEAR FROM "{datetime_col}") as year, COUNT(*) as cnt
+            FROM '{file_path}'
+            WHERE "{datetime_col}" IS NOT NULL
+            GROUP BY year
+            ORDER BY cnt DESC
+            LIMIT 1
+        """).fetchone()
+
+        if result and result[0]:
+            return int(result[0])
+
+        return None
+    except Exception:
+        return None
     finally:
         conn.close()
 

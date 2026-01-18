@@ -43,33 +43,63 @@ from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
     default=None,
     help="Path for JSON report of download results.",
 )
+@click.option(
+    "--keep-remote-refs",
+    is_flag=True,
+    default=False,
+    help="Keep remote asset references instead of replacing with local paths.",
+)
 def download_images_cmd(
     catalog_path: str,
     bands: str,
     resolution: float,
     resume: bool,
     output_report: str | None,
+    keep_remote_refs: bool,
 ) -> None:
     """Download and clip satellite imagery for selected scenes.
 
     Reads child STAC items (created by select-images) with remote asset links
-    and downloads/clips the imagery to the chip's bounding box. Adds a "clipped"
-    asset to each child item pointing to the local file.
+    and downloads/clips the imagery to the chip's bounding box.
+
+    By default, updates STAC items to point to local files:
+    - Child items: replaces band assets with local "image" asset
+    - Parent chip items: adds planting_image/harvest_image assets
+
+    Use --keep-remote-refs to keep original remote references and add a separate
+    "clipped" asset for the local file.
 
     \b
-    CATALOG_PATH: Path to the STAC catalog directory (containing collection.json)
+    CATALOG_PATH: Path to the chips collection or dataset directory
 
     \b
     Examples:
         ftwd download-images ./my-dataset-chips
+        ftwd download-images ./my-dataset              # Also works with dataset dir
         ftwd download-images ./chips --bands red,green,blue,nir,scl
-        ftwd download-images ./chips --resolution 10 --resume
+        ftwd download-images ./chips --keep-remote-refs  # Keep remote asset refs
     """
-    catalog_dir = Path(catalog_path)
-    collection_file = catalog_dir / "collection.json"
+    input_path = Path(catalog_path)
+    collection_file = input_path / "collection.json"
 
-    if not collection_file.exists():
-        raise click.ClickException(f"No collection.json found in {catalog_path}")
+    if collection_file.exists():
+        catalog_dir = input_path
+    else:
+        # Look for *-chips subdirectory with collection.json (dataset directory)
+        chips_dirs = list(input_path.glob("*-chips"))
+        chips_dir_with_collection = None
+        for chips_dir in chips_dirs:
+            if (chips_dir / "collection.json").exists():
+                chips_dir_with_collection = chips_dir
+                break
+
+        if chips_dir_with_collection:
+            catalog_dir = chips_dir_with_collection
+            collection_file = catalog_dir / "collection.json"
+        else:
+            raise click.ClickException(
+                f"No collection.json found in {catalog_path} or in any *-chips subdirectory"
+            )
 
     band_list = [b.strip() for b in bands.split(",")]
 
@@ -170,14 +200,38 @@ def download_images_cmd(
                 )
 
                 if result.success:
-                    # Update item with clipped asset
-                    item.assets["clipped"] = pystac.Asset(
+                    local_asset = pystac.Asset(
                         href=f"./{output_filename}",
                         media_type="image/tiff; application=geotiff; profile=cloud-optimized",
                         title=f"Clipped {len(band_list)}-band image ({','.join(band_list)})",
                         roles=["data"],
                     )
+
+                    if keep_remote_refs:
+                        # Keep remote assets, add local as "clipped"
+                        item.assets["clipped"] = local_asset
+                    else:
+                        # Replace remote band assets with single local "image" asset
+                        # Remove the downloaded band assets (keep others like scl, cloud)
+                        for band in band_list:
+                            item.assets.pop(band, None)
+                        item.assets["image"] = local_asset
+
                     item.save_object(str(item_path))
+
+                    # Update parent chip item with asset reference
+                    parent_item_path = item_path.parent / f"{base_id}.json"
+                    if parent_item_path.exists():
+                        parent_item = pystac.Item.from_file(str(parent_item_path))
+                        asset_key = f"{season}_image"
+                        parent_item.assets[asset_key] = pystac.Asset(
+                            href=f"./{output_filename}",
+                            media_type="image/tiff; application=geotiff; profile=cloud-optimized",
+                            title=f"{season.capitalize()} season imagery ({','.join(band_list)})",
+                            roles=["data"],
+                        )
+                        parent_item.save_object(str(parent_item_path))
+
                     successful.append(item.id)
                 else:
                     failed.append({"item": item.id, "error": result.error})

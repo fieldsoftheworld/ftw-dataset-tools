@@ -12,10 +12,12 @@ from tqdm import tqdm
 
 from ftw_dataset_tools.api import dataset
 from ftw_dataset_tools.api.imagery import (
+    ImageryProgressBar,
     download_and_clip_scene,
     select_scenes_for_chip,
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
+from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_datetime_column
 
 
 @click.command("create-dataset")
@@ -66,16 +68,16 @@ from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
     help="Year for temporal extent (required if fields lack determination_datetime column).",
 )
 @click.option(
-    "--select-images",
+    "--skip-images",
     is_flag=True,
     default=False,
-    help="Run image selection after mask creation.",
+    help="Skip image selection (by default, imagery is selected after mask creation).",
 )
 @click.option(
     "--download-images",
     is_flag=True,
     default=False,
-    help="Download images after selection (implies --select-images).",
+    help="Download images after selection.",
 )
 @click.option(
     "--stac-host",
@@ -89,7 +91,7 @@ from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
     type=int,
     default=10,
     show_default=True,
-    help="Maximum scene-level cloud cover percentage.",
+    help="Maximum scene-level cloud cover percentage for STAC query filter.",
 )
 @click.option(
     "--buffer-days",
@@ -97,6 +99,33 @@ from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
     default=14,
     show_default=True,
     help="Days to search around crop calendar dates.",
+)
+@click.option(
+    "--pixel-check/--no-pixel-check",
+    default=True,
+    show_default=True,
+    help="Enable pixel-level cloud cover analysis using SCL band.",
+)
+@click.option(
+    "--cloud-cover-pixel",
+    type=float,
+    default=0.0,
+    show_default=True,
+    help="Maximum pixel-level cloud cover percentage (0.0 = require fully clear).",
+)
+@click.option(
+    "--num-buffer-expansions",
+    type=int,
+    default=3,
+    show_default=True,
+    help="Number of times to expand date buffer if no cloud-free scenes found.",
+)
+@click.option(
+    "--buffer-expansion-size",
+    type=int,
+    default=14,
+    show_default=True,
+    help="Days to add to buffer on each expansion.",
 )
 def create_dataset_cmd(
     fields_file: str,
@@ -107,11 +136,15 @@ def create_dataset_cmd(
     num_workers: int | None,
     skip_reproject: bool,
     year: int | None,
-    select_images: bool,
+    skip_images: bool,
     download_images: bool,
     stac_host: str,
     cloud_cover_scene: int,
     buffer_days: int,
+    pixel_check: bool,
+    cloud_cover_pixel: float,
+    num_buffer_expansions: int,
+    buffer_expansion_size: int,
 ) -> None:
     """Create a complete training dataset from a fields file.
 
@@ -253,11 +286,23 @@ def create_dataset_cmd(
             click.echo(f"  Items: {result.stac_result.total_items:,}")
             click.echo(f"  Items parquet: {result.stac_result.items_parquet_path}")
 
-        # Image selection and download
-        if select_images or download_images:
-            if year is None:
+        # Image selection (by default enabled, unless --skip-images is set)
+        should_select_images = not skip_images or download_images
+        if should_select_images:
+            # Try to extract year from determination_datetime if not provided
+            effective_year = year
+            if effective_year is None:
+                datetime_col = detect_datetime_column(fields_file)
+                if datetime_col:
+                    effective_year = get_year_from_datetime_column(fields_file, datetime_col)
+                    if effective_year:
+                        click.echo(f"  Year: {effective_year} (from {datetime_col})")
+
+            if effective_year is None:
                 raise click.ClickException(
-                    "--year is required when using --select-images or --download-images"
+                    "--year is required for image selection "
+                    "(no determination_datetime column found). "
+                    "Use --skip-images to skip image selection."
                 )
 
             click.echo("")
@@ -267,13 +312,17 @@ def create_dataset_cmd(
             chips_collection_path = Path(result.stac_result.chips_collection_path)
             catalog_dir = chips_collection_path.parent
 
-            # Run image selection
+            # Run image selection with full parameters
             image_stats = _run_image_selection(
                 catalog_dir=catalog_dir,
-                year=year,
+                year=effective_year,
                 stac_host=stac_host,
                 cloud_cover_scene=cloud_cover_scene,
                 buffer_days=buffer_days,
+                pixel_check=pixel_check,
+                cloud_cover_pixel=cloud_cover_pixel,
+                num_buffer_expansions=num_buffer_expansions,
+                buffer_expansion_size=buffer_expansion_size,
             )
 
             click.echo(f"  Selected: {image_stats['successful']}")
@@ -316,6 +365,10 @@ def _run_image_selection(
     stac_host: str,
     cloud_cover_scene: int,
     buffer_days: int,
+    pixel_check: bool = True,
+    cloud_cover_pixel: float = 0.0,
+    num_buffer_expansions: int = 3,
+    buffer_expansion_size: int = 14,
 ) -> dict:
     """Run image selection for all chips in a catalog."""
     # Find all chip items (parent items, not child S2 items)
@@ -332,17 +385,14 @@ def _run_image_selection(
                 except Exception:
                     pass
 
-    successful = 0
-    skipped = 0
-    failed = 0
-
-    with tqdm(total=len(chip_items), desc="Selecting imagery", unit="chip", leave=False) as pbar:
+    # Process chips with unified progress display
+    with ImageryProgressBar(total=len(chip_items), leave=False, verbose=False) as progress:
         for item, item_path in chip_items:
+            progress.start_chip(item.id)
             bbox = tuple(item.bbox) if item.bbox else None
 
             if bbox is None:
-                skipped += 1
-                pbar.update(1)
+                progress.mark_skipped("No bbox in item")
                 continue
 
             try:
@@ -353,6 +403,11 @@ def _run_image_selection(
                     stac_host=stac_host,
                     cloud_cover_scene=cloud_cover_scene,
                     buffer_days=buffer_days,
+                    pixel_check=pixel_check,
+                    cloud_cover_pixel=cloud_cover_pixel,
+                    num_buffer_expansions=num_buffer_expansions,
+                    buffer_expansion_size=buffer_expansion_size,
+                    on_progress=progress.on_progress,
                 )
 
                 if result.success:
@@ -365,17 +420,18 @@ def _run_image_selection(
                         stac_host=stac_host,
                         cloud_cover_scene=cloud_cover_scene,
                         buffer_days=buffer_days,
+                        pixel_check=pixel_check,
+                        num_buffer_expansions=num_buffer_expansions,
+                        buffer_expansion_size=buffer_expansion_size,
                     )
-                    successful += 1
+                    progress.mark_success(result)
                 else:
-                    skipped += 1
+                    progress.mark_skipped(result.skipped_reason or "No cloud-free scenes")
 
-            except Exception:
-                failed += 1
+            except Exception as e:
+                progress.mark_failed(str(e))
 
-            pbar.update(1)
-
-    return {"successful": successful, "skipped": skipped, "failed": failed}
+    return progress.get_stats_dict()
 
 
 def _create_child_items_inline(
@@ -386,6 +442,9 @@ def _create_child_items_inline(
     stac_host: str,
     cloud_cover_scene: int,
     buffer_days: int,
+    pixel_check: bool = True,
+    num_buffer_expansions: int = 3,
+    buffer_expansion_size: int = 14,
 ) -> None:
     """Create child STAC items for planting and harvest scenes (inline version)."""
     # Update parent item with FTW properties
@@ -395,6 +454,9 @@ def _create_child_items_inline(
     parent_item.properties["ftw:stac_host"] = stac_host
     parent_item.properties["ftw:cloud_cover_scene_threshold"] = cloud_cover_scene
     parent_item.properties["ftw:buffer_days"] = buffer_days
+    parent_item.properties["ftw:pixel_check"] = pixel_check
+    parent_item.properties["ftw:num_buffer_expansions"] = num_buffer_expansions
+    parent_item.properties["ftw:buffer_expansion_size"] = buffer_expansion_size
 
     # Set temporal extent from selected scenes
     if result.planting_scene and result.harvest_scene:
