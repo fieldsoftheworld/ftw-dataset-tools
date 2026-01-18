@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,6 +17,31 @@ if TYPE_CHECKING:
 
 # Default MGRS grid source
 DEFAULT_GRID_SOURCE = "s3://us-west-2.opendata.source.coop/tge-labs/mgrs/gzd_partition/*/*.parquet"
+
+
+def get_grid_cache_dir() -> Path:
+    """
+    Get the cache directory for grid query results.
+
+    Uses FTW_CACHE_DIR environment variable if set,
+    otherwise defaults to ~/.cache/ftw-tools/grid/
+
+    Returns:
+        Path to cache directory
+    """
+    cache_base = os.environ.get("FTW_CACHE_DIR")
+    cache_base_path = Path(cache_base) if cache_base else Path.home() / ".cache" / "ftw-tools"
+    cache_dir = cache_base_path / "grid"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _get_cache_key(bounds: tuple[float, float, float, float], precise: bool) -> str:
+    """Generate a cache key from bounds and precision setting."""
+    # Round bounds to 4 decimal places (~11m precision) to allow some tolerance
+    rounded = tuple(round(b, 4) for b in bounds)
+    key_str = f"{rounded}_{precise}"
+    return hashlib.md5(key_str.encode()).hexdigest()[:12]
 
 
 class CRSError(Exception):
@@ -45,6 +72,7 @@ def get_grid(
     grid_source: str = DEFAULT_GRID_SOURCE,
     geom_col: str = "geometry",
     precise: bool = False,
+    use_cache: bool = True,
     on_progress: Callable[[str], None] | None = None,
 ) -> GetGridResult:
     """
@@ -57,6 +85,8 @@ def get_grid(
         geom_col: Name of the geometry column in the input file
         precise: If True, use geometry union for precise matching. If False (default),
                  use bounding box only (faster but may include extra grids).
+        use_cache: If True (default), cache grid results by bounding box for faster
+                   repeated queries in the same area.
         on_progress: Optional callback for progress messages
 
     Returns:
@@ -108,10 +138,43 @@ def get_grid(
         FROM input_data
     """).fetchone()
     xmin, ymin, xmax, ymax = bounds_result
+    bounds = (xmin, ymin, xmax, ymax)
     log(f"Bounds: [{xmin:.6f}, {ymin:.6f}, {xmax:.6f}, {ymax:.6f}]")
 
-    # Fetch grids that intersect the bounding box
-    log("Fetching grid cells by bounding box...")
+    # Check cache for existing grid results
+    cache_file = None
+    if use_cache:
+        cache_key = _get_cache_key(bounds, precise)
+        cache_file = get_grid_cache_dir() / f"grid_{cache_key}.parquet"
+
+        if cache_file.exists():
+            log(f"Using cached grid from {cache_file}")
+            conn.execute(f"CREATE TABLE grid_result AS SELECT * FROM '{cache_file}'")
+            grid_count = conn.execute("SELECT COUNT(*) FROM grid_result").fetchone()[0]
+            log(f"Loaded {grid_count:,} cached grid cells")
+
+            # Skip to output writing
+            if output_file:
+                out_path = Path(output_file).resolve()
+            else:
+                out_path = input_path.parent / f"{input_path.stem}_grid.parquet"
+
+            log(f"Writing output to: {out_path}")
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            conn.execute(f"""
+                COPY grid_result TO '{out_path}'
+                (FORMAT PARQUET, COMPRESSION 'zstd', COMPRESSION_LEVEL 16)
+            """)
+            conn.close()
+
+            return GetGridResult(
+                output_path=out_path,
+                grid_count=grid_count,
+                bounds=bounds,
+            )
+
+    # Fetch grids that intersect the bounding box from remote source
+    log("Fetching grid cells from remote source...")
     conn.execute(f"""
         CREATE TABLE grid_bbox AS
         SELECT *
@@ -153,6 +216,14 @@ def get_grid(
     grid_count = conn.execute("SELECT COUNT(*) FROM grid_result").fetchone()[0]
     log(f"Found {grid_count:,} intersecting grid cells")
 
+    # Save to cache if caching is enabled
+    if use_cache and cache_file:
+        log(f"Caching grid results to {cache_file}")
+        conn.execute(f"""
+            COPY grid_result TO '{cache_file}'
+            (FORMAT PARQUET, COMPRESSION 'zstd', COMPRESSION_LEVEL 16)
+        """)
+
     # Determine output path
     if output_file:
         out_path = Path(output_file).resolve()
@@ -172,5 +243,5 @@ def get_grid(
     return GetGridResult(
         output_path=out_path,
         grid_count=grid_count,
-        bounds=(xmin, ymin, xmax, ymax),
+        bounds=bounds,
     )

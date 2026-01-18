@@ -3,7 +3,6 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-import click
 from tqdm import tqdm
 
 if TYPE_CHECKING:
@@ -23,10 +22,9 @@ class SelectionStats:
 
 @dataclass
 class ImageryProgressBar:
-    """Progress bar for imagery selection with status line updates.
+    """Progress bar for imagery selection with single-line status updates.
 
-    Provides a unified progress display for both select-images and create-dataset
-    commands, with informative status updates below the progress bar.
+    Shows a compact progress bar with current chip status updating in-place.
     """
 
     total: int
@@ -38,11 +36,14 @@ class ImageryProgressBar:
     _last_result: "SceneSelectionResult | None" = field(default=None, repr=False)
 
     def __enter__(self) -> "ImageryProgressBar":
+        # Compact bar format: progress bar | count | stats | description (at end so width changes don't matter)
+        bar_format = "|{bar:25}| {n}/{total} ok={postfix} {desc}"
         self._pbar = tqdm(
             total=self.total,
-            desc="Selecting imagery",
+            desc="",
             unit="chip",
             leave=self.leave,
+            bar_format=bar_format,
         )
         self._update_postfix()
         return self
@@ -56,89 +57,60 @@ class ImageryProgressBar:
         if not self._pbar:
             return
 
-        status = {
-            "ok": self.stats.successful,
-            "skip": self.stats.skipped,
-            "fail": self.stats.failed,
-        }
+        # Build stats string: "5" or "5 skip=2" or "5 skip=2 fail=1"
+        parts = [str(self.stats.successful)]
+        if self.stats.skipped > 0:
+            parts.append(f"skip={self.stats.skipped}")
+        if self.stats.failed > 0:
+            parts.append(f"fail={self.stats.failed}")
 
-        if self._last_result and self._last_result.success:
-            p_cc = (
-                self._last_result.planting_scene.cloud_cover
-                if self._last_result.planting_scene
-                else 0
-            )
-            h_cc = (
-                self._last_result.harvest_scene.cloud_cover
-                if self._last_result.harvest_scene
-                else 0
-            )
-            status["last"] = f"P:{p_cc:.0f}%/H:{h_cc:.0f}%"
+        self._pbar.set_postfix_str(" ".join(parts))
 
-        self._pbar.set_postfix(status)
-
-    def _status(self, message: str, style: str | None = None) -> None:
-        """Write a status message below the progress bar.
-
-        Args:
-            message: The message to display
-            style: Optional color style ('green', 'yellow', 'red', 'cyan', 'dim')
-        """
+    def _status(self, message: str) -> None:
+        """Update the status message in-place."""
         if not self._pbar:
             return
-
-        if style:
-            styled = click.style(message, fg=style)
-            self._pbar.write(styled)
-        else:
-            self._pbar.write(message)
+        # Truncate to keep display compact
+        display_msg = message[:50] if len(message) > 50 else message
+        self._pbar.set_description(display_msg)
 
     def start_chip(self, chip_id: str) -> None:
         """Called when starting to process a chip."""
         self._current_chip = chip_id
+        # Show short chip ID (last part after 'ftw-')
+        short_id = chip_id.replace("ftw-", "") if chip_id.startswith("ftw-") else chip_id
+        self._status(short_id)
 
     def on_progress(self, message: str) -> None:
-        """Progress callback for scene selection - shows detailed info.
+        """Progress callback for scene selection.
 
-        This is passed to select_scenes_for_chip() as the on_progress callback.
-        It intelligently formats messages based on their content.
+        All messages update in-place on the description line with original formatting.
         """
         if not self._pbar:
             return
 
-        # Format different message types with appropriate styling
+        # Format messages with icons like the original
         if message.startswith("Expansion"):
-            # Buffer expansion - highlight in cyan
-            self._status(f"  ↻ {message}", "cyan")
+            # "Expansion 1: planting buffer now 28 days"
+            self._status(f"↻ {message}")
         elif message.startswith("Searching for"):
-            # Search start - dim
-            if self.verbose:
-                self._status(f"  ○ {message}", "bright_black")
-        elif message.startswith("STAC Query:") or message.startswith("  "):
-            # Detailed query info - only show in verbose mode
-            if self.verbose:
-                self._status(f"    {message}", "bright_black")
+            # "Searching for planting scene around 2024-05-01..." -> "○ Searching planting..."
+            season = "planting" if "planting" in message else "harvest"
+            self._status(f"○ Searching {season}...")
+        elif message.startswith("Selected"):
+            # Keep the full message: "✓ Selected planting scene: S2B_T54TWN... (0.0% cloud)"
+            self._status(f"✓ {message}")
         elif message.startswith("Found"):
-            # Candidate count - show count info
-            if self.verbose:
-                self._status(f"  ○ {message}", "bright_black")
-        elif message.startswith("Selected planting") or message.startswith("Selected harvest"):
-            # Success - green
-            self._status(f"  ✓ {message}", "green")
-        elif "Skipping" in message or "exceeds" in message:
-            # Skipped due to cloud cover - dim
-            if self.verbose:
-                self._status(f"  ○ {message}", "bright_black")
-        elif message.startswith("Both seasons meet"):
-            # Final success message
-            self._status(f"  ✓ {message}", "green")
-        elif message.startswith("Crop calendar:"):
-            # Crop calendar info - dim
-            if self.verbose:
-                self._status(f"  ○ {message}", "bright_black")
-        elif self.verbose:
-            # Other messages only in verbose
-            self._status(f"  ○ {message}", "bright_black")
+            # "Found 5 planting scene candidates"
+            self._status(f"○ {message}")
+        elif message.startswith("Both seasons"):
+            self._status(f"✓ {message}")
+        elif "Skipping" in message:
+            # "  Skipping 9-28: 15.2% cloud" -> "✗ Skipping 9-28: 15.2% cloud"
+            self._status(f"✗ {message.strip()}")
+        else:
+            # Other messages
+            self._status(message)
 
     def mark_success(self, result: "SceneSelectionResult") -> None:
         """Mark current chip as successfully processed."""
@@ -155,17 +127,13 @@ class ImageryProgressBar:
             self.stats.already_has += 1
         elif "No cloud-free" in reason or "no scenes" in reason.lower():
             self.stats.no_scenes += 1
-            chip = self._current_chip or "chip"
-            self._status(f"  ✗ {chip}: {reason}", "yellow")
         self._update_postfix()
         if self._pbar:
             self._pbar.update(1)
 
-    def mark_failed(self, error: str) -> None:
+    def mark_failed(self, error: str) -> None:  # noqa: ARG002
         """Mark current chip as failed with error."""
         self.stats.failed += 1
-        chip = self._current_chip or "chip"
-        self._status(f"  ✗ {chip}: {error}", "red")
         self._update_postfix()
         if self._pbar:
             self._pbar.update(1)

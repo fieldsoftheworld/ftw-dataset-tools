@@ -447,6 +447,11 @@ def _create_child_items_inline(
     buffer_expansion_size: int = 14,
 ) -> None:
     """Create child STAC items for planting and harvest scenes (inline version)."""
+    # Ensure parent has self_href set (required for saving with relative links)
+    parent_path = chip_dir / f"{parent_item.id}.json"
+    if parent_item.get_self_href() is None:
+        parent_item.set_self_href(str(parent_path))
+
     # Update parent item with FTW properties
     parent_item.properties["ftw:calendar_year"] = year
     parent_item.properties["ftw:planting_day"] = result.crop_calendar.planting_day
@@ -463,14 +468,14 @@ def _create_child_items_inline(
         parent_item.properties["start_datetime"] = result.planting_scene.datetime.isoformat()
         parent_item.properties["end_datetime"] = result.harvest_scene.datetime.isoformat()
 
-    # Save updated parent
-    parent_path = chip_dir / f"{parent_item.id}.json"
-    parent_item.save_object(str(parent_path))
+    # Save updated parent (parent_path already set at function start)
+    parent_item.save_object(dest_href=str(parent_path))
 
     # Create child items for each season
     for scene, season in [(result.planting_scene, "planting"), (result.harvest_scene, "harvest")]:
         if scene:
             child_id = f"{parent_item.id}_{season}_s2"
+            child_path = chip_dir / f"{child_id}.json"
             child_item = pystac.Item(
                 id=child_id,
                 geometry=parent_item.geometry,
@@ -482,6 +487,9 @@ def _create_child_items_inline(
                     "ftw:calendar_year": year,
                 },
             )
+
+            # Set self_href before adding links (required for relative link resolution)
+            child_item.set_self_href(str(child_path))
 
             # Copy relevant band assets
             for band in ["red", "green", "blue", "nir", "scl", "visual"]:
@@ -508,8 +516,7 @@ def _create_child_items_inline(
             if scene.cloud_cover < 0.1:
                 child_item.properties["eo:cloud_cover"] = scene.cloud_cover
 
-            child_path = chip_dir / f"{child_id}.json"
-            child_item.save_object(str(child_path))
+            child_item.save_object(dest_href=str(child_path))
 
 
 def _run_image_download(

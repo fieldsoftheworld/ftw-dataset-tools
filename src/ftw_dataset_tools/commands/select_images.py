@@ -83,7 +83,6 @@ def _clear_chip_selections(catalog_dir: Path, item: pystac.Item) -> dict:
             deleted["geotiffs"] += 1
 
     # Remove ftw:planting and ftw:harvest links from parent item
-    original_link_count = len(item.links)
     item.links = [link for link in item.links if link.rel not in ("ftw:planting", "ftw:harvest")]
 
     # Extract calendar year before removing properties (needed to restore datetime)
@@ -123,12 +122,15 @@ def _clear_chip_selections(catalog_dir: Path, item: pystac.Item) -> dict:
         restored_dt = datetime(calendar_year, 1, 1, 0, 0, 0, tzinfo=UTC)
     else:
         restored_dt = datetime.now(UTC)
+    # Set both the Item attribute and the properties dict
+    item.datetime = restored_dt
     item.properties["datetime"] = restored_dt.isoformat()
 
-    # Save updated parent item if we removed links or need to restore datetime
-    if len(item.links) < original_link_count or calendar_year:
-        parent_path = chip_dir / f"{item.id}.json"
-        item.save_object(dest_href=str(parent_path))
+    # Always save since we've modified the item (removed properties, restored datetime)
+    parent_path = chip_dir / f"{item.id}.json"
+    if item.get_self_href() is None:
+        item.set_self_href(str(parent_path))
+    item.save_object(dest_href=str(parent_path))
 
     return deleted
 
@@ -166,7 +168,7 @@ def _extract_year_from_item(item: pystac.Item) -> int | None:
 @click.option(
     "--cloud-cover-scene",
     type=int,
-    default=30,
+    default=75,
     show_default=True,
     help="Maximum scene-level cloud cover percentage.",
 )
@@ -422,44 +424,62 @@ def select_images_cmd(
     if verbose:
         click.echo("Verbose mode: ON")
 
-    click.echo(f"\nFound {len(chip_items)} chips to process")
+    click.echo(f"\nFound {len(chip_items)} total chips")
+
+    # Pre-scan to categorize chips and filter to only those needing processing
+    chips_to_process: list[tuple[pystac.Item, int]] = []  # (item, year)
+    skipped: list[dict] = []
+    already_has_count = 0
+
+    for item in chip_items:
+        chip_id = item.id
+        bbox = tuple(item.bbox) if item.bbox else None
+
+        if bbox is None:
+            skipped.append({"chip": chip_id, "reason": "No bbox in item"})
+            continue
+
+        # Skip chips that already have scene selections (unless --force)
+        if not force and _has_existing_scenes(item):
+            skipped.append({"chip": chip_id, "reason": "Already has imagery selections"})
+            already_has_count += 1
+            continue
+
+        # Determine the year for this chip
+        chip_year = year
+        if chip_year is None:
+            chip_year = _extract_year_from_chip_id(chip_id)
+        if chip_year is None:
+            chip_year = _extract_year_from_item(item)
+        if chip_year is None:
+            reason = "No year provided and could not extract from chip ID or item properties"
+            skipped.append({"chip": chip_id, "reason": reason})
+            continue
+
+        chips_to_process.append((item, chip_year))
+
+    # Report pre-scan results
+    if already_has_count > 0:
+        click.echo(f"  Already have imagery: {already_has_count}")
+    pre_skipped = len(skipped) - already_has_count
+    if pre_skipped > 0:
+        click.echo(f"  Skipped (no bbox/year): {pre_skipped}")
+    click.echo(f"  To process: {len(chips_to_process)}")
+
+    if not chips_to_process:
+        click.echo("\nNo chips need processing.")
+        return
 
     # Track results for detailed reporting
     successful: list[str] = []
-    skipped: list[dict] = []
     failed: list[dict] = []
 
-    # Process each chip with unified progress display
-    with ImageryProgressBar(total=len(chip_items), leave=True, verbose=verbose) as progress:
-        for item in chip_items:
+    # Process only the chips that need work
+    with ImageryProgressBar(total=len(chips_to_process), leave=True, verbose=verbose) as progress:
+        for item, chip_year in chips_to_process:
             chip_id = item.id
             progress.start_chip(chip_id)
-            bbox = tuple(item.bbox) if item.bbox else None
-
-            if bbox is None:
-                skipped.append({"chip": chip_id, "reason": "No bbox in item"})
-                progress.mark_skipped("No bbox in item")
-                continue
-
-            # Skip chips that already have scene selections (unless --force)
-            if not force and _has_existing_scenes(item):
-                skipped.append({"chip": chip_id, "reason": "Already has imagery selections"})
-                progress.mark_skipped("Already has imagery selections", was_existing=True)
-                continue
-
-            # Determine the year for this chip
-            chip_year = year
-            if chip_year is None:
-                # Try extracting from chip ID first (e.g., ftw-34UFF1628_2024)
-                chip_year = _extract_year_from_chip_id(chip_id)
-            if chip_year is None:
-                # Try extracting from item's temporal properties
-                chip_year = _extract_year_from_item(item)
-            if chip_year is None:
-                reason = "No year provided and could not extract from chip ID or item properties"
-                skipped.append({"chip": chip_id, "reason": reason})
-                progress.mark_skipped(reason)
-                continue
+            bbox = tuple(item.bbox)  # Already validated in pre-scan
 
             try:
                 result = select_scenes_for_chip(
@@ -595,6 +615,11 @@ def _create_child_items(
     """Create child STAC items for planting and harvest scenes."""
     chip_dir = catalog_dir / parent_item.id
 
+    # Ensure parent item has self_href set (required for saving with relative links)
+    parent_path = chip_dir / f"{parent_item.id}.json"
+    if parent_item.get_self_href() is None:
+        parent_item.set_self_href(str(parent_path))
+
     # Update parent item with FTW properties
     parent_item.properties["ftw:calendar_year"] = year
     parent_item.properties["ftw:planting_day"] = result.crop_calendar.planting_day
@@ -655,8 +680,7 @@ def _create_child_items(
             )
         )
 
-    # Save updated parent
-    parent_path = chip_dir / f"{parent_item.id}.json"
+    # Save updated parent (parent_path already set at function start)
     parent_item.save_object(dest_href=str(parent_path))
 
     # Create planting child item
@@ -691,6 +715,7 @@ def _create_season_child_item(
     child_id = f"{parent_item.id}_{season}_s2"
 
     # Create child item
+    child_path = chip_dir / f"{child_id}.json"
     child_item = pystac.Item(
         id=child_id,
         geometry=parent_item.geometry,
@@ -702,6 +727,9 @@ def _create_season_child_item(
             "ftw:calendar_year": year,
         },
     )
+
+    # Set self_href before adding links (required for relative link resolution)
+    child_item.set_self_href(str(child_path))
 
     # Copy relevant band assets from source scene
     bands_to_copy = ["red", "green", "blue", "nir", "scl", "visual"]
@@ -734,8 +762,7 @@ def _create_season_child_item(
     # Always include eo:cloud_cover, rounded to 2 decimal places
     child_item.properties["eo:cloud_cover"] = round(scene.cloud_cover, 2)
 
-    # Save child item
-    child_path = chip_dir / f"{child_id}.json"
+    # Save child item (child_path already set at function start)
     child_item.save_object(dest_href=str(child_path))
 
 

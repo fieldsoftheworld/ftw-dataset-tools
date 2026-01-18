@@ -212,6 +212,23 @@ def _query_stac(
     )
 
 
+def _short_date(item: pystac.Item) -> str:
+    """Extract short date (M-DD) from item datetime or ID."""
+    # Try datetime first
+    dt = item.datetime
+    if dt:
+        return f"{dt.month}-{dt.day:02d}"
+    # Fall back to parsing from ID like "S2A_T54TWN_20240928T012657_L2A"
+    parts = item.id.split("_")
+    if len(parts) >= 3:
+        date_part = parts[2][:8]  # "20240928"
+        if len(date_part) == 8 and date_part.isdigit():
+            month = int(date_part[4:6])
+            day = int(date_part[6:8])
+            return f"{month}-{day:02d}"
+    return item.id[:15]  # Fallback to truncated ID
+
+
 def _select_best_scene(
     items: list[pystac.Item],
     season: Literal["planting", "harvest"],
@@ -277,9 +294,8 @@ def _select_best_scene(
 
                 # Check if pixel cloud cover exceeds threshold
                 if actual_cloud_cover > cloud_cover_pixel:
-                    log(
-                        f"  Skipping {item.id}: pixel cloud {actual_cloud_cover:.1f}% > {cloud_cover_pixel}%"
-                    )
+                    short_dt = _short_date(item)
+                    log(f"  Skipping {short_dt}: {actual_cloud_cover:.1f}% cloud")
                     continue
 
         # Get scene datetime
