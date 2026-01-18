@@ -63,6 +63,8 @@ class TestGetGrid:
         with pytest.raises(CRSError):
             get_grid(input_file)
 
+    @pytest.mark.slow
+    @pytest.mark.network
     def test_progress_callback(self, sample_geoparquet_4326: Path) -> None:
         """Test progress callback is invoked."""
         import contextlib
@@ -78,6 +80,7 @@ class TestGetGrid:
         assert len(messages) > 0
         assert any("CRS" in msg for msg in messages)
 
+    @pytest.mark.slow
     @pytest.mark.network
     def test_fetches_grid_from_source_coop(self, sample_geoparquet_4326: Path) -> None:
         """Test fetching grid from Source Coop (requires network)."""

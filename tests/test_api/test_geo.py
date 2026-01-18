@@ -183,9 +183,6 @@ class TestReproject:
 class TestReprojectIntegration:
     """Integration tests for reproject that verify actual data transformation."""
 
-    @pytest.mark.skip(
-        reason="Requires geoparquet-io >0.8.0 which fixes reproject bbox computation issues"
-    )
     def test_reproject_updates_bbox_column(self, tmp_path: Path) -> None:
         """Test that bbox column is recalculated after reprojection.
 
