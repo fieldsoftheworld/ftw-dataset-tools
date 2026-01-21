@@ -49,4 +49,4 @@ class TestCli:
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
         assert "FTW Dataset Tools" in result.output
-        assert "create-chips" in result.output
+        assert "add-field-stats" in result.output
