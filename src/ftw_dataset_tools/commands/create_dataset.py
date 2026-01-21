@@ -26,7 +26,12 @@ from ftw_dataset_tools.api import dataset, splits
     "--split-type",
     type=click.Choice(splits.SPLIT_TYPE_CHOICES),
     required=True,
-    help=f"Dataset train/val/test split strategy ({splits.SPLIT_TYPE_CHOICES_STR}).",
+    help=(
+        "Dataset train/val/test split strategy. "
+        "Use 'block3x3' for spatially coherent 3x3 blocks, or "
+        "'random-uniform' for random chip assignment across the dataset. "
+        f"Available choices: {splits.SPLIT_TYPE_CHOICES_STR}."
+    ),
 )
 @click.option(
     "--split-percents",
