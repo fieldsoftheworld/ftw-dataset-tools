@@ -79,9 +79,10 @@ def _extract_boundaries(
 ) -> int:
     """Extract boundaries from polygons and write to output file."""
     # Create boundary lines using ST_Boundary
+    # Wrap in ST_AsWKB to ensure proper WKB format for GeoParquet output
     query = f"""
         SELECT * EXCLUDE ("{geom_col}"),
-               ST_Boundary("{geom_col}") AS "{geom_col}"
+               ST_AsWKB(ST_Boundary("{geom_col}")) AS "{geom_col}"
         FROM '{input_path}'
     """
 

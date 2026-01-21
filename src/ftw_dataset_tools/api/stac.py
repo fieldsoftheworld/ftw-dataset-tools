@@ -272,8 +272,9 @@ def _create_source_collection(
 def _create_chip_item(
     chip_info: ChipInfo,
     field_dataset: str,
-    mask_dirs: dict[str, Path],
     temporal_extent: tuple[datetime, datetime],
+    chip_dir: Path | None = None,
+    mask_dirs: dict[str, Path] | None = None,
 ) -> Item | None:
     """
     Create a STAC Item for a single chip.
@@ -281,8 +282,9 @@ def _create_chip_item(
     Args:
         chip_info: ChipInfo with geometry and bbox
         field_dataset: Dataset name
-        mask_dirs: Dict mapping mask type name to directory path
         temporal_extent: Tuple of (start, end) datetime
+        chip_dir: Directory containing co-located masks (new structure)
+        mask_dirs: Dict mapping mask type name to directory path (legacy structure)
 
     Returns:
         pystac Item, or None if no mask files exist
@@ -298,11 +300,22 @@ def _create_chip_item(
     }
 
     for mask_name, mask_type in mask_type_map.items():
-        if mask_name in mask_dirs:
+        if chip_dir is not None:
+            # New structure: masks co-located with item
+            mask_filename = f"{grid_id}_{mask_type.value}.tif"
+            mask_path = chip_dir / mask_filename
+            if mask_path.exists():
+                mask_assets[f"{mask_name}_mask"] = Asset(
+                    href=f"./{mask_filename}",
+                    media_type=MEDIA_TYPE_COG,
+                    title=_get_mask_title(mask_name),
+                    roles=["labels"],
+                )
+        elif mask_dirs is not None and mask_name in mask_dirs:
+            # Legacy structure: masks in type-based directories
             mask_filename = f"{field_dataset}_{grid_id}_{mask_type.value}.tif"
             mask_path = mask_dirs[mask_name] / mask_filename
             if mask_path.exists():
-                # Relative path from chips/{grid_id}/ to label_masks/{type}/
                 rel_path = f"../../label_masks/{mask_name}/{mask_filename}"
                 mask_assets[f"{mask_name}_mask"] = Asset(
                     href=rel_path,
@@ -431,7 +444,8 @@ def generate_stac_catalog(
     fields_file: Path | str,
     chips_file: Path | str,
     boundary_lines_file: Path | str,
-    mask_dirs: dict[str, Path],
+    chips_base_dir: Path | None = None,
+    mask_dirs: dict[str, Path] | None = None,
     year: int | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> STACGenerationResult:
@@ -444,7 +458,10 @@ def generate_stac_catalog(
         fields_file: Path to fields parquet file
         chips_file: Path to chips parquet file
         boundary_lines_file: Path to boundary lines parquet file
-        mask_dirs: Dict mapping mask type name to directory path
+        chips_base_dir: Base directory containing chip subdirectories with co-located masks.
+                        If provided, expects structure: {chips_base_dir}/{grid_id}/{grid_id}_*.tif
+        mask_dirs: Legacy - Dict mapping mask type name to directory path.
+                   Ignored if chips_base_dir is provided.
         year: Optional year for temporal extent (required if no determination_datetime)
         on_progress: Optional callback for progress messages
 
@@ -492,11 +509,20 @@ def generate_stac_catalog(
     log("Creating STAC items...")
     items = []
     for chip_info in chip_infos:
+        # Determine chip directory if using new structure
+        chip_dir = None
+        if chips_base_dir is not None:
+            chip_dir = chips_base_dir / chip_info.grid_id
+            if not chip_dir.exists():
+                # Skip chips without directories (no masks generated)
+                continue
+
         item = _create_chip_item(
             chip_info=chip_info,
             field_dataset=field_dataset,
-            mask_dirs=mask_dirs,
             temporal_extent=temporal_extent,
+            chip_dir=chip_dir,
+            mask_dirs=mask_dirs if chip_dir is None else None,
         )
         if item:
             items.append(item)

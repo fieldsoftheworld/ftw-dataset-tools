@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -12,8 +10,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
-import geopandas as gpd
-from geoparquet_io.core.add_bbox_column import add_bbox_column
+import geopandas as gpd  # noqa: TC002 - used at runtime for GeoDataFrame methods
+import geoparquet_io as gpio
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -36,8 +34,6 @@ def write_geoparquet(
     conn: duckdb.DuckDBPyConnection | None = None,
     query: str | None = None,
     gdf: gpd.GeoDataFrame | None = None,
-    compression: str = "ZSTD",
-    compression_level: int = 16,
 ) -> Path:
     """
     Write a proper GeoParquet file with bbox column and metadata.
@@ -50,8 +46,6 @@ def write_geoparquet(
         conn: DuckDB connection (required if using query)
         query: SQL query to execute and write results from
         gdf: GeoDataFrame to write (alternative to query)
-        compression: Compression type (default: ZSTD)
-        compression_level: Compression level (default: 16)
 
     Returns:
         Path to the written file
@@ -68,21 +62,25 @@ def write_geoparquet(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if gdf is not None:
-        # Write GeoDataFrame using geopandas
+        # Write GeoDataFrame, then add bbox via gpio
         gdf.to_parquet(out_path)
     else:
-        # Write from DuckDB query
+        # Write from DuckDB query - COPY exports geometry as WKB
         conn.execute(f"COPY ({query}) TO '{out_path}' (FORMAT PARQUET)")
 
-    # Add bbox column only if the file doesn't already have one
+    # Add bbox column using gpio fluent API if not already present
+    # Use temp-file + atomic-rename pattern to prevent corruption on partial writes
     if not has_bbox_column(out_path):
-        with Path(os.devnull).open("w") as devnull, contextlib.redirect_stdout(devnull):
-            add_bbox_column(
-                str(out_path),
-                str(out_path),
-                compression=compression,
-                compression_level=compression_level,
-            )
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+            gpio.read(str(out_path)).add_bbox().write(str(tmp_path))
+            shutil.move(str(tmp_path), str(out_path))
+        except Exception:
+            if tmp_path and tmp_path.exists():
+                tmp_path.unlink()
+            raise
 
     return out_path
 
@@ -417,7 +415,7 @@ def reproject(
     on_progress: Callable[[str], None] | None = None,
 ) -> ReprojectResult:
     """
-    Reproject a GeoParquet file to a different CRS using geopandas.
+    Reproject a GeoParquet file to a different CRS using geoparquet-io.
 
     Args:
         input_file: Path to input GeoParquet file
@@ -440,21 +438,30 @@ def reproject(
         if on_progress:
             on_progress(msg)
 
-    # Read with geopandas
-    log("Loading data...")
-    gdf = gpd.read_parquet(input_path)
-    count = len(gdf)
-    log(f"Loaded {count:,} features")
+    log("Loading and reprojecting data...")
 
-    # Get source CRS
-    source_crs = gdf.crs
-    source_crs_str = format_crs(source_crs)
+    # Use fluent API to read, reproject, and write
+    table = gpio.read(str(input_path))
+
+    # Get source CRS for reporting - may be a PROJJSON dict or string
+    raw_crs = table.crs
+    if raw_crs is None:
+        source_crs_str = "unknown"
+    elif isinstance(raw_crs, dict):
+        # Extract EPSG code from PROJJSON if available
+        crs_id = raw_crs.get("id", {})
+        if crs_id.get("authority") and crs_id.get("code"):
+            source_crs_str = f"{crs_id['authority']}:{crs_id['code']}"
+        else:
+            source_crs_str = raw_crs.get("name", "unknown")
+    else:
+        source_crs_str = str(raw_crs)
     log(f"Source CRS: {source_crs_str}")
     log(f"Target CRS: {target_crs}")
 
-    # Reproject using geopandas
-    log("Reprojecting...")
-    gdf_reprojected = gdf.to_crs(target_crs)
+    # Get count before reprojection
+    count = table.num_rows
+    log(f"Reprojecting {count:,} features...")
 
     # Determine output path
     if output_file:
@@ -464,23 +471,37 @@ def reproject(
         target_suffix = target_crs.replace(":", "_").lower()
         out_path = input_path.parent / f"{input_path.stem}_{target_suffix}.parquet"
 
-    # Write output
-    log(f"Writing output to: {out_path}")
+    # Reproject and write to temp file, then add bbox
+    # Note: We write first, then read back to add bbox because gpio's add_bbox()
+    # has trouble parsing the in-memory geometry format from reproject().
+    # Writing to file serializes as standard WKB which add_bbox() can parse.
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if out_path == input_path:
-        # Write to temp file first, then replace
+    # Use atomic write pattern to protect against partial writes, especially
+    # when out_path equals the input file (in-place reprojection)
+    tmp_path = None
+    tmp_out_path = None
+    try:
         with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
             tmp_path = Path(tmp.name)
+        # Write reprojected data to temp file
+        table.reproject(target_crs).write(str(tmp_path))
 
-        try:
-            write_geoparquet(tmp_path, gdf=gdf_reprojected)
-            shutil.move(tmp_path, out_path)
-        except Exception:
-            if tmp_path.exists():
-                tmp_path.unlink()
-            raise
-    else:
-        write_geoparquet(out_path, gdf=gdf_reprojected)
+        # Read back and add bbox, write to a second temp file for atomic replacement
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp_out:
+            tmp_out_path = Path(tmp_out.name)
+        gpio.read(str(tmp_path)).add_bbox().write(str(tmp_out_path))
+
+        # Atomically replace the output file
+        tmp_out_path.replace(out_path)
+        tmp_out_path = None  # Mark as moved, no cleanup needed
+    finally:
+        if tmp_path and tmp_path.exists():
+            tmp_path.unlink()
+        if tmp_out_path and tmp_out_path.exists():
+            tmp_out_path.unlink()
+
+    log(f"Wrote output to: {out_path}")
 
     return ReprojectResult(
         output_path=out_path,
