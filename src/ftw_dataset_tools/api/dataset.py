@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import duckdb
 
-from ftw_dataset_tools.api import boundaries, field_stats, masks, stac
+from ftw_dataset_tools.api import boundaries, field_stats, masks, splits, stac
 from ftw_dataset_tools.api.geo import (
     detect_crs,
     detect_geometry_column,
@@ -35,6 +35,7 @@ class CreateDatasetResult:
     was_reprojected: bool = False
     source_crs: str | None = None
     chips_result: field_stats.FieldStatsResult | None = None
+    splits_result: splits.CreateSplitsResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
     stac_result: stac.STACGenerationResult | None = None
@@ -49,6 +50,8 @@ def create_dataset(
     fields_file: str | Path,
     output_dir: str | Path = "./dataset",
     field_dataset: str | None = None,
+    split_type: str | None = None,
+    split_percents: tuple[int, int, int] = (80, 10, 10),
     min_coverage: float = 0.01,
     resolution: float = 10.0,
     num_workers: int | None = None,
@@ -64,14 +67,17 @@ def create_dataset(
     This function orchestrates the full dataset creation pipeline:
     1. Reproject fields to EPSG:4326 if needed
     2. Create chips with field coverage statistics
-    3. Create boundary lines from polygons
-    4. Create all three mask types (instance, semantic_2class, semantic_3class)
-    5. Generate STAC static catalog
+    3. Create dataset splits based on the chosen strategy
+    4. Create boundary lines from polygons
+    5. Create all three mask types (instance, semantic_2class, semantic_3class)
+    6. Generate STAC static catalog
 
     Args:
         fields_file: Path to input GeoParquet file with field polygons
         output_dir: Output directory for all generated files (default: ./dataset)
         field_dataset: Name for the dataset (default: input filename stem)
+        split_type: Dataset split strategy
+        split_percents: Train/val/test percentages (must be three integers summing to 100; default: 80 10 10)
         min_coverage: Minimum coverage percentage to include grids (default: 0.01)
         resolution: Pixel resolution in meters for masks (default: 10.0)
         num_workers: Number of parallel workers for mask creation
@@ -104,6 +110,16 @@ def create_dataset(
             on_progress(msg)
 
     log(f"Creating dataset '{field_dataset}' from {fields_path.name}")
+
+    if split_type is None:
+        raise ValueError("split_type is required and cannot be None")
+    if split_type not in splits.SPLIT_TYPE_CHOICES:
+        raise ValueError(f"split_type must be one of: {splits.SPLIT_TYPE_CHOICES_STR}")
+
+    # Validate at API layer to protect against invalid input from direct programmatic usage
+    # (CLI also validates for immediate user feedback, but API may be called directly)
+    split_percents = splits.validate_split_percents(split_percents)
+    log(f"Using split percents (train/val/test): {split_percents}")
 
     # Early validation: Check temporal extent availability
     # This avoids processing the entire dataset only to fail at STAC generation
@@ -174,7 +190,17 @@ def create_dataset(
         f"Created chips: {chips_result.total_cells:,} cells, {chips_result.cells_with_coverage:,} with coverage"
     )
 
-    # Step 3: Create boundary lines
+    # Step 3: Assign splits
+    log(f"Assigning {split_type} splits...")
+    splits_result = splits.assign_splits(
+        chips_file=str(chips_path),
+        split_type=split_type,
+        split_percents=split_percents,
+        random_seed=42,
+        on_progress=log,
+    )
+
+    # Step 4: Create boundary lines
     log("Creating boundary lines...")
     boundary_lines_path = out_dir / f"{field_dataset}_boundary_lines.parquet"
 
@@ -193,7 +219,7 @@ def create_dataset(
 
     log(f"Created boundary lines: {boundaries_result.total_features:,} features")
 
-    # Step 4: Create masks for all three types
+    # Step 5: Create masks for all three types
     masks_results: dict[str, masks.CreateMasksResult] = {}
 
     # Get list of grid IDs from chips file to create directories
@@ -242,7 +268,7 @@ def create_dataset(
         masks_results[subdir_name] = mask_result
         log(f"Created {mask_result.total_created} {mask_type.value} masks")
 
-    # Step 5: Generate STAC catalog
+    # Step 6: Generate STAC catalog
     log("Generating STAC catalog...")
     stac_result = stac.generate_stac_catalog(
         output_dir=out_dir,
@@ -268,6 +294,7 @@ def create_dataset(
         was_reprojected=was_reprojected,
         source_crs=source_crs,
         chips_result=chips_result,
+        splits_result=splits_result,
         boundaries_result=boundaries_result,
         masks_results=masks_results,
         stac_result=stac_result,
