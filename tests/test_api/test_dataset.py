@@ -76,7 +76,7 @@ class TestCreateDatasetInputValidation:
         gdf.to_parquet(fields_file)
 
         with pytest.raises(ValueError, match="Cannot determine temporal extent"):
-            create_dataset(fields_file, year=None)
+            create_dataset(fields_file, year=None, split_type="random-uniform")
 
     def test_skip_reproject_error_non_4326(self, tmp_path: Path) -> None:
         """Test ValueError when skip_reproject=True with non-4326 input."""
@@ -92,7 +92,7 @@ class TestCreateDatasetInputValidation:
         gdf.to_parquet(fields_file)
 
         with pytest.raises(ValueError, match="EPSG:4326 is required"):
-            create_dataset(fields_file, year=2023, skip_reproject=True)
+            create_dataset(fields_file, year=2023, skip_reproject=True, split_type="random-uniform")
 
 
 class TestCreateDatasetResultProperties:

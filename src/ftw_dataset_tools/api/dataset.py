@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import duckdb
 
-from ftw_dataset_tools.api import boundaries, field_stats, masks, stac
+from ftw_dataset_tools.api import boundaries, field_stats, masks, splits, stac
 from ftw_dataset_tools.api.geo import (
     detect_crs,
     detect_geometry_column,
