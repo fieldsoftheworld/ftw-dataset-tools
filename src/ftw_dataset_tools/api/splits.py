@@ -157,8 +157,8 @@ def _assign_random_uniform(
     n_chips = len(gdf)
     train_pct, val_pct = split_percents[0], split_percents[1]
 
-    # Set random seed
-    np.random.seed(random_seed)
+    # Create random number generator for reproducibility without global state
+    rng = np.random.default_rng(random_seed)
 
     # Calculate number of chips for each split
     n_train = int(n_chips * train_pct / 100)
@@ -168,8 +168,8 @@ def _assign_random_uniform(
     # Create split labels
     splits = np.array(["train"] * n_train + ["val"] * n_val + ["test"] * n_test)
 
-    # Shuffle randomly
-    np.random.shuffle(splits)
+    # Shuffle randomly using generator
+    rng.shuffle(splits)
 
     return splits
 
@@ -232,8 +232,8 @@ def _assign_block3x3(
     unique_blocks = block_ids.unique()
     n_blocks = len(unique_blocks)
 
-    # Set random seed
-    np.random.seed(random_seed)
+    # Create random number generator for reproducibility without global state
+    rng = np.random.default_rng(random_seed)
 
     # Calculate number of blocks for each split
     train_pct, val_pct = split_percents[0], split_percents[1]
@@ -244,8 +244,8 @@ def _assign_block3x3(
     # Create block split labels
     block_splits = np.array(["train"] * n_train + ["val"] * n_val + ["test"] * n_test)
 
-    # Shuffle block assignments randomly
-    np.random.shuffle(block_splits)
+    # Shuffle block assignments randomly using generator
+    rng.shuffle(block_splits)
 
     # Create mapping from block ID to split
     block_to_split = dict(zip(unique_blocks, block_splits, strict=True))
