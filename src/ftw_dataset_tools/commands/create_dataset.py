@@ -102,23 +102,23 @@ def create_dataset_cmd(
     For temporal extent, uses determination_datetime from fiboa if present,
     otherwise requires --year to specify the year range.
 
-    \b
-    Output structure:
+    Output structure::
+
         {name}-dataset/
         ├── catalog.json
-        ├── source/
+        ├── {name}-source/
         │   └── collection.json
-        ├── chips/
+        ├── {name}-chips/
         │   ├── collection.json
         │   ├── items.parquet
         │   └── {grid_id}/
-        ├── {dataset}_fields.parquet
-        ├── {dataset}_chips.parquet
-        ├── {dataset}_boundary_lines.parquet
-        └── label_masks/
-            ├── instance/
-            ├── semantic_2class/
-            └── semantic_3class/
+        │       ├── {grid_id}.json
+        │       ├── {grid_id}_instance.tif
+        │       ├── {grid_id}_semantic_2_class.tif
+        │       └── {grid_id}_semantic_3_class.tif
+        ├── {name}_fields.parquet
+        ├── {name}_chips.parquet
+        └── {name}_boundary_lines.parquet
 
     \b
     FIELDS_FILE: GeoParquet file with field boundary polygons
@@ -226,10 +226,10 @@ def create_dataset_cmd(
         click.echo(f"  Chips: {result.chips_file}")
         click.echo(f"  Boundary lines: {result.boundary_lines_file}")
         click.echo("  Masks:")
-        for mask_type, mask_dir in result.mask_dirs.items():
-            if mask_type in result.masks_results:
-                count = result.masks_results[mask_type].total_created
-                click.echo(f"    {mask_type}: {mask_dir} ({count:,} files)")
+        if result.chips_base_dir:
+            click.echo(f"    Location: {result.chips_base_dir}/{{grid_id}}/")
+        for mask_type, mask_result in result.masks_results.items():
+            click.echo(f"    {mask_type}: {mask_result.total_created:,} files")
 
         if result.stac_result:
             click.echo("")

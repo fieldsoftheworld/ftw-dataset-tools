@@ -32,6 +32,59 @@ class MaskType(str, Enum):
     SEMANTIC_3_CLASS = "semantic_3_class"
 
 
+def get_mask_filename(grid_id: str, mask_type: MaskType) -> str:
+    """
+    Generate mask filename for a grid cell.
+
+    Args:
+        grid_id: The grid cell ID
+        mask_type: Type of mask
+
+    Returns:
+        Filename like "{grid_id}_{mask_type.value}.tif"
+    """
+    return f"{grid_id}_{mask_type.value}.tif"
+
+
+def get_mask_output_path(
+    grid_id: str,
+    mask_type: MaskType,
+    chip_dirs: dict[str, Path] | None,
+    output_dir: Path,
+    field_dataset: str,
+) -> Path:
+    """
+    Get the output path for a mask file.
+
+    Args:
+        grid_id: The grid cell ID
+        mask_type: Type of mask
+        chip_dirs: Optional dict mapping grid_id to chip directory.
+                   If provided, grid_id MUST exist in the mapping.
+        output_dir: Fallback output directory (used when chip_dirs is None)
+        field_dataset: Dataset name (used in filename when chip_dirs is None)
+
+    Returns:
+        Full path for the mask file
+
+    Raises:
+        KeyError: If chip_dirs is provided but grid_id is not in the mapping.
+                  Callers should handle/skip grid cells not present in chip_dirs.
+    """
+    if chip_dirs is not None:
+        if grid_id not in chip_dirs:
+            raise KeyError(
+                f"Grid ID '{grid_id}' not found in chip_dirs mapping for mask type "
+                f"'{mask_type.value}'. Caller should skip this grid cell or ensure "
+                f"chip_dirs contains all expected grid IDs."
+            )
+        # Co-located with STAC item: simple filename
+        return chip_dirs[grid_id] / get_mask_filename(grid_id, mask_type)
+    else:
+        # Legacy: dataset prefix in filename
+        return output_dir / f"{field_dataset}_{grid_id}_{mask_type.value}.tif"
+
+
 @dataclass
 class MaskResult:
     """Result of a single mask creation."""
@@ -314,6 +367,7 @@ def create_masks(
     min_coverage: float = 0.01,
     resolution: float = 10.0,
     num_workers: int | None = None,
+    chip_dirs: dict[str, Path] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
     on_start: Callable[[int, int], None] | None = None,
 ) -> CreateMasksResult:
@@ -332,6 +386,9 @@ def create_masks(
         min_coverage: Minimum coverage percentage to process (default: 0.01)
         resolution: Pixel resolution in CRS units (default: 10.0 meters)
         num_workers: Number of parallel workers (default: number of CPUs)
+        chip_dirs: Optional dict mapping grid_id to output directory.
+                   If provided, masks are written to chip-specific directories.
+                   If None, all masks go to output_dir with dataset prefix in filename.
         on_progress: Optional callback (current, total) for progress updates
         on_start: Optional callback (total_grids, filtered_grids) called before processing
 
@@ -453,8 +510,17 @@ def create_masks(
     work_items = []
     for grid_id, minx, miny, maxx, maxy in grid_cells:
         grid_id_str = str(grid_id)
-        mask_filename = f"{field_dataset}_{grid_id_str}_{mask_type.value}.tif"
-        mask_path = output_path / mask_filename
+        mask_path = get_mask_output_path(
+            grid_id=grid_id_str,
+            mask_type=mask_type,
+            chip_dirs=chip_dirs,
+            output_dir=output_path,
+            field_dataset=field_dataset,
+        )
+
+        # Ensure parent directory exists when using chip_dirs
+        if chip_dirs is not None:
+            mask_path.parent.mkdir(parents=True, exist_ok=True)
 
         work_items.append(
             (

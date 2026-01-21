@@ -7,8 +7,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ftw_dataset_tools.api import boundaries, field_stats, masks, splits, stac
-from ftw_dataset_tools.api.geo import detect_crs, detect_geometry_column, reproject
+import duckdb
+
+from ftw_dataset_tools.api import boundaries, field_stats, masks, stac
+from ftw_dataset_tools.api.geo import (
+    detect_crs,
+    detect_geometry_column,
+    ensure_spatial_loaded,
+    reproject,
+)
 from ftw_dataset_tools.api.masks import MaskType
 
 if TYPE_CHECKING:
@@ -24,7 +31,7 @@ class CreateDatasetResult:
     fields_file: Path
     chips_file: Path
     boundary_lines_file: Path
-    mask_dirs: dict[str, Path] = field(default_factory=dict)
+    chips_base_dir: Path | None = None
     was_reprojected: bool = False
     source_crs: str | None = None
     chips_result: field_stats.FieldStatsResult | None = None
@@ -131,16 +138,10 @@ def create_dataset(
 
     # Create output directory structure
     out_dir.mkdir(parents=True, exist_ok=True)
-    masks_dir = out_dir / "label_masks"
-    masks_dir.mkdir(exist_ok=True)
 
-    mask_subdirs = {
-        "instance": masks_dir / "instance",
-        "semantic_2class": masks_dir / "semantic_2class",
-        "semantic_3class": masks_dir / "semantic_3class",
-    }
-    for subdir in mask_subdirs.values():
-        subdir.mkdir(exist_ok=True)
+    # Chips base directory (will contain per-grid subdirectories)
+    chips_base_dir = out_dir / f"{field_dataset}-chips"
+    chips_base_dir.mkdir(exist_ok=True)
 
     # Step 1: Check CRS and reproject if needed
     log("Checking CRS...")
@@ -221,6 +222,25 @@ def create_dataset(
     # Step 5: Create masks for all three types
     masks_results: dict[str, masks.CreateMasksResult] = {}
 
+    # Get list of grid IDs from chips file to create directories
+    conn = duckdb.connect(":memory:")
+    ensure_spatial_loaded(conn)
+    grid_ids = conn.execute(f"""
+        SELECT id FROM '{chips_path}'
+        WHERE field_coverage_pct >= {min_coverage}
+    """).fetchall()
+    conn.close()
+
+    # Create chip directories and build mapping
+    chip_dirs: dict[str, Path] = {}
+    for (grid_id,) in grid_ids:
+        grid_id_str = str(grid_id)
+        chip_dir = chips_base_dir / grid_id_str
+        chip_dir.mkdir(exist_ok=True)
+        chip_dirs[grid_id_str] = chip_dir
+
+    log(f"Created {len(chip_dirs)} chip directories")
+
     mask_type_mapping = [
         (MaskType.INSTANCE, "instance"),
         (MaskType.SEMANTIC_2_CLASS, "semantic_2class"),
@@ -234,12 +254,13 @@ def create_dataset(
             chips_file=str(chips_path),
             boundaries_file=str(fields_path),
             boundary_lines_file=str(boundary_lines_path),
-            output_dir=str(mask_subdirs[subdir_name]),
+            output_dir=str(chips_base_dir),  # Fallback, not used when chip_dirs provided
             field_dataset=field_dataset,
             mask_type=mask_type,
             min_coverage=min_coverage,
             resolution=resolution,
             num_workers=num_workers,
+            chip_dirs=chip_dirs,
             on_progress=on_mask_progress,
             on_start=on_mask_start,
         )
@@ -255,7 +276,7 @@ def create_dataset(
         fields_file=output_fields_path,
         chips_file=chips_path,
         boundary_lines_file=boundary_lines_path,
-        mask_dirs=mask_subdirs,
+        chips_base_dir=chips_base_dir,
         year=year,
         on_progress=log,
     )
@@ -269,7 +290,7 @@ def create_dataset(
         fields_file=output_fields_path,
         chips_file=chips_path,
         boundary_lines_file=boundary_lines_path,
-        mask_dirs=mask_subdirs,
+        chips_base_dir=chips_base_dir,
         was_reprojected=was_reprojected,
         source_crs=source_crs,
         chips_result=chips_result,
