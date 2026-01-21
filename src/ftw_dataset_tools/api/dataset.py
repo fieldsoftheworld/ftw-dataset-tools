@@ -104,6 +104,8 @@ def create_dataset(
 
     log(f"Creating dataset '{field_dataset}' from {fields_path.name}")
 
+    if split_type is None:
+        raise ValueError("split_type is required and cannot be None")
     if split_type not in splits.SPLIT_TYPE_CHOICES:
         raise ValueError(f"split_type must be one of: {splits.SPLIT_TYPE_CHOICES_STR}")
 
