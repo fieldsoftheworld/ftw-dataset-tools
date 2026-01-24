@@ -9,7 +9,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import numpy as np
 import rasterio
 
 if TYPE_CHECKING:
@@ -149,41 +148,6 @@ def harvest_day_to_datetime(harvest_day: int, year: int) -> datetime:
     return datetime.strptime(f"{year}-{harvest_day}", "%Y-%j")
 
 
-def _circular_mean(values: np.ndarray, low: int = 1, high: int = 365) -> int:
-    """
-    Calculate circular mean for day-of-year values.
-
-    This handles the wraparound at year boundaries correctly.
-
-    Args:
-        values: Array of day-of-year values
-        low: Minimum value (default: 1)
-        high: Maximum value (default: 365)
-
-    Returns:
-        Circular mean as integer
-    """
-    # Filter out nodata values (typically 0 or negative)
-    valid_values = values[(values >= low) & (values <= high)]
-    if len(valid_values) == 0:
-        raise ValueError("No valid crop calendar values found in the region")
-
-    # Convert to radians (0 to 2*pi)
-    angles = 2 * np.pi * (valid_values - low) / (high - low)
-
-    # Calculate circular mean
-    sin_mean = np.mean(np.sin(angles))
-    cos_mean = np.mean(np.cos(angles))
-    mean_angle = np.arctan2(sin_mean, cos_mean)
-
-    # Convert back to day of year
-    if mean_angle < 0:
-        mean_angle += 2 * np.pi
-
-    mean_day = int(round(mean_angle * (high - low) / (2 * np.pi) + low))  # noqa: RUF046
-    return mean_day
-
-
 def _sample_raster_at_center(
     raster_path: Path,
     bbox: tuple[float, float, float, float],
@@ -217,9 +181,12 @@ def _sample_raster_at_center(
         # Get pixel coordinates
         row, col = src.index(cx, cy)
 
-        # Read the full raster and sample (COG should make this efficient)
-        data = src.read(1)
-        value = data[row, col]
+        # Use windowed read to only fetch the single pixel needed
+        from rasterio.windows import Window
+
+        window = Window(col, row, 1, 1)
+        data = src.read(1, window=window)
+        value = data[0, 0]
 
         # Check for nodata
         nodata = src.nodata or 0

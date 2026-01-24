@@ -9,9 +9,9 @@ from unittest.mock import MagicMock, patch
 import pystac
 import pytest
 
+from ftw_dataset_tools.api.imagery.catalog_ops import has_existing_scenes
 from ftw_dataset_tools.api.imagery.selection_workflow import (
     SelectionWorkflowResult,
-    _has_existing_scenes,
     find_chip_items,
     select_imagery_for_catalog,
 )
@@ -79,7 +79,7 @@ class TestFindChipItems:
 
 
 class TestHasExistingScenes:
-    """Tests for _has_existing_scenes function."""
+    """Tests for has_existing_scenes function."""
 
     def test_returns_true_when_both_links(self) -> None:
         """Test returns True when both planting and harvest links exist."""
@@ -93,7 +93,7 @@ class TestHasExistingScenes:
         item.add_link(pystac.Link(rel="ftw:planting", target="./planting.json"))
         item.add_link(pystac.Link(rel="ftw:harvest", target="./harvest.json"))
 
-        assert _has_existing_scenes(item) is True
+        assert has_existing_scenes(item) is True
 
     def test_returns_false_when_planting_only(self) -> None:
         """Test returns False when only planting link exists."""
@@ -106,7 +106,7 @@ class TestHasExistingScenes:
         )
         item.add_link(pystac.Link(rel="ftw:planting", target="./planting.json"))
 
-        assert _has_existing_scenes(item) is False
+        assert has_existing_scenes(item) is False
 
     def test_returns_false_when_harvest_only(self) -> None:
         """Test returns False when only harvest link exists."""
@@ -119,7 +119,7 @@ class TestHasExistingScenes:
         )
         item.add_link(pystac.Link(rel="ftw:harvest", target="./harvest.json"))
 
-        assert _has_existing_scenes(item) is False
+        assert has_existing_scenes(item) is False
 
     def test_returns_false_when_no_links(self) -> None:
         """Test returns False when no scene links exist."""
@@ -131,7 +131,7 @@ class TestHasExistingScenes:
             properties={},
         )
 
-        assert _has_existing_scenes(item) is False
+        assert has_existing_scenes(item) is False
 
 
 class TestSelectImageryForCatalog:

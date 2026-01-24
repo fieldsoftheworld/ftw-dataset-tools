@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 
 # GDAL HTTP optimization for remote COG access
 os.environ.update(
@@ -60,34 +59,3 @@ DEFAULT_BUFFER_EXPANSION_SIZE = 14  # Days to add on each buffer expansion
 # Hybrid cloud filtering thresholds
 # Skip pixel check if scene cloud cover is below this (too clear to matter)
 PIXEL_CHECK_SKIP_THRESHOLD = 0.1
-# Don't bother with pixel check if scene cloud cover is above this
-PIXEL_CHECK_MAX_SCENE_THRESHOLD = 50.0
-
-
-@dataclass
-class STACHostConfig:
-    """Configuration for EarthSearch STAC host."""
-
-    name: str
-    url: str
-    collection: str
-    bands: list[str]
-
-
-def get_stac_host_config(s2_collection: str = "c1") -> STACHostConfig:
-    """
-    Get STAC host configuration (EarthSearch).
-
-    Args:
-        s2_collection: Sentinel-2 collection identifier ("c1" or "old-baseline")
-
-    Returns:
-        STACHostConfig with URL, collection, and band names
-    """
-    collection = S2_COLLECTIONS.get(s2_collection, S2_COLLECTIONS["c1"])
-    return STACHostConfig(
-        name="earthsearch",
-        url=STAC_URL,
-        collection=collection,
-        bands=BANDS_OF_INTEREST,
-    )

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Literal
 
 import pystac
 
+from ftw_dataset_tools.api.imagery.catalog_ops import has_existing_scenes
 from ftw_dataset_tools.api.imagery.progress import ImageryProgressBar
 from ftw_dataset_tools.api.imagery.scene_selection import select_scenes_for_chip
 from ftw_dataset_tools.api.imagery.stac_child_items import create_child_items_from_selection
@@ -69,13 +70,6 @@ def find_chip_items(catalog_dir: Path) -> list[tuple[pystac.Item, Path]]:
     return chip_items
 
 
-def _has_existing_scenes(item: pystac.Item) -> bool:
-    """Check if item already has planting and harvest scene links."""
-    has_planting = any(link.rel == "ftw:planting" for link in item.links)
-    has_harvest = any(link.rel == "ftw:harvest" for link in item.links)
-    return has_planting and has_harvest
-
-
 def select_imagery_for_catalog(
     catalog_dir: Path,
     year: int,
@@ -85,7 +79,7 @@ def select_imagery_for_catalog(
     num_buffer_expansions: int = 3,
     buffer_expansion_size: int = 14,
     force: bool = False,
-    on_missing: Literal["skip", "fail", "best-available"] = "skip",
+    on_missing: Literal["skip", "fail"] = "skip",
     verbose: bool = False,
 ) -> SelectionWorkflowResult:
     """Select imagery for all chips in a catalog.
@@ -105,7 +99,6 @@ def select_imagery_for_catalog(
         on_missing: How to handle chips with no cloud-free scenes:
                     - "skip": Skip and record in skipped_details
                     - "fail": Raise exception
-                    - "best-available": Use best available scene regardless of threshold
         verbose: If True, show detailed STAC query information
 
     Returns:
@@ -134,7 +127,7 @@ def select_imagery_for_catalog(
             continue
 
         # Skip chips that already have scene selections (unless --force)
-        if not force and _has_existing_scenes(item):
+        if not force and has_existing_scenes(item):
             result.skipped += 1
             result.skipped_details.append(
                 {"chip": item.id, "reason": "Already has imagery selections"}

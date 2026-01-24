@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -211,61 +212,75 @@ def download_and_clip_scene(
             error=f"Failed to open source imagery: {e}",
         )
 
-    # Read each band
-    band_data = []
-    for band_name in found_bands:
-        href = band_hrefs[band_name]
-        log(f"Reading {band_name}...")
+    # Transform bbox to source CRS once (used by all bands)
+    if source_crs != CRS.from_epsg(4326):
+        from rasterio.warp import transform_bounds
 
-        try:
-            # For COGs, we can read windowed data directly
-            with rasterio.open(href) as src:
-                # Transform bbox to source CRS if needed
-                if source_crs != CRS.from_epsg(4326):
-                    from rasterio.warp import transform_bounds
+        src_bbox = transform_bounds(CRS.from_epsg(4326), source_crs, minx, miny, maxx, maxy)
+    else:
+        src_bbox = bbox
 
-                    src_bbox = transform_bounds(
-                        CRS.from_epsg(4326), source_crs, minx, miny, maxx, maxy
-                    )
-                else:
-                    src_bbox = bbox
-
-                window = from_bounds(*src_bbox, src.transform)
-                data = src.read(
-                    1,
-                    window=window,
-                    out_shape=(target_height, target_width),
-                    resampling=Resampling.bilinear,
-                )
-                band_data.append(data)
-        except Exception as e:
-            return DownloadResult(
-                output_path=output_path,
-                scene_id=scene.id,
-                season=scene.season,
-                bands=bands,
-                width=0,
-                height=0,
-                crs="",
-                success=False,
-                error=f"Failed to read band {band_name}: {e}",
+    def read_single_band(band_name: str, href: str) -> tuple[str, np.ndarray]:
+        """Read a single band from a COG."""
+        with rasterio.open(href) as src:
+            window = from_bounds(*src_bbox, src.transform)
+            data = src.read(
+                1,
+                window=window,
+                out_shape=(target_height, target_width),
+                resampling=Resampling.bilinear,
             )
+            return band_name, data
+
+    # Read bands in parallel for faster network throughput
+    log(f"Reading {len(found_bands)} bands in parallel...")
+    band_results: dict[str, np.ndarray] = {}
+    failed_band = None
+    failed_error = None
+
+    with ThreadPoolExecutor(max_workers=min(4, len(found_bands))) as executor:
+        futures = {
+            executor.submit(read_single_band, band_name, href): band_name
+            for band_name, href in band_hrefs.items()
+        }
+
+        for future in as_completed(futures):
+            band_name = futures[future]
+            try:
+                name, data = future.result()
+                band_results[name] = data
+            except Exception as e:
+                failed_band = band_name
+                failed_error = str(e)
+                # Cancel remaining futures
+                for f in futures:
+                    f.cancel()
+                break
+
+    if failed_band is not None:
+        return DownloadResult(
+            output_path=output_path,
+            scene_id=scene.id,
+            season=scene.season,
+            bands=bands,
+            width=0,
+            height=0,
+            crs="",
+            success=False,
+            error=f"Failed to read band {failed_band}: {failed_error}",
+        )
+
+    # Stack bands in the original order
+    band_data = [band_results[band_name] for band_name in found_bands]
 
     # Stack bands
     stacked = np.stack(band_data, axis=0)
     log(f"Stacked shape: {stacked.shape}")
 
-    # Calculate transform for output
-    if source_crs != CRS.from_epsg(4326):
-        from rasterio.warp import transform_bounds
-
-        out_bbox = transform_bounds(CRS.from_epsg(4326), source_crs, minx, miny, maxx, maxy)
-    else:
-        out_bbox = bbox
-
+    # Calculate transform for output (reuse src_bbox computed earlier)
     from rasterio.transform import from_bounds as transform_from_bounds
 
-    out_transform = transform_from_bounds(*out_bbox, target_width, target_height)
+    out_transform = transform_from_bounds(*src_bbox, target_width, target_height)
 
     # Write output as COG
     output_path.parent.mkdir(parents=True, exist_ok=True)
