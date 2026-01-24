@@ -7,7 +7,6 @@ identical behavior.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
 import pystac
@@ -75,12 +74,19 @@ def create_child_items_from_selection(
     parent_item.properties["ftw:harvest_buffer_used"] = result.harvest_buffer_used
     parent_item.properties["ftw:expansions_performed"] = result.expansions_performed
 
-    # Set temporal extent to the full calendar year
-    # This represents the crop cycle year, not just the scene acquisition dates
-    parent_item.properties["start_datetime"] = datetime(year, 1, 1, 0, 0, 0, tzinfo=UTC).isoformat()
-    parent_item.properties["end_datetime"] = datetime(
-        year, 12, 31, 23, 59, 59, tzinfo=UTC
-    ).isoformat()
+    # Set temporal extent based on actual scene acquisition dates
+    # Collect available scene datetimes
+    scene_datetimes = []
+    if result.planting_scene and result.planting_scene.datetime:
+        scene_datetimes.append(result.planting_scene.datetime)
+    if result.harvest_scene and result.harvest_scene.datetime:
+        scene_datetimes.append(result.harvest_scene.datetime)
+
+    if scene_datetimes:
+        start_dt = min(scene_datetimes)
+        end_dt = max(scene_datetimes)
+        parent_item.properties["start_datetime"] = start_dt.isoformat()
+        parent_item.properties["end_datetime"] = end_dt.isoformat()
 
     # Add cloud cover from child scenes to parent
     if result.planting_scene:

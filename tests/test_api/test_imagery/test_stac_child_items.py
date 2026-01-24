@@ -63,12 +63,16 @@ class TestCreateChildItemsFromSelection:
         assert parent_item.properties["ftw:harvest_buffer_used"] == 14
         assert parent_item.properties["ftw:expansions_performed"] == 0
 
-    def test_sets_temporal_extent(
+    def test_sets_temporal_extent_from_scene_dates(
         self,
         tmp_path: Path,
         mock_selection_result: SceneSelectionResult,
     ) -> None:
-        """Test that temporal extent is set to full calendar year."""
+        """Test that temporal extent is set from actual scene acquisition dates.
+
+        Regression test: Previously this was incorrectly set to the full calendar year
+        (Jan 1 - Dec 31). It should reflect the actual planting and harvest dates.
+        """
         chip_dir = tmp_path / "chip_001"
         chip_dir.mkdir()
 
@@ -89,8 +93,104 @@ class TestCreateChildItemsFromSelection:
             buffer_days=14,
         )
 
-        assert parent_item.properties["start_datetime"] == "2024-01-01T00:00:00+00:00"
-        assert parent_item.properties["end_datetime"] == "2024-12-31T23:59:59+00:00"
+        # Mock scenes have planting=June 15 and harvest=Sept 15
+        # start_datetime should be the planting date, end_datetime should be harvest
+        assert parent_item.properties["start_datetime"] == "2024-06-15T10:00:00+00:00"
+        assert parent_item.properties["end_datetime"] == "2024-09-15T10:00:00+00:00"
+
+    def test_temporal_extent_not_full_year_regression(
+        self,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        """Regression test: temporal extent must NOT be the full calendar year.
+
+        This test explicitly verifies that a previous bug (setting datetime to full year)
+        does not resurface. The datetime range should come from actual scene dates.
+        """
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+
+        parent_item = pystac.Item(
+            id="chip_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime.now(UTC),
+            properties={},
+        )
+
+        create_child_items_from_selection(
+            chip_dir=chip_dir,
+            parent_item=parent_item,
+            result=mock_selection_result,
+            year=2024,
+            cloud_cover_chip=2.0,
+            buffer_days=14,
+        )
+
+        # Explicitly verify these are NOT the old buggy values (full year range)
+        assert parent_item.properties["start_datetime"] != "2024-01-01T00:00:00+00:00"
+        assert parent_item.properties["end_datetime"] != "2024-12-31T23:59:59+00:00"
+
+    def test_temporal_extent_with_planting_only(
+        self,
+        tmp_path: Path,
+        mock_selection_result_planting_only: SceneSelectionResult,
+    ) -> None:
+        """Test temporal extent when only planting scene is present."""
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+
+        parent_item = pystac.Item(
+            id="chip_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime.now(UTC),
+            properties={},
+        )
+
+        create_child_items_from_selection(
+            chip_dir=chip_dir,
+            parent_item=parent_item,
+            result=mock_selection_result_planting_only,
+            year=2024,
+            cloud_cover_chip=2.0,
+            buffer_days=14,
+        )
+
+        # With only planting scene (June 15), both start and end should be same date
+        assert parent_item.properties["start_datetime"] == "2024-06-15T10:00:00+00:00"
+        assert parent_item.properties["end_datetime"] == "2024-06-15T10:00:00+00:00"
+
+    def test_temporal_extent_with_harvest_only(
+        self,
+        tmp_path: Path,
+        mock_selection_result_harvest_only: SceneSelectionResult,
+    ) -> None:
+        """Test temporal extent when only harvest scene is present."""
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+
+        parent_item = pystac.Item(
+            id="chip_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime.now(UTC),
+            properties={},
+        )
+
+        create_child_items_from_selection(
+            chip_dir=chip_dir,
+            parent_item=parent_item,
+            result=mock_selection_result_harvest_only,
+            year=2024,
+            cloud_cover_chip=2.0,
+            buffer_days=14,
+        )
+
+        # With only harvest scene (Sept 15), both start and end should be same date
+        assert parent_item.properties["start_datetime"] == "2024-09-15T10:00:00+00:00"
+        assert parent_item.properties["end_datetime"] == "2024-09-15T10:00:00+00:00"
 
     def test_sets_cloud_cover_from_scenes(
         self,
