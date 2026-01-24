@@ -124,7 +124,7 @@ class TestAddFieldStats:
                 fields_file=str(fields_file),
             )
 
-    def test_file_not_found_fields(self, tmp_path: pytest.TempPathFactory) -> None:
+    def test_file_not_found_fields(self, tmp_path: Path) -> None:
         """Test that FileNotFoundError is raised for missing fields file."""
         from ftw_dataset_tools.api.field_stats import add_field_stats
 

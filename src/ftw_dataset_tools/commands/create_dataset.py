@@ -10,7 +10,7 @@ import click
 import pystac
 from tqdm import tqdm
 
-from ftw_dataset_tools.api import dataset
+from ftw_dataset_tools.api import dataset, splits
 from ftw_dataset_tools.api.imagery import (
     ImageryProgressBar,
     download_and_clip_scene,
@@ -33,6 +33,26 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     "--field-dataset",
     default=None,
     help="Name for the dataset (used in output filenames). Defaults to input filename stem.",
+)
+@click.option(
+    "--split-type",
+    type=click.Choice(splits.SPLIT_TYPE_CHOICES),
+    required=True,
+    help=(
+        "Dataset train/val/test split strategy. "
+        "Use 'block3x3' for spatially coherent 3x3 blocks, or "
+        "'random-uniform' for random chip assignment across the dataset. "
+        f"Available choices: {splits.SPLIT_TYPE_CHOICES_STR}."
+    ),
+)
+@click.option(
+    "--split-percents",
+    nargs=3,
+    type=click.IntRange(0, 100),
+    default=(80, 10, 10),
+    show_default=True,
+    metavar="TRAIN VAL TEST",
+    help="Train/val/test split percentages (must sum to 100).",
 )
 @click.option(
     "--min-coverage",
@@ -131,6 +151,8 @@ def create_dataset_cmd(
     fields_file: str,
     output_dir: str | None,
     field_dataset: str | None,
+    split_type: str,
+    split_percents: tuple[int, int, int],
     min_coverage: float,
     resolution: float,
     num_workers: int | None,
@@ -233,10 +255,18 @@ def create_dataset_cmd(
             click.echo(f"  Processing {filtered_grids:,} grids")
 
     try:
+        # Validate at CLI layer for immediate user feedback with proper Click error formatting
+        try:
+            validated_split_percents = splits.validate_split_percents(split_percents)
+        except ValueError as err:
+            raise click.BadParameter(str(err), param_hint="split-percents") from err
+
         result = dataset.create_dataset(
             fields_file=fields_file,
             output_dir=output_dir,
             field_dataset=field_dataset,
+            split_type=split_type,
+            split_percents=validated_split_percents,
             min_coverage=min_coverage,
             resolution=resolution,
             num_workers=num_workers,
@@ -263,6 +293,11 @@ def create_dataset_cmd(
         if result.chips_result:
             click.echo(f"  Grid cells: {result.chips_result.total_cells:,}")
             click.echo(f"  Cells with coverage: {result.chips_result.cells_with_coverage:,}")
+
+        if result.splits_result:
+            click.echo(
+                f"  Splits: {result.splits_result.train_count} train, {result.splits_result.val_count} val, {result.splits_result.test_count} test"
+            )
 
         click.echo(f"  Total masks created: {result.total_masks_created:,}")
 
