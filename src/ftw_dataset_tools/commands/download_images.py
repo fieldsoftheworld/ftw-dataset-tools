@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 from pathlib import Path
 from typing import Literal
@@ -13,14 +12,11 @@ from tqdm import tqdm
 
 from ftw_dataset_tools.api.imagery import (
     download_and_clip_scene,
+    process_downloaded_scene,
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
-from ftw_dataset_tools.api.imagery.thumbnails import (
-    ThumbnailError,
-    generate_thumbnail,
-    has_rgb_bands,
-)
-from ftw_dataset_tools.api.stac_items import STACSaveError, update_parent_item
+from ftw_dataset_tools.api.imagery.thumbnails import has_rgb_bands
+from ftw_dataset_tools.api.stac_items import STACSaveError
 
 # All valid Sentinel-2 bands from EarthSearch
 VALID_BANDS: tuple[str, ...] = (
@@ -245,68 +241,33 @@ def download_images_cmd(
                 )
 
                 if result.success:
-                    local_asset = pystac.Asset(
-                        href=f"./{output_filename}",
-                        media_type="image/tiff; application=geotiff; profile=cloud-optimized",
-                        title=f"Clipped {len(band_list)}-band image ({','.join(band_list)})",
-                        roles=["data"],
-                    )
-
                     if keep_remote_refs:
-                        # Keep remote assets, add local as "clipped"
-                        item.assets["clipped"] = local_asset
-                    else:
-                        # Replace remote band assets with single local "image" asset
-                        # Remove the downloaded band assets (keep others like scl, cloud)
-                        for band in band_list:
-                            item.assets.pop(band, None)
-                        item.assets["image"] = local_asset
-
-                    # Generate thumbnail if requested and RGB bands are available
-                    thumbnail_path = None
-                    if preview and has_rgb_bands(band_list):
-                        try:
-                            thumbnail_filename = output_filename.replace(".tif", ".jpg")
-                            thumbnail_path = output_path.parent / thumbnail_filename
-                            generate_thumbnail(output_path, thumbnail_path)
-                            item.assets["thumbnail"] = pystac.Asset(
-                                href=f"./{thumbnail_filename}",
-                                media_type=pystac.MediaType.JPEG,
-                                title="JPEG preview",
-                                roles=["thumbnail"],
-                            )
-                        except ThumbnailError:
-                            # Thumbnail generation failed, but don't fail the whole download
-                            thumbnail_path = None
-
-                    try:
+                        # Legacy mode: keep remote assets, add local as "clipped"
+                        item.assets["clipped"] = pystac.Asset(
+                            href=f"./{output_filename}",
+                            media_type="image/tiff; application=geotiff; profile=cloud-optimized",
+                            title=f"Clipped {len(band_list)}-band image ({','.join(band_list)})",
+                            roles=["data"],
+                        )
                         item.save_object(str(item_path))
-                    except Exception as e:
-                        # Clean up downloaded TIF and thumbnail if save fails
-                        if output_path.exists():
-                            output_path.unlink()
-                        if thumbnail_path and thumbnail_path.exists():
-                            thumbnail_path.unlink()
-                        raise STACSaveError(f"Failed to save child item {item.id}: {e}") from e
-
-                    # Update parent chip item with asset reference
-                    parent_item_path = item_path.parent / f"{base_id}.json"
-                    if parent_item_path.exists():
-                        parent_item = pystac.Item.from_file(str(parent_item_path))
-                        # Pass thumbnail filename for planting season
-                        thumb_for_parent = None
-                        if thumbnail_path and season == "planting":
-                            thumb_for_parent = thumbnail_path.name
-                        # Suppress errors - child item was saved successfully
-                        with contextlib.suppress(STACSaveError):
-                            update_parent_item(
-                                parent_item=parent_item,
-                                parent_path=parent_item_path,
-                                season=season,
+                    else:
+                        # Use shared processing logic for default workflow
+                        try:
+                            process_downloaded_scene(
+                                item=item,
+                                item_path=item_path,
+                                output_path=output_path,
                                 output_filename=output_filename,
                                 band_list=band_list,
-                                thumbnail_filename=thumb_for_parent,
+                                season=season,
+                                base_id=base_id,
+                                generate_thumbnails=preview and has_rgb_bands(band_list),
                             )
+                        except Exception as e:
+                            # Clean up downloaded TIF if processing fails
+                            if output_path.exists():
+                                output_path.unlink()
+                            raise STACSaveError(f"Failed to process {item.id}: {e}") from e
 
                     successful.append(item.id)
                 else:

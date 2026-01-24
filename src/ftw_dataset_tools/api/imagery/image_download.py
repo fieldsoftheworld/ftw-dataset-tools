@@ -2,28 +2,36 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+import pystac
 import rasterio
 from rasterio.crs import CRS
 from rasterio.warp import Resampling, calculate_default_transform, reproject
 from rasterio.windows import from_bounds
 
 from ftw_dataset_tools.api.imagery.settings import BANDS_OF_INTEREST
+from ftw_dataset_tools.api.imagery.thumbnails import (
+    ThumbnailError,
+    generate_overlay_thumbnail,
+    generate_thumbnail,
+    has_rgb_bands,
+)
+from ftw_dataset_tools.api.stac_items import update_parent_item
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
-
-    import pystac
 
     from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 
 __all__ = [
     "DownloadResult",
     "download_and_clip_scene",
+    "process_downloaded_scene",
 ]
 
 
@@ -306,3 +314,113 @@ def download_and_clip_scene(
         crs=str(source_crs),
         success=True,
     )
+
+
+@dataclass
+class ProcessedSceneResult:
+    """Result of processing a downloaded scene."""
+
+    thumbnail_path: Path | None = None
+    overlay_path: Path | None = None
+    is_overlay: bool = False
+
+
+def process_downloaded_scene(
+    item: pystac.Item,
+    item_path: Path,
+    output_path: Path,
+    output_filename: str,
+    band_list: list[str],
+    season: Literal["planting", "harvest"],
+    base_id: str,
+    generate_thumbnails: bool = True,
+) -> ProcessedSceneResult:
+    """Process a downloaded scene: update STAC assets, generate thumbnails, update parent.
+
+    This function handles all post-download processing that should be identical
+    between `download-images` command and `create-dataset --download-images`.
+
+    Args:
+        item: Child STAC item to update
+        item_path: Path to the child item JSON file
+        output_path: Path to the downloaded image file
+        output_filename: Filename of the downloaded image
+        band_list: List of bands in the downloaded image
+        season: Season identifier ("planting" or "harvest")
+        base_id: Base chip ID (without season suffix)
+        generate_thumbnails: Whether to generate thumbnails
+
+    Returns:
+        ProcessedSceneResult with paths to generated files
+    """
+    result = ProcessedSceneResult()
+
+    # Replace remote band assets with single local "image" asset
+    for band in band_list:
+        item.assets.pop(band, None)
+    item.assets["image"] = pystac.Asset(
+        href=f"./{output_filename}",
+        media_type="image/tiff; application=geotiff; profile=cloud-optimized",
+        title=f"Clipped {len(band_list)}-band image ({','.join(band_list)})",
+        roles=["data"],
+    )
+
+    # Generate thumbnail if RGB bands available
+    if generate_thumbnails and has_rgb_bands(band_list):
+        try:
+            thumbnail_filename = output_filename.replace(".tif", ".jpg")
+            thumbnail_path = output_path.parent / thumbnail_filename
+            generate_thumbnail(output_path, thumbnail_path)
+            item.assets["thumbnail"] = pystac.Asset(
+                href=f"./{thumbnail_filename}",
+                media_type=pystac.MediaType.JPEG,
+                title="JPEG preview",
+                roles=["thumbnail"],
+            )
+            result.thumbnail_path = thumbnail_path
+        except ThumbnailError:
+            pass
+
+    # Save the child item
+    item.save_object(str(item_path))
+
+    # Update parent chip item with asset reference
+    parent_item_path = item_path.parent / f"{base_id}.json"
+    if parent_item_path.exists():
+        parent_item = pystac.Item.from_file(str(parent_item_path))
+
+        # Generate overlay thumbnail for planting season if mask exists
+        thumb_for_parent = None
+        is_overlay = False
+
+        if result.thumbnail_path and season == "planting":
+            # Look for semantic 3-class mask
+            mask_path = item_path.parent / f"{base_id}_semantic_3_class.tif"
+            if mask_path.exists():
+                try:
+                    overlay_filename = f"{base_id}_overlay.jpg"
+                    overlay_path = item_path.parent / overlay_filename
+                    generate_overlay_thumbnail(result.thumbnail_path, mask_path, overlay_path)
+                    thumb_for_parent = overlay_filename
+                    is_overlay = True
+                    result.overlay_path = overlay_path
+                    result.is_overlay = True
+                except ThumbnailError:
+                    # Fallback to plain thumbnail
+                    thumb_for_parent = result.thumbnail_path.name
+            else:
+                thumb_for_parent = result.thumbnail_path.name
+
+        # Suppress errors - child item was saved successfully
+        with contextlib.suppress(Exception):
+            update_parent_item(
+                parent_item=parent_item,
+                parent_path=parent_item_path,
+                season=season,
+                output_filename=output_filename,
+                band_list=band_list,
+                thumbnail_filename=thumb_for_parent,
+                is_overlay=is_overlay,
+            )
+
+    return result

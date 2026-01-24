@@ -14,9 +14,11 @@ from ftw_dataset_tools.api import dataset, splits
 from ftw_dataset_tools.api.imagery import (
     ImageryProgressBar,
     download_and_clip_scene,
+    process_downloaded_scene,
     select_scenes_for_chip,
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
+from ftw_dataset_tools.api.imagery.thumbnails import has_rgb_bands
 from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_datetime_column
 
 
@@ -537,7 +539,14 @@ def _run_image_download(
     bands: list[str],
     resolution: float,
 ) -> dict:
-    """Run image download for all S2 child items in a catalog."""
+    """Run image download for all S2 child items in a catalog.
+
+    Downloads imagery, generates thumbnails, and creates overlay thumbnails
+    when semantic masks are available. Updates both child and parent STAC items.
+
+    Uses shared process_downloaded_scene() for consistent behavior with
+    the standalone download-images command.
+    """
     # Find all child S2 items
     child_items = []
     for subdir in catalog_dir.iterdir():
@@ -553,6 +562,8 @@ def _run_image_download(
     successful = 0
     skipped = 0
     failed = 0
+    band_list = list(bands)
+    can_generate_thumbnail = has_rgb_bands(band_list)
 
     with tqdm(
         total=len(child_items), desc="Downloading imagery", unit="scene", leave=False
@@ -560,7 +571,7 @@ def _run_image_download(
         for item, item_path in child_items:
             bbox = tuple(item.bbox) if item.bbox else None
 
-            if bbox is None or "clipped" in item.assets:
+            if bbox is None or "clipped" in item.assets or "image" in item.assets:
                 skipped += 1
                 pbar.update(1)
                 continue
@@ -589,18 +600,22 @@ def _run_image_download(
                     scene=scene,
                     bbox=bbox,
                     output_path=output_path,
-                    bands=bands,
+                    bands=band_list,
                     resolution=resolution,
                 )
 
                 if result.success:
-                    item.assets["clipped"] = pystac.Asset(
-                        href=f"./{output_filename}",
-                        media_type="image/tiff; application=geotiff; profile=cloud-optimized",
-                        title=f"Clipped {len(bands)}-band image ({','.join(bands)})",
-                        roles=["data"],
+                    # Use shared processing logic
+                    process_downloaded_scene(
+                        item=item,
+                        item_path=item_path,
+                        output_path=output_path,
+                        output_filename=output_filename,
+                        band_list=band_list,
+                        season=season,
+                        base_id=base_id,
+                        generate_thumbnails=can_generate_thumbnail,
                     )
-                    item.save_object(str(item_path))
                     successful += 1
                 else:
                     failed += 1

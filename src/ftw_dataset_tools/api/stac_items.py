@@ -58,6 +58,7 @@ def update_parent_item(
     output_filename: str,
     band_list: list[str],
     thumbnail_filename: str | None = None,
+    is_overlay: bool = False,
 ) -> None:
     """Update parent item with reference to downloaded image.
 
@@ -71,6 +72,7 @@ def update_parent_item(
         band_list: List of bands in the image
         thumbnail_filename: Optional thumbnail filename. If provided and season is
             "planting", adds as the chip's thumbnail asset.
+        is_overlay: If True, thumbnail has mask overlay (used for title).
 
     Raises:
         STACSaveError: If the save operation fails
@@ -88,10 +90,15 @@ def update_parent_item(
 
         # Add planting thumbnail as the chip's thumbnail
         if thumbnail_filename and season == "planting":
+            thumb_title = (
+                "Chip preview with field overlay"
+                if is_overlay
+                else "Chip preview (planting season)"
+            )
             parent_item.assets["thumbnail"] = pystac.Asset(
                 href=f"./{thumbnail_filename}",
                 media_type=pystac.MediaType.JPEG,
-                title="Chip preview (planting season)",
+                title=thumb_title,
                 roles=["thumbnail"],
             )
             added_thumbnail = True
