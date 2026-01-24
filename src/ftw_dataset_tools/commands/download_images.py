@@ -15,6 +15,11 @@ from ftw_dataset_tools.api.imagery import (
     download_and_clip_scene,
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
+from ftw_dataset_tools.api.imagery.thumbnails import (
+    ThumbnailError,
+    generate_thumbnail,
+    has_rgb_bands,
+)
 from ftw_dataset_tools.api.stac_items import STACSaveError, update_parent_item
 
 # All valid Sentinel-2 bands from EarthSearch
@@ -82,6 +87,12 @@ VALID_BANDS: tuple[str, ...] = (
     default=False,
     help="Keep remote asset references instead of replacing with local paths.",
 )
+@click.option(
+    "--preview/--no-preview",
+    default=True,
+    show_default=True,
+    help="Generate JPEG preview thumbnails for downloaded images.",
+)
 def download_images_cmd(
     catalog_path: str,
     bands: tuple[str, ...],
@@ -89,6 +100,7 @@ def download_images_cmd(
     resume: bool,
     output_report: str | None,
     keep_remote_refs: bool,
+    preview: bool,
 ) -> None:
     """Download and clip satellite imagery for selected scenes.
 
@@ -250,12 +262,31 @@ def download_images_cmd(
                             item.assets.pop(band, None)
                         item.assets["image"] = local_asset
 
+                    # Generate thumbnail if requested and RGB bands are available
+                    thumbnail_path = None
+                    if preview and has_rgb_bands(band_list):
+                        try:
+                            thumbnail_filename = output_filename.replace(".tif", ".jpg")
+                            thumbnail_path = output_path.parent / thumbnail_filename
+                            generate_thumbnail(output_path, thumbnail_path)
+                            item.assets["thumbnail"] = pystac.Asset(
+                                href=f"./{thumbnail_filename}",
+                                media_type=pystac.MediaType.JPEG,
+                                title="JPEG preview",
+                                roles=["thumbnail"],
+                            )
+                        except ThumbnailError:
+                            # Thumbnail generation failed, but don't fail the whole download
+                            thumbnail_path = None
+
                     try:
                         item.save_object(str(item_path))
                     except Exception as e:
-                        # Clean up downloaded TIF if save fails
+                        # Clean up downloaded TIF and thumbnail if save fails
                         if output_path.exists():
                             output_path.unlink()
+                        if thumbnail_path and thumbnail_path.exists():
+                            thumbnail_path.unlink()
                         raise STACSaveError(f"Failed to save child item {item.id}: {e}") from e
 
                     # Update parent chip item with asset reference

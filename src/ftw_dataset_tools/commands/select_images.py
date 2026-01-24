@@ -17,6 +17,7 @@ from ftw_dataset_tools.api.imagery import (
     SceneSelectionResult,
     select_scenes_for_chip,
 )
+from ftw_dataset_tools.api.stac_items import copy_catalog
 
 
 def _extract_year_from_chip_id(chip_id: str) -> int | None:
@@ -233,6 +234,13 @@ def _extract_year_from_item(item: pystac.Item) -> int | None:
     help="Show detailed STAC query information and results.",
 )
 @click.option(
+    "-o",
+    "--output-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output directory for complete STAC catalog copy. If not specified, modifies catalog in place.",
+)
+@click.option(
     "--show-stats",
     is_flag=True,
     default=False,
@@ -257,6 +265,7 @@ def select_images_cmd(
     force: bool,
     output_report: str | None,
     verbose: bool,
+    output_dir: Path | None,
     show_stats: bool,
     clear_selections: bool,
 ) -> None:
@@ -280,7 +289,7 @@ def select_images_cmd(
         ftwd select-images ./my-dataset              # Dataset directory
         ftwd select-images ./my-dataset-chips        # Chips collection directory
         ftwd select-images ./chips/ftw-34UFF1628_2024/ftw-34UFF1628_2024.json -v
-        ftwd select-images ./chips --year 2023 --cloud-cover-scene 5
+        ftwd select-images ./chips --year 2023 --cloud-cover-chip 5
         ftwd select-images ./chips --force  # Overwrite existing selections
     """
     input_path_obj = Path(input_path)
@@ -292,6 +301,9 @@ def select_images_cmd(
         # Single chip JSON file
         if not input_path_obj.exists():
             raise click.ClickException(f"Chip file not found: {input_path}")
+
+        if output_dir is not None:
+            raise click.ClickException("--output-dir is not supported in single chip mode")
 
         item = pystac.Item.from_file(str(input_path_obj))
         chip_items = [item]
@@ -324,6 +336,19 @@ def select_images_cmd(
                 )
 
         click.echo(f"Catalog: {catalog_dir}")
+
+        # If output_dir specified, copy catalog before processing
+        if output_dir is not None:
+            output_dir = output_dir.resolve()
+            if output_dir.exists():
+                raise click.ClickException(f"Output directory already exists: {output_dir}")
+            click.echo(f"Copying catalog to: {output_dir}")
+            try:
+                copy_catalog(catalog_dir, output_dir)
+            except Exception as e:
+                raise click.ClickException(f"Failed to copy catalog: {e}") from e
+            catalog_dir = output_dir
+            collection_file = catalog_dir / "collection.json"
 
         # Load collection to find items
         collection = pystac.Collection.from_file(str(collection_file))
