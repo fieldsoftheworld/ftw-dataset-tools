@@ -293,6 +293,10 @@ def download_images_cmd(
                     parent_item_path = item_path.parent / f"{base_id}.json"
                     if parent_item_path.exists():
                         parent_item = pystac.Item.from_file(str(parent_item_path))
+                        # Pass thumbnail filename for planting season
+                        thumb_for_parent = None
+                        if thumbnail_path and season == "planting":
+                            thumb_for_parent = thumbnail_path.name
                         # Suppress errors - child item was saved successfully
                         with contextlib.suppress(STACSaveError):
                             update_parent_item(
@@ -301,6 +305,7 @@ def download_images_cmd(
                                 season=season,
                                 output_filename=output_filename,
                                 band_list=band_list,
+                                thumbnail_filename=thumb_for_parent,
                             )
 
                     successful.append(item.id)

@@ -57,6 +57,7 @@ def update_parent_item(
     season: Literal["planting", "harvest"],
     output_filename: str,
     band_list: list[str],
+    thumbnail_filename: str | None = None,
 ) -> None:
     """Update parent item with reference to downloaded image.
 
@@ -68,11 +69,14 @@ def update_parent_item(
         season: Season identifier
         output_filename: Name of downloaded image file
         band_list: List of bands in the image
+        thumbnail_filename: Optional thumbnail filename. If provided and season is
+            "planting", adds as the chip's thumbnail asset.
 
     Raises:
         STACSaveError: If the save operation fails
     """
     asset_key = f"{season}_image"
+    added_thumbnail = False
 
     try:
         parent_item.assets[asset_key] = pystac.Asset(
@@ -81,9 +85,22 @@ def update_parent_item(
             title=f"{season.capitalize()} season imagery ({','.join(band_list)})",
             roles=["data"],
         )
+
+        # Add planting thumbnail as the chip's thumbnail
+        if thumbnail_filename and season == "planting":
+            parent_item.assets["thumbnail"] = pystac.Asset(
+                href=f"./{thumbnail_filename}",
+                media_type=pystac.MediaType.JPEG,
+                title="Chip preview (planting season)",
+                roles=["thumbnail"],
+            )
+            added_thumbnail = True
+
         parent_item.save_object(str(parent_path))
     except Exception as e:
         parent_item.assets.pop(asset_key, None)
+        if added_thumbnail:
+            parent_item.assets.pop("thumbnail", None)
         raise STACSaveError(f"Failed to update parent item at {parent_path}: {e}") from e
 
 
