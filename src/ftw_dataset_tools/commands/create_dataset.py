@@ -107,6 +107,13 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     help="Maximum chip-level cloud cover percentage (0-100).",
 )
 @click.option(
+    "--nodata-max",
+    type=click.FloatRange(0.0, 100.0),
+    default=0.0,
+    show_default=True,
+    help="Maximum nodata percentage (0-100). Default 0 rejects any nodata.",
+)
+@click.option(
     "--buffer-days",
     type=int,
     default=14,
@@ -141,6 +148,7 @@ def create_dataset_cmd(
     skip_images: bool,
     download_images: bool,
     cloud_cover_chip: float,
+    nodata_max: float,
     buffer_days: int,
     num_buffer_expansions: int,
     buffer_expansion_size: int,
@@ -329,6 +337,7 @@ def create_dataset_cmd(
                 catalog_dir=catalog_dir,
                 year=effective_year,
                 cloud_cover_chip=cloud_cover_chip,
+                nodata_max=nodata_max,
                 buffer_days=buffer_days,
                 num_buffer_expansions=num_buffer_expansions,
                 buffer_expansion_size=buffer_expansion_size,
@@ -372,6 +381,7 @@ def _run_image_selection(
     catalog_dir: Path,
     year: int,
     cloud_cover_chip: float,
+    nodata_max: float,
     buffer_days: int,
     num_buffer_expansions: int = 3,
     buffer_expansion_size: int = 14,
@@ -407,6 +417,7 @@ def _run_image_selection(
                     bbox=bbox,
                     year=year,
                     cloud_cover_chip=cloud_cover_chip,
+                    nodata_max=nodata_max,
                     buffer_days=buffer_days,
                     num_buffer_expansions=num_buffer_expansions,
                     buffer_expansion_size=buffer_expansion_size,

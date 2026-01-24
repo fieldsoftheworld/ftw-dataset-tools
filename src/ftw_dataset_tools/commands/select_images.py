@@ -173,6 +173,13 @@ def _extract_year_from_item(item: pystac.Item) -> int | None:
     help="Maximum chip-level cloud cover percentage (0-100).",
 )
 @click.option(
+    "--nodata-max",
+    type=click.FloatRange(0.0, 100.0),
+    default=0.0,
+    show_default=True,
+    help="Maximum nodata percentage (0-100). Default 0 rejects any nodata.",
+)
+@click.option(
     "--buffer-days",
     type=int,
     default=14,
@@ -241,6 +248,7 @@ def select_images_cmd(
     input_path: str,
     year: int | None,
     cloud_cover_chip: float,
+    nodata_max: float,
     buffer_days: int,
     on_missing: Literal["skip", "fail", "best-available"],
     num_buffer_expansions: int,
@@ -468,6 +476,7 @@ def select_images_cmd(
                     bbox=bbox,
                     year=chip_year,
                     cloud_cover_chip=cloud_cover_chip,
+                    nodata_max=nodata_max,
                     buffer_days=buffer_days,
                     num_buffer_expansions=num_buffer_expansions,
                     buffer_expansion_size=buffer_expansion_size,

@@ -20,11 +20,16 @@ from ftw_dataset_tools.api.imagery.crop_calendar import (
     CropCalendarDates,
     get_crop_calendar_dates,
 )
+from ftw_dataset_tools.api.imagery.nodata_analysis import (
+    calculate_nodata_percentage,
+    get_nodata_from_metadata,
+)
 from ftw_dataset_tools.api.imagery.settings import (
     DEFAULT_BUFFER_DAYS,
     DEFAULT_BUFFER_EXPANSION_SIZE,
     DEFAULT_CLOUD_COVER_CHIP,
     DEFAULT_CLOUD_COVER_SCENE,
+    DEFAULT_NODATA_MAX,
     DEFAULT_NUM_BUFFER_EXPANSIONS,
     PIXEL_CHECK_SKIP_THRESHOLD,
     S2_COLLECTIONS,
@@ -279,6 +284,7 @@ def _select_best_scene(
     season: str,
     bbox: tuple[float, float, float, float],
     cloud_cover_chip: float = DEFAULT_CLOUD_COVER_CHIP,
+    nodata_max: float = DEFAULT_NODATA_MAX,
     on_progress: Callable[[str], None] | None = None,
 ) -> SelectedScene | None:
     """
@@ -289,6 +295,7 @@ def _select_best_scene(
         season: Season identifier ("planting" or "harvest")
         bbox: Bounding box for chip-level cloud calculation
         cloud_cover_chip: Maximum chip-level cloud cover percentage (0-100)
+        nodata_max: Maximum nodata percentage (0-100). Default 0 rejects any nodata.
         on_progress: Optional callback for progress messages
 
     Returns:
@@ -302,6 +309,28 @@ def _select_best_scene(
             on_progress(msg)
 
     for item in items:
+        short_dt = _short_date(item)
+
+        # Check nodata first (fail fast - uses metadata then overviews)
+        nodata_pct = get_nodata_from_metadata(item)
+        if nodata_pct is not None:
+            # Use STAC metadata if available
+            if nodata_pct > nodata_max:
+                log(f"  Skipping {short_dt}: {nodata_pct:.1f}% nodata (from metadata)")
+                continue
+        elif nodata_max < 100:
+            # Check using actual pixel data if threshold is restrictive
+            try:
+                # Use NIR band for nodata check (available in all scenes)
+                nir_asset = item.assets.get("nir")
+                if nir_asset:
+                    nodata_pct = calculate_nodata_percentage(nir_asset.href, bbox)
+                    if nodata_pct > nodata_max:
+                        log(f"  Skipping {short_dt}: {nodata_pct:.1f}% nodata")
+                        continue
+            except Exception as e:
+                log(f"  {item.id}: nodata check failed ({e}), continuing")
+
         scene_cloud_cover = EOExtension.ext(item).cloud_cover or 0.0
 
         # For very clear scenes (< 0.1% reported), trust the metadata
@@ -332,7 +361,6 @@ def _select_best_scene(
 
         # Check if chip cloud cover exceeds threshold
         if actual_cloud_cover > cloud_cover_chip:
-            short_dt = _short_date(item)
             log(f"  Skipping {short_dt}: {actual_cloud_cover:.1f}% cloud")
             continue
 
@@ -359,6 +387,7 @@ def select_scenes_for_chip(
     bbox: tuple[float, float, float, float],
     year: int,
     cloud_cover_chip: float = DEFAULT_CLOUD_COVER_CHIP,
+    nodata_max: float = DEFAULT_NODATA_MAX,
     buffer_days: int = DEFAULT_BUFFER_DAYS,
     s2_collection: str = "c1",
     num_buffer_expansions: int = DEFAULT_NUM_BUFFER_EXPANSIONS,
@@ -373,6 +402,7 @@ def select_scenes_for_chip(
         bbox: Bounding box (minx, miny, maxx, maxy) in EPSG:4326
         year: Calendar year for the crop cycle
         cloud_cover_chip: Maximum chip-level cloud cover percentage (0-100)
+        nodata_max: Maximum nodata percentage (0-100). Default 0 rejects any nodata.
         buffer_days: Days to search around crop calendar dates
         s2_collection: Sentinel-2 collection identifier
         num_buffer_expansions: Number of times to expand buffer for seasons without cloud-free scenes
@@ -482,6 +512,7 @@ def select_scenes_for_chip(
                     season="planting",
                     bbox=bbox,
                     cloud_cover_chip=cloud_cover_chip,
+                    nodata_max=nodata_max,
                     on_progress=on_progress,
                 )
 
@@ -548,6 +579,7 @@ def select_scenes_for_chip(
                     season="harvest",
                     bbox=bbox,
                     cloud_cover_chip=cloud_cover_chip,
+                    nodata_max=nodata_max,
                     on_progress=on_progress,
                 )
 

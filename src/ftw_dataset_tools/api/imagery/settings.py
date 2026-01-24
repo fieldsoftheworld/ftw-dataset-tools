@@ -52,6 +52,7 @@ CROP_CALENDAR_FILES = [
 # Default parameter values
 DEFAULT_CLOUD_COVER_SCENE = 75  # Internal scene-level filter for STAC query
 DEFAULT_CLOUD_COVER_CHIP = 2  # Maximum chip-level cloud cover percentage
+DEFAULT_NODATA_MAX = 0  # Maximum nodata percentage (0 = reject any nodata)
 DEFAULT_BUFFER_DAYS = 14  # Days to search around crop calendar dates
 DEFAULT_NUM_BUFFER_EXPANSIONS = 3  # Number of times to expand buffer for cloudy chips
 DEFAULT_BUFFER_EXPANSION_SIZE = 14  # Days to add on each buffer expansion
