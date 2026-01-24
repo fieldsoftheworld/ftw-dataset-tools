@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Literal
@@ -14,15 +15,47 @@ from ftw_dataset_tools.api.imagery import (
     download_and_clip_scene,
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
+from ftw_dataset_tools.api.stac_items import STACSaveError, update_parent_item
+
+# All valid Sentinel-2 bands from EarthSearch
+VALID_BANDS: tuple[str, ...] = (
+    # Visible bands
+    "coastal",  # B01 - Coastal aerosol (60m)
+    "blue",  # B02 - Blue (10m)
+    "green",  # B03 - Green (10m)
+    "red",  # B04 - Red (10m)
+    # Red edge bands
+    "rededge1",  # B05 - Vegetation red edge 1 (20m)
+    "rededge2",  # B06 - Vegetation red edge 2 (20m)
+    "rededge3",  # B07 - Vegetation red edge 3 (20m)
+    # NIR bands
+    "nir",  # B08 - NIR (10m)
+    "nir08",  # B8A - NIR narrow (20m)
+    "nir09",  # B09 - Water vapour (60m)
+    # SWIR bands
+    "swir16",  # B11 - SWIR 1.6μm (20m)
+    "swir22",  # B12 - SWIR 2.2μm (20m)
+    # Atmospheric
+    "aot",  # Aerosol Optical Thickness
+    "wvp",  # Water Vapour
+    # Classification/masks
+    "scl",  # Scene Classification Layer
+    "cloud",  # Cloud probability
+    "snow",  # Snow probability
+    # Composite
+    "visual",  # True color RGB composite
+)
 
 
 @click.command("download-images")
 @click.argument("catalog_path", type=click.Path(exists=True))
 @click.option(
     "--bands",
-    default="red,green,blue,nir",
+    type=click.Choice(VALID_BANDS, case_sensitive=False),
+    multiple=True,
+    default=("red", "green", "blue", "nir"),
     show_default=True,
-    help="Comma-separated list of bands to download.",
+    help="Sentinel-2 bands to download. Can be specified multiple times.",
 )
 @click.option(
     "--resolution",
@@ -51,7 +84,7 @@ from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 )
 def download_images_cmd(
     catalog_path: str,
-    bands: str,
+    bands: tuple[str, ...],
     resolution: float,
     resume: bool,
     output_report: str | None,
@@ -101,7 +134,7 @@ def download_images_cmd(
                 f"No collection.json found in {catalog_path} or in any *-chips subdirectory"
             )
 
-    band_list = [b.strip() for b in bands.split(",")]
+    band_list = list(bands)
 
     click.echo(f"Catalog: {catalog_path}")
     click.echo(f"Bands: {band_list}")
@@ -217,20 +250,27 @@ def download_images_cmd(
                             item.assets.pop(band, None)
                         item.assets["image"] = local_asset
 
-                    item.save_object(str(item_path))
+                    try:
+                        item.save_object(str(item_path))
+                    except Exception as e:
+                        # Clean up downloaded TIF if save fails
+                        if output_path.exists():
+                            output_path.unlink()
+                        raise STACSaveError(f"Failed to save child item {item.id}: {e}") from e
 
                     # Update parent chip item with asset reference
                     parent_item_path = item_path.parent / f"{base_id}.json"
                     if parent_item_path.exists():
                         parent_item = pystac.Item.from_file(str(parent_item_path))
-                        asset_key = f"{season}_image"
-                        parent_item.assets[asset_key] = pystac.Asset(
-                            href=f"./{output_filename}",
-                            media_type="image/tiff; application=geotiff; profile=cloud-optimized",
-                            title=f"{season.capitalize()} season imagery ({','.join(band_list)})",
-                            roles=["data"],
-                        )
-                        parent_item.save_object(str(parent_item_path))
+                        # Suppress errors - child item was saved successfully
+                        with contextlib.suppress(STACSaveError):
+                            update_parent_item(
+                                parent_item=parent_item,
+                                parent_path=parent_item_path,
+                                season=season,
+                                output_filename=output_filename,
+                                band_list=band_list,
+                            )
 
                     successful.append(item.id)
                 else:

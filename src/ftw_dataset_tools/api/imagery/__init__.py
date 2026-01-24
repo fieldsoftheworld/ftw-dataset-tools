@@ -19,16 +19,14 @@ from ftw_dataset_tools.api.imagery.settings import (
     BANDS_OF_INTEREST,
     CROP_CALENDAR_BASE_URL,
     CROP_CALENDAR_FILES,
-    EARTHSEARCH_URL,
-    STAC_HOSTS,
+    STAC_URL,
 )
 
 __all__ = [
     "BANDS_OF_INTEREST",
     "CROP_CALENDAR_BASE_URL",
     "CROP_CALENDAR_FILES",
-    "EARTHSEARCH_URL",
-    "STAC_HOSTS",
+    "STAC_URL",
     "CropCalendarDates",
     "DownloadResult",
     "ImageryProgressBar",

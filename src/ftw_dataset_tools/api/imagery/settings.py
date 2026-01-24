@@ -2,39 +2,32 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from typing import Literal
 
-# STAC Host URLs
-EARTHSEARCH_URL = "https://earth-search.aws.element84.com/v1"
-MSPC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
+# GDAL HTTP optimization for remote COG access
+os.environ.update(
+    {
+        "GDAL_HTTP_MULTIPLEX": "YES",
+        "GDAL_HTTP_VERSION": "2",
+        "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
+        "GDAL_HTTP_MAX_RETRY": "3",
+        "GDAL_HTTP_TIMEOUT": "30",
+        "VSI_CACHE": "TRUE",
+        "VSI_CACHE_SIZE": "50000000",  # 50MB cache
+    }
+)
+
+# STAC configuration - EarthSearch is the only supported host
+STAC_URL = "https://earth-search.aws.element84.com/v1"
 
 # Sentinel-2 collection identifiers
 S2_COLLECTIONS = {
-    "earthsearch": {
-        "old-baseline": "sentinel-2-l2a",
-        "c1": "sentinel-2-c1-l2a",
-    },
-    "mspc": {
-        "default": "sentinel-2-l2a",
-    },
+    "old-baseline": "sentinel-2-l2a",
+    "c1": "sentinel-2-c1-l2a",
 }
 
-# STAC host configuration
-STAC_HOSTS = {
-    "earthsearch": {
-        "url": EARTHSEARCH_URL,
-        "default_collection": "sentinel-2-c1-l2a",
-        "bands": ["red", "green", "blue", "nir"],
-    },
-    "mspc": {
-        "url": MSPC_URL,
-        "default_collection": "sentinel-2-l2a",
-        "bands": ["B04", "B03", "B02", "B08"],  # MSPC uses band codes
-    },
-}
-
-# Default bands of interest (EarthSearch naming)
+# Default bands of interest
 BANDS_OF_INTEREST = ["red", "green", "blue", "nir"]
 
 # Cloud probability band (for pixel-level cloud filtering)
@@ -57,10 +50,9 @@ CROP_CALENDAR_FILES = [
 ]
 
 # Default parameter values
-DEFAULT_CLOUD_COVER_SCENE = 10  # Maximum scene-level cloud cover percentage
-DEFAULT_CLOUD_COVER_PIXEL = 0  # Maximum pixel-level cloud cover percentage
+DEFAULT_CLOUD_COVER_SCENE = 75  # Internal scene-level filter for STAC query
+DEFAULT_CLOUD_COVER_CHIP = 2  # Maximum chip-level cloud cover percentage
 DEFAULT_BUFFER_DAYS = 14  # Days to search around crop calendar dates
-DEFAULT_STAC_HOST = "earthsearch"
 DEFAULT_NUM_BUFFER_EXPANSIONS = 3  # Number of times to expand buffer for cloudy chips
 DEFAULT_BUFFER_EXPANSION_SIZE = 14  # Days to add on each buffer expansion
 
@@ -73,7 +65,7 @@ PIXEL_CHECK_MAX_SCENE_THRESHOLD = 50.0
 
 @dataclass
 class STACHostConfig:
-    """Configuration for a STAC host."""
+    """Configuration for EarthSearch STAC host."""
 
     name: str
     url: str
@@ -81,36 +73,20 @@ class STACHostConfig:
     bands: list[str]
 
 
-def get_stac_host_config(
-    host: Literal["earthsearch", "mspc"] = "earthsearch",
-    s2_collection: str = "c1",
-) -> STACHostConfig:
+def get_stac_host_config(s2_collection: str = "c1") -> STACHostConfig:
     """
-    Get STAC host configuration.
+    Get STAC host configuration (EarthSearch).
 
     Args:
-        host: STAC host name ("earthsearch" or "mspc")
-        s2_collection: Sentinel-2 collection identifier (only used for earthsearch)
+        s2_collection: Sentinel-2 collection identifier ("c1" or "old-baseline")
 
     Returns:
         STACHostConfig with URL, collection, and band names
     """
-    if host == "earthsearch":
-        collection = S2_COLLECTIONS["earthsearch"].get(
-            s2_collection, S2_COLLECTIONS["earthsearch"]["c1"]
-        )
-        return STACHostConfig(
-            name="earthsearch",
-            url=EARTHSEARCH_URL,
-            collection=collection,
-            bands=STAC_HOSTS["earthsearch"]["bands"],
-        )
-    elif host == "mspc":
-        return STACHostConfig(
-            name="mspc",
-            url=MSPC_URL,
-            collection=S2_COLLECTIONS["mspc"]["default"],
-            bands=STAC_HOSTS["mspc"]["bands"],
-        )
-    else:
-        raise ValueError(f"Unknown STAC host: {host}. Use 'earthsearch' or 'mspc'.")
+    collection = S2_COLLECTIONS.get(s2_collection, S2_COLLECTIONS["c1"])
+    return STACHostConfig(
+        name="earthsearch",
+        url=STAC_URL,
+        collection=collection,
+        bands=BANDS_OF_INTEREST,
+    )

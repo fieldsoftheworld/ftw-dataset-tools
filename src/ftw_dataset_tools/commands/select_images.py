@@ -166,11 +166,11 @@ def _extract_year_from_item(item: pystac.Item) -> int | None:
     help="Calendar year for the crop cycle. If not provided, extracted from chip IDs.",
 )
 @click.option(
-    "--cloud-cover-scene",
-    type=int,
-    default=75,
+    "--cloud-cover-chip",
+    type=click.FloatRange(0.0, 100.0),
+    default=2.0,
     show_default=True,
-    help="Maximum scene-level cloud cover percentage.",
+    help="Maximum chip-level cloud cover percentage (0-100).",
 )
 @click.option(
     "--buffer-days",
@@ -178,19 +178,6 @@ def _extract_year_from_item(item: pystac.Item) -> int | None:
     default=14,
     show_default=True,
     help="Days to search around crop calendar dates.",
-)
-@click.option(
-    "--pixel-check/--no-pixel-check",
-    default=True,
-    show_default=True,
-    help="Enable/disable pixel-level cloud filtering using SCL band.",
-)
-@click.option(
-    "--cloud-cover-pixel",
-    type=float,
-    default=0.0,
-    show_default=True,
-    help="Maximum pixel-level cloud cover when --pixel-check is enabled.",
 )
 @click.option(
     "--on-missing",
@@ -253,10 +240,8 @@ def _extract_year_from_item(item: pystac.Item) -> int | None:
 def select_images_cmd(
     input_path: str,
     year: int | None,
-    cloud_cover_scene: int,
+    cloud_cover_chip: float,
     buffer_days: int,
-    pixel_check: bool,
-    cloud_cover_pixel: float,
     on_missing: Literal["skip", "fail", "best-available"],
     num_buffer_expansions: int,
     buffer_expansion_size: int,
@@ -413,11 +398,7 @@ def select_images_cmd(
         click.echo(f"Year: {year} (from --year option)")
     else:
         click.echo("Year: (extracted from chip IDs)")
-    click.echo(f"Cloud cover scene threshold: {cloud_cover_scene}%")
-    if pixel_check:
-        click.echo(f"Pixel-level check: enabled (threshold: {cloud_cover_pixel}%)")
-    else:
-        click.echo("Pixel-level check: disabled")
+    click.echo(f"Cloud cover chip threshold: {cloud_cover_chip}%")
     click.echo(
         f"Buffer: {buffer_days} days (expand by {buffer_expansion_size}d x{num_buffer_expansions})"
     )
@@ -486,10 +467,8 @@ def select_images_cmd(
                     chip_id=chip_id,
                     bbox=bbox,
                     year=chip_year,
-                    cloud_cover_scene=cloud_cover_scene,
+                    cloud_cover_chip=cloud_cover_chip,
                     buffer_days=buffer_days,
-                    pixel_check=pixel_check,
-                    cloud_cover_pixel=cloud_cover_pixel,
                     num_buffer_expansions=num_buffer_expansions,
                     buffer_expansion_size=buffer_expansion_size,
                     on_progress=progress.on_progress,
@@ -502,9 +481,8 @@ def select_images_cmd(
                         parent_item=item,
                         result=result,
                         year=chip_year,
-                        cloud_cover_scene=cloud_cover_scene,
+                        cloud_cover_chip=cloud_cover_chip,
                         buffer_days=buffer_days,
-                        pixel_check=pixel_check,
                         num_buffer_expansions=num_buffer_expansions,
                         buffer_expansion_size=buffer_expansion_size,
                     )
@@ -583,10 +561,8 @@ def select_images_cmd(
             "failed": failed,
             "parameters": {
                 "year": year if year else "extracted_from_chip_ids",
-                "cloud_cover_scene": cloud_cover_scene,
+                "cloud_cover_chip": cloud_cover_chip,
                 "buffer_days": buffer_days,
-                "pixel_check": pixel_check,
-                "cloud_cover_pixel": cloud_cover_pixel,
                 "num_buffer_expansions": num_buffer_expansions,
                 "buffer_expansion_size": buffer_expansion_size,
             },
@@ -606,9 +582,8 @@ def _create_child_items(
     parent_item: pystac.Item,
     result: SceneSelectionResult,
     year: int,
-    cloud_cover_scene: int,
+    cloud_cover_chip: float,
     buffer_days: int,
-    pixel_check: bool,
     num_buffer_expansions: int,
     buffer_expansion_size: int,
 ) -> None:
@@ -625,9 +600,8 @@ def _create_child_items(
     parent_item.properties["ftw:planting_day"] = result.crop_calendar.planting_day
     parent_item.properties["ftw:harvest_day"] = result.crop_calendar.harvest_day
     parent_item.properties["ftw:stac_host"] = "earthsearch"  # Always earthsearch
-    parent_item.properties["ftw:cloud_cover_scene_threshold"] = cloud_cover_scene
+    parent_item.properties["ftw:cloud_cover_chip_threshold"] = cloud_cover_chip
     parent_item.properties["ftw:buffer_days"] = buffer_days
-    parent_item.properties["ftw:pixel_check"] = pixel_check
     parent_item.properties["ftw:num_buffer_expansions"] = num_buffer_expansions
     parent_item.properties["ftw:buffer_expansion_size"] = buffer_expansion_size
     # Track actual buffer used for each season
@@ -635,10 +609,14 @@ def _create_child_items(
     parent_item.properties["ftw:harvest_buffer_used"] = result.harvest_buffer_used
     parent_item.properties["ftw:expansions_performed"] = result.expansions_performed
 
-    # Set temporal extent from selected scenes
-    if result.planting_scene and result.harvest_scene:
-        parent_item.properties["start_datetime"] = result.planting_scene.datetime.isoformat()
-        parent_item.properties["end_datetime"] = result.harvest_scene.datetime.isoformat()
+    # Set temporal extent to the full calendar year
+    # This represents the crop cycle year, not just the scene acquisition dates
+    from datetime import datetime
+
+    parent_item.properties["start_datetime"] = datetime(year, 1, 1, 0, 0, 0, tzinfo=UTC).isoformat()
+    parent_item.properties["end_datetime"] = datetime(
+        year, 12, 31, 23, 59, 59, tzinfo=UTC
+    ).isoformat()
 
     # Add cloud cover from child scenes to parent
     if result.planting_scene:

@@ -100,18 +100,11 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     help="Download images after selection.",
 )
 @click.option(
-    "--stac-host",
-    type=click.Choice(["earthsearch", "mspc"]),
-    default="earthsearch",
+    "--cloud-cover-chip",
+    type=click.FloatRange(0.0, 100.0),
+    default=2.0,
     show_default=True,
-    help="STAC host to query for imagery.",
-)
-@click.option(
-    "--cloud-cover-scene",
-    type=int,
-    default=10,
-    show_default=True,
-    help="Maximum scene-level cloud cover percentage for STAC query filter.",
+    help="Maximum chip-level cloud cover percentage (0-100).",
 )
 @click.option(
     "--buffer-days",
@@ -119,19 +112,6 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     default=14,
     show_default=True,
     help="Days to search around crop calendar dates.",
-)
-@click.option(
-    "--pixel-check/--no-pixel-check",
-    default=True,
-    show_default=True,
-    help="Enable pixel-level cloud cover analysis using SCL band.",
-)
-@click.option(
-    "--cloud-cover-pixel",
-    type=float,
-    default=0.0,
-    show_default=True,
-    help="Maximum pixel-level cloud cover percentage (0.0 = require fully clear).",
 )
 @click.option(
     "--num-buffer-expansions",
@@ -160,11 +140,8 @@ def create_dataset_cmd(
     year: int | None,
     skip_images: bool,
     download_images: bool,
-    stac_host: str,
-    cloud_cover_scene: int,
+    cloud_cover_chip: float,
     buffer_days: int,
-    pixel_check: bool,
-    cloud_cover_pixel: float,
     num_buffer_expansions: int,
     buffer_expansion_size: int,
 ) -> None:
@@ -351,11 +328,8 @@ def create_dataset_cmd(
             image_stats = _run_image_selection(
                 catalog_dir=catalog_dir,
                 year=effective_year,
-                stac_host=stac_host,
-                cloud_cover_scene=cloud_cover_scene,
+                cloud_cover_chip=cloud_cover_chip,
                 buffer_days=buffer_days,
-                pixel_check=pixel_check,
-                cloud_cover_pixel=cloud_cover_pixel,
                 num_buffer_expansions=num_buffer_expansions,
                 buffer_expansion_size=buffer_expansion_size,
             )
@@ -397,11 +371,8 @@ def create_dataset_cmd(
 def _run_image_selection(
     catalog_dir: Path,
     year: int,
-    stac_host: str,
-    cloud_cover_scene: int,
+    cloud_cover_chip: float,
     buffer_days: int,
-    pixel_check: bool = True,
-    cloud_cover_pixel: float = 0.0,
     num_buffer_expansions: int = 3,
     buffer_expansion_size: int = 14,
 ) -> dict:
@@ -435,11 +406,8 @@ def _run_image_selection(
                     chip_id=item.id,
                     bbox=bbox,
                     year=year,
-                    stac_host=stac_host,
-                    cloud_cover_scene=cloud_cover_scene,
+                    cloud_cover_chip=cloud_cover_chip,
                     buffer_days=buffer_days,
-                    pixel_check=pixel_check,
-                    cloud_cover_pixel=cloud_cover_pixel,
                     num_buffer_expansions=num_buffer_expansions,
                     buffer_expansion_size=buffer_expansion_size,
                     on_progress=progress.on_progress,
@@ -452,10 +420,8 @@ def _run_image_selection(
                         parent_item=item,
                         result=result,
                         year=year,
-                        stac_host=stac_host,
-                        cloud_cover_scene=cloud_cover_scene,
+                        cloud_cover_chip=cloud_cover_chip,
                         buffer_days=buffer_days,
-                        pixel_check=pixel_check,
                         num_buffer_expansions=num_buffer_expansions,
                         buffer_expansion_size=buffer_expansion_size,
                     )
@@ -474,10 +440,8 @@ def _create_child_items_inline(
     parent_item: pystac.Item,
     result,
     year: int,
-    stac_host: str,
-    cloud_cover_scene: int,
+    cloud_cover_chip: float,
     buffer_days: int,
-    pixel_check: bool = True,
     num_buffer_expansions: int = 3,
     buffer_expansion_size: int = 14,
 ) -> None:
@@ -491,17 +455,20 @@ def _create_child_items_inline(
     parent_item.properties["ftw:calendar_year"] = year
     parent_item.properties["ftw:planting_day"] = result.crop_calendar.planting_day
     parent_item.properties["ftw:harvest_day"] = result.crop_calendar.harvest_day
-    parent_item.properties["ftw:stac_host"] = stac_host
-    parent_item.properties["ftw:cloud_cover_scene_threshold"] = cloud_cover_scene
+    parent_item.properties["ftw:stac_host"] = "earthsearch"  # Always earthsearch
+    parent_item.properties["ftw:cloud_cover_chip_threshold"] = cloud_cover_chip
     parent_item.properties["ftw:buffer_days"] = buffer_days
-    parent_item.properties["ftw:pixel_check"] = pixel_check
     parent_item.properties["ftw:num_buffer_expansions"] = num_buffer_expansions
     parent_item.properties["ftw:buffer_expansion_size"] = buffer_expansion_size
 
-    # Set temporal extent from selected scenes
-    if result.planting_scene and result.harvest_scene:
-        parent_item.properties["start_datetime"] = result.planting_scene.datetime.isoformat()
-        parent_item.properties["end_datetime"] = result.harvest_scene.datetime.isoformat()
+    # Set temporal extent to the full calendar year
+    # This represents the crop cycle year, not just the scene acquisition dates
+    from datetime import UTC, datetime
+
+    parent_item.properties["start_datetime"] = datetime(year, 1, 1, 0, 0, 0, tzinfo=UTC).isoformat()
+    parent_item.properties["end_datetime"] = datetime(
+        year, 12, 31, 23, 59, 59, tzinfo=UTC
+    ).isoformat()
 
     # Save updated parent (parent_path already set at function start)
     parent_item.save_object(dest_href=str(parent_path))

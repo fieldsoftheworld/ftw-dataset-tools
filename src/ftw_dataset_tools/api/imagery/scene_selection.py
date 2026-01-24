@@ -5,7 +5,8 @@ from __future__ import annotations
 import time
 import urllib.error
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from typing import TYPE_CHECKING, Literal
 
 import pystac_client
@@ -22,12 +23,12 @@ from ftw_dataset_tools.api.imagery.crop_calendar import (
 from ftw_dataset_tools.api.imagery.settings import (
     DEFAULT_BUFFER_DAYS,
     DEFAULT_BUFFER_EXPANSION_SIZE,
+    DEFAULT_CLOUD_COVER_CHIP,
     DEFAULT_CLOUD_COVER_SCENE,
     DEFAULT_NUM_BUFFER_EXPANSIONS,
-    EARTHSEARCH_URL,
-    MSPC_URL,
     PIXEL_CHECK_SKIP_THRESHOLD,
     S2_COLLECTIONS,
+    STAC_URL,
 )
 
 if TYPE_CHECKING:
@@ -105,6 +106,12 @@ def _validate_date_not_future(center_date: datetime, buffer_days: int) -> None:
         )
 
 
+@lru_cache(maxsize=4)
+def _get_stac_client(catalog_url: str) -> pystac_client.Client:
+    """Get cached STAC client for a catalog URL."""
+    return pystac_client.Client.open(catalog_url)
+
+
 @dataclass
 class STACQueryResult:
     """Result of a STAC query with debug information."""
@@ -120,7 +127,6 @@ class STACQueryResult:
 def _query_stac(
     bbox: tuple[float, float, float, float],
     center_date: datetime,
-    stac_host: Literal["earthsearch", "mspc"],
     cloud_cover_max: int,
     buffer_days: int,
     s2_collection: str = "c1",
@@ -132,10 +138,9 @@ def _query_stac(
     Args:
         bbox: Bounding box (minx, miny, maxx, maxy) in EPSG:4326
         center_date: Center date for the search
-        stac_host: STAC host to query
         cloud_cover_max: Maximum cloud cover percentage
         buffer_days: Days to search around center_date
-        s2_collection: Sentinel-2 collection identifier (earthsearch only)
+        s2_collection: Sentinel-2 collection identifier ("c1" or "old-baseline")
         max_retries: Maximum number of retries for transient errors
 
     Returns:
@@ -147,21 +152,14 @@ def _query_stac(
     _validate_date_not_future(center_date, buffer_days)
 
     date_range = _format_date_range(center_date, buffer_days)
-
-    if stac_host == "earthsearch":
-        catalog_url = EARTHSEARCH_URL
-        collection = S2_COLLECTIONS["earthsearch"].get(s2_collection, "sentinel-2-c1-l2a")
-    elif stac_host == "mspc":
-        catalog_url = MSPC_URL
-        collection = S2_COLLECTIONS["mspc"]["default"]
-    else:
-        raise ValueError(f"Unknown STAC host: {stac_host}")
+    catalog_url = STAC_URL
+    collection = S2_COLLECTIONS.get(s2_collection, "sentinel-2-c1-l2a")
 
     last_error = None
     for attempt in range(max_retries):
         try:
-            # Open catalog and search
-            catalog = pystac_client.Client.open(catalog_url)
+            # Use cached STAC client
+            catalog = _get_stac_client(catalog_url)
             search = catalog.search(
                 collections=[collection],
                 bbox=list(bbox),
@@ -212,6 +210,53 @@ def _query_stac(
     )
 
 
+def _parse_iso_datetime(value: str) -> datetime:
+    """Parse ISO datetime string to timezone-aware datetime."""
+
+    normalized = value.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(normalized)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _get_item_datetime(item: pystac.Item) -> datetime:
+    """
+    Get datetime from STAC item, falling back to start_datetime if needed.
+
+    Always returns a timezone-aware datetime.
+    """
+
+    if item.datetime is not None:
+        dt = item.datetime
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=UTC)
+        return dt
+
+    # Fall back to start_datetime
+    start_dt = item.properties.get("start_datetime")
+    if start_dt is None:
+        # Fall back to datetime property
+        datetime_prop = item.properties.get("datetime")
+        if datetime_prop is not None:
+            if isinstance(datetime_prop, str):
+                return _parse_iso_datetime(datetime_prop)
+            if isinstance(datetime_prop, datetime):
+                if datetime_prop.tzinfo is None:
+                    return datetime_prop.replace(tzinfo=UTC)
+                return datetime_prop
+        raise ValueError(f"STAC item {item.id} has no datetime or start_datetime")
+
+    if isinstance(start_dt, str):
+        return _parse_iso_datetime(start_dt)
+    if isinstance(start_dt, datetime):
+        if start_dt.tzinfo is None:
+            return start_dt.replace(tzinfo=UTC)
+        return start_dt
+
+    raise ValueError(f"STAC item {item.id} has invalid start_datetime type: {type(start_dt)}")
+
+
 def _short_date(item: pystac.Item) -> str:
     """Extract short date (M-DD) from item datetime or ID."""
     # Try datetime first
@@ -231,10 +276,9 @@ def _short_date(item: pystac.Item) -> str:
 
 def _select_best_scene(
     items: list[pystac.Item],
-    season: Literal["planting", "harvest"],
+    season: str,
     bbox: tuple[float, float, float, float],
-    pixel_check: bool = False,
-    cloud_cover_pixel: float = 0.0,
+    cloud_cover_chip: float = DEFAULT_CLOUD_COVER_CHIP,
     on_progress: Callable[[str], None] | None = None,
 ) -> SelectedScene | None:
     """
@@ -242,10 +286,9 @@ def _select_best_scene(
 
     Args:
         items: List of candidate STAC items (pre-sorted by cloud cover)
-        season: Season identifier
-        bbox: Bounding box for pixel-level cloud calculation
-        pixel_check: Whether to perform pixel-level cloud check
-        cloud_cover_pixel: Maximum pixel-level cloud cover (if pixel_check enabled)
+        season: Season identifier ("planting" or "harvest")
+        bbox: Bounding box for chip-level cloud calculation
+        cloud_cover_chip: Maximum chip-level cloud cover percentage (0-100)
         on_progress: Optional callback for progress messages
 
     Returns:
@@ -260,48 +303,45 @@ def _select_best_scene(
 
     for item in items:
         scene_cloud_cover = EOExtension.ext(item).cloud_cover or 0.0
-        actual_cloud_cover = scene_cloud_cover  # Default to scene-level
 
-        # If pixel check is enabled, calculate actual cloud cover over the bbox
-        if pixel_check:
-            # For very clear scenes (< 0.1% reported), trust the metadata
-            if scene_cloud_cover < PIXEL_CHECK_SKIP_THRESHOLD:
-                log(
-                    f"  {item.id}: scene cloud {scene_cloud_cover:.1f}% (trusted, < {PIXEL_CHECK_SKIP_THRESHOLD}%)"
-                )
-                actual_cloud_cover = scene_cloud_cover
-            else:
-                # Calculate actual pixel-level cloud cover using SCL
-                scl_asset = item.assets.get("scl")
-                if scl_asset:
-                    try:
-                        actual_cloud_cover = calculate_pixel_cloud_cover(
-                            cloud_href=scl_asset.href,
-                            bbox=bbox,
-                            cloud_type="scl",
-                        )
-                        log(
-                            f"  {item.id}: scene {scene_cloud_cover:.1f}% -> pixel {actual_cloud_cover:.1f}%"
-                        )
-                    except Exception as e:
-                        log(f"  {item.id}: pixel check failed ({e}), using scene cloud cover")
-                        actual_cloud_cover = scene_cloud_cover
-                else:
-                    log(
-                        f"  {item.id}: no SCL asset, using scene cloud cover {scene_cloud_cover:.1f}%"
+        # For very clear scenes (< 0.1% reported), trust the metadata
+        if scene_cloud_cover < PIXEL_CHECK_SKIP_THRESHOLD:
+            log(
+                f"  {item.id}: scene cloud {scene_cloud_cover:.1f}% (trusted, < {PIXEL_CHECK_SKIP_THRESHOLD}%)"
+            )
+            actual_cloud_cover = scene_cloud_cover
+        else:
+            # Calculate actual chip-level cloud cover using SCL
+            scl_asset = item.assets.get("scl")
+            if scl_asset:
+                try:
+                    actual_cloud_cover = calculate_pixel_cloud_cover(
+                        cloud_href=scl_asset.href,
+                        bbox=bbox,
+                        cloud_type="scl",
                     )
+                    log(
+                        f"  {item.id}: scene {scene_cloud_cover:.1f}% -> chip {actual_cloud_cover:.1f}%"
+                    )
+                except Exception as e:
+                    log(f"  {item.id}: chip check failed ({e}), using scene cloud cover")
                     actual_cloud_cover = scene_cloud_cover
+            else:
+                log(f"  {item.id}: no SCL asset, using scene cloud cover {scene_cloud_cover:.1f}%")
+                actual_cloud_cover = scene_cloud_cover
 
-                # Check if pixel cloud cover exceeds threshold
-                if actual_cloud_cover > cloud_cover_pixel:
-                    short_dt = _short_date(item)
-                    log(f"  Skipping {short_dt}: {actual_cloud_cover:.1f}% cloud")
-                    continue
+        # Check if chip cloud cover exceeds threshold
+        if actual_cloud_cover > cloud_cover_chip:
+            short_dt = _short_date(item)
+            log(f"  Skipping {short_dt}: {actual_cloud_cover:.1f}% cloud")
+            continue
 
-        # Get scene datetime
-        scene_dt = item.datetime or item.properties.get("datetime")
-        if isinstance(scene_dt, str):
-            scene_dt = datetime.fromisoformat(scene_dt.replace("Z", "+00:00"))
+        # Get scene datetime using helper (handles None datetime with start_datetime fallback)
+        try:
+            scene_dt = _get_item_datetime(item)
+        except ValueError as e:
+            log(f"  {item.id}: skipping - {e}")
+            continue
 
         return SelectedScene(
             item=item,
@@ -318,11 +358,8 @@ def select_scenes_for_chip(
     chip_id: str,
     bbox: tuple[float, float, float, float],
     year: int,
-    stac_host: Literal["earthsearch", "mspc"] = "earthsearch",
-    cloud_cover_scene: int = DEFAULT_CLOUD_COVER_SCENE,
+    cloud_cover_chip: float = DEFAULT_CLOUD_COVER_CHIP,
     buffer_days: int = DEFAULT_BUFFER_DAYS,
-    pixel_check: bool = True,
-    cloud_cover_pixel: float = 0.0,
     s2_collection: str = "c1",
     num_buffer_expansions: int = DEFAULT_NUM_BUFFER_EXPANSIONS,
     buffer_expansion_size: int = DEFAULT_BUFFER_EXPANSION_SIZE,
@@ -335,11 +372,8 @@ def select_scenes_for_chip(
         chip_id: Chip identifier
         bbox: Bounding box (minx, miny, maxx, maxy) in EPSG:4326
         year: Calendar year for the crop cycle
-        stac_host: STAC host to query ("earthsearch" or "mspc")
-        cloud_cover_scene: Maximum scene-level cloud cover percentage
+        cloud_cover_chip: Maximum chip-level cloud cover percentage (0-100)
         buffer_days: Days to search around crop calendar dates
-        pixel_check: Enable pixel-level cloud filtering using SCL band
-        cloud_cover_pixel: Maximum pixel-level cloud cover (if pixel_check enabled)
         s2_collection: Sentinel-2 collection identifier
         num_buffer_expansions: Number of times to expand buffer for seasons without cloud-free scenes
         buffer_expansion_size: Days to add to buffer on each expansion
@@ -376,22 +410,18 @@ def select_scenes_for_chip(
 
     # Store selection parameters
     selection_params = {
-        "stac_host": stac_host,
-        "cloud_cover_scene_threshold": cloud_cover_scene,
+        "stac_host": "earthsearch",  # Always earthsearch
+        "cloud_cover_chip_threshold": cloud_cover_chip,
         "buffer_days": buffer_days,
-        "pixel_check": pixel_check,
         "num_buffer_expansions": num_buffer_expansions,
         "buffer_expansion_size": buffer_expansion_size,
     }
-    if pixel_check:
-        selection_params["cloud_cover_pixel_threshold"] = cloud_cover_pixel
 
     # Helper to check if a scene meets threshold
     def _meets_threshold(scene: SelectedScene | None) -> bool:
         if scene is None:
             return False
-        threshold = cloud_cover_pixel if pixel_check else cloud_cover_scene
-        return scene.cloud_cover <= threshold
+        return scene.cloud_cover <= cloud_cover_chip
 
     # Initialize buffers and scenes for iterative expansion
     planting_buffer = buffer_days
@@ -416,8 +446,7 @@ def select_scenes_for_chip(
                 planting_result = _query_stac(
                     bbox=bbox,
                     center_date=planting_dt,
-                    stac_host=stac_host,
-                    cloud_cover_max=cloud_cover_scene,
+                    cloud_cover_max=DEFAULT_CLOUD_COVER_SCENE,  # Internal scene-level filter
                     buffer_days=planting_buffer,
                     s2_collection=s2_collection,
                 )
@@ -452,8 +481,7 @@ def select_scenes_for_chip(
                     new_items,
                     season="planting",
                     bbox=bbox,
-                    pixel_check=pixel_check,
-                    cloud_cover_pixel=cloud_cover_pixel,
+                    cloud_cover_chip=cloud_cover_chip,
                     on_progress=on_progress,
                 )
 
@@ -484,8 +512,7 @@ def select_scenes_for_chip(
                 harvest_result = _query_stac(
                     bbox=bbox,
                     center_date=harvest_dt,
-                    stac_host=stac_host,
-                    cloud_cover_max=cloud_cover_scene,
+                    cloud_cover_max=DEFAULT_CLOUD_COVER_SCENE,  # Internal scene-level filter
                     buffer_days=harvest_buffer,
                     s2_collection=s2_collection,
                 )
@@ -520,8 +547,7 @@ def select_scenes_for_chip(
                     new_items,
                     season="harvest",
                     bbox=bbox,
-                    pixel_check=pixel_check,
-                    cloud_cover_pixel=cloud_cover_pixel,
+                    cloud_cover_chip=cloud_cover_chip,
                     on_progress=on_progress,
                 )
 

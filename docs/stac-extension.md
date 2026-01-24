@@ -24,11 +24,11 @@ These properties are added to parent chip items after image selection:
 | `ftw:calendar_year` | integer | Calendar year for the crop cycle (e.g., 2024) |
 | `ftw:planting_day` | integer | Day of year (1-365) for planting from crop calendar |
 | `ftw:harvest_day` | integer | Day of year (1-365) for harvest from crop calendar |
-| `ftw:stac_host` | string | Source STAC catalog used ("earthsearch" or "mspc") |
-| `ftw:cloud_cover_scene_threshold` | number | Scene-level cloud cover threshold used (percentage) |
+| `ftw:stac_host` | string | Source STAC catalog used (always "earthsearch") |
+| `ftw:cloud_cover_chip_threshold` | number | Chip-level cloud cover threshold percentage (0-100). Note: 2 means 2%, not 0.02 |
 | `ftw:buffer_days` | integer | Search buffer in days around crop calendar dates |
-| `ftw:pixel_check` | boolean | Whether pixel-level cloud check was used |
-| `ftw:cloud_cover_pixel_threshold` | number | Pixel-level threshold if pixel_check was used |
+| `ftw:num_buffer_expansions` | integer | Number of times to expand buffer if no cloud-free scenes found |
+| `ftw:buffer_expansion_size` | integer | Days added to buffer on each expansion |
 
 ### Child S2 Item Properties
 
@@ -58,15 +58,16 @@ After image selection, a parent chip item contains:
   "id": "ftw-34UFF1628_2024",
   "type": "Feature",
   "properties": {
-    "start_datetime": "2024-03-15T10:30:00Z",
-    "end_datetime": "2024-09-30T11:00:00Z",
+    "start_datetime": "2024-01-01T00:00:00Z",
+    "end_datetime": "2024-12-31T23:59:59Z",
     "ftw:calendar_year": 2024,
     "ftw:planting_day": 75,
     "ftw:harvest_day": 274,
     "ftw:stac_host": "earthsearch",
-    "ftw:cloud_cover_scene_threshold": 10,
+    "ftw:cloud_cover_chip_threshold": 2.0,
     "ftw:buffer_days": 14,
-    "ftw:pixel_check": false
+    "ftw:num_buffer_expansions": 3,
+    "ftw:buffer_expansion_size": 14
   }
 }
 ```
