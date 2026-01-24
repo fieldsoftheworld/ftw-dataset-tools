@@ -111,6 +111,43 @@ raise ClickException("Human readable error message")
 raise BadParameter("Invalid value for --option")
 ```
 
+**3. Command Synchronization: `create-dataset` and Component Commands**
+
+The `create-dataset` command is a pipeline that combines multiple standalone operations. Some functionality exists in both places:
+
+| Standalone Command | `create-dataset` Function |
+|--------------------|---------------------------|
+| `download-images`  | `_run_image_download()`   |
+| `select-images`    | `_run_image_selection()`  |
+
+**IMPORTANT:** When adding or modifying functionality in these commands:
+
+1. **Refactor shared logic into `api/` modules** - Extract common functionality into reusable functions in the appropriate `api/` module. Both the standalone command and `create_dataset.py` should call the same underlying code.
+
+2. **Keep commands as thin wrappers** - Commands should handle CLI concerns (arguments, options, progress display) and delegate to `api/` functions for business logic.
+
+3. **Verify both code paths** - After changes, test both:
+   - `ftwd create-dataset ... --download-images`
+   - `ftwd download-images` (standalone)
+
+**Example refactoring pattern:**
+```python
+# api/imagery/download.py - Shared logic
+def process_downloaded_image(item, item_path, output_path, band_list, season):
+    """Process a downloaded image: update assets, generate thumbnails, update parent."""
+    # All shared logic here
+
+# commands/download_images.py - Uses shared logic
+from ftw_dataset_tools.api.imagery.download import process_downloaded_image
+# ... call process_downloaded_image()
+
+# commands/create_dataset.py - Uses same shared logic
+from ftw_dataset_tools.api.imagery.download import process_downloaded_image
+# ... call process_downloaded_image()
+```
+
+This ensures users get identical behavior regardless of which command they use, and prevents logic drift between implementations.
+
 ---
 
 ## Key Dependencies and Usage
@@ -422,20 +459,22 @@ assert result.exit_code == 0
 
 Before every commit:
 ```bash
-# 1. Run all checks
+# 1. Run pre-commit IN A LOOP until all checks pass
+#    Some hooks auto-fix files, which can introduce new issues
+#    that only appear on subsequent runs
 pre-commit run --all-files
+# If any "files were modified by this hook" messages appear,
+# run again until you see all "Passed"
 
-# 2. Fix any issues
-ruff check --fix .
-ruff format .
-
-# 3. Run tests
+# 2. Run tests
 pytest
 
-# 4. If tests pass, commit
+# 3. If tests pass, commit
 git add .
 git commit -m "Brief description of change"
 ```
+
+**IMPORTANT:** Always run `pre-commit run --all-files` repeatedly until ALL checks pass with no modifications. Hooks like ruff may auto-fix issues, and those fixes can trigger new linting errors (e.g., import reordering may violate TC003 rules). Never report success after a single pre-commit run if files were modified.
 
 ---
 

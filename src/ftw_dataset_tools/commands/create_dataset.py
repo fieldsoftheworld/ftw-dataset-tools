@@ -1,11 +1,25 @@
 """CLI command for creating complete training datasets from field boundaries."""
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
+from typing import Literal
 
 import click
+import pystac
+from tqdm import tqdm
 
 from ftw_dataset_tools.api import dataset, splits
+from ftw_dataset_tools.api.imagery import (
+    ImageryProgressBar,
+    download_and_clip_scene,
+    process_downloaded_scene,
+    select_scenes_for_chip,
+)
+from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
+from ftw_dataset_tools.api.imagery.thumbnails import has_rgb_bands
+from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_datetime_column
 
 
 @click.command("create-dataset")
@@ -75,6 +89,53 @@ from ftw_dataset_tools.api import dataset, splits
     default=None,
     help="Year for temporal extent (required if fields lack determination_datetime column).",
 )
+@click.option(
+    "--skip-images",
+    is_flag=True,
+    default=False,
+    help="Skip image selection (by default, imagery is selected after mask creation).",
+)
+@click.option(
+    "--download-images",
+    is_flag=True,
+    default=False,
+    help="Download images after selection.",
+)
+@click.option(
+    "--cloud-cover-chip",
+    type=click.FloatRange(0.0, 100.0),
+    default=2.0,
+    show_default=True,
+    help="Maximum chip-level cloud cover percentage (0-100).",
+)
+@click.option(
+    "--nodata-max",
+    type=click.FloatRange(0.0, 100.0),
+    default=0.0,
+    show_default=True,
+    help="Maximum nodata percentage (0-100). Default 0 rejects any nodata.",
+)
+@click.option(
+    "--buffer-days",
+    type=int,
+    default=14,
+    show_default=True,
+    help="Days to search around crop calendar dates.",
+)
+@click.option(
+    "--num-buffer-expansions",
+    type=int,
+    default=3,
+    show_default=True,
+    help="Number of times to expand date buffer if no cloud-free scenes found.",
+)
+@click.option(
+    "--buffer-expansion-size",
+    type=int,
+    default=14,
+    show_default=True,
+    help="Days to add to buffer on each expansion.",
+)
 def create_dataset_cmd(
     fields_file: str,
     output_dir: str | None,
@@ -86,6 +147,13 @@ def create_dataset_cmd(
     num_workers: int | None,
     skip_reproject: bool,
     year: int | None,
+    skip_images: bool,
+    download_images: bool,
+    cloud_cover_chip: float,
+    nodata_max: float,
+    buffer_days: int,
+    num_buffer_expansions: int,
+    buffer_expansion_size: int,
 ) -> None:
     """Create a complete training dataset from a fields file.
 
@@ -240,6 +308,65 @@ def create_dataset_cmd(
             click.echo(f"  Items: {result.stac_result.total_items:,}")
             click.echo(f"  Items parquet: {result.stac_result.items_parquet_path}")
 
+        # Image selection (by default enabled, unless --skip-images is set)
+        should_select_images = not skip_images or download_images
+        if should_select_images:
+            # Try to extract year from determination_datetime if not provided
+            effective_year = year
+            if effective_year is None:
+                datetime_col = detect_datetime_column(fields_file)
+                if datetime_col:
+                    effective_year = get_year_from_datetime_column(fields_file, datetime_col)
+                    if effective_year:
+                        click.echo(f"  Year: {effective_year} (from {datetime_col})")
+
+            if effective_year is None:
+                raise click.ClickException(
+                    "--year is required for image selection "
+                    "(no determination_datetime column found). "
+                    "Use --skip-images to skip image selection."
+                )
+
+            click.echo("")
+            click.echo(click.style("Selecting imagery...", fg="cyan", bold=True))
+
+            # Get chips collection path
+            chips_collection_path = Path(result.stac_result.chips_collection_path)
+            catalog_dir = chips_collection_path.parent
+
+            # Run image selection with full parameters
+            image_stats = _run_image_selection(
+                catalog_dir=catalog_dir,
+                year=effective_year,
+                cloud_cover_chip=cloud_cover_chip,
+                nodata_max=nodata_max,
+                buffer_days=buffer_days,
+                num_buffer_expansions=num_buffer_expansions,
+                buffer_expansion_size=buffer_expansion_size,
+            )
+
+            click.echo(f"  Selected: {image_stats['successful']}")
+            click.echo(f"  Skipped: {image_stats['skipped']}")
+            if image_stats["failed"]:
+                click.echo(click.style(f"  Failed: {image_stats['failed']}", fg="yellow"))
+
+            # Download if requested
+            if download_images:
+                click.echo("")
+                click.echo(click.style("Downloading imagery...", fg="cyan", bold=True))
+
+                download_stats = _run_image_download(
+                    catalog_dir=catalog_dir,
+                    bands=["red", "green", "blue", "nir"],
+                    resolution=resolution,
+                )
+
+                click.echo(f"  Downloaded: {download_stats['successful']}")
+                if download_stats["skipped"]:
+                    click.echo(f"  Skipped: {download_stats['skipped']}")
+                if download_stats["failed"]:
+                    click.echo(click.style(f"  Failed: {download_stats['failed']}", fg="yellow"))
+
     except KeyboardInterrupt:
         sys.stdout.write("\n")
         click.echo(click.style("Interrupted by user.", fg="yellow"))
@@ -250,6 +377,255 @@ def create_dataset_cmd(
     except ValueError as e:
         click.echo(click.style(f"\nError: {e}", fg="red"))
         raise SystemExit(1) from e
+
+
+def _run_image_selection(
+    catalog_dir: Path,
+    year: int,
+    cloud_cover_chip: float,
+    nodata_max: float,
+    buffer_days: int,
+    num_buffer_expansions: int = 3,
+    buffer_expansion_size: int = 14,
+) -> dict:
+    """Run image selection for all chips in a catalog."""
+    # Find all chip items (parent items, not child S2 items)
+    chip_items = []
+    for subdir in catalog_dir.iterdir():
+        if subdir.is_dir() and not subdir.name.startswith("."):
+            for json_file in subdir.glob("*.json"):
+                # Skip child items
+                if "_planting_s2" in json_file.name or "_harvest_s2" in json_file.name:
+                    continue
+                try:
+                    item = pystac.Item.from_file(str(json_file))
+                    chip_items.append((item, json_file))
+                except Exception:
+                    pass
+
+    # Process chips with unified progress display
+    with ImageryProgressBar(total=len(chip_items), leave=False, verbose=False) as progress:
+        for item, item_path in chip_items:
+            progress.start_chip(item.id)
+            bbox = tuple(item.bbox) if item.bbox else None
+
+            if bbox is None:
+                progress.mark_skipped("No bbox in item")
+                continue
+
+            try:
+                result = select_scenes_for_chip(
+                    chip_id=item.id,
+                    bbox=bbox,
+                    year=year,
+                    cloud_cover_chip=cloud_cover_chip,
+                    nodata_max=nodata_max,
+                    buffer_days=buffer_days,
+                    num_buffer_expansions=num_buffer_expansions,
+                    buffer_expansion_size=buffer_expansion_size,
+                    on_progress=progress.on_progress,
+                )
+
+                if result.success:
+                    # Create child STAC items
+                    _create_child_items_inline(
+                        chip_dir=item_path.parent,
+                        parent_item=item,
+                        result=result,
+                        year=year,
+                        cloud_cover_chip=cloud_cover_chip,
+                        buffer_days=buffer_days,
+                        num_buffer_expansions=num_buffer_expansions,
+                        buffer_expansion_size=buffer_expansion_size,
+                    )
+                    progress.mark_success(result)
+                else:
+                    progress.mark_skipped(result.skipped_reason or "No cloud-free scenes")
+
+            except Exception as e:
+                progress.mark_failed(str(e))
+
+    return progress.get_stats_dict()
+
+
+def _create_child_items_inline(
+    chip_dir: Path,
+    parent_item: pystac.Item,
+    result,
+    year: int,
+    cloud_cover_chip: float,
+    buffer_days: int,
+    num_buffer_expansions: int = 3,
+    buffer_expansion_size: int = 14,
+) -> None:
+    """Create child STAC items for planting and harvest scenes (inline version)."""
+    # Ensure parent has self_href set (required for saving with relative links)
+    parent_path = chip_dir / f"{parent_item.id}.json"
+    if parent_item.get_self_href() is None:
+        parent_item.set_self_href(str(parent_path))
+
+    # Update parent item with FTW properties
+    parent_item.properties["ftw:calendar_year"] = year
+    parent_item.properties["ftw:planting_day"] = result.crop_calendar.planting_day
+    parent_item.properties["ftw:harvest_day"] = result.crop_calendar.harvest_day
+    parent_item.properties["ftw:stac_host"] = "earthsearch"  # Always earthsearch
+    parent_item.properties["ftw:cloud_cover_chip_threshold"] = cloud_cover_chip
+    parent_item.properties["ftw:buffer_days"] = buffer_days
+    parent_item.properties["ftw:num_buffer_expansions"] = num_buffer_expansions
+    parent_item.properties["ftw:buffer_expansion_size"] = buffer_expansion_size
+
+    # Set temporal extent to the full calendar year
+    # This represents the crop cycle year, not just the scene acquisition dates
+    from datetime import UTC, datetime
+
+    parent_item.properties["start_datetime"] = datetime(year, 1, 1, 0, 0, 0, tzinfo=UTC).isoformat()
+    parent_item.properties["end_datetime"] = datetime(
+        year, 12, 31, 23, 59, 59, tzinfo=UTC
+    ).isoformat()
+
+    # Save updated parent (parent_path already set at function start)
+    parent_item.save_object(dest_href=str(parent_path))
+
+    # Create child items for each season
+    for scene, season in [(result.planting_scene, "planting"), (result.harvest_scene, "harvest")]:
+        if scene:
+            child_id = f"{parent_item.id}_{season}_s2"
+            child_path = chip_dir / f"{child_id}.json"
+            child_item = pystac.Item(
+                id=child_id,
+                geometry=parent_item.geometry,
+                bbox=parent_item.bbox,
+                datetime=scene.datetime,
+                properties={
+                    "ftw:season": season,
+                    "ftw:source": "sentinel-2",
+                    "ftw:calendar_year": year,
+                },
+            )
+
+            # Set self_href before adding links (required for relative link resolution)
+            child_item.set_self_href(str(child_path))
+
+            # Copy relevant band assets
+            for band in ["red", "green", "blue", "nir", "scl", "visual"]:
+                if band in scene.item.assets:
+                    child_item.assets[band] = scene.item.assets[band].clone()
+
+            if "cloud" in scene.item.assets:
+                child_item.assets["cloud_probability"] = scene.item.assets["cloud"].clone()
+
+            # Add links
+            child_item.add_link(
+                pystac.Link(
+                    rel="derived_from",
+                    target=f"./{parent_item.id}.json",
+                    media_type="application/json",
+                )
+            )
+
+            if scene.stac_url:
+                child_item.add_link(
+                    pystac.Link(rel="via", target=scene.stac_url, media_type="application/json")
+                )
+
+            if scene.cloud_cover < 0.1:
+                child_item.properties["eo:cloud_cover"] = scene.cloud_cover
+
+            child_item.save_object(dest_href=str(child_path))
+
+
+def _run_image_download(
+    catalog_dir: Path,
+    bands: list[str],
+    resolution: float,
+) -> dict:
+    """Run image download for all S2 child items in a catalog.
+
+    Downloads imagery, generates thumbnails, and creates overlay thumbnails
+    when semantic masks are available. Updates both child and parent STAC items.
+
+    Uses shared process_downloaded_scene() for consistent behavior with
+    the standalone download-images command.
+    """
+    # Find all child S2 items
+    child_items = []
+    for subdir in catalog_dir.iterdir():
+        if subdir.is_dir() and not subdir.name.startswith("."):
+            for json_file in subdir.glob("*_s2.json"):
+                try:
+                    item = pystac.Item.from_file(str(json_file))
+                    if item.id.endswith("_planting_s2") or item.id.endswith("_harvest_s2"):
+                        child_items.append((item, json_file))
+                except Exception:
+                    pass
+
+    successful = 0
+    skipped = 0
+    failed = 0
+    band_list = list(bands)
+    can_generate_thumbnail = has_rgb_bands(band_list)
+
+    with tqdm(
+        total=len(child_items), desc="Downloading imagery", unit="scene", leave=False
+    ) as pbar:
+        for item, item_path in child_items:
+            bbox = tuple(item.bbox) if item.bbox else None
+
+            if bbox is None or "clipped" in item.assets or "image" in item.assets:
+                skipped += 1
+                pbar.update(1)
+                continue
+
+            # Determine season from item ID
+            if item.id.endswith("_planting_s2"):
+                season: Literal["planting", "harvest"] = "planting"
+            else:
+                season = "harvest"
+
+            # Construct output filename
+            base_id = item.id.replace("_planting_s2", "").replace("_harvest_s2", "")
+            output_filename = f"{base_id}_{season}_image_s2.tif"
+            output_path = item_path.parent / output_filename
+
+            try:
+                scene = SelectedScene(
+                    item=item,
+                    season=season,
+                    cloud_cover=item.properties.get("eo:cloud_cover", 0.0),
+                    datetime=item.datetime,
+                    stac_url=item.get_self_href() or "",
+                )
+
+                result = download_and_clip_scene(
+                    scene=scene,
+                    bbox=bbox,
+                    output_path=output_path,
+                    bands=band_list,
+                    resolution=resolution,
+                )
+
+                if result.success:
+                    # Use shared processing logic
+                    process_downloaded_scene(
+                        item=item,
+                        item_path=item_path,
+                        output_path=output_path,
+                        output_filename=output_filename,
+                        band_list=band_list,
+                        season=season,
+                        base_id=base_id,
+                        generate_thumbnails=can_generate_thumbnail,
+                    )
+                    successful += 1
+                else:
+                    failed += 1
+
+            except Exception:
+                failed += 1
+
+            pbar.update(1)
+
+    return {"successful": successful, "skipped": skipped, "failed": failed}
 
 
 # Alias for registration

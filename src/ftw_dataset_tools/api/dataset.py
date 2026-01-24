@@ -16,7 +16,7 @@ from ftw_dataset_tools.api.geo import (
     ensure_spatial_loaded,
     reproject,
 )
-from ftw_dataset_tools.api.masks import MaskType
+from ftw_dataset_tools.api.masks import MaskType, get_item_id
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -125,8 +125,14 @@ def create_dataset(
     # This avoids processing the entire dataset only to fail at STAC generation
     log("Checking temporal extent availability...")
     datetime_col = stac.detect_datetime_column(fields_path)
+    effective_year = year
     if datetime_col:
         log(f"Found '{datetime_col}' column for temporal extent")
+        # Extract year from datetime column for chip ID naming if not explicitly provided
+        if effective_year is None:
+            effective_year = stac.get_year_from_datetime_column(fields_path, datetime_col)
+            if effective_year:
+                log(f"Using year {effective_year} from {datetime_col} for chip naming")
     elif year is not None:
         log(f"Using --year {year} for temporal extent")
     else:
@@ -232,12 +238,14 @@ def create_dataset(
     conn.close()
 
     # Create chip directories and build mapping
+    # Directory names include year if provided (e.g., ftw-34UFF1628_2024)
     chip_dirs: dict[str, Path] = {}
     for (grid_id,) in grid_ids:
         grid_id_str = str(grid_id)
-        chip_dir = chips_base_dir / grid_id_str
+        item_id = get_item_id(grid_id_str, effective_year)
+        chip_dir = chips_base_dir / item_id
         chip_dir.mkdir(exist_ok=True)
-        chip_dirs[grid_id_str] = chip_dir
+        chip_dirs[item_id] = chip_dir
 
     log(f"Created {len(chip_dirs)} chip directories")
 
@@ -261,6 +269,7 @@ def create_dataset(
             resolution=resolution,
             num_workers=num_workers,
             chip_dirs=chip_dirs,
+            year=effective_year,
             on_progress=on_mask_progress,
             on_start=on_mask_start,
         )
@@ -277,7 +286,7 @@ def create_dataset(
         chips_file=chips_path,
         boundary_lines_file=boundary_lines_path,
         chips_base_dir=chips_base_dir,
-        year=year,
+        year=effective_year,
         on_progress=log,
     )
     log(f"Created STAC catalog with {stac_result.total_items} items")
