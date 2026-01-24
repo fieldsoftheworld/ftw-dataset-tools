@@ -459,20 +459,22 @@ assert result.exit_code == 0
 
 Before every commit:
 ```bash
-# 1. Run all checks
+# 1. Run pre-commit IN A LOOP until all checks pass
+#    Some hooks auto-fix files, which can introduce new issues
+#    that only appear on subsequent runs
 pre-commit run --all-files
+# If any "files were modified by this hook" messages appear,
+# run again until you see all "Passed"
 
-# 2. Fix any issues
-ruff check --fix .
-ruff format .
-
-# 3. Run tests
+# 2. Run tests
 pytest
 
-# 4. If tests pass, commit
+# 3. If tests pass, commit
 git add .
 git commit -m "Brief description of change"
 ```
+
+**IMPORTANT:** Always run `pre-commit run --all-files` repeatedly until ALL checks pass with no modifications. Hooks like ruff may auto-fix issues, and those fixes can trigger new linting errors (e.g., import reordering may violate TC003 rules). Never report success after a single pre-commit run if files were modified.
 
 ---
 
