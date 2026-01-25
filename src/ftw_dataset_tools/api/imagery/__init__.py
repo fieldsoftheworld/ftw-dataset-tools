@@ -37,6 +37,16 @@ from ftw_dataset_tools.api.imagery.planet_client import (
 from ftw_dataset_tools.api.imagery.planet_client import (
     VALID_BANDS as PLANET_VALID_BANDS,
 )
+from ftw_dataset_tools.api.imagery.planet_download import (
+    PlanetDownloadResult,
+    download_and_clip_planet_scene,
+)
+from ftw_dataset_tools.api.imagery.planet_download import (
+    activate_asset as activate_planet_asset,
+)
+from ftw_dataset_tools.api.imagery.planet_download import (
+    wait_for_activation as wait_for_planet_activation,
+)
 from ftw_dataset_tools.api.imagery.planet_selection import (
     PlanetScene,
     PlanetSelectionResult,
@@ -82,6 +92,7 @@ __all__ = [
     "ImageryProgressBar",
     "ImageryStats",
     "PlanetClient",
+    "PlanetDownloadResult",
     "PlanetScene",
     "PlanetSelectionResult",
     "ProcessedSceneResult",
@@ -89,9 +100,11 @@ __all__ = [
     "SelectedScene",
     "SelectionStats",
     "SelectionWorkflowResult",
+    "activate_planet_asset",
     "calculate_pixel_cloud_cover",
     "clear_chip_selections",
     "create_child_items_from_selection",
+    "download_and_clip_planet_scene",
     "download_and_clip_scene",
     "download_imagery_for_catalog",
     "find_chip_items",
@@ -105,4 +118,5 @@ __all__ = [
     "select_imagery_for_catalog",
     "select_planet_scenes_for_chip",
     "select_scenes_for_chip",
+    "wait_for_planet_activation",
 ]
