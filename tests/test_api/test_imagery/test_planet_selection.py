@@ -44,10 +44,13 @@ class TestPlanetClient:
         client = PlanetClient()
         assert client.api_key == "env_test_key"
 
-    def test_init_no_key_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test that missing API key raises ValueError."""
+    @patch.object(PlanetClient, "_get_cli_auth", return_value=None)
+    def test_init_no_auth_raises(
+        self, _mock_cli_auth: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that missing authentication raises ValueError."""
         monkeypatch.delenv("PL_API_KEY", raising=False)
-        with pytest.raises(ValueError, match="Planet API key required"):
+        with pytest.raises(ValueError, match="Planet authentication required"):
             PlanetClient()
 
     def test_constants(self) -> None:

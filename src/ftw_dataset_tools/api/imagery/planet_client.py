@@ -7,11 +7,11 @@ for imagery selection and download operations.
 from __future__ import annotations
 
 import os
-import subprocess
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from planet import Planet
+    from planet.auth import Auth
     from pystac_client import Client
 
 __all__ = [
@@ -52,57 +52,75 @@ class PlanetClient:
     - Planet Data API for coverage estimation and asset operations
     - Planet Tiles API for thumbnail generation
 
-    Authentication is via API key, either passed directly or from PL_API_KEY env var.
+    Authentication supports:
+    - Explicit API key (via parameter or PL_API_KEY env var)
+    - OAuth via Planet CLI authentication (planet auth login)
     """
 
     def __init__(self, api_key: str | None = None) -> None:
-        """Initialize Planet client with API key.
+        """Initialize Planet client.
 
         Args:
-            api_key: Planet API key. If None, reads from PL_API_KEY env var,
-                    or tries to get it from Planet CLI authentication.
+            api_key: Planet API key. If None, uses PL_API_KEY env var or
+                    Planet CLI authentication (OAuth).
 
         Raises:
-            ValueError: If no API key is provided or found.
+            ValueError: If no authentication method is available.
         """
-        self._api_key = api_key or os.environ.get("PL_API_KEY") or self._get_api_key_from_cli()
-        if not self._api_key:
-            raise ValueError(
-                "Planet API key required. Either:\n"
-                "  - Pass api_key parameter\n"
-                "  - Set PL_API_KEY environment variable\n"
-                "  - Authenticate with: planet auth init"
-            )
+        self._api_key = api_key or os.environ.get("PL_API_KEY")
+        self._auth: Auth | None = None
         self._sdk_client: Planet | None = None
         self._stac_client: Client | None = None
 
+        # If no explicit API key, try to get auth from Planet CLI
+        if not self._api_key:
+            self._auth = self._get_cli_auth()
+            if not self._auth:
+                raise ValueError(
+                    "Planet authentication required. Either:\n"
+                    "  - Pass api_key parameter\n"
+                    "  - Set PL_API_KEY environment variable\n"
+                    "  - Authenticate with: planet auth login"
+                )
+
     @staticmethod
-    def _get_api_key_from_cli() -> str | None:
-        """Try to get API key from Planet CLI authentication.
+    def _get_cli_auth() -> Auth | None:
+        """Try to get auth from Planet CLI.
 
         Returns:
-            API key string if available, None otherwise.
+            Auth object if available, None otherwise.
         """
         try:
-            result = subprocess.run(
-                ["planet", "auth", "print-api-key"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            pass
-        return None
+            from planet.auth import Auth
+
+            return Auth.from_user_default_session()
+        except Exception:
+            return None
 
     @property
-    def api_key(self) -> str:
-        """Return the API key (for authenticated requests)."""
+    def api_key(self) -> str | None:
+        """Return the API key if using API key auth, None for OAuth."""
         return self._api_key
 
+    def _get_auth_header(self) -> dict[str, str]:
+        """Get authorization header for HTTP requests.
+
+        Returns:
+            Dict with Authorization header.
+        """
+        if self._api_key:
+            return {"Authorization": f"api-key {self._api_key}"}
+
+        # For OAuth, get bearer token from auth flow
+        import httpx
+
+        request = httpx.Request("GET", "https://api.planet.com/")
+        flow = self._auth.sync_auth_flow(request)
+        authed_request = next(flow)
+        return {"Authorization": authed_request.headers["authorization"]}
+
     def validate_auth(self) -> bool:
-        """Validate API key by making a simple API call.
+        """Validate authentication by making a simple API call.
 
         Returns:
             True if authentication is valid.
@@ -112,10 +130,10 @@ class PlanetClient:
         """
         import httpx
 
-        # Simple validation: check if we can access the STAC API root
+        headers = self._get_auth_header()
         response = httpx.get(
             PLANET_STAC_URL,
-            auth=(self._api_key, ""),
+            headers=headers,
             timeout=30.0,
         )
         response.raise_for_status()
@@ -132,7 +150,7 @@ class PlanetClient:
 
             self._stac_client = pystac_client.Client.open(
                 PLANET_STAC_URL,
-                headers={"Authorization": f"api-key {self._api_key}"},
+                headers=self._get_auth_header(),
             )
         return self._stac_client
 
@@ -145,5 +163,9 @@ class PlanetClient:
         if self._sdk_client is None:
             from planet import Planet
 
-            self._sdk_client = Planet(api_key=self._api_key)
+            if self._api_key:
+                self._sdk_client = Planet(api_key=self._api_key)
+            else:
+                # Let SDK auto-detect auth from CLI
+                self._sdk_client = Planet()
         return self._sdk_client
