@@ -7,6 +7,7 @@ for imagery selection and download operations.
 from __future__ import annotations
 
 import os
+import subprocess
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -58,18 +59,42 @@ class PlanetClient:
         """Initialize Planet client with API key.
 
         Args:
-            api_key: Planet API key. If None, reads from PL_API_KEY env var.
+            api_key: Planet API key. If None, reads from PL_API_KEY env var,
+                    or tries to get it from Planet CLI authentication.
 
         Raises:
-            ValueError: If no API key is provided or found in environment.
+            ValueError: If no API key is provided or found.
         """
-        self._api_key = api_key or os.environ.get("PL_API_KEY")
+        self._api_key = api_key or os.environ.get("PL_API_KEY") or self._get_api_key_from_cli()
         if not self._api_key:
             raise ValueError(
-                "Planet API key required. Pass api_key or set PL_API_KEY environment variable."
+                "Planet API key required. Either:\n"
+                "  - Pass api_key parameter\n"
+                "  - Set PL_API_KEY environment variable\n"
+                "  - Authenticate with: planet auth init"
             )
         self._sdk_client: Planet | None = None
         self._stac_client: Client | None = None
+
+    @staticmethod
+    def _get_api_key_from_cli() -> str | None:
+        """Try to get API key from Planet CLI authentication.
+
+        Returns:
+            API key string if available, None otherwise.
+        """
+        try:
+            result = subprocess.run(
+                ["planet", "auth", "print-api-key"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass
+        return None
 
     @property
     def api_key(self) -> str:
