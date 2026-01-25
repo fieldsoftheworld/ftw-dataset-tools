@@ -6,11 +6,14 @@ pattern as the Sentinel-2 scene_selection.py module.
 
 from __future__ import annotations
 
+import io
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
 import httpx
+from PIL import Image
 
 from ftw_dataset_tools.api.imagery.crop_calendar import (
     CropCalendarDates,
@@ -19,7 +22,6 @@ from ftw_dataset_tools.api.imagery.crop_calendar import (
 from ftw_dataset_tools.api.imagery.planet_client import (
     DEFAULT_BUFFER_DAYS,
     DEFAULT_NUM_ITERATIONS,
-    PLANET_TILES_URL,
     PlanetClient,
 )
 
@@ -186,38 +188,201 @@ def get_clear_coverage(
         return 0.0  # Conservative fallback
 
 
+def _lat_lon_to_tile(lat: float, lon: float, zoom: int) -> tuple[int, int]:
+    """Convert lat/lon to XYZ tile coordinates."""
+    lat_rad = math.radians(lat)
+    n = 2**zoom
+    x = int((lon + 180.0) / 360.0 * n)
+    y = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+    return x, y
+
+
+def _tile_bounds(x: int, y: int, zoom: int) -> tuple[float, float, float, float]:
+    """Get lat/lon bounds of a tile (minx, miny, maxx, maxy)."""
+    n = 2**zoom
+
+    def tile_to_lon(x_: int) -> float:
+        return x_ / n * 360.0 - 180.0
+
+    def tile_to_lat(y_: int) -> float:
+        lat_rad = math.atan(math.sinh(math.pi * (1 - 2 * y_ / n)))
+        return math.degrees(lat_rad)
+
+    minx = tile_to_lon(x)
+    maxx = tile_to_lon(x + 1)
+    maxy = tile_to_lat(y)  # Note: y increases downward
+    miny = tile_to_lat(y + 1)
+    return minx, miny, maxx, maxy
+
+
+def _calculate_zoom_for_bbox(
+    bbox: tuple[float, float, float, float],
+    target_size: int = 256,
+) -> int:
+    """Calculate appropriate zoom level for a bbox to get ~target_size pixels."""
+    minx, miny, maxx, maxy = bbox
+    # Use latitude center for Mercator distortion
+    lat_center = (miny + maxy) / 2
+
+    # Width of bbox in degrees
+    bbox_width_deg = maxx - minx
+
+    # At zoom 0, full world (360 deg) = 256 pixels
+    # Each zoom level doubles resolution
+    # We want: bbox_width_deg * (256 * 2^zoom / 360) ≈ target_size
+    # So: zoom ≈ log2(target_size * 360 / (256 * bbox_width_deg))
+
+    if bbox_width_deg <= 0:
+        return 15  # Default for point
+
+    # Adjust for Mercator distortion at latitude
+    cos_lat = math.cos(math.radians(lat_center))
+    effective_width = bbox_width_deg * cos_lat
+
+    zoom = math.log2(target_size * 360 / (256 * effective_width))
+    # Clamp to reasonable range
+    return max(10, min(18, int(zoom)))
+
+
 def generate_thumbnail(
     client: PlanetClient,
     item_id: str,
     output_path: Path,
-    width: int = 256,
+    bbox: tuple[float, float, float, float] | None = None,
+    size: int = 256,
 ) -> Path | None:
-    """Generate thumbnail via Planet tiles endpoint.
+    """Generate thumbnail via Planet XYZ tiles endpoint, clipped to bbox.
 
     Args:
         client: Authenticated Planet client
         item_id: Planet scene ID
         output_path: Path to save the thumbnail
-        width: Thumbnail width in pixels
+        bbox: Bounding box (minx, miny, maxx, maxy) in EPSG:4326. If None,
+              falls back to scene-level thumbnail.
+        size: Target thumbnail size in pixels (default 256)
 
     Returns:
         Path to saved thumbnail, or None on failure
     """
-    # Planet Tiles API for thumbnails
-    url = f"{PLANET_TILES_URL}PSScene/{item_id}/thumb"
+    if bbox is None:
+        # Fall back to scene thumbnail endpoint
+        url = f"https://tiles.planet.com/data/v1/PSScene/{item_id}/thumb"
+        try:
+            headers = client._get_auth_header()
+            response = httpx.get(
+                url,
+                params={"width": size},
+                headers=headers,
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(response.content)
+            return output_path
+        except Exception:
+            return None
+
+    minx, miny, maxx, maxy = bbox
+
+    # Calculate zoom level for desired size
+    zoom = _calculate_zoom_for_bbox(bbox, size)
+
+    # Get tile range covering the bbox
+    x_min, y_max = _lat_lon_to_tile(miny, minx, zoom)  # SW corner
+    x_max, y_min = _lat_lon_to_tile(maxy, maxx, zoom)  # NE corner
+
+    # Ensure proper ordering
+    if x_min > x_max:
+        x_min, x_max = x_max, x_min
+    if y_min > y_max:
+        y_min, y_max = y_max, y_min
+
+    # Limit to reasonable number of tiles (max 4x4)
+    if (x_max - x_min + 1) > 4 or (y_max - y_min + 1) > 4:
+        # Reduce zoom to fit in 4x4
+        while (x_max - x_min + 1) > 4 or (y_max - y_min + 1) > 4:
+            zoom -= 1
+            x_min, y_max = _lat_lon_to_tile(miny, minx, zoom)
+            x_max, y_min = _lat_lon_to_tile(maxy, maxx, zoom)
+            if x_min > x_max:
+                x_min, x_max = x_max, x_min
+            if y_min > y_max:
+                y_min, y_max = y_max, y_min
+
+    # Fetch tiles and stitch
+    tile_size = 256
+    num_tiles_x = x_max - x_min + 1
+    num_tiles_y = y_max - y_min + 1
+
+    # Create combined image
+    combined = Image.new("RGB", (num_tiles_x * tile_size, num_tiles_y * tile_size))
+
+    headers = client._get_auth_header()
+    base_url = "https://tiles.planet.com/data/v1"
 
     try:
-        response = httpx.get(
-            url,
-            params={"width": width},
-            auth=(client.api_key, ""),
-            timeout=30.0,
-        )
-        response.raise_for_status()
+        for ty in range(y_min, y_max + 1):
+            for tx in range(x_min, x_max + 1):
+                tile_url = f"{base_url}/PSScene/{item_id}/{zoom}/{tx}/{ty}.png"
+                response = httpx.get(
+                    tile_url,
+                    headers=headers,
+                    timeout=30.0,
+                )
+                response.raise_for_status()
 
+                tile_img = Image.open(io.BytesIO(response.content))
+                # Position in combined image
+                px = (tx - x_min) * tile_size
+                py = (ty - y_min) * tile_size
+                combined.paste(tile_img, (px, py))
+
+        # Get bounds of the tile grid
+        grid_bounds = (
+            _tile_bounds(x_min, y_min, zoom)[0],  # minx from first tile
+            _tile_bounds(x_min, y_max, zoom)[1],  # miny from last row
+            _tile_bounds(x_max, y_min, zoom)[2],  # maxx from last col
+            _tile_bounds(x_min, y_min, zoom)[3],  # maxy from first row
+        )
+        grid_minx, grid_miny, grid_maxx, grid_maxy = grid_bounds
+
+        # Calculate pixel coordinates for bbox within the combined image
+        img_width = num_tiles_x * tile_size
+        img_height = num_tiles_y * tile_size
+
+        # Convert bbox to pixel coordinates
+        px_per_deg_x = img_width / (grid_maxx - grid_minx)
+        px_per_deg_y = img_height / (grid_maxy - grid_miny)
+
+        crop_left = int((minx - grid_minx) * px_per_deg_x)
+        crop_right = int((maxx - grid_minx) * px_per_deg_x)
+        crop_top = int((grid_maxy - maxy) * px_per_deg_y)
+        crop_bottom = int((grid_maxy - miny) * px_per_deg_y)
+
+        # Clamp to image bounds
+        crop_left = max(0, crop_left)
+        crop_top = max(0, crop_top)
+        crop_right = min(img_width, crop_right)
+        crop_bottom = min(img_height, crop_bottom)
+
+        # Crop to bbox
+        cropped = combined.crop((crop_left, crop_top, crop_right, crop_bottom))
+
+        # Resize to target size
+        if cropped.width > 0 and cropped.height > 0:
+            # Maintain aspect ratio
+            scale = min(size / cropped.width, size / cropped.height)
+            new_width = max(1, int(cropped.width * scale))
+            new_height = max(1, int(cropped.height * scale))
+            thumbnail = cropped.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        else:
+            thumbnail = cropped
+
+        # Save
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(response.content)
+        thumbnail.save(output_path, "PNG")
         return output_path
+
     except Exception:
         return None
 

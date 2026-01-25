@@ -187,9 +187,10 @@ def _create_planet_season_child_item(
     child_id = f"{parent_item.id}_{season}_planet"
     child_path = chip_dir / f"{child_id}.json"
 
-    # Generate thumbnail
+    # Generate thumbnail clipped to chip bounds
     thumb_path = chip_dir / f"{child_id}_thumb.png"
-    thumb_result = generate_thumbnail(client, scene.id, thumb_path)
+    chip_bbox = tuple(parent_item.bbox) if parent_item.bbox else None
+    thumb_result = generate_thumbnail(client, scene.id, thumb_path, bbox=chip_bbox)
 
     # Create child item
     child_item = pystac.Item(

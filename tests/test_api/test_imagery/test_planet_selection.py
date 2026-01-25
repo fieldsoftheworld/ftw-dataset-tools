@@ -218,10 +218,10 @@ class TestGetClearCoverage:
 class TestGenerateThumbnail:
     """Tests for generate_thumbnail function."""
 
-    def test_returns_none_on_error(self, tmp_path: Path) -> None:
-        """Test that function returns None on API error."""
+    def test_returns_none_on_error_no_bbox(self, tmp_path: Path) -> None:
+        """Test that function returns None on API error (no bbox)."""
         client = MagicMock(spec=PlanetClient)
-        client.api_key = "test_key"
+        client._get_auth_header.return_value = {"Authorization": "api-key test_key"}
 
         with patch("httpx.get") as mock_get:
             mock_get.side_effect = Exception("API error")
@@ -229,10 +229,10 @@ class TestGenerateThumbnail:
 
         assert result is None
 
-    def test_saves_thumbnail_on_success(self, tmp_path: Path) -> None:
-        """Test that function saves thumbnail on success."""
+    def test_saves_thumbnail_on_success_no_bbox(self, tmp_path: Path) -> None:
+        """Test that function saves thumbnail on success (no bbox, falls back to /thumb)."""
         client = MagicMock(spec=PlanetClient)
-        client.api_key = "test_key"
+        client._get_auth_header.return_value = {"Authorization": "api-key test_key"}
 
         mock_response = MagicMock()
         mock_response.content = b"fake png data"
@@ -246,6 +246,19 @@ class TestGenerateThumbnail:
         assert result == output_path
         assert output_path.exists()
         assert output_path.read_bytes() == b"fake png data"
+
+    def test_returns_none_on_error_with_bbox(self, tmp_path: Path) -> None:
+        """Test that function returns None on API error (with bbox)."""
+        client = MagicMock(spec=PlanetClient)
+        client._get_auth_header.return_value = {"Authorization": "api-key test_key"}
+
+        bbox = (139.0, 35.0, 139.1, 35.1)
+
+        with patch("httpx.get") as mock_get:
+            mock_get.side_effect = Exception("API error")
+            result = generate_thumbnail(client, "test_scene", tmp_path / "thumb.png", bbox=bbox)
+
+        assert result is None
 
 
 class TestSelectPlanetScenesForChip:
