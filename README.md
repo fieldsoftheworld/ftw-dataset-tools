@@ -69,8 +69,9 @@ ftwd create-dataset fields.parquet --split-type block3x3 --min-coverage 1.0 --re
 │   ├── items.parquet                # STAC items as parquet
 │   └── {grid_id}/                   # Individual STAC item JSON files
 └── label_masks/
-    ├── instance/                    # Instance segmentation masks
-    ├── semantic_2class/            # 2-class semantic masks (field/boundary)
+    ├── instance/                    # Instance segmentation masks (single-band with IDs)
+    ├── instance_coco/              # COCO-format instance masks (multi-band binary)
+    ├── semantic_2class/            # 2-class semantic masks (field/background)
     └── semantic_3class/            # 3-class semantic masks (field/boundary/background)
 ```
 
@@ -109,17 +110,26 @@ Create raster masks from vector boundaries for each grid cell. Outputs Cloud Opt
 # Create semantic 2-class masks
 ftwd create-masks chips.parquet fields.parquet boundary_lines.parquet --field-dataset austria
 
-# Create instance masks
+# Create instance masks (single-band with IDs)
 ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset france --mask-type instance
+
+# Create COCO-format instance masks (multi-band binary masks)
+ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset france --mask-type instance_coco
 
 # Custom settings
 ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spain --min-coverage 1.0 --resolution 5.0
 ```
 
+**Mask Types:**
+- `instance` - Single-band mask with instance IDs burned in (pixel value = instance ID)
+- `instance_coco` - Multi-band mask with one binary mask per instance (COCO format, compatible with Detectron2)
+- `semantic_2_class` - Binary semantic mask (field vs. background)
+- `semantic_3_class` - 3-class semantic mask (field, boundary, background)
+
 **Options:**
 - `-o, --output-dir` - Output directory (default: `./masks`)
 - `--field-dataset` - Dataset name for output filenames (required)
-- `--mask-type` - Type of mask: `instance`, `semantic_2_class`, or `semantic_3_class` (default: `semantic_2_class`)
+- `--mask-type` - Type of mask: `instance`, `instance_coco`, `semantic_2_class`, or `semantic_3_class` (default: `semantic_2_class`)
 - `--grid-id-col` - Column name for grid cell ID (default: `id`)
 - `--coverage-col` - Column name for coverage percentage (default: `field_coverage_pct`)
 - `--min-coverage` - Minimum coverage to process (default: 0.01)
