@@ -33,7 +33,7 @@ from ftw_dataset_tools.api.masks import MaskType
 )
 @click.option(
     "--mask-type",
-    type=click.Choice(["instance", "semantic_2_class", "semantic_3_class"]),
+    type=click.Choice(["instance", "instance_coco", "semantic_2_class", "semantic_3_class"]),
     default="semantic_2_class",
     show_default=True,
     help="Type of mask to create.",
