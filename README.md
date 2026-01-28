@@ -37,6 +37,9 @@ ftwd create-dataset fields.parquet --field-dataset austria --split-type block3x3
 # Custom split percentages
 ftwd create-dataset fields.parquet --split-type random-uniform --split-percents 70 20 10
 
+# Generate only specific mask types
+ftwd create-dataset fields.parquet --split-type block3x3 --mask-types semantic_2_class,semantic_3_class
+
 # If fields lack determination_datetime column, specify year
 ftwd create-dataset fields.parquet --split-type block3x3 --year 2023
 
@@ -47,6 +50,7 @@ ftwd create-dataset fields.parquet --split-type block3x3 --min-coverage 1.0 --re
 **Options:**
 - `--split-type` - **Required.** Split strategy: `random-uniform` (random assignment of chips) or `block3x3` (3x3 blocks of chips assigned together for spatial coherence)
 - `--split-percents` - Train/val/test split percentages as three integers that sum to 100 (default: 80 10 10)
+- `--mask-types` - Comma-separated list of mask types to generate: `instance`, `semantic_2_class`, `semantic_3_class` (default: all three)
 - `-o, --output-dir` - Output directory (defaults to `{input_stem}-dataset/`)
 - `--field-dataset` - Dataset name for output filenames (defaults to input filename stem)
 - `--year` - Year for temporal extent (only required if fields lack `determination_datetime` column)

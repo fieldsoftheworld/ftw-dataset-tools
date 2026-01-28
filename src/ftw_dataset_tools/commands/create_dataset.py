@@ -136,6 +136,13 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     show_default=True,
     help="Days to add to buffer on each expansion.",
 )
+@click.option(
+    "--mask-types",
+    type=str,
+    default="instance,semantic_2_class,semantic_3_class",
+    show_default=True,
+    help="Comma-separated list of mask types to generate (instance, semantic_2_class, semantic_3_class).",
+)
 def create_dataset_cmd(
     fields_file: str,
     output_dir: str | None,
@@ -154,6 +161,7 @@ def create_dataset_cmd(
     buffer_days: int,
     num_buffer_expansions: int,
     buffer_expansion_size: int,
+    mask_types: str,
 ) -> None:
     """Create a complete training dataset from a fields file.
 
@@ -161,8 +169,9 @@ def create_dataset_cmd(
 
     \b
     - Chips file with field coverage statistics
+    - Train/val/test split assignments
     - Boundary lines file
-    - All three mask types (instance, semantic_2class, semantic_3class)
+    - Mask types (instance, semantic_2_class, semantic_3_class) - configurable via --mask-types
     - STAC static catalog with items for each chip
 
     If the input file is not in EPSG:4326, it will be automatically reprojected.
@@ -193,9 +202,10 @@ def create_dataset_cmd(
 
     \b
     Examples:
-        ftwd create-dataset austria_fields.parquet --year 2023
-        ftwd create-dataset fields.parquet --field-dataset austria -o ./austria_dataset --year 2022
-        ftwd create-dataset fields.parquet --min-coverage 1.0 --resolution 5.0 --year 2024
+        ftwd create-dataset austria_fields.parquet --split-type random-uniform --year 2023
+        ftwd create-dataset fields.parquet --split-type block3x3 --field-dataset austria -o ./austria_dataset --year 2022
+        ftwd create-dataset fields.parquet --split-type random-uniform --min-coverage 1.0 --resolution 5.0 --year 2024
+        ftwd create-dataset fields.parquet --split-type block3x3 --mask-types semantic_2_class,semantic_3_class --year 2023
     """
     # Derive output directory from input filename if not specified
     if output_dir is None:
@@ -248,6 +258,16 @@ def create_dataset_cmd(
         except ValueError as err:
             raise click.BadParameter(str(err), param_hint="split-percents") from err
 
+        # Parse and validate mask types
+        mask_types_list = [mt.strip() for mt in mask_types.split(",")]
+        valid_mask_types = {"instance", "semantic_2_class", "semantic_3_class"}
+        for mask_type in mask_types_list:
+            if mask_type not in valid_mask_types:
+                raise click.BadParameter(
+                    f"Invalid mask type '{mask_type}'. Must be one of: {', '.join(sorted(valid_mask_types))}",
+                    param_hint="mask-types"
+                )
+
         result = dataset.create_dataset(
             fields_file=fields_file,
             output_dir=output_dir,
@@ -259,6 +279,7 @@ def create_dataset_cmd(
             num_workers=num_workers,
             skip_reproject=skip_reproject,
             year=year,
+            mask_types=mask_types_list,
             on_progress=on_progress,
             on_mask_progress=on_mask_progress,
             on_mask_start=on_mask_start,

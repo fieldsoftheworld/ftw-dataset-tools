@@ -57,6 +57,7 @@ def create_dataset(
     num_workers: int | None = None,
     skip_reproject: bool = False,
     year: int | None = None,
+    mask_types: list[str] | None = None,
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int], None] | None = None,
@@ -83,6 +84,7 @@ def create_dataset(
         num_workers: Number of parallel workers for mask creation
         skip_reproject: If True, fail instead of reprojecting non-4326 inputs
         year: Year for temporal extent (required if fields lack determination_datetime)
+        mask_types: List of mask types to generate (e.g., ["instance", "semantic_2_class"]). If None, generates all types.
         on_progress: Optional callback for progress messages
         on_mask_progress: Optional callback (current, total) for mask creation progress
         on_mask_start: Optional callback (total_grids, filtered_grids) for mask start
@@ -249,13 +251,25 @@ def create_dataset(
 
     log(f"Created {len(chip_dirs)} chip directories")
 
+    # Default to all mask types if not specified
+    if mask_types is None:
+        mask_types = ["instance", "semantic_2_class", "semantic_3_class"]
+
+    # Map string names to enum values and subdirectory names
     mask_type_mapping = [
-        (MaskType.INSTANCE, "instance"),
-        (MaskType.SEMANTIC_2_CLASS, "semantic_2class"),
-        (MaskType.SEMANTIC_3_CLASS, "semantic_3class"),
+        (MaskType.INSTANCE, "instance", "instance"),
+        (MaskType.SEMANTIC_2_CLASS, "semantic_2class", "semantic_2_class"),
+        (MaskType.SEMANTIC_3_CLASS, "semantic_3class", "semantic_3_class"),
     ]
 
-    for mask_type, subdir_name in mask_type_mapping:
+    # Filter to only requested mask types
+    requested_masks = [
+        (mask_type, subdir_name)
+        for mask_type, subdir_name, type_name in mask_type_mapping
+        if type_name in mask_types
+    ]
+
+    for mask_type, subdir_name in requested_masks:
         log(f"Creating {mask_type.value} masks...")
 
         mask_result = masks.create_masks(
