@@ -1,6 +1,25 @@
 """Tests for the masks API."""
 
 
+class TestMaskType:
+    """Tests for MaskType enum."""
+
+    def test_mask_type_has_instance_coco(self) -> None:
+        """Test that INSTANCE_COCO is a valid mask type."""
+        from ftw_dataset_tools.api.masks import MaskType
+
+        assert hasattr(MaskType, "INSTANCE_COCO")
+        assert MaskType.INSTANCE_COCO.value == "instance_coco"
+
+    def test_all_mask_types(self) -> None:
+        """Test all mask types are present."""
+        from ftw_dataset_tools.api.masks import MaskType
+
+        expected_types = {"instance", "instance_coco", "semantic_2_class", "semantic_3_class"}
+        actual_types = {mt.value for mt in MaskType}
+        assert actual_types == expected_types
+
+
 class TestMaskFilenameConvention:
     """Tests for mask filename generation."""
 
@@ -39,6 +58,20 @@ class TestMaskFilenameConvention:
 
         filename = get_mask_filename("grid_001", MaskType.SEMANTIC_2_CLASS, year=2023)
         assert filename == "grid_001_2023_semantic_2_class.tif"
+
+    def test_mask_filename_instance_coco(self) -> None:
+        """Test COCO instance mask filename."""
+        from ftw_dataset_tools.api.masks import MaskType, get_mask_filename
+
+        filename = get_mask_filename("grid_001", MaskType.INSTANCE_COCO)
+        assert filename == "grid_001_instance_coco.tif"
+
+    def test_mask_filename_instance_coco_with_year(self) -> None:
+        """Test COCO instance mask filename with year."""
+        from ftw_dataset_tools.api.masks import MaskType, get_mask_filename
+
+        filename = get_mask_filename("ftw-34UFF1628", MaskType.INSTANCE_COCO, year=2024)
+        assert filename == "ftw-34UFF1628_2024_instance_coco.tif"
 
 
 class TestGetItemId:

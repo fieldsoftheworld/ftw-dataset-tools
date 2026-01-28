@@ -28,6 +28,7 @@ class MaskType(str, Enum):
     """Type of mask to create."""
 
     INSTANCE = "instance"
+    INSTANCE_COCO = "instance_coco"
     SEMANTIC_2_CLASS = "semantic_2_class"
     SEMANTIC_3_CLASS = "semantic_3_class"
 
@@ -176,6 +177,133 @@ def _wkt_to_geometry(wkt: str):
     return shapely_wkt.loads(wkt)
 
 
+def _create_coco_instance_mask(
+    conn: duckdb.DuckDBPyConnection,
+    grid_id: str,
+    bounds: tuple[float, float, float, float],
+    crs: CRS,
+    boundaries_path: Path,
+    boundary_lines_path: Path,
+    boundaries_geom_col: str,
+    boundary_lines_geom_col: str,
+    output_path: Path,
+    transform,
+    width: int,
+    height: int,
+    id_col: str | None,
+) -> MaskResult:
+    """
+    Create a COCO-format instance mask as a multi-band GeoTIFF.
+
+    Each band represents one instance as a binary mask (0 or 1).
+    This format is compatible with instance segmentation models like Detectron2.
+
+    Band descriptions are set to "instance_{id}" to preserve the mapping between
+    band indices and instance IDs. Users can read these descriptions using
+    rasterio: `dataset.descriptions` or `dataset.tags(band_idx)`.
+
+    Args:
+        conn: DuckDB connection
+        grid_id: Grid cell ID
+        bounds: Bounding box (minx, miny, maxx, maxy)
+        crs: Coordinate reference system
+        boundaries_path: Path to boundaries parquet file
+        boundary_lines_path: Path to boundary lines parquet file
+        boundaries_geom_col: Geometry column name in boundaries file
+        boundary_lines_geom_col: Geometry column name in boundary lines file
+        output_path: Output path for the mask file
+        transform: Rasterio transform
+        width: Raster width in pixels
+        height: Raster height in pixels
+        id_col: Column name for instance IDs
+
+    Returns:
+        MaskResult with information about the created mask
+    """
+    # Get boundaries within bounds with IDs
+    if not id_col:
+        # If no ID column, fall back to generating sequential IDs
+        boundaries = _get_geometries_in_bounds(conn, boundaries_path, boundaries_geom_col, bounds)
+        # Generate sequential IDs
+        boundaries_with_ids = [(i + 1, wkt) for i, (wkt,) in enumerate(boundaries)]
+    else:
+        boundaries = _get_geometries_in_bounds(
+            conn, boundaries_path, boundaries_geom_col, bounds, id_col=id_col
+        )
+        boundaries_with_ids = [(int(id_val), wkt) for id_val, wkt in boundaries]
+
+    if not boundaries_with_ids:
+        # No instances, create empty single-band mask
+        num_bands = 1
+        masks = np.zeros((num_bands, height, width), dtype=np.uint8)
+    else:
+        # Create one band per instance
+        num_bands = len(boundaries_with_ids)
+        masks = np.zeros((num_bands, height, width), dtype=np.uint8)
+
+        # Rasterize each instance to its own band
+        for band_idx, (_instance_id, wkt) in enumerate(boundaries_with_ids):
+            geom = _wkt_to_geometry(wkt)
+            # Create binary mask for this instance
+            features.rasterize(
+                [(geom, 1)],
+                out=masks[band_idx],
+                transform=transform,
+                all_touched=False,
+            )
+
+    # Get boundary lines and burn them as 0 in all bands
+    boundary_lines = _get_geometries_in_bounds(
+        conn, boundary_lines_path, boundary_lines_geom_col, bounds
+    )
+
+    if boundary_lines:
+        # Burn boundary lines as 0 (background) in all bands
+        for band_idx in range(num_bands):
+            features.rasterize(
+                [(_wkt_to_geometry(wkt), 0) for (wkt,) in boundary_lines],
+                out=masks[band_idx],
+                transform=transform,
+                all_touched=True,
+            )
+
+    # Write as multi-band GeoTIFF first
+    temp_path = output_path.with_suffix(".tmp.tif")
+    with rasterio.open(
+        temp_path,
+        "w",
+        driver="GTiff",
+        height=height,
+        width=width,
+        count=num_bands,
+        dtype=np.uint8,
+        crs=crs,
+        transform=transform,
+        nodata=0,
+        tiled=True,
+        blockxsize=256,
+        blockysize=256,
+        compress="deflate",
+    ) as dst:
+        # Write each band with description containing instance ID
+        for band_idx in range(num_bands):
+            dst.write(masks[band_idx], band_idx + 1)
+            if boundaries_with_ids:
+                instance_id = boundaries_with_ids[band_idx][0]
+                dst.set_band_description(band_idx + 1, f"instance_{instance_id}")
+
+    # Convert to COG
+    _convert_to_cog(temp_path, output_path)
+    temp_path.unlink()
+
+    return MaskResult(
+        grid_id=grid_id,
+        output_path=output_path,
+        width=width,
+        height=height,
+    )
+
+
 def _create_single_mask(
     conn: duckdb.DuckDBPyConnection,
     grid_id: str,
@@ -215,6 +343,24 @@ def _create_single_mask(
 
     # Set data type based on mask type
     dtype = np.uint32 if mask_type == MaskType.INSTANCE else np.uint8
+
+    # Handle INSTANCE_COCO format separately
+    if mask_type == MaskType.INSTANCE_COCO:
+        return _create_coco_instance_mask(
+            conn=conn,
+            grid_id=grid_id,
+            bounds=bounds,
+            crs=crs,
+            boundaries_path=boundaries_path,
+            boundary_lines_path=boundary_lines_path,
+            boundaries_geom_col=boundaries_geom_col,
+            boundary_lines_geom_col=boundary_lines_geom_col,
+            output_path=output_path,
+            transform=transform,
+            width=width,
+            height=height,
+            id_col=id_col,
+        )
 
     # Initialize mask
     mask = np.zeros((height, width), dtype=dtype)
@@ -513,7 +659,7 @@ def create_masks(
 
     # Determine ID column for instance masks
     id_col_for_instance = None
-    if mask_type == MaskType.INSTANCE:
+    if mask_type in (MaskType.INSTANCE, MaskType.INSTANCE_COCO):
         # Try to find an ID column in boundaries file
         try:
             schema = conn.execute(f"DESCRIBE SELECT * FROM '{boundaries_path}'").fetchall()

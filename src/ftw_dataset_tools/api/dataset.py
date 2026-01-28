@@ -251,6 +251,7 @@ def create_dataset(
 
     mask_type_mapping = [
         (MaskType.INSTANCE, "instance"),
+        (MaskType.INSTANCE_COCO, "instance_coco"),
         (MaskType.SEMANTIC_2_CLASS, "semantic_2class"),
         (MaskType.SEMANTIC_3_CLASS, "semantic_3class"),
     ]

@@ -353,6 +353,7 @@ def _create_chip_item(
     mask_assets = {}
     mask_type_map = {
         "instance": MaskType.INSTANCE,
+        "instance_coco": MaskType.INSTANCE_COCO,
         "semantic_2class": MaskType.SEMANTIC_2_CLASS,
         "semantic_3class": MaskType.SEMANTIC_3_CLASS,
     }
@@ -423,6 +424,7 @@ def _get_mask_title(mask_name: str) -> str:
     """Get human-readable title for mask type."""
     titles = {
         "instance": "Instance segmentation mask",
+        "instance_coco": "COCO-format instance segmentation mask (multi-band binary masks)",
         "semantic_2class": "Binary semantic mask (field/background)",
         "semantic_3class": "3-class semantic mask (field/boundary/background)",
     }
