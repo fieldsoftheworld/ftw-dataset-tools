@@ -58,6 +58,7 @@ def create_dataset(
     skip_reproject: bool = False,
     year: int | None = None,
     mask_types: list[str] | None = None,
+    presence_only: bool = False,
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int], None] | None = None,
@@ -85,6 +86,7 @@ def create_dataset(
         skip_reproject: If True, fail instead of reprojecting non-4326 inputs
         year: Year for temporal extent (required if fields lack determination_datetime)
         mask_types: List of mask types to generate (e.g., ["instance", "semantic_2_class"]). If None, generates all types.
+        presence_only: If True, background class value is 3 instead of 0 (for presence-only labels)
         on_progress: Optional callback for progress messages
         on_mask_progress: Optional callback (current, total) for mask creation progress
         on_mask_start: Optional callback (total_grids, filtered_grids) for mask start
@@ -284,6 +286,7 @@ def create_dataset(
             num_workers=num_workers,
             chip_dirs=chip_dirs,
             year=effective_year,
+            background_class_value=3 if presence_only else 0,
             on_progress=on_mask_progress,
             on_start=on_mask_start,
         )

@@ -159,3 +159,29 @@ class TestCreateMasksChipDirs:
         assert "chip_dirs" in sig.parameters
         # Should be optional (has default None)
         assert sig.parameters["chip_dirs"].default is None
+
+
+class TestBackgroundClassValue:
+    """Tests for background_class_value parameter."""
+
+    def test_create_masks_accepts_background_class_value_parameter(self) -> None:
+        """Test that create_masks signature accepts background_class_value parameter."""
+        import inspect
+
+        from ftw_dataset_tools.api.masks import create_masks
+
+        sig = inspect.signature(create_masks)
+        assert "background_class_value" in sig.parameters
+        # Should have default value of 0
+        assert sig.parameters["background_class_value"].default == 0
+
+    def test_create_single_mask_accepts_background_class_value_parameter(self) -> None:
+        """Test that _create_single_mask signature accepts background_class_value parameter."""
+        import inspect
+
+        from ftw_dataset_tools.api.masks import _create_single_mask
+
+        sig = inspect.signature(_create_single_mask)
+        assert "background_class_value" in sig.parameters
+        # Should have default value of 0
+        assert sig.parameters["background_class_value"].default == 0
