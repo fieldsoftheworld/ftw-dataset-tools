@@ -265,7 +265,7 @@ def create_dataset_cmd(
             if mask_type not in valid_mask_types:
                 raise click.BadParameter(
                     f"Invalid mask type '{mask_type}'. Must be one of: {', '.join(sorted(valid_mask_types))}",
-                    param_hint="mask-types"
+                    param_hint="mask-types",
                 )
 
         result = dataset.create_dataset(
