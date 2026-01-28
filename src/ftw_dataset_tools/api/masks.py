@@ -189,6 +189,7 @@ def _create_single_mask(
     mask_type: MaskType,
     resolution: float = 10.0,
     id_col: str | None = None,
+    background_class_value: int = 0,
 ) -> MaskResult:
     """Create a single mask for a grid cell."""
     minx, miny, maxx, maxy = bounds
@@ -216,8 +217,8 @@ def _create_single_mask(
     # Set data type based on mask type
     dtype = np.uint32 if mask_type == MaskType.INSTANCE else np.uint8
 
-    # Initialize mask
-    mask = np.zeros((height, width), dtype=dtype)
+    # Initialize mask with background value
+    mask = np.full((height, width), background_class_value, dtype=dtype)
 
     # Get boundaries within bounds
     if mask_type == MaskType.INSTANCE and id_col:
@@ -250,9 +251,9 @@ def _create_single_mask(
                 all_touched=True,
             )
         else:
-            # Burn boundary lines as 0 (background)
+            # Burn boundary lines as background
             features.rasterize(
-                [(_wkt_to_geometry(wkt), 0) for (wkt,) in boundary_lines],
+                [(_wkt_to_geometry(wkt), background_class_value) for (wkt,) in boundary_lines],
                 out=mask,
                 transform=transform,
                 all_touched=True,
@@ -270,7 +271,6 @@ def _create_single_mask(
         dtype=dtype,
         crs=crs,
         transform=transform,
-        nodata=0,
         tiled=True,
         blockxsize=256,
         blockysize=256,
@@ -317,7 +317,7 @@ def _process_single_grid_cell(args: tuple) -> tuple[MaskResult | None, tuple[str
     Args:
         args: Tuple of (grid_id, bounds, crs_wkt, boundaries_path, boundary_lines_path,
               boundaries_geom_col, boundary_lines_geom_col, output_path, mask_type,
-              resolution, id_col)
+              resolution, id_col, background_class_value)
 
     Returns:
         Tuple of (MaskResult or None, error tuple or None)
@@ -334,6 +334,7 @@ def _process_single_grid_cell(args: tuple) -> tuple[MaskResult | None, tuple[str
         mask_type,
         resolution,
         id_col,
+        background_class_value,
     ) = args
 
     # Suppress stdout/stderr from GDAL/rasterio progress output at OS level
@@ -368,6 +369,7 @@ def _process_single_grid_cell(args: tuple) -> tuple[MaskResult | None, tuple[str
                 mask_type=mask_type_enum,
                 resolution=resolution,
                 id_col=id_col,
+                background_class_value=background_class_value,
             )
             conn.close()
             return (result, None)
@@ -396,6 +398,7 @@ def create_masks(
     num_workers: int | None = None,
     chip_dirs: dict[str, Path] | None = None,
     year: int | None = None,
+    background_class_value: int = 0,
     on_progress: Callable[[int, int], None] | None = None,
     on_start: Callable[[int, int], None] | None = None,
 ) -> CreateMasksResult:
@@ -419,6 +422,7 @@ def create_masks(
                    If None, all masks go to output_dir with dataset prefix in filename.
         year: Optional year for year-based naming convention (e.g., 2024).
               When provided, item IDs and filenames include the year.
+        background_class_value: Value to use for background pixels (default: 0). Use 3 for presence-only labels.
         on_progress: Optional callback (current, total) for progress updates
         on_start: Optional callback (total_grids, filtered_grids) called before processing
 
@@ -566,6 +570,7 @@ def create_masks(
                 mask_type.value,  # Pass as string for serialization
                 resolution,
                 id_col_for_instance,
+                background_class_value,
             )
         )
 

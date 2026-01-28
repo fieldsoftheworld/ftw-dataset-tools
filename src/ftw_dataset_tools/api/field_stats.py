@@ -333,6 +333,9 @@ def add_field_stats(
             """).fetchone()
             xmin, ymin, xmax, ymax = bounds_result
             log(f"Fields bounds: [{xmin:.6f}, {ymin:.6f}, {xmax:.6f}, {ymax:.6f}]")
+            log(
+                f"BBox Finder URL: https://bboxfinder.com/#{ymin:.6f},{xmin:.6f},{ymax:.6f},{xmax:.6f}"
+            )
 
             # Fetch grid cells that intersect the bounding box
             log("Fetching grid cells by bounding box...")
