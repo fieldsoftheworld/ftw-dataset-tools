@@ -61,7 +61,7 @@ class TestCreateMasksCommand:
         tmp_path: Path,
     ) -> None:
         """Test --mask-type option with different values."""
-        for mask_type in ["instance", "semantic_2_class", "semantic_3_class"]:
+        for mask_type in ["instance", "instance_coco", "semantic_2_class", "semantic_3_class"]:
             output_dir = tmp_path / f"masks_{mask_type}"
             runner = CliRunner()
             result = runner.invoke(
