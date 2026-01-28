@@ -198,6 +198,10 @@ def _create_coco_instance_mask(
     Each band represents one instance as a binary mask (0 or 1).
     This format is compatible with instance segmentation models like Detectron2.
 
+    Band descriptions are set to "instance_{id}" to preserve the mapping between
+    band indices and instance IDs. Users can read these descriptions using
+    rasterio: `dataset.descriptions` or `dataset.tags(band_idx)`.
+
     Args:
         conn: DuckDB connection
         grid_id: Grid cell ID
@@ -281,9 +285,12 @@ def _create_coco_instance_mask(
         blockysize=256,
         compress="deflate",
     ) as dst:
-        # Write each band
+        # Write each band with description containing instance ID
         for band_idx in range(num_bands):
             dst.write(masks[band_idx], band_idx + 1)
+            if boundaries_with_ids:
+                instance_id = boundaries_with_ids[band_idx][0]
+                dst.set_band_description(band_idx + 1, f"instance_{instance_id}")
 
     # Convert to COG
     _convert_to_cog(temp_path, output_path)
