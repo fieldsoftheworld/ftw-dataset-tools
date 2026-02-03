@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from tqdm import tqdm
 
 if TYPE_CHECKING:
+    from ftw_dataset_tools.api.imagery.planet_selection import PlanetSelectionResult
     from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
 
 
@@ -116,6 +117,13 @@ class ImageryProgressBar:
         """Mark current chip as successfully processed."""
         self.stats.successful += 1
         self._last_result = result
+        self._update_postfix()
+        if self._pbar:
+            self._pbar.update(1)
+
+    def mark_success_planet(self, result: "PlanetSelectionResult") -> None:  # noqa: ARG002
+        """Mark current chip as successfully processed (Planet imagery)."""
+        self.stats.successful += 1
         self._update_postfix()
         if self._pbar:
             self._pbar.update(1)
