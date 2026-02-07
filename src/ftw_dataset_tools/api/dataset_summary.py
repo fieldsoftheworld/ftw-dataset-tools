@@ -168,16 +168,16 @@ def _load_chips_df(chips_parquet: Path, log: Callable[[str], None]) -> tuple[pd.
     con.execute("LOAD spatial")
 
     # Check if geometry column exists and convert it to WKB format
-    columns_query = f"SELECT * FROM read_parquet('{chips_parquet}') LIMIT 0"
-    columns_df = con.execute(columns_query).fetchdf()
+    columns_query = "SELECT * FROM read_parquet(?) LIMIT 0"
+    columns_df = con.execute(columns_query, [str(chips_parquet)]).fetchdf()
 
     if "geometry" in columns_df.columns:
         # Convert geometry column to WKB bytes for compatibility with shapely
-        query = f"SELECT * EXCLUDE (geometry), ST_AsWKB(geometry) as geometry FROM read_parquet('{chips_parquet}')"
+        query = "SELECT * EXCLUDE (geometry), ST_AsWKB(geometry) as geometry FROM read_parquet(?)"
     else:
-        query = f"SELECT * FROM read_parquet('{chips_parquet}')"
+        query = "SELECT * FROM read_parquet(?)"
 
-    df = con.execute(query).fetchdf()
+    df = con.execute(query, [str(chips_parquet)]).fetchdf()
     con.close()
 
     total_chips = len(df)
@@ -188,6 +188,34 @@ def _load_chips_df(chips_parquet: Path, log: Callable[[str], None]) -> tuple[pd.
     log(f"Total chips: {total_chips} (train={train_chips}, val={val_chips}, test={test_chips})")
 
     return df, total_chips, train_chips, val_chips, test_chips
+
+
+def _extract_dates_and_cloud_cover(
+    items: list[Path], log: Callable[[str], None]
+) -> tuple[list[datetime], list[float]]:
+    """Extract dates and cloud cover from STAC items.
+
+    Args:
+        items: List of paths to STAC item JSON files
+        log: Logging callback function
+
+    Returns:
+        Tuple of (dates, cloud_cover_values)
+    """
+    dates = []
+    cloud_cover = []
+
+    for json_file in items:
+        try:
+            item = pystac.Item.from_file(str(json_file))
+            if item.datetime:
+                dates.append(item.datetime)
+            if "eo:cloud_cover" in item.properties:
+                cloud_cover.append(item.properties["eo:cloud_cover"])
+        except Exception as e:
+            log(f"Warning: Could not parse {json_file.name}: {e}")
+
+    return dates, cloud_cover
 
 
 def _collect_stac_metadata(chips_dir: Path, log: Callable[[str], None]) -> dict:
@@ -218,32 +246,9 @@ def _collect_stac_metadata(chips_dir: Path, log: Callable[[str], None]) -> dict:
         f"Found {len(parent_items)} parent items, {len(planting_items)} planting items, {len(harvest_items)} harvest items"
     )
 
-    planting_dates = []
-    harvest_dates = []
-    planting_cloud_cover = []
-    harvest_cloud_cover = []
-
-    # Process planting child items
-    for json_file in planting_items:
-        try:
-            item = pystac.Item.from_file(str(json_file))
-            if item.datetime:
-                planting_dates.append(item.datetime)
-            if "eo:cloud_cover" in item.properties:
-                planting_cloud_cover.append(item.properties["eo:cloud_cover"])
-        except Exception as e:
-            log(f"Warning: Could not parse {json_file.name}: {e}")
-
-    # Process harvest child items
-    for json_file in harvest_items:
-        try:
-            item = pystac.Item.from_file(str(json_file))
-            if item.datetime:
-                harvest_dates.append(item.datetime)
-            if "eo:cloud_cover" in item.properties:
-                harvest_cloud_cover.append(item.properties["eo:cloud_cover"])
-        except Exception as e:
-            log(f"Warning: Could not parse {json_file.name}: {e}")
+    # Process planting and harvest child items
+    planting_dates, planting_cloud_cover = _extract_dates_and_cloud_cover(planting_items, log)
+    harvest_dates, harvest_cloud_cover = _extract_dates_and_cloud_cover(harvest_items, log)
 
     # Process parent items for metadata
     metadata = {}
@@ -304,6 +309,12 @@ def _select_example_chips(
 
     # Randomly sample chip IDs to get diverse examples
     chip_ids_list = list(chip_ids_with_planting)
+
+    # Guard against empty chip list
+    if not chip_ids_list:
+        log("Warning: No chip IDs found with planting items, returning empty example list")
+        return []
+
     rng = np.random.default_rng(42)
     sample_size = min(num_examples * 3, len(chip_ids_list))
     chip_ids_to_check = rng.choice(chip_ids_list, size=sample_size, replace=False)
@@ -372,6 +383,11 @@ def _create_split_map(df: pd.DataFrame, output_path: Path, log: Callable[[str], 
 
         # Convert to GeoDataFrame - handle WKB format if needed
         if not isinstance(df, gpd.GeoDataFrame):
+            # Check if DataFrame is empty before accessing iloc[0]
+            if df.empty:
+                log("Warning: Empty DataFrame, skipping split map")
+                return
+
             # Check if geometry is in WKB format (bytes or bytearray)
             first_geom = df["geometry"].iloc[0]
 
@@ -539,9 +555,16 @@ def _write_markdown_summary(
         f.write("## Overview\n\n")
         f.write(f"- **Dataset Directory**: `{dataset_dir.name}`\n")
         f.write(f"- **Total Chips**: {total_chips:,}\n")
-        f.write(f"- **Train**: {train_chips:,} ({train_chips / total_chips * 100:.1f}%)\n")
-        f.write(f"- **Validation**: {val_chips:,} ({val_chips / total_chips * 100:.1f}%)\n")
-        f.write(f"- **Test**: {test_chips:,} ({test_chips / total_chips * 100:.1f}%)\n\n")
+
+        # Avoid division by zero
+        if total_chips > 0:
+            f.write(f"- **Train**: {train_chips:,} ({train_chips / total_chips * 100:.1f}%)\n")
+            f.write(f"- **Validation**: {val_chips:,} ({val_chips / total_chips * 100:.1f}%)\n")
+            f.write(f"- **Test**: {test_chips:,} ({test_chips / total_chips * 100:.1f}%)\n\n")
+        else:
+            f.write(f"- **Train**: {train_chips:,}\n")
+            f.write(f"- **Validation**: {val_chips:,}\n")
+            f.write(f"- **Test**: {test_chips:,}\n\n")
 
         # Metadata
         if metadata:
