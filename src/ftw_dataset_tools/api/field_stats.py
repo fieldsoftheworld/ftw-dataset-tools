@@ -394,14 +394,15 @@ def add_field_stats(
                 """)
 
                 remaining_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
-                log(f"Removed {border_count:,} border chips (outside convex hull), {remaining_count:,} chips remaining")
+                log(
+                    f"Removed {border_count:,} border chips (outside convex hull), {remaining_count:,} chips remaining"
+                )
                 grid_count = remaining_count
             else:
                 log("No border chips found to remove")
 
             # Clean up temporary tables
             conn.execute("DROP TABLE fields_hull")
-
 
         # Auto-detect bbox columns if not specified
         detected_grid_bbox = grid_bbox_col
