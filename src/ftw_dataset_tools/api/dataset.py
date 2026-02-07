@@ -59,6 +59,7 @@ def create_dataset(
     year: int | None = None,
     mask_types: list[str] | None = None,
     presence_only: bool = False,
+    drop_border_chips: bool = False,
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int], None] | None = None,
@@ -87,6 +88,7 @@ def create_dataset(
         year: Year for temporal extent (required if fields lack determination_datetime)
         mask_types: List of mask types to generate (e.g., ["instance", "semantic_2_class"]). If None, generates all types.
         presence_only: If True, background class value is 3 instead of 0 (for presence-only labels)
+        drop_border_chips: If True, remove chips touching outer boundary (edges of convex hull). Useful when fields at boundary may have partial coverage.
         on_progress: Optional callback for progress messages
         on_mask_progress: Optional callback (current, total) for mask creation progress
         on_mask_start: Optional callback (total_grids, filtered_grids) for mask start
@@ -194,6 +196,7 @@ def create_dataset(
         grid_file=None,  # Use default FTW grid from Source Coop
         output_file=str(chips_path),
         min_coverage=min_coverage,
+        drop_border_chips=drop_border_chips,
         on_progress=log,
     )
     log(
