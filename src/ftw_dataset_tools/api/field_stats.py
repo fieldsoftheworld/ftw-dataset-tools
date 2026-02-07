@@ -182,6 +182,7 @@ def add_field_stats(
     coverage_col: str = "field_coverage_pct",
     min_coverage: float | None = None,
     reproject_to_4326: bool = False,
+    drop_border_chips: bool = False,
     grid_source: str = DEFAULT_FTW_GRID_SOURCE,
     on_progress: Callable[[str], None] | None = None,
 ) -> FieldStatsResult:
@@ -209,6 +210,8 @@ def add_field_stats(
         min_coverage: If set, exclude grid cells with coverage below this percentage
             (e.g., 0.01 to exclude cells with 0% coverage)
         reproject_to_4326: If True, reproject both inputs to EPSG:4326 before processing
+        drop_border_chips: If True, remove chips along the outer border of the dataset
+            (where fields may have partial coverage)
         grid_source: URL/path to fetch grid from when grid_file is None
             (default: FTW grid on Source Coop)
         on_progress: Optional callback for progress messages
@@ -357,6 +360,49 @@ def add_field_stats(
         # Get grid count
         grid_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
         log(f"Loaded {grid_count:,} grid cells")
+
+        # Filter out border chips if requested
+        if drop_border_chips:
+            log("Identifying border chips to remove...")
+
+            # Strategy: Remove chips that are not completely within the convex hull of field polygons
+            # This identifies chips on the boundary that may have partial field coverage
+
+            # Create convex hull of all field geometries
+            conn.execute(f"""
+                CREATE TABLE fields_hull AS
+                SELECT ST_ConvexHull(ST_Union_Agg({fields_geom_col})) as hull
+                FROM fields_table
+            """)
+
+            # Identify chips that are NOT completely within the convex hull
+            # ST_Within returns true only if the chip geometry is completely inside the hull
+            conn.execute(f"""
+                CREATE TABLE border_chips AS
+                SELECT g.rowid
+                FROM grid_table g, fields_hull h
+                WHERE NOT ST_Within(g.{grid_geom_col}, h.hull)
+            """)
+
+            border_count = conn.execute("SELECT COUNT(*) FROM border_chips").fetchone()[0]
+
+            if border_count > 0:
+                # Remove border chips from grid_table
+                conn.execute("""
+                    DELETE FROM grid_table
+                    WHERE rowid IN (SELECT rowid FROM border_chips)
+                """)
+
+                remaining_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
+                log(
+                    f"Removed {border_count:,} border chips (outside convex hull), {remaining_count:,} chips remaining"
+                )
+                grid_count = remaining_count
+            else:
+                log("No border chips found to remove")
+
+            # Clean up temporary tables
+            conn.execute("DROP TABLE fields_hull")
 
         # Auto-detect bbox columns if not specified
         detected_grid_bbox = grid_bbox_col

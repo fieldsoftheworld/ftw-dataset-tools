@@ -62,6 +62,12 @@ from ftw_dataset_tools.api.geo import CRSMismatchError
     default=False,
     help="Reproject both inputs to EPSG:4326 if CRS don't match.",
 )
+@click.option(
+    "--drop-border-chips",
+    is_flag=True,
+    default=False,
+    help="Remove chips along the outer border of the dataset (where fields may have partial coverage).",
+)
 def create_chips_cmd(
     fields_file: str,
     grid_file: str | None,
@@ -73,6 +79,7 @@ def create_chips_cmd(
     coverage_col: str,
     min_coverage: float | None,
     reproject_to_4326: bool,
+    drop_border_chips: bool,
 ) -> None:
     """Create chip definitions with field coverage statistics.
 
@@ -132,6 +139,7 @@ def create_chips_cmd(
                 coverage_col=coverage_col,
                 min_coverage=min_coverage,
                 reproject_to_4326=reproject_to_4326,
+                drop_border_chips=drop_border_chips,
                 on_progress=on_progress,
             )
 

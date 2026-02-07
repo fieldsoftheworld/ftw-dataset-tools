@@ -149,6 +149,12 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     default=False,
     help="Indicates labels are presence-only; background class value will be 3 instead of 0.",
 )
+@click.option(
+    "--drop-border-chips",
+    is_flag=True,
+    default=False,
+    help="Remove chips touching outer boundary (edges of convex hull). Useful when fields at boundary may have partial coverage.",
+)
 def create_dataset_cmd(
     fields_file: str,
     output_dir: str | None,
@@ -169,6 +175,7 @@ def create_dataset_cmd(
     buffer_expansion_size: int,
     mask_types: str,
     presence_only: bool,
+    drop_border_chips: bool,
 ) -> None:
     """Create a complete training dataset from a fields file.
 
@@ -289,6 +296,7 @@ def create_dataset_cmd(
             year=year,
             mask_types=mask_types_list,
             presence_only=presence_only,
+            drop_border_chips=drop_border_chips,
             on_progress=on_progress,
             on_mask_progress=on_mask_progress,
             on_mask_start=on_mask_start,
