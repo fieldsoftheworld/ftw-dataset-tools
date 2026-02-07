@@ -7,16 +7,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import duckdb
 import matplotlib
 
 matplotlib.use("Agg")  # Use non-interactive backend
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import pystac
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    import pandas as pd
 
 __all__ = [
     "DatasetSummary",
@@ -38,8 +40,6 @@ class DatasetSummary:
     harvest_dates: list[datetime.datetime]
     planting_cloud_cover: list[float]
     harvest_cloud_cover: list[float]
-    planting_nodata: list[float]
-    harvest_nodata: list[float]
     metadata: dict
     example_chips: list[str]
     output_path: Path
@@ -77,24 +77,98 @@ def create_dataset_summary(
 
     log(f"Analyzing dataset: {dataset_dir}")
 
-    # Find chips directory
+    # Find chips directory and parquet file
+    chips_dir, chips_parquet = _find_chips_dir_and_parquet(dataset_dir, log)
+
+    # Load chips dataframe and compute split counts
+    df, total_chips, train_chips, val_chips, test_chips = _load_chips_df(chips_parquet, log)
+
+    # Collect STAC metadata from chip items
+    stac_metadata = _collect_stac_metadata(chips_dir, log)
+
+    # Select example chips with imagery
+    example_chips = _select_example_chips(chips_dir, stac_metadata["planting_items"], num_examples, log)
+
+    # Generate visualizations
+    figures_dir = dataset_dir / "figures"
+    figures_dir.mkdir(exist_ok=True)
+    _generate_visualizations(
+        df=df,
+        figures_dir=figures_dir,
+        planting_dates=stac_metadata["planting_dates"],
+        harvest_dates=stac_metadata["harvest_dates"],
+        planting_cloud_cover=stac_metadata["planting_cloud_cover"],
+        harvest_cloud_cover=stac_metadata["harvest_cloud_cover"],
+        log=log,
+    )
+
+    # Create markdown report
+    output_path = dataset_dir / "summary.md" if output_path is None else Path(output_path)
+
+    log("Generating markdown report...")
+    _write_markdown_summary(
+        output_path=output_path,
+        dataset_dir=dataset_dir,
+        chips_dir=chips_dir,
+        total_chips=total_chips,
+        train_chips=train_chips,
+        val_chips=val_chips,
+        test_chips=test_chips,
+        metadata=stac_metadata["metadata"],
+        example_chips=example_chips,
+        planting_dates=stac_metadata["planting_dates"],
+        harvest_dates=stac_metadata["harvest_dates"],
+        planting_cloud_cover=stac_metadata["planting_cloud_cover"],
+        harvest_cloud_cover=stac_metadata["harvest_cloud_cover"],
+        figures_dir=figures_dir,
+    )
+
+    log(f"Summary written to: {output_path}")
+
+    return DatasetSummary(
+        dataset_dir=dataset_dir,
+        chips_dir=chips_dir,
+        total_chips=total_chips,
+        train_chips=train_chips,
+        val_chips=val_chips,
+        test_chips=test_chips,
+        planting_dates=stac_metadata["planting_dates"],
+        harvest_dates=stac_metadata["harvest_dates"],
+        planting_cloud_cover=stac_metadata["planting_cloud_cover"],
+        harvest_cloud_cover=stac_metadata["harvest_cloud_cover"],
+        metadata=stac_metadata["metadata"],
+        example_chips=example_chips,
+        output_path=output_path,
+    )
+
+
+def _find_chips_dir_and_parquet(dataset_dir: Path, log: Callable[[str], None]) -> tuple[Path, Path]:
+    """Find chips directory and parquet file in dataset directory."""
     chips_dirs = list(dataset_dir.glob("*-chips"))
     if not chips_dirs:
         raise FileNotFoundError(f"No *-chips directory found in {dataset_dir}")
     chips_dir = chips_dirs[0]
     log(f"Found chips directory: {chips_dir.name}")
 
-    # Find chips parquet file
     chips_parquet_files = list(dataset_dir.glob("*_chips.parquet"))
     if not chips_parquet_files:
         raise FileNotFoundError(f"No *_chips.parquet file found in {dataset_dir}")
     chips_parquet = chips_parquet_files[0]
 
-    # Load chips data
-    log("Loading chips data...")
-    df = pd.read_parquet(chips_parquet)
+    return chips_dir, chips_parquet
 
-    # Get split counts
+
+def _load_chips_df(chips_parquet: Path, log: Callable[[str], None]) -> tuple[pd.DataFrame, int, int, int, int]:
+    """Load chips dataframe and compute split counts."""
+    log("Loading chips data...")
+
+    # Use DuckDB with spatial extension to load parquet file
+    con = duckdb.connect(":memory:")
+    con.execute("INSTALL spatial")
+    con.execute("LOAD spatial")
+    df = con.execute(f"SELECT * FROM read_parquet('{chips_parquet}')").fetchdf()
+    con.close()
+
     total_chips = len(df)
     train_chips = int((df["split"] == "train").sum()) if "split" in df.columns else 0
     val_chips = int((df["split"] == "val").sum()) if "split" in df.columns else 0
@@ -102,17 +176,14 @@ def create_dataset_summary(
 
     log(f"Total chips: {total_chips} (train={train_chips}, val={val_chips}, test={test_chips})")
 
-    # Collect STAC metadata from chip items
-    log("Scanning STAC items...")
-    planting_dates = []
-    harvest_dates = []
-    planting_cloud_cover = []
-    harvest_cloud_cover = []
-    planting_nodata = []
-    harvest_nodata = []
-    metadata = {}
+    return df, total_chips, train_chips, val_chips, test_chips
 
-    # Find all chip subdirectories (not JSON files directly in chips_dir)
+
+def _collect_stac_metadata(chips_dir: Path, log: Callable[[str], None]) -> dict:
+    """Collect STAC metadata from chip items."""
+    log("Scanning STAC items...")
+
+    # Find all chip subdirectories
     chip_subdirs = [d for d in chips_dir.iterdir() if d.is_dir()]
     log(f"Found {len(chip_subdirs)} chip subdirectories")
 
@@ -136,7 +207,12 @@ def create_dataset_summary(
         f"Found {len(parent_items)} parent items, {len(planting_items)} planting items, {len(harvest_items)} harvest items"
     )
 
-    # Process planting child items for dates and cloud cover
+    planting_dates = []
+    harvest_dates = []
+    planting_cloud_cover = []
+    harvest_cloud_cover = []
+
+    # Process planting child items
     for json_file in planting_items:
         try:
             item = pystac.Item.from_file(str(json_file))
@@ -146,9 +222,8 @@ def create_dataset_summary(
                 planting_cloud_cover.append(item.properties["eo:cloud_cover"])
         except Exception as e:
             log(f"Warning: Could not parse {json_file.name}: {e}")
-            continue
 
-    # Process harvest child items for dates and cloud cover
+    # Process harvest child items
     for json_file in harvest_items:
         try:
             item = pystac.Item.from_file(str(json_file))
@@ -158,14 +233,12 @@ def create_dataset_summary(
                 harvest_cloud_cover.append(item.properties["eo:cloud_cover"])
         except Exception as e:
             log(f"Warning: Could not parse {json_file.name}: {e}")
-            continue
 
-    # Process parent items for metadata (if they exist)
+    # Process parent items for metadata
+    metadata = {}
     for json_file in parent_items:
         try:
             item = pystac.Item.from_file(str(json_file))
-
-            # Collect general metadata (from first item)
             if not metadata:
                 metadata = {
                     "calendar_year": item.properties.get("ftw:calendar_year"),
@@ -175,12 +248,11 @@ def create_dataset_summary(
                     "buffer_days": item.properties.get("ftw:buffer_days"),
                     "stac_host": item.properties.get("ftw:stac_host"),
                 }
-
+                break
         except Exception as e:
             log(f"Warning: Could not parse {json_file.name}: {e}")
-            continue
 
-    # If no parent items, try to get metadata from child items
+    # Fallback to child items if no parent metadata
     if not metadata and (planting_items or harvest_items):
         try:
             sample_item_file = planting_items[0] if planting_items else harvest_items[0]
@@ -198,23 +270,30 @@ def create_dataset_summary(
 
     log(f"Found {len(planting_dates)} planting dates, {len(harvest_dates)} harvest dates")
 
-    # Select example chips (with imagery)
-    # Extract chip IDs from planting items (remove _planting_s2 suffix)
+    return {
+        "planting_items": planting_items,
+        "planting_dates": planting_dates,
+        "harvest_dates": harvest_dates,
+        "planting_cloud_cover": planting_cloud_cover,
+        "harvest_cloud_cover": harvest_cloud_cover,
+        "metadata": metadata,
+    }
+
+
+def _select_example_chips(
+    chips_dir: Path, planting_items: list[Path], num_examples: int, log: Callable[[str], None]
+) -> list[str]:
+    """Select example chips with imagery."""
     example_chips = []
     chip_ids_with_planting = set()
 
     for planting_file in planting_items:
-        # Extract base chip ID (e.g., ftw-33UWP4690_2021_planting_s2 -> ftw-33UWP4690_2021)
         chip_id = planting_file.stem.replace("_planting_s2", "")
         chip_ids_with_planting.add(chip_id)
 
-    for chip_id in sorted(chip_ids_with_planting)[
-        : num_examples * 2
-    ]:  # Check more to ensure we find enough with images
-        # The preview images are in the chip subdirectory
+    for chip_id in sorted(chip_ids_with_planting)[: num_examples * 2]:
         preview_dir = chips_dir / chip_id
         if preview_dir.exists() and preview_dir.is_dir():
-            # Look for actual file names with _s2 suffix
             planting_jpg = preview_dir / f"{chip_id}_planting_image_s2.jpg"
             harvest_jpg = preview_dir / f"{chip_id}_harvest_image_s2.jpg"
             if planting_jpg.exists() and harvest_jpg.exists():
@@ -223,22 +302,28 @@ def create_dataset_summary(
                     break
 
     log(f"Selected {len(example_chips)} example chips with imagery")
+    return example_chips
 
-    # Generate visualizations
-    figures_dir = dataset_dir / "figures"
-    figures_dir.mkdir(exist_ok=True)
+
+def _generate_visualizations(
+    df: pd.DataFrame,
+    figures_dir: Path,
+    planting_dates: list[datetime.datetime],
+    harvest_dates: list[datetime.datetime],
+    planting_cloud_cover: list[float],
+    harvest_cloud_cover: list[float],
+    log: Callable[[str], None],
+) -> None:
+    """Generate all visualization plots."""
     log(f"Creating visualizations in {figures_dir.name}/")
 
-    # Create split map
     _create_split_map(df, figures_dir / "split_map.png", log)
 
-    # Create date histograms
     if planting_dates:
         _create_date_histogram(planting_dates, "Planting", figures_dir / "planting_dates.png", log)
     if harvest_dates:
         _create_date_histogram(harvest_dates, "Harvest", figures_dir / "harvest_dates.png", log)
 
-    # Create cloud cover histograms
     if planting_cloud_cover:
         _create_histogram(
             planting_cloud_cover,
@@ -253,47 +338,6 @@ def create_dataset_summary(
             figures_dir / "harvest_cloud_cover.png",
             log,
         )
-
-    # Create markdown report
-    output_path = dataset_dir / "summary.md" if output_path is None else Path(output_path)
-
-    log("Generating markdown report...")
-    _write_markdown_summary(
-        output_path=output_path,
-        dataset_dir=dataset_dir,
-        chips_dir=chips_dir,
-        total_chips=total_chips,
-        train_chips=train_chips,
-        val_chips=val_chips,
-        test_chips=test_chips,
-        metadata=metadata,
-        example_chips=example_chips,
-        planting_dates=planting_dates,
-        harvest_dates=harvest_dates,
-        planting_cloud_cover=planting_cloud_cover,
-        harvest_cloud_cover=harvest_cloud_cover,
-        figures_dir=figures_dir,
-    )
-
-    log(f"Summary written to: {output_path}")
-
-    return DatasetSummary(
-        dataset_dir=dataset_dir,
-        chips_dir=chips_dir,
-        total_chips=total_chips,
-        train_chips=train_chips,
-        val_chips=val_chips,
-        test_chips=test_chips,
-        planting_dates=planting_dates,
-        harvest_dates=harvest_dates,
-        planting_cloud_cover=planting_cloud_cover,
-        harvest_cloud_cover=harvest_cloud_cover,
-        planting_nodata=planting_nodata,
-        harvest_nodata=harvest_nodata,
-        metadata=metadata,
-        example_chips=example_chips,
-        output_path=output_path,
-    )
 
 
 def _create_split_map(df: pd.DataFrame, output_path: Path, log: Callable[[str], None]) -> None:
