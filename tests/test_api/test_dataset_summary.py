@@ -122,10 +122,14 @@ class TestLoadChipsDf:
 
         # Create test parquet with splits and geometry using GeoDataFrame
         geom = box(10, 50, 10.1, 50.1)
-        gdf = gpd.GeoDataFrame({
-            "chip_id": ["chip1", "chip2", "chip3"],
-            "split": ["train", "val", "test"],
-        }, geometry=[geom, geom, geom], crs="EPSG:4326")
+        gdf = gpd.GeoDataFrame(
+            {
+                "chip_id": ["chip1", "chip2", "chip3"],
+                "split": ["train", "val", "test"],
+            },
+            geometry=[geom, geom, geom],
+            crs="EPSG:4326",
+        )
         parquet_file = tmp_path / "chips.parquet"
         gdf.to_parquet(parquet_file)
 
@@ -142,9 +146,11 @@ class TestLoadChipsDf:
         from ftw_dataset_tools.api.dataset_summary import _load_chips_df
 
         # Create test parquet without splits
-        df = pd.DataFrame({
-            "chip_id": ["chip1", "chip2"],
-        })
+        df = pd.DataFrame(
+            {
+                "chip_id": ["chip1", "chip2"],
+            }
+        )
         parquet_file = tmp_path / "chips.parquet"
         df.to_parquet(parquet_file)
 
@@ -361,11 +367,16 @@ class TestCreateDatasetSummaryIntegration:
 
         # Create parquet file using GeoDataFrame
         import geopandas as gpd
+
         geom = box(4.0, 50.0, 4.1, 50.1)
-        gdf = gpd.GeoDataFrame({
-            "chip_id": ["chip1"],
-            "split": ["train"],
-        }, geometry=[geom], crs="EPSG:4326")
+        gdf = gpd.GeoDataFrame(
+            {
+                "chip_id": ["chip1"],
+                "split": ["train"],
+            },
+            geometry=[geom],
+            crs="EPSG:4326",
+        )
         parquet_file = dataset_dir / "belgium_chips.parquet"
         gdf.to_parquet(parquet_file)
 

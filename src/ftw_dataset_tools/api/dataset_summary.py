@@ -87,7 +87,9 @@ def create_dataset_summary(
     stac_metadata = _collect_stac_metadata(chips_dir, log)
 
     # Select example chips with imagery
-    example_chips = _select_example_chips(chips_dir, stac_metadata["planting_items"], num_examples, log)
+    example_chips = _select_example_chips(
+        chips_dir, stac_metadata["planting_items"], num_examples, log
+    )
 
     # Generate visualizations
     figures_dir = dataset_dir / "figures"
@@ -158,7 +160,9 @@ def _find_chips_dir_and_parquet(dataset_dir: Path, log: Callable[[str], None]) -
     return chips_dir, chips_parquet
 
 
-def _load_chips_df(chips_parquet: Path, log: Callable[[str], None]) -> tuple[pd.DataFrame, int, int, int, int]:
+def _load_chips_df(
+    chips_parquet: Path, log: Callable[[str], None]
+) -> tuple[pd.DataFrame, int, int, int, int]:
     """Load chips dataframe and compute split counts."""
     log("Loading chips data...")
 
@@ -393,6 +397,7 @@ def _create_split_map(df: pd.DataFrame, output_path: Path, log: Callable[[str], 
 
             if isinstance(first_geom, (bytes, bytearray)):
                 df = df.copy()
+
                 # Convert WKB to geometry, handling None/invalid values
                 def safe_wkb_load(x):
                     if isinstance(x, (bytes, bytearray)):
