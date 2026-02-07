@@ -166,7 +166,18 @@ def _load_chips_df(chips_parquet: Path, log: Callable[[str], None]) -> tuple[pd.
     con = duckdb.connect(":memory:")
     con.execute("INSTALL spatial")
     con.execute("LOAD spatial")
-    df = con.execute(f"SELECT * FROM read_parquet('{chips_parquet}')").fetchdf()
+
+    # Check if geometry column exists and convert it to WKB format
+    columns_query = f"SELECT * FROM read_parquet('{chips_parquet}') LIMIT 0"
+    columns_df = con.execute(columns_query).fetchdf()
+
+    if "geometry" in columns_df.columns:
+        # Convert geometry column to WKB bytes for compatibility with shapely
+        query = f"SELECT * EXCLUDE (geometry), ST_AsWKB(geometry) as geometry FROM read_parquet('{chips_parquet}')"
+    else:
+        query = f"SELECT * FROM read_parquet('{chips_parquet}')"
+
+    df = con.execute(query).fetchdf()
     con.close()
 
     total_chips = len(df)
@@ -291,7 +302,13 @@ def _select_example_chips(
         chip_id = planting_file.stem.replace("_planting_s2", "")
         chip_ids_with_planting.add(chip_id)
 
-    for chip_id in sorted(chip_ids_with_planting)[: num_examples * 2]:
+    # Randomly sample chip IDs to get diverse examples
+    chip_ids_list = list(chip_ids_with_planting)
+    rng = np.random.default_rng(42)
+    sample_size = min(num_examples * 3, len(chip_ids_list))
+    chip_ids_to_check = rng.choice(chip_ids_list, size=sample_size, replace=False)
+
+    for chip_id in chip_ids_to_check:
         preview_dir = chips_dir / chip_id
         if preview_dir.exists() and preview_dir.is_dir():
             planting_jpg = preview_dir / f"{chip_id}_planting_image_s2.jpg"
@@ -355,11 +372,34 @@ def _create_split_map(df: pd.DataFrame, output_path: Path, log: Callable[[str], 
 
         # Convert to GeoDataFrame - handle WKB format if needed
         if not isinstance(df, gpd.GeoDataFrame):
-            # Check if geometry is in WKB format (bytes)
-            if isinstance(df["geometry"].iloc[0], bytes):
+            # Check if geometry is in WKB format (bytes or bytearray)
+            first_geom = df["geometry"].iloc[0]
+
+            if isinstance(first_geom, (bytes, bytearray)):
                 df = df.copy()
-                df["geometry"] = df["geometry"].apply(wkb.loads)
+                # Convert WKB to geometry, handling None/invalid values
+                def safe_wkb_load(x):
+                    if isinstance(x, (bytes, bytearray)):
+                        try:
+                            # Convert bytearray to bytes if needed
+                            if isinstance(x, bytearray):
+                                x = bytes(x)
+                            return wkb.loads(x)
+                        except Exception:
+                            return None
+                    return None
+
+                df["geometry"] = df["geometry"].apply(safe_wkb_load)
             df = gpd.GeoDataFrame(df, geometry="geometry")
+
+        # Filter out rows with None geometry
+        df = df[df["geometry"].notna()]
+
+        if len(df) == 0:
+            log("Warning: No valid geometries found after conversion, skipping split map")
+            return
+
+        log(f"Plotting {len(df)} chips on map...")
 
         # Plot splits
         fig, ax = plt.subplots(figsize=(12, 8))
