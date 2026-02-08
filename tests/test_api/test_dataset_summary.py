@@ -30,6 +30,8 @@ class TestDatasetSummary:
             harvest_cloud_cover=[3.0, 8.0],
             metadata={"calendar_year": 2023},
             example_chips=["chip1", "chip2"],
+            field_coverage_pct=[50.0, 75.0, 90.0],
+            empty_mask_count=5,
             output_path=Path("/tmp/dataset/summary.md"),
         )
         assert summary.total_chips == 100
@@ -463,6 +465,8 @@ class TestWriteMarkdownSummary:
             harvest_dates=[],
             planting_cloud_cover=[],
             harvest_cloud_cover=[],
+            field_coverage_pct=[],
+            empty_mask_count=0,
             figures_dir=figures_dir,
         )
 
