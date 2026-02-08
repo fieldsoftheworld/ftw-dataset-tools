@@ -710,9 +710,10 @@ def _write_markdown_summary(
             f.write(
                 f"- **Min/Max**: {np.min(field_coverage_pct):.2f}% / {np.max(field_coverage_pct):.2f}%\n"
             )
-            f.write(
-                f"- **Empty Masks**: {empty_mask_count:,} ({empty_mask_count / total_chips * 100:.1f}% of total)\n\n"
-            )
+
+        # Always show empty mask count
+        empty_pct = (empty_mask_count / total_chips * 100) if total_chips else 0.0
+        f.write(f"- **Empty Masks**: {empty_mask_count:,} ({empty_pct:.1f}% of total)\n\n")
 
         # Example chips
         if example_chips:
