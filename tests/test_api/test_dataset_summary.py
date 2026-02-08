@@ -30,6 +30,8 @@ class TestDatasetSummary:
             harvest_cloud_cover=[3.0, 8.0],
             metadata={"calendar_year": 2023},
             example_chips=["chip1", "chip2"],
+            field_coverage_pct=[50.0, 75.0, 90.0],
+            empty_mask_count=5,
             output_path=Path("/tmp/dataset/summary.md"),
         )
         assert summary.total_chips == 100
@@ -463,9 +465,307 @@ class TestWriteMarkdownSummary:
             harvest_dates=[],
             planting_cloud_cover=[],
             harvest_cloud_cover=[],
+            field_coverage_pct=[],
+            empty_mask_count=0,
             figures_dir=figures_dir,
         )
 
         assert output_file.exists()
         content = output_file.read_text()
         assert "0" in content  # Should contain zero counts
+
+
+class TestCountEmptyMasks:
+    """Tests for _count_empty_masks helper."""
+
+    def test_counts_empty_and_non_empty_masks(self, tmp_path: Path) -> None:
+        """Test counting mix of empty and non-empty masks."""
+        from ftw_dataset_tools.api.dataset_summary import _count_empty_masks
+
+        chips_dir = tmp_path / "chips"
+
+        # Create chip directories with masks
+        # Empty mask (all zeros)
+        chip1_dir = chips_dir / "chip1"
+        chip1_dir.mkdir(parents=True)
+        mask1_path = chip1_dir / "chip1_semantic_3_class.tif"
+        self._create_test_mask(mask1_path, all_zeros=True)
+
+        # Non-empty mask
+        chip2_dir = chips_dir / "chip2"
+        chip2_dir.mkdir(parents=True)
+        mask2_path = chip2_dir / "chip2_semantic_3_class.tif"
+        self._create_test_mask(mask2_path, all_zeros=False)
+
+        # Another empty mask
+        chip3_dir = chips_dir / "chip3"
+        chip3_dir.mkdir(parents=True)
+        mask3_path = chip3_dir / "chip3_semantic_3_class.tif"
+        self._create_test_mask(mask3_path, all_zeros=True)
+
+        messages = []
+        result = _count_empty_masks(chips_dir, messages.append)
+
+        assert result == 2  # Two empty masks
+        assert any("Found 2 empty masks" in msg for msg in messages)
+
+    def test_handles_missing_mask_files(self, tmp_path: Path) -> None:
+        """Test handling chips without mask files."""
+        from ftw_dataset_tools.api.dataset_summary import _count_empty_masks
+
+        chips_dir = tmp_path / "chips"
+
+        # Chip with mask
+        chip1_dir = chips_dir / "chip1"
+        chip1_dir.mkdir(parents=True)
+        mask1_path = chip1_dir / "chip1_semantic_3_class.tif"
+        self._create_test_mask(mask1_path, all_zeros=True)
+
+        # Chip without mask
+        chip2_dir = chips_dir / "chip2"
+        chip2_dir.mkdir(parents=True)
+        # No mask file created
+
+        messages = []
+        result = _count_empty_masks(chips_dir, messages.append)
+
+        # Should only count the one chip with a mask
+        assert result == 1
+        assert any("Found 1 empty masks out of 1 chips checked" in msg for msg in messages)
+
+    def test_handles_rasterio_read_errors(self, tmp_path: Path) -> None:
+        """Test handling rasterio read errors gracefully."""
+        from ftw_dataset_tools.api.dataset_summary import _count_empty_masks
+
+        chips_dir = tmp_path / "chips"
+
+        # Create chip directory with mask
+        chip1_dir = chips_dir / "chip1"
+        chip1_dir.mkdir(parents=True)
+        mask1_path = chip1_dir / "chip1_semantic_3_class.tif"
+        self._create_test_mask(mask1_path, all_zeros=True)
+
+        messages = []
+
+        # Mock rasterio.open to raise an exception
+        with patch("rasterio.open") as mock_open:
+            mock_open.side_effect = Exception("Simulated read error")
+
+            result = _count_empty_masks(chips_dir, messages.append)
+
+        # Should return 0 and log warning
+        assert result == 0
+        assert any("Warning: Failed to read mask" in msg for msg in messages)
+
+    def test_handles_missing_rasterio(self, tmp_path: Path) -> None:
+        """Test graceful handling when rasterio is not available."""
+        from ftw_dataset_tools.api.dataset_summary import _count_empty_masks
+
+        chips_dir = tmp_path / "chips"
+        chip_dir = chips_dir / "chip1"
+        chip_dir.mkdir(parents=True)
+
+        messages = []
+
+        # Mock the rasterio import to fail
+        with patch.dict("sys.modules", {"rasterio": None}):
+            result = _count_empty_masks(chips_dir, messages.append)
+
+        assert result == 0
+        assert any("rasterio not available" in msg for msg in messages)
+
+    @staticmethod
+    def _create_test_mask(path: Path, all_zeros: bool = True) -> None:
+        """Create a test GeoTIFF mask file."""
+        import numpy as np
+        import rasterio
+        from rasterio.transform import from_bounds
+
+        # Create 10x10 test mask
+        if all_zeros:
+            data = np.zeros((10, 10), dtype=np.uint8)
+        else:
+            data = np.ones((10, 10), dtype=np.uint8)
+            data[5:8, 5:8] = 2  # Some field pixels
+
+        # Write GeoTIFF
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            height=10,
+            width=10,
+            count=1,
+            dtype=np.uint8,
+            crs="EPSG:4326",
+            transform=from_bounds(0, 0, 10, 10, 10, 10),
+        ) as dst:
+            dst.write(data, 1)
+
+
+class TestMaskStatisticsMarkdown:
+    """Tests for Mask Statistics section in markdown output."""
+
+    def test_renders_mask_statistics_with_field_coverage(self, tmp_path: Path) -> None:
+        """Test rendering Mask Statistics section with field coverage data."""
+        from ftw_dataset_tools.api.dataset_summary import _write_markdown_summary
+
+        output_file = tmp_path / "summary.md"
+        figures_dir = tmp_path / "figures"
+        figures_dir.mkdir()
+
+        # Create field coverage histogram
+        field_cov_path = figures_dir / "field_coverage.png"
+        field_cov_path.touch()
+
+        _write_markdown_summary(
+            output_path=output_file,
+            dataset_dir=tmp_path,
+            chips_dir=tmp_path / "chips",
+            total_chips=100,
+            train_chips=70,
+            val_chips=15,
+            test_chips=15,
+            metadata={},
+            example_chips=[],
+            planting_dates=[],
+            harvest_dates=[],
+            planting_cloud_cover=[],
+            harvest_cloud_cover=[],
+            field_coverage_pct=[50.0, 75.5, 90.2, 45.3, 82.1],
+            empty_mask_count=5,
+            figures_dir=figures_dir,
+        )
+
+        assert output_file.exists()
+        content = output_file.read_text()
+
+        # Check Mask Statistics section exists
+        assert "## Mask Statistics" in content
+
+        # Check Field Coverage Distribution subsection
+        assert "### Field Coverage Distribution" in content
+        assert "![Field Coverage](figures/field_coverage.png)" in content
+
+        # Check statistics are rendered
+        assert "**Mean Coverage**:" in content
+        assert "**Median Coverage**:" in content
+        assert "**Min/Max**:" in content
+
+        # Check empty mask count is shown with percentage
+        assert "**Empty Masks**: 5" in content
+        assert "(5.0% of total)" in content
+
+    def test_renders_empty_masks_without_field_coverage(self, tmp_path: Path) -> None:
+        """Test that empty mask count is always shown even without field coverage data."""
+        from ftw_dataset_tools.api.dataset_summary import _write_markdown_summary
+
+        output_file = tmp_path / "summary.md"
+        figures_dir = tmp_path / "figures"
+        figures_dir.mkdir()
+
+        _write_markdown_summary(
+            output_path=output_file,
+            dataset_dir=tmp_path,
+            chips_dir=tmp_path / "chips",
+            total_chips=50,
+            train_chips=35,
+            val_chips=8,
+            test_chips=7,
+            metadata={},
+            example_chips=[],
+            planting_dates=[],
+            harvest_dates=[],
+            planting_cloud_cover=[],
+            harvest_cloud_cover=[],
+            field_coverage_pct=[],  # No field coverage data
+            empty_mask_count=3,
+            figures_dir=figures_dir,
+        )
+
+        assert output_file.exists()
+        content = output_file.read_text()
+
+        # Mask Statistics section should exist
+        assert "## Mask Statistics" in content
+
+        # Empty mask count should be shown
+        assert "**Empty Masks**: 3" in content
+        assert "(6.0% of total)" in content
+
+        # Field coverage subsection should NOT exist
+        assert "### Field Coverage Distribution" not in content
+        assert "**Mean Coverage**:" not in content
+
+    def test_handles_division_by_zero_in_empty_mask_percentage(self, tmp_path: Path) -> None:
+        """Test that zero total_chips doesn't cause division by zero."""
+        from ftw_dataset_tools.api.dataset_summary import _write_markdown_summary
+
+        output_file = tmp_path / "summary.md"
+        figures_dir = tmp_path / "figures"
+        figures_dir.mkdir()
+
+        # Should not raise ZeroDivisionError
+        _write_markdown_summary(
+            output_path=output_file,
+            dataset_dir=tmp_path,
+            chips_dir=tmp_path / "chips",
+            total_chips=0,  # Zero chips
+            train_chips=0,
+            val_chips=0,
+            test_chips=0,
+            metadata={},
+            example_chips=[],
+            planting_dates=[],
+            harvest_dates=[],
+            planting_cloud_cover=[],
+            harvest_cloud_cover=[],
+            field_coverage_pct=[],
+            empty_mask_count=0,
+            figures_dir=figures_dir,
+        )
+
+        assert output_file.exists()
+        content = output_file.read_text()
+
+        # Should show 0.0% when total_chips is 0
+        assert "## Mask Statistics" in content
+        assert "**Empty Masks**: 0 (0.0% of total)" in content
+
+    def test_renders_histogram_only_when_file_exists(self, tmp_path: Path) -> None:
+        """Test that histogram image is only included when file exists."""
+        from ftw_dataset_tools.api.dataset_summary import _write_markdown_summary
+
+        output_file = tmp_path / "summary.md"
+        figures_dir = tmp_path / "figures"
+        figures_dir.mkdir()
+        # Don't create field_coverage.png
+
+        _write_markdown_summary(
+            output_path=output_file,
+            dataset_dir=tmp_path,
+            chips_dir=tmp_path / "chips",
+            total_chips=100,
+            train_chips=70,
+            val_chips=15,
+            test_chips=15,
+            metadata={},
+            example_chips=[],
+            planting_dates=[],
+            harvest_dates=[],
+            planting_cloud_cover=[],
+            harvest_cloud_cover=[],
+            field_coverage_pct=[50.0, 75.0, 90.0],
+            empty_mask_count=5,
+            figures_dir=figures_dir,
+        )
+
+        assert output_file.exists()
+        content = output_file.read_text()
+
+        # Statistics should be shown
+        assert "### Field Coverage Distribution" in content
+        assert "**Mean Coverage**:" in content
+
+        # But histogram image should not be included
+        assert "![Field Coverage](figures/field_coverage.png)" not in content

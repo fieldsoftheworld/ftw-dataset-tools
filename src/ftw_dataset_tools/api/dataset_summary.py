@@ -42,6 +42,8 @@ class DatasetSummary:
     harvest_cloud_cover: list[float]
     metadata: dict
     example_chips: list[str]
+    field_coverage_pct: list[float]
+    empty_mask_count: int
     output_path: Path
 
 
@@ -91,6 +93,14 @@ def create_dataset_summary(
         chips_dir, stac_metadata["planting_items"], num_examples, log
     )
 
+    # Get field coverage statistics
+    field_coverage_pct = (
+        df["field_coverage_pct"].tolist() if "field_coverage_pct" in df.columns else []
+    )
+
+    # Count empty masks
+    empty_mask_count = _count_empty_masks(chips_dir, log)
+
     # Generate visualizations
     figures_dir = dataset_dir / "figures"
     figures_dir.mkdir(exist_ok=True)
@@ -101,6 +111,7 @@ def create_dataset_summary(
         harvest_dates=stac_metadata["harvest_dates"],
         planting_cloud_cover=stac_metadata["planting_cloud_cover"],
         harvest_cloud_cover=stac_metadata["harvest_cloud_cover"],
+        field_coverage_pct=field_coverage_pct,
         log=log,
     )
 
@@ -122,6 +133,8 @@ def create_dataset_summary(
         harvest_dates=stac_metadata["harvest_dates"],
         planting_cloud_cover=stac_metadata["planting_cloud_cover"],
         harvest_cloud_cover=stac_metadata["harvest_cloud_cover"],
+        field_coverage_pct=field_coverage_pct,
+        empty_mask_count=empty_mask_count,
         figures_dir=figures_dir,
     )
 
@@ -140,6 +153,8 @@ def create_dataset_summary(
         harvest_cloud_cover=stac_metadata["harvest_cloud_cover"],
         metadata=stac_metadata["metadata"],
         example_chips=example_chips,
+        field_coverage_pct=field_coverage_pct,
+        empty_mask_count=empty_mask_count,
         output_path=output_path,
     )
 
@@ -337,6 +352,52 @@ def _select_example_chips(
     return example_chips
 
 
+def _count_empty_masks(chips_dir: Path, log: Callable[[str], None]) -> int:
+    """Count the number of chips with empty masks (no field pixels).
+
+    Args:
+        chips_dir: Directory containing chip subdirectories
+        log: Logging function
+
+    Returns:
+        Number of chips with empty masks
+    """
+    log("Counting empty masks...")
+
+    try:
+        import rasterio
+    except ImportError:
+        log("Warning: rasterio not available, skipping empty mask count")
+        return 0
+
+    empty_count = 0
+    total_checked = 0
+
+    for chip_dir in sorted(chips_dir.iterdir()):
+        if not chip_dir.is_dir():
+            continue
+
+        # Look for mask file
+        mask_files = list(chip_dir.glob("*_semantic_3_class.tif"))
+        if not mask_files:
+            continue
+
+        mask_file = mask_files[0]
+        try:
+            with rasterio.open(mask_file) as src:
+                data = src.read(1)  # Read first band
+                # Check if all pixels are 0 (no fields)
+                if np.all(data == 0):
+                    empty_count += 1
+                total_checked += 1
+        except Exception as e:
+            log(f"Warning: Failed to read mask {mask_file.name}: {e}")
+            continue
+
+    log(f"Found {empty_count} empty masks out of {total_checked} chips checked")
+    return empty_count
+
+
 def _generate_visualizations(
     df: pd.DataFrame,
     figures_dir: Path,
@@ -344,6 +405,7 @@ def _generate_visualizations(
     harvest_dates: list[datetime.datetime],
     planting_cloud_cover: list[float],
     harvest_cloud_cover: list[float],
+    field_coverage_pct: list[float],
     log: Callable[[str], None],
 ) -> None:
     """Generate all visualization plots."""
@@ -368,6 +430,14 @@ def _generate_visualizations(
             harvest_cloud_cover,
             "Harvest Cloud Cover (%)",
             figures_dir / "harvest_cloud_cover.png",
+            log,
+        )
+
+    if field_coverage_pct:
+        _create_histogram(
+            field_coverage_pct,
+            "Field Coverage (%)",
+            figures_dir / "field_coverage.png",
             log,
         )
 
@@ -550,6 +620,8 @@ def _write_markdown_summary(
     harvest_dates: list[datetime],
     planting_cloud_cover: list[float],
     harvest_cloud_cover: list[float],
+    field_coverage_pct: list[float],
+    empty_mask_count: int,
     figures_dir: Path,
 ) -> None:
     """Write the markdown summary report."""
@@ -623,6 +695,25 @@ def _write_markdown_summary(
             if harvest_cc_path.exists():
                 f.write(f"### Harvest Cloud Cover ({len(harvest_cloud_cover)} images)\n\n")
                 f.write(f"![Harvest Cloud Cover](figures/{harvest_cc_path.name})\n\n")
+
+        # Mask statistics
+        f.write("## Mask Statistics\n\n")
+
+        if field_coverage_pct:
+            f.write("### Field Coverage Distribution\n\n")
+            field_cov_path = figures_dir / "field_coverage.png"
+            if field_cov_path.exists():
+                f.write(f"![Field Coverage](figures/{field_cov_path.name})\n\n")
+
+            f.write(f"- **Mean Coverage**: {np.mean(field_coverage_pct):.2f}%\n")
+            f.write(f"- **Median Coverage**: {np.median(field_coverage_pct):.2f}%\n")
+            f.write(
+                f"- **Min/Max**: {np.min(field_coverage_pct):.2f}% / {np.max(field_coverage_pct):.2f}%\n"
+            )
+
+        # Always show empty mask count
+        empty_pct = (empty_mask_count / total_chips * 100) if total_chips else 0.0
+        f.write(f"- **Empty Masks**: {empty_mask_count:,} ({empty_pct:.1f}% of total)\n\n")
 
         # Example chips
         if example_chips:
