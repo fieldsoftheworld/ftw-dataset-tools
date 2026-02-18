@@ -4,7 +4,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import pytest
-from shapely.geometry import Point
+from shapely.geometry import Point, box
 
 from ftw_dataset_tools.api.splits import assign_splits, validate_split_percents
 
@@ -177,3 +177,125 @@ class TestAssignSplits:
                 split_percents=(80, 10, 10),
                 random_seed=42,
             )
+
+    def test_predefined_requires_fields_file(self, tmp_path: Path) -> None:
+        """Test predefined split type requires fields_file."""
+        chips_file = tmp_path / "chips.parquet"
+
+        gdf = gpd.GeoDataFrame(
+            {"id": ["ftw-36NXF0000"], "geometry": [box(0, 0, 1, 1)]},
+            crs="EPSG:4326",
+        )
+        gdf.to_parquet(chips_file)
+
+        with pytest.raises(ValueError, match="fields_file is required"):
+            assign_splits(
+                chips_file=chips_file,
+                split_type="predefined",
+                split_percents=(80, 10, 10),
+                random_seed=42,
+            )
+
+    def test_predefined_missing_split_column(self, tmp_path: Path) -> None:
+        """Test predefined split raises when fields file lacks split column."""
+        chips_file = tmp_path / "chips.parquet"
+        fields_file = tmp_path / "fields.parquet"
+
+        chips_gdf = gpd.GeoDataFrame(
+            {"id": ["ftw-36NXF0000"], "geometry": [box(0, 0, 1, 1)]},
+            crs="EPSG:4326",
+        )
+        chips_gdf.to_parquet(chips_file)
+
+        fields_gdf = gpd.GeoDataFrame(
+            {"name": ["field1"], "geometry": [box(0.1, 0.1, 0.2, 0.2)]},
+            crs="EPSG:4326",
+        )
+        fields_gdf.to_parquet(fields_file)
+
+        with pytest.raises(ValueError, match="must contain a 'split' column"):
+            assign_splits(
+                chips_file=chips_file,
+                split_type="predefined",
+                split_percents=(80, 10, 10),
+                random_seed=42,
+                fields_file=fields_file,
+            )
+
+    def test_predefined_invalid_split_value(self, tmp_path: Path) -> None:
+        """Test predefined split raises on invalid split values."""
+        chips_file = tmp_path / "chips.parquet"
+        fields_file = tmp_path / "fields.parquet"
+
+        chips_gdf = gpd.GeoDataFrame(
+            {"id": ["ftw-36NXF0000"], "geometry": [box(0, 0, 1, 1)]},
+            crs="EPSG:4326",
+        )
+        chips_gdf.to_parquet(chips_file)
+
+        fields_gdf = gpd.GeoDataFrame(
+            {"split": ["not-a-split"], "geometry": [box(0.1, 0.1, 0.2, 0.2)]},
+            crs="EPSG:4326",
+        )
+        fields_gdf.to_parquet(fields_file)
+
+        with pytest.raises(ValueError, match="Invalid split values"):
+            assign_splits(
+                chips_file=chips_file,
+                split_type="predefined",
+                split_percents=(80, 10, 10),
+                random_seed=42,
+                fields_file=fields_file,
+            )
+
+    def test_predefined_majority_and_tiebreak(self, tmp_path: Path) -> None:
+        """Test predefined split assigns majority and applies deterministic tie-break."""
+        chips_file = tmp_path / "chips.parquet"
+        fields_file = tmp_path / "fields.parquet"
+
+        chips_gdf = gpd.GeoDataFrame(
+            {
+                "id": ["ftw-36NXF0000", "ftw-36NXF0001"],
+                "geometry": [box(0, 0, 1, 1), box(2, 0, 3, 1)],
+            },
+            crs="EPSG:4326",
+        )
+        chips_gdf.to_parquet(chips_file)
+
+        fields_gdf = gpd.GeoDataFrame(
+            {
+                "split": [
+                    "train",
+                    "Training",
+                    "validation",
+                    "testing",
+                    "TRAIN",
+                ],
+                "geometry": [
+                    box(0.1, 0.1, 0.2, 0.2),
+                    box(0.2, 0.2, 0.3, 0.3),
+                    box(0.3, 0.3, 0.4, 0.4),
+                    box(2.1, 0.1, 2.2, 0.2),
+                    box(2.2, 0.2, 2.3, 0.3),
+                ],
+            },
+            crs="EPSG:4326",
+        )
+        fields_gdf.to_parquet(fields_file)
+
+        result = assign_splits(
+            chips_file=chips_file,
+            split_type="predefined",
+            split_percents=(80, 10, 10),
+            random_seed=42,
+            fields_file=fields_file,
+        )
+
+        assert result.total_chips == 2
+        updated_gdf = gpd.read_parquet(chips_file)
+        split_map = dict(zip(updated_gdf["id"], updated_gdf["split"], strict=True))
+
+        # Chip 1: 2 train vs 1 val -> train
+        assert split_map["ftw-36NXF0000"] == "train"
+        # Chip 2: 1 train vs 1 test -> tie-break to train
+        assert split_map["ftw-36NXF0001"] == "train"

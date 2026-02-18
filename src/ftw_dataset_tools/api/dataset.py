@@ -210,6 +210,7 @@ def create_dataset(
         split_type=split_type,
         split_percents=split_percents,
         random_seed=42,
+        fields_file=str(fields_path),
         on_progress=log,
     )
 

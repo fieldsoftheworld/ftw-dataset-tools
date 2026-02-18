@@ -13,8 +13,15 @@ from ftw_dataset_tools.api import splits
     required=True,
     help=(
         "Split strategy. 'random-uniform': randomly assign individual chips. "
-        "'block3x3': group chips into 3x3 spatial blocks and randomly assign blocks."
+        "'block3x3': group chips into 3x3 spatial blocks and randomly assign blocks. "
+        "'predefined': use a split column from the fields file."
     ),
+)
+@click.option(
+    "--fields-file",
+    type=click.Path(exists=True),
+    default=None,
+    help="Fields GeoParquet with a 'split' column (required for split-type predefined).",
 )
 @click.option(
     "--split-percents",
@@ -36,6 +43,7 @@ def create_splits(
     split_type: str,
     split_percents: tuple[int, int, int],
     random_seed: int,
+    fields_file: str | None,
 ) -> None:
     """Assign train/val/test splits to a chips file.
 
@@ -49,6 +57,8 @@ def create_splits(
     - random-uniform: Randomly assigns each chip to train/val/test splits
     - block3x3: Groups chips into 3x3 spatial blocks and assigns blocks to splits
                 (ensures spatial coherence within each split)
+    - predefined: Uses 'split' column from the fields file and assigns each chip
+                  by majority vote of intersecting fields
 
     \b
     Examples:
@@ -60,7 +70,15 @@ def create_splits(
 
         # With custom random seed
         ftwd create-splits chips.parquet --split-type random-uniform --random-seed 123
+
+        # Use predefined split labels from fields file
+        ftwd create-splits chips.parquet --split-type predefined --fields-file fields.parquet
     """
+    if split_type == "predefined" and fields_file is None:
+        raise click.BadParameter(
+            "--fields-file is required when --split-type predefined is selected",
+            param_hint="fields-file",
+        )
     # Validate at CLI layer for immediate user feedback with proper Click error formatting
     try:
         validated_split_percents = splits.validate_split_percents(split_percents)
@@ -73,6 +91,7 @@ def create_splits(
             split_type=split_type,
             split_percents=validated_split_percents,
             random_seed=random_seed,
+            fields_file=fields_file,
             on_progress=lambda msg: click.echo(msg),
         )
 
