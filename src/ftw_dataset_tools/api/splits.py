@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
+import geoparquet_io as gpio
 import numpy as np
 import pandas as pd
 
@@ -227,8 +228,8 @@ def _assign_block3x3(
         northings = chip_ids.str[-2:].astype(int)
     except (ValueError, TypeError) as e:
         raise ValueError(
-            f"Invalid chip ID format: Unable to extract numeric easting/northing from last 4 characters. "
-            f"Expected format: ftw-<zone><band><grid><EENN>. Error: {e}"
+            "Invalid chip ID format: Unable to extract numeric easting/northing from last "
+            f"4 characters. Expected format: ftw-<zone><band><grid><EENN>. Error: {e}"
         ) from e
 
     # Extract the full MGRS grid identifier (zone + band + 100km grid square)
@@ -302,7 +303,11 @@ def _validate_fields_file(fields_file: str | Path | None) -> Path:
 
 
 def _load_and_validate_fields(fields_path: Path) -> gpd.GeoDataFrame:
-    fields_gdf = gpd.read_parquet(fields_path)
+    table = gpio.read(str(fields_path))
+    fields_gdf = gpd.GeoDataFrame.from_arrow(
+        table.to_arrow(),
+        geometry=table.geometry_column,
+    )
     if "split" not in fields_gdf.columns:
         raise ValueError(
             "Fields file must contain a 'split' column when split_type is 'predefined'. "
@@ -313,9 +318,19 @@ def _load_and_validate_fields(fields_path: Path) -> gpd.GeoDataFrame:
 
 def _normalize_and_validate_splits(
     fields_gdf: gpd.GeoDataFrame,
+    log: Callable[[str], None],
 ) -> gpd.GeoDataFrame:
     fields_gdf = fields_gdf.copy()
     fields_gdf["_split_norm"] = fields_gdf["split"].map(_normalize_predefined_split)
+
+    null_mask = fields_gdf["split"].isna()
+    if null_mask.any():
+        null_count = int(null_mask.sum())
+        example_indices = fields_gdf.index[null_mask][:5].tolist()
+        log(
+            "Warning: Found null split values in fields file. "
+            f"Count: {null_count}. Example row indices: {example_indices}"
+        )
 
     invalid = fields_gdf[fields_gdf["_split_norm"].isna()]["split"].dropna().unique()
     if len(invalid) > 0:
@@ -403,7 +418,7 @@ def _assign_predefined(
     """Assign splits by majority vote using a predefined split column in fields."""
     fields_path = _validate_fields_file(fields_file)
     fields_gdf = _load_and_validate_fields(fields_path)
-    fields_gdf = _normalize_and_validate_splits(fields_gdf)
+    fields_gdf = _normalize_and_validate_splits(fields_gdf, log)
     fields_gdf = _ensure_crs_alignment(gdf, fields_gdf, log)
     splits, has_val_labels = _compute_chip_majority_splits(fields_gdf, gdf)
 

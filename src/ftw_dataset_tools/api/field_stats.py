@@ -333,7 +333,8 @@ def add_field_stats(
             xmin, ymin, xmax, ymax = bounds_result
             log(f"Fields bounds: [{xmin:.6f}, {ymin:.6f}, {xmax:.6f}, {ymax:.6f}]")
             log(
-                f"BBox Finder URL: https://bboxfinder.com/#{ymin:.6f},{xmin:.6f},{ymax:.6f},{xmax:.6f}"
+                "BBox Finder URL: "
+                f"https://bboxfinder.com/#{ymin:.6f},{xmin:.6f},{ymax:.6f},{xmax:.6f}"
             )
 
             # Guard against mislabeled CRS (EPSG:4326 expected degrees)
@@ -344,7 +345,8 @@ def add_field_stats(
                 )
                 raise ValueError(
                     "Fields bounds appear to be in projected units, but EPSG:4326 is required "
-                    "when using the remote grid. Please fix the CRS metadata and reproject to EPSG:4326."
+                    "when using the remote grid. Please fix the CRS metadata and reproject to "
+                    "EPSG:4326."
                 )
 
             # Load httpfs for S3 access
@@ -376,7 +378,7 @@ def add_field_stats(
         if drop_border_chips:
             log("Identifying border chips to remove...")
 
-            # Strategy: Remove chips that are not completely within the convex hull of field polygons
+            # Strategy: Remove chips not completely within the convex hull of field polygons
             # This identifies chips on the boundary that may have partial field coverage
 
             # Create convex hull of all field geometries
@@ -406,7 +408,8 @@ def add_field_stats(
 
                 remaining_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
                 log(
-                    f"Removed {border_count:,} border chips (outside convex hull), {remaining_count:,} chips remaining"
+                    f"Removed {border_count:,} border chips (outside convex hull), "
+                    f"{remaining_count:,} chips remaining"
                 )
                 grid_count = remaining_count
             else:
