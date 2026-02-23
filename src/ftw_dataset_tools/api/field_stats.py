@@ -321,10 +321,6 @@ def add_field_stats(
 
             log("Fetching grid from Source Coop...")
 
-            # Load httpfs for S3 access
-            conn.execute("INSTALL httpfs; LOAD httpfs;")
-            conn.execute("SET s3_region = 'us-west-2';")
-
             # Compute bounds from fields geometry
             bounds_result = conn.execute(f"""
                 SELECT
@@ -337,8 +333,25 @@ def add_field_stats(
             xmin, ymin, xmax, ymax = bounds_result
             log(f"Fields bounds: [{xmin:.6f}, {ymin:.6f}, {xmax:.6f}, {ymax:.6f}]")
             log(
-                f"BBox Finder URL: https://bboxfinder.com/#{ymin:.6f},{xmin:.6f},{ymax:.6f},{xmax:.6f}"
+                "BBox Finder URL: "
+                f"https://bboxfinder.com/#{ymin:.6f},{xmin:.6f},{ymax:.6f},{xmax:.6f}"
             )
+
+            # Guard against mislabeled CRS (EPSG:4326 expected degrees)
+            if abs(xmin) > 180 or abs(xmax) > 180 or abs(ymin) > 90 or abs(ymax) > 90:
+                log(
+                    "Warning: Fields bounds are outside degree ranges for EPSG:4326. "
+                    "This suggests the file CRS metadata may be incorrect."
+                )
+                raise ValueError(
+                    "Fields bounds appear to be in projected units, but EPSG:4326 is required "
+                    "when using the remote grid. Please fix the CRS metadata and reproject to "
+                    "EPSG:4326."
+                )
+
+            # Load httpfs for S3 access
+            conn.execute("INSTALL httpfs; LOAD httpfs;")
+            conn.execute("SET s3_region = 'us-west-2';")
 
             # Fetch grid cells that intersect the bounding box
             log("Fetching grid cells by bounding box...")
@@ -365,7 +378,7 @@ def add_field_stats(
         if drop_border_chips:
             log("Identifying border chips to remove...")
 
-            # Strategy: Remove chips that are not completely within the convex hull of field polygons
+            # Strategy: Remove chips not completely within the convex hull of field polygons
             # This identifies chips on the boundary that may have partial field coverage
 
             # Create convex hull of all field geometries
@@ -395,7 +408,8 @@ def add_field_stats(
 
                 remaining_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
                 log(
-                    f"Removed {border_count:,} border chips (outside convex hull), {remaining_count:,} chips remaining"
+                    f"Removed {border_count:,} border chips (outside convex hull), "
+                    f"{remaining_count:,} chips remaining"
                 )
                 grid_count = remaining_count
             else:

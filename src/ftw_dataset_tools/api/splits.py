@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
+import geoparquet_io as gpio
 import numpy as np
+import pandas as pd
 
 from ftw_dataset_tools.api.geo import write_geoparquet
 
@@ -17,6 +19,7 @@ if TYPE_CHECKING:
 
 SPLIT_TYPE_CHOICES: tuple[str, ...] = (
     "block3x3",
+    "predefined",
     "random-uniform",
 )
 SPLIT_TYPE_CHOICES_STR = ", ".join(SPLIT_TYPE_CHOICES)
@@ -48,7 +51,7 @@ class CreateSplitsResult:
 
     chips_file: Path
     split_type: str
-    split_percents: tuple[int, int, int]
+    split_percents: tuple[float, float, float]
     total_chips: int
     train_count: int
     val_count: int
@@ -60,6 +63,7 @@ def assign_splits(
     split_type: str,
     split_percents: tuple[int, int, int] = (80, 10, 10),
     random_seed: int = 42,
+    fields_file: str | Path | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> CreateSplitsResult:
     """
@@ -70,10 +74,12 @@ def assign_splits(
     Args:
         chips_file: Path to chips parquet file
         split_type: Split strategy (required). Must be one of: 'random-uniform' (random
-            individual chip assignment) or 'block3x3' (3x3 spatial block assignment)
+            individual chip assignment), 'block3x3' (3x3 spatial block assignment),
+            or 'predefined' (use split column from fields file with majority vote per chip)
         split_percents: Tuple of (train_pct, val_pct, test_pct) summing to 100.
             Default: (80, 10, 10)
         random_seed: Random seed for reproducibility. Default: 42
+        fields_file: Fields GeoParquet path (required for split_type='predefined').
         on_progress: Optional callback for progress messages
 
     Returns:
@@ -121,6 +127,8 @@ def assign_splits(
         splits = _assign_random_uniform(gdf, split_percents, random_seed)
     elif split_type == "block3x3":
         splits = _assign_block3x3(gdf, split_percents, random_seed)
+    elif split_type == "predefined":
+        splits = _assign_predefined(gdf, fields_file, random_seed, log)
     else:
         raise ValueError(f"Unsupported split_type: {split_type}")
 
@@ -135,12 +143,21 @@ def assign_splits(
     val_count = int((splits == "val").sum())
     test_count = int((splits == "test").sum())
 
+    actual_split_percents = split_percents
+    if split_type == "predefined":
+        total = max(n_chips, 1)
+        actual_split_percents = (
+            100.0 * train_count / total,
+            100.0 * val_count / total,
+            100.0 * test_count / total,
+        )
+
     log(f"Assigned {train_count} train, {val_count} val, {test_count} test")
 
     return CreateSplitsResult(
         chips_file=chips_path,
         split_type=split_type,
-        split_percents=split_percents,
+        split_percents=actual_split_percents,
         total_chips=n_chips,
         train_count=train_count,
         val_count=val_count,
@@ -211,8 +228,8 @@ def _assign_block3x3(
         northings = chip_ids.str[-2:].astype(int)
     except (ValueError, TypeError) as e:
         raise ValueError(
-            f"Invalid chip ID format: Unable to extract numeric easting/northing from last 4 characters. "
-            f"Expected format: ftw-<zone><band><grid><EENN>. Error: {e}"
+            "Invalid chip ID format: Unable to extract numeric easting/northing from last "
+            f"4 characters. Expected format: ftw-<zone><band><grid><EENN>. Error: {e}"
         ) from e
 
     # Extract the full MGRS grid identifier (zone + band + 100km grid square)
@@ -254,3 +271,175 @@ def _assign_block3x3(
     chip_splits = block_ids.map(block_to_split).values
 
     return chip_splits
+
+
+def _normalize_predefined_split(value: object) -> str | None:
+    """Normalize user-provided split labels to train/val/test."""
+    if pd.isna(value):
+        return None
+
+    text = str(value).strip().lower()
+    mapping = {
+        "train": "train",
+        "training": "train",
+        "val": "val",
+        "valid": "val",
+        "validation": "val",
+        "test": "test",
+        "testing": "test",
+    }
+    return mapping.get(text)
+
+
+def _validate_fields_file(fields_file: str | Path | None) -> Path:
+    if fields_file is None:
+        raise ValueError("fields_file is required when split_type is 'predefined'")
+
+    fields_path = Path(fields_file).resolve()
+    if not fields_path.exists():
+        raise FileNotFoundError(f"Fields file not found: {fields_path}")
+
+    return fields_path
+
+
+def _load_and_validate_fields(fields_path: Path) -> gpd.GeoDataFrame:
+    table = gpio.read(str(fields_path))
+    fields_gdf = gpd.GeoDataFrame.from_arrow(
+        table.to_arrow(),
+        geometry=table.geometry_column,
+    )
+    if "split" not in fields_gdf.columns:
+        raise ValueError(
+            "Fields file must contain a 'split' column when split_type is 'predefined'. "
+            f"Found columns: {list(fields_gdf.columns)}"
+        )
+    return fields_gdf
+
+
+def _normalize_and_validate_splits(
+    fields_gdf: gpd.GeoDataFrame,
+    log: Callable[[str], None],
+) -> gpd.GeoDataFrame:
+    fields_gdf = fields_gdf.copy()
+    fields_gdf["_split_norm"] = fields_gdf["split"].map(_normalize_predefined_split)
+
+    null_mask = fields_gdf["split"].isna()
+    if null_mask.any():
+        null_count = int(null_mask.sum())
+        example_indices = fields_gdf.index[null_mask][:5].tolist()
+        log(
+            "Warning: Found null split values in fields file. "
+            f"Count: {null_count}. Example row indices: {example_indices}"
+        )
+
+    invalid = fields_gdf[fields_gdf["_split_norm"].isna()]["split"].dropna().unique()
+    if len(invalid) > 0:
+        invalid_list = ", ".join(map(str, invalid[:5]))
+        raise ValueError(
+            "Invalid split values in fields file. Expected variants of train/val/test. "
+            f"Found: {invalid_list}"
+        )
+
+    return fields_gdf
+
+
+def _ensure_crs_alignment(
+    gdf: gpd.GeoDataFrame,
+    fields_gdf: gpd.GeoDataFrame,
+    log: Callable[[str], None],
+) -> gpd.GeoDataFrame:
+    if gdf.crs is None:
+        raise ValueError("Chips file has no CRS information; cannot align with fields CRS.")
+    if fields_gdf.crs is None:
+        raise ValueError("Fields file has no CRS information; cannot align with chips CRS.")
+
+    if fields_gdf.crs != gdf.crs:
+        log("Reprojecting fields to match chips CRS for predefined splits...")
+        fields_gdf = fields_gdf.to_crs(gdf.crs)
+
+    return fields_gdf
+
+
+def _compute_chip_majority_splits(
+    fields_gdf: gpd.GeoDataFrame,
+    gdf: gpd.GeoDataFrame,
+) -> tuple[pd.Series, bool]:
+    joined = gpd.sjoin(
+        fields_gdf[["_split_norm", "geometry"]],
+        gdf[["id", "geometry"]],
+        how="inner",
+        predicate="intersects",
+    )
+
+    if joined.empty:
+        raise ValueError(
+            "No fields intersected chips when assigning predefined splits. "
+            "Check CRS alignment and geometry validity."
+        )
+
+    counts = (
+        joined.groupby("id")["_split_norm"]
+        .value_counts()
+        .unstack(fill_value=0)
+        .reindex(columns=["train", "val", "test"], fill_value=0)
+    )
+
+    has_val_labels = bool(counts.get("val", pd.Series(dtype=int)).sum() > 0)
+
+    priority = ["train", "val", "test"]
+    chip_to_split: dict[str, str] = {}
+    for chip_id, row in counts.iterrows():
+        max_count = int(row.max())
+        if max_count == 0:
+            continue
+        for split in priority:
+            if int(row[split]) == max_count:
+                chip_to_split[chip_id] = split
+                break
+
+    splits = gdf["id"].map(chip_to_split)
+    missing = gdf.loc[splits.isna(), "id"].astype(str).tolist()
+    if missing:
+        missing_preview = ", ".join(missing[:5])
+        raise ValueError(
+            "No predefined split assignments found for some chips. "
+            f"Example missing chip IDs: {missing_preview}"
+        )
+
+    return splits, has_val_labels
+
+
+def _assign_predefined(
+    gdf: gpd.GeoDataFrame,
+    fields_file: str | Path | None,
+    random_seed: int,
+    log: Callable[[str], None],
+) -> np.ndarray:
+    """Assign splits by majority vote using a predefined split column in fields."""
+    fields_path = _validate_fields_file(fields_file)
+    fields_gdf = _load_and_validate_fields(fields_path)
+    fields_gdf = _normalize_and_validate_splits(fields_gdf, log)
+    fields_gdf = _ensure_crs_alignment(gdf, fields_gdf, log)
+    splits, has_val_labels = _compute_chip_majority_splits(fields_gdf, gdf)
+
+    if not has_val_labels:
+        train_mask = splits.eq("train")
+        train_indices = splits[train_mask].index.to_numpy()
+        train_count = len(train_indices)
+        n_val = int(train_count * 0.2)
+
+        if n_val > 0:
+            rng = np.random.default_rng(random_seed)
+            val_indices = rng.choice(train_indices, size=n_val, replace=False)
+            splits.loc[val_indices] = "val"
+            log(
+                "Warning: No validation labels found in fields split column. "
+                f"Promoted {n_val} of {train_count} training chips to validation (20% of train)."
+            )
+        else:
+            log(
+                "Warning: No validation labels found in fields split column, "
+                "and training set is too small to allocate 20% to validation."
+            )
+
+    return splits.to_numpy()

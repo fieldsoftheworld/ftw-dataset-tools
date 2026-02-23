@@ -43,7 +43,8 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     help=(
         "Dataset train/val/test split strategy. "
         "Use 'block3x3' for spatially coherent 3x3 blocks, or "
-        "'random-uniform' for random chip assignment across the dataset. "
+        "'random-uniform' for random chip assignment across the dataset, or "
+        "'predefined' to use a split column from the input fields file. "
         f"Available choices: {splits.SPLIT_TYPE_CHOICES_STR}."
     ),
 )

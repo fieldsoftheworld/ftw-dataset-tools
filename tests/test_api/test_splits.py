@@ -4,7 +4,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import pytest
-from shapely.geometry import Point
+from shapely.geometry import Point, box
 
 from ftw_dataset_tools.api.splits import assign_splits, validate_split_percents
 
@@ -177,3 +177,165 @@ class TestAssignSplits:
                 split_percents=(80, 10, 10),
                 random_seed=42,
             )
+
+    def test_predefined_requires_fields_file(self, tmp_path: Path) -> None:
+        """Test predefined split type requires fields_file."""
+        chips_file = tmp_path / "chips.parquet"
+
+        gdf = gpd.GeoDataFrame(
+            {"id": ["ftw-36NXF0000"], "geometry": [box(0, 0, 1, 1)]},
+            crs="EPSG:4326",
+        )
+        gdf.to_parquet(chips_file)
+
+        with pytest.raises(ValueError, match="fields_file is required"):
+            assign_splits(
+                chips_file=chips_file,
+                split_type="predefined",
+                split_percents=(80, 10, 10),
+                random_seed=42,
+            )
+
+    def test_predefined_missing_split_column(self, tmp_path: Path) -> None:
+        """Test predefined split raises when fields file lacks split column."""
+        chips_file = tmp_path / "chips.parquet"
+        fields_file = tmp_path / "fields.parquet"
+
+        chips_gdf = gpd.GeoDataFrame(
+            {"id": ["ftw-36NXF0000"], "geometry": [box(0, 0, 1, 1)]},
+            crs="EPSG:4326",
+        )
+        chips_gdf.to_parquet(chips_file)
+
+        fields_gdf = gpd.GeoDataFrame(
+            {"name": ["field1"], "geometry": [box(0.1, 0.1, 0.2, 0.2)]},
+            crs="EPSG:4326",
+        )
+        fields_gdf.to_parquet(fields_file)
+
+        with pytest.raises(ValueError, match="must contain a 'split' column"):
+            assign_splits(
+                chips_file=chips_file,
+                split_type="predefined",
+                split_percents=(80, 10, 10),
+                random_seed=42,
+                fields_file=fields_file,
+            )
+
+    def test_predefined_invalid_split_value(self, tmp_path: Path) -> None:
+        """Test predefined split raises on invalid split values."""
+        chips_file = tmp_path / "chips.parquet"
+        fields_file = tmp_path / "fields.parquet"
+
+        chips_gdf = gpd.GeoDataFrame(
+            {"id": ["ftw-36NXF0000"], "geometry": [box(0, 0, 1, 1)]},
+            crs="EPSG:4326",
+        )
+        chips_gdf.to_parquet(chips_file)
+
+        fields_gdf = gpd.GeoDataFrame(
+            {"split": ["not-a-split"], "geometry": [box(0.1, 0.1, 0.2, 0.2)]},
+            crs="EPSG:4326",
+        )
+        fields_gdf.to_parquet(fields_file)
+
+        with pytest.raises(ValueError, match="Invalid split values"):
+            assign_splits(
+                chips_file=chips_file,
+                split_type="predefined",
+                split_percents=(80, 10, 10),
+                random_seed=42,
+                fields_file=fields_file,
+            )
+
+    def test_predefined_majority_and_tiebreak(self, tmp_path: Path) -> None:
+        """Test predefined split assigns majority and applies deterministic tie-break."""
+        chips_file = tmp_path / "chips.parquet"
+        fields_file = tmp_path / "fields.parquet"
+
+        chips_gdf = gpd.GeoDataFrame(
+            {
+                "id": ["ftw-36NXF0000", "ftw-36NXF0001"],
+                "geometry": [box(0, 0, 1, 1), box(2, 0, 3, 1)],
+            },
+            crs="EPSG:4326",
+        )
+        chips_gdf.to_parquet(chips_file)
+
+        fields_gdf = gpd.GeoDataFrame(
+            {
+                "split": [
+                    "train",
+                    "Training",
+                    "validation",
+                    "testing",
+                    "TRAIN",
+                ],
+                "geometry": [
+                    box(0.1, 0.1, 0.2, 0.2),
+                    box(0.2, 0.2, 0.3, 0.3),
+                    box(0.3, 0.3, 0.4, 0.4),
+                    box(2.1, 0.1, 2.2, 0.2),
+                    box(2.2, 0.2, 2.3, 0.3),
+                ],
+            },
+            crs="EPSG:4326",
+        )
+        fields_gdf.to_parquet(fields_file)
+
+        result = assign_splits(
+            chips_file=chips_file,
+            split_type="predefined",
+            split_percents=(80, 10, 10),
+            random_seed=42,
+            fields_file=fields_file,
+        )
+
+        assert result.total_chips == 2
+        updated_gdf = gpd.read_parquet(chips_file)
+        split_map = dict(zip(updated_gdf["id"], updated_gdf["split"], strict=True))
+
+        # Chip 1: 2 train vs 1 val -> train
+        assert split_map["ftw-36NXF0000"] == "train"
+        # Chip 2: 1 train vs 1 test -> tie-break to train
+        assert split_map["ftw-36NXF0001"] == "train"
+
+    def test_predefined_creates_validation_when_missing(self, tmp_path: Path) -> None:
+        """Test predefined split promotes 20% of train chips to validation when no val labels."""
+        chips_file = tmp_path / "chips.parquet"
+        fields_file = tmp_path / "fields.parquet"
+
+        chip_ids = [f"ftw-36NXF{idx:04d}" for idx in range(12)]
+        chips_gdf = gpd.GeoDataFrame(
+            {
+                "id": chip_ids,
+                "geometry": [box(idx, 0, idx + 1, 1) for idx in range(12)],
+            },
+            crs="EPSG:4326",
+        )
+        chips_gdf.to_parquet(chips_file)
+
+        split_labels = ["train"] * 10 + ["test"] * 2
+        fields_gdf = gpd.GeoDataFrame(
+            {
+                "split": split_labels,
+                "geometry": [box(idx + 0.1, 0.1, idx + 0.2, 0.2) for idx in range(12)],
+            },
+            crs="EPSG:4326",
+        )
+        fields_gdf.to_parquet(fields_file)
+
+        messages: list[str] = []
+        result = assign_splits(
+            chips_file=chips_file,
+            split_type="predefined",
+            split_percents=(80, 10, 10),
+            random_seed=42,
+            fields_file=fields_file,
+            on_progress=messages.append,
+        )
+
+        assert result.train_count == 8
+        assert result.val_count == 2
+        assert result.test_count == 2
+        assert any("No validation labels found" in msg for msg in messages)

@@ -138,6 +138,30 @@ class TestAddFieldStats:
                 fields_file="/nonexistent/fields.parquet",
             )
 
+    def test_remote_grid_bounds_guard_for_mislabeled_crs(self, tmp_path: Path) -> None:
+        """Test guard for projected bounds when EPSG:4326 is expected."""
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        fields_file = tmp_path / "fields.parquet"
+        gdf = gpd.GeoDataFrame(
+            {
+                "id": ["field1"],
+                "geometry": [box(408000, 5808000, 409000, 5809000)],
+            },
+            crs="EPSG:4326",
+        )
+        gdf.to_parquet(fields_file)
+
+        messages: list[str] = []
+        with pytest.raises(ValueError, match="Fields bounds appear to be in projected units"):
+            add_field_stats(
+                fields_file=str(fields_file),
+                grid_file=None,
+                on_progress=messages.append,
+            )
+
+        assert any("Warning: Fields bounds are outside degree ranges" in msg for msg in messages)
+
 
 class TestAddFieldStatsWithLocalGrid:
     """Tests for add_field_stats with local grid file."""
