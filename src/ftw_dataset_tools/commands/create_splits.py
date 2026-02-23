@@ -101,8 +101,8 @@ def create_splits(
         click.echo(f"  Chips file: {result.chips_file}")
         click.echo(f"  Split type: {result.split_type}")
         click.echo(
-            f"  Split percentages: {result.split_percents[0]}% train, "
-            f"{result.split_percents[1]}% val, {result.split_percents[2]}% test"
+            f"  Split percentages: {result.split_percents[0]:.1f}% train, "
+            f"{result.split_percents[1]:.1f}% val, {result.split_percents[2]:.1f}% test"
         )
         click.echo()
         click.echo(f"  Total chips: {result.total_chips:,}")

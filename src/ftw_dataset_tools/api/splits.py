@@ -50,7 +50,7 @@ class CreateSplitsResult:
 
     chips_file: Path
     split_type: str
-    split_percents: tuple[int, int, int]
+    split_percents: tuple[float, float, float]
     total_chips: int
     train_count: int
     val_count: int
@@ -142,12 +142,21 @@ def assign_splits(
     val_count = int((splits == "val").sum())
     test_count = int((splits == "test").sum())
 
+    actual_split_percents = split_percents
+    if split_type == "predefined":
+        total = max(n_chips, 1)
+        actual_split_percents = (
+            100.0 * train_count / total,
+            100.0 * val_count / total,
+            100.0 * test_count / total,
+        )
+
     log(f"Assigned {train_count} train, {val_count} val, {test_count} test")
 
     return CreateSplitsResult(
         chips_file=chips_path,
         split_type=split_type,
-        split_percents=split_percents,
+        split_percents=actual_split_percents,
         total_chips=n_chips,
         train_count=train_count,
         val_count=val_count,
@@ -281,13 +290,7 @@ def _normalize_predefined_split(value: object) -> str | None:
     return mapping.get(text)
 
 
-def _assign_predefined(
-    gdf: gpd.GeoDataFrame,
-    fields_file: str | Path | None,
-    random_seed: int,
-    log: Callable[[str], None],
-) -> np.ndarray:
-    """Assign splits by majority vote using a predefined split column in fields."""
+def _validate_fields_file(fields_file: str | Path | None) -> Path:
     if fields_file is None:
         raise ValueError("fields_file is required when split_type is 'predefined'")
 
@@ -295,17 +298,24 @@ def _assign_predefined(
     if not fields_path.exists():
         raise FileNotFoundError(f"Fields file not found: {fields_path}")
 
+    return fields_path
+
+
+def _load_and_validate_fields(fields_path: Path) -> gpd.GeoDataFrame:
     fields_gdf = gpd.read_parquet(fields_path)
     if "split" not in fields_gdf.columns:
         raise ValueError(
             "Fields file must contain a 'split' column when split_type is 'predefined'. "
             f"Found columns: {list(fields_gdf.columns)}"
         )
+    return fields_gdf
 
+
+def _normalize_and_validate_splits(
+    fields_gdf: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
     fields_gdf = fields_gdf.copy()
     fields_gdf["_split_norm"] = fields_gdf["split"].map(_normalize_predefined_split)
-
-    has_val_labels = fields_gdf["_split_norm"].eq("val").any()
 
     invalid = fields_gdf[fields_gdf["_split_norm"].isna()]["split"].dropna().unique()
     if len(invalid) > 0:
@@ -315,6 +325,14 @@ def _assign_predefined(
             f"Found: {invalid_list}"
         )
 
+    return fields_gdf
+
+
+def _ensure_crs_alignment(
+    gdf: gpd.GeoDataFrame,
+    fields_gdf: gpd.GeoDataFrame,
+    log: Callable[[str], None],
+) -> gpd.GeoDataFrame:
     if gdf.crs is None:
         raise ValueError("Chips file has no CRS information; cannot align with fields CRS.")
     if fields_gdf.crs is None:
@@ -324,6 +342,13 @@ def _assign_predefined(
         log("Reprojecting fields to match chips CRS for predefined splits...")
         fields_gdf = fields_gdf.to_crs(gdf.crs)
 
+    return fields_gdf
+
+
+def _compute_chip_majority_splits(
+    fields_gdf: gpd.GeoDataFrame,
+    gdf: gpd.GeoDataFrame,
+) -> tuple[pd.Series, bool]:
     joined = gpd.sjoin(
         fields_gdf[["_split_norm", "geometry"]],
         gdf[["id", "geometry"]],
@@ -344,6 +369,8 @@ def _assign_predefined(
         .reindex(columns=["train", "val", "test"], fill_value=0)
     )
 
+    has_val_labels = bool(counts.get("val", pd.Series(dtype=int)).sum() > 0)
+
     priority = ["train", "val", "test"]
     chip_to_split: dict[str, str] = {}
     for chip_id, row in counts.iterrows():
@@ -363,6 +390,22 @@ def _assign_predefined(
             "No predefined split assignments found for some chips. "
             f"Example missing chip IDs: {missing_preview}"
         )
+
+    return splits, has_val_labels
+
+
+def _assign_predefined(
+    gdf: gpd.GeoDataFrame,
+    fields_file: str | Path | None,
+    random_seed: int,
+    log: Callable[[str], None],
+) -> np.ndarray:
+    """Assign splits by majority vote using a predefined split column in fields."""
+    fields_path = _validate_fields_file(fields_file)
+    fields_gdf = _load_and_validate_fields(fields_path)
+    fields_gdf = _normalize_and_validate_splits(fields_gdf)
+    fields_gdf = _ensure_crs_alignment(gdf, fields_gdf, log)
+    splits, has_val_labels = _compute_chip_majority_splits(fields_gdf, gdf)
 
     if not has_val_labels:
         train_mask = splits.eq("train")
