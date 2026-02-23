@@ -299,3 +299,43 @@ class TestAssignSplits:
         assert split_map["ftw-36NXF0000"] == "train"
         # Chip 2: 1 train vs 1 test -> tie-break to train
         assert split_map["ftw-36NXF0001"] == "train"
+
+    def test_predefined_creates_validation_when_missing(self, tmp_path: Path) -> None:
+        """Test predefined split promotes 20% of train chips to validation when no val labels."""
+        chips_file = tmp_path / "chips.parquet"
+        fields_file = tmp_path / "fields.parquet"
+
+        chip_ids = [f"ftw-36NXF{idx:04d}" for idx in range(12)]
+        chips_gdf = gpd.GeoDataFrame(
+            {
+                "id": chip_ids,
+                "geometry": [box(idx, 0, idx + 1, 1) for idx in range(12)],
+            },
+            crs="EPSG:4326",
+        )
+        chips_gdf.to_parquet(chips_file)
+
+        split_labels = ["train"] * 10 + ["test"] * 2
+        fields_gdf = gpd.GeoDataFrame(
+            {
+                "split": split_labels,
+                "geometry": [box(idx + 0.1, 0.1, idx + 0.2, 0.2) for idx in range(12)],
+            },
+            crs="EPSG:4326",
+        )
+        fields_gdf.to_parquet(fields_file)
+
+        messages: list[str] = []
+        result = assign_splits(
+            chips_file=chips_file,
+            split_type="predefined",
+            split_percents=(80, 10, 10),
+            random_seed=42,
+            fields_file=fields_file,
+            on_progress=messages.append,
+        )
+
+        assert result.train_count == 8
+        assert result.val_count == 2
+        assert result.test_count == 2
+        assert any("No validation labels found" in msg for msg in messages)

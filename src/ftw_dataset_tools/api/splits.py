@@ -127,7 +127,7 @@ def assign_splits(
     elif split_type == "block3x3":
         splits = _assign_block3x3(gdf, split_percents, random_seed)
     elif split_type == "predefined":
-        splits = _assign_predefined(gdf, fields_file, log)
+        splits = _assign_predefined(gdf, fields_file, random_seed, log)
     else:
         raise ValueError(f"Unsupported split_type: {split_type}")
 
@@ -284,6 +284,7 @@ def _normalize_predefined_split(value: object) -> str | None:
 def _assign_predefined(
     gdf: gpd.GeoDataFrame,
     fields_file: str | Path | None,
+    random_seed: int,
     log: Callable[[str], None],
 ) -> np.ndarray:
     """Assign splits by majority vote using a predefined split column in fields."""
@@ -303,6 +304,8 @@ def _assign_predefined(
 
     fields_gdf = fields_gdf.copy()
     fields_gdf["_split_norm"] = fields_gdf["split"].map(_normalize_predefined_split)
+
+    has_val_labels = fields_gdf["_split_norm"].eq("val").any()
 
     invalid = fields_gdf[fields_gdf["_split_norm"].isna()]["split"].dropna().unique()
     if len(invalid) > 0:
@@ -360,5 +363,25 @@ def _assign_predefined(
             "No predefined split assignments found for some chips. "
             f"Example missing chip IDs: {missing_preview}"
         )
+
+    if not has_val_labels:
+        train_mask = splits.eq("train")
+        train_indices = splits[train_mask].index.to_numpy()
+        train_count = len(train_indices)
+        n_val = int(train_count * 0.2)
+
+        if n_val > 0:
+            rng = np.random.default_rng(random_seed)
+            val_indices = rng.choice(train_indices, size=n_val, replace=False)
+            splits.loc[val_indices] = "val"
+            log(
+                "Warning: No validation labels found in fields split column. "
+                f"Promoted {n_val} of {train_count} training chips to validation (20% of train)."
+            )
+        else:
+            log(
+                "Warning: No validation labels found in fields split column, "
+                "and training set is too small to allocate 20% to validation."
+            )
 
     return splits.to_numpy()
