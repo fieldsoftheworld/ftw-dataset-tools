@@ -337,12 +337,7 @@ def add_field_stats(
             )
 
             # Guard against mislabeled CRS (EPSG:4326 expected degrees)
-            if (
-                abs(xmin) > 180
-                or abs(xmax) > 180
-                or abs(ymin) > 90
-                or abs(ymax) > 90
-            ):
+            if abs(xmin) > 180 or abs(xmax) > 180 or abs(ymin) > 90 or abs(ymax) > 90:
                 log(
                     "Warning: Fields bounds are outside degree ranges for EPSG:4326. "
                     "This suggests the file CRS metadata may be incorrect."
