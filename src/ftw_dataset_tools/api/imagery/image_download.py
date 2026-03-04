@@ -198,16 +198,21 @@ def read_single_band(
     target_height: int,
 ) -> tuple[str, np.ndarray]:
     """Read one band reprojected to the target grid."""
-    resampling = Resampling.nearest if band_name in {"scl", "cloud", "snow"} else Resampling.bilinear
+    resampling = (
+        Resampling.nearest if band_name in {"scl", "cloud", "snow"} else Resampling.bilinear
+    )
 
-    with rasterio.open(href) as source_dataset, WarpedVRT(
-        source_dataset,
-        crs=target_crs,
-        transform=target_transform,
-        width=target_width,
-        height=target_height,
-        resampling=resampling,
-    ) as warped_dataset:
+    with (
+        rasterio.open(href) as source_dataset,
+        WarpedVRT(
+            source_dataset,
+            crs=target_crs,
+            transform=target_transform,
+            width=target_width,
+            height=target_height,
+            resampling=resampling,
+        ) as warped_dataset,
+    ):
         data = warped_dataset.read(1)
 
     return band_name, data
@@ -239,7 +244,10 @@ def validate_alignment(output_path: Path, reference_grid: Path | None) -> str | 
         return None
 
     try:
-        with rasterio.open(output_path) as output_dataset, rasterio.open(reference_grid) as reference_dataset:
+        with (
+            rasterio.open(output_path) as output_dataset,
+            rasterio.open(reference_grid) as reference_dataset,
+        ):
             if (
                 output_dataset.crs != reference_dataset.crs
                 or output_dataset.transform != reference_dataset.transform
