@@ -69,7 +69,10 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     type=float,
     default=10.0,
     show_default=True,
-    help="Pixel resolution in meters for masks.",
+    help=(
+        "Pixel resolution in meters for masks; also used as imagery fallback "
+        "when no reference mask grid is found."
+    ),
 )
 @click.option(
     "--workers",
@@ -604,6 +607,10 @@ def _run_image_download(
     band_list = list(bands)
     can_generate_thumbnail = has_rgb_bands(band_list)
 
+    def on_download_progress(msg: str) -> None:
+        if msg.startswith("Grid:"):
+            tqdm.write(f"  {msg}")
+
     with tqdm(
         total=len(child_items), desc="Downloading imagery", unit="scene", leave=False
     ) as pbar:
@@ -641,6 +648,7 @@ def _run_image_download(
                     output_path=output_path,
                     bands=band_list,
                     resolution=resolution,
+                    on_progress=on_download_progress,
                 )
 
                 if result.success:

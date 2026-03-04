@@ -11,8 +11,9 @@ import numpy as np
 import pystac
 import rasterio
 from rasterio.crs import CRS
-from rasterio.warp import Resampling, calculate_default_transform, reproject
-from rasterio.windows import from_bounds
+from rasterio.transform import from_bounds as transform_from_bounds
+from rasterio.vrt import WarpedVRT
+from rasterio.warp import Resampling
 
 from ftw_dataset_tools.api.imagery.settings import BANDS_OF_INTEREST
 from ftw_dataset_tools.api.imagery.thumbnails import (
@@ -27,11 +28,14 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from affine import Affine
+
     from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 
 __all__ = [
     "DownloadResult",
     "download_and_clip_scene",
+    "find_reference_mask_for_output",
     "process_downloaded_scene",
 ]
 
@@ -73,57 +77,190 @@ def _get_band_hrefs(
     return hrefs
 
 
-def _read_band_windowed(
-    href: str,
-    bbox: tuple[float, float, float, float],
-    target_crs: CRS,
-    target_width: int,
-    target_height: int,
-) -> np.ndarray:
-    """
-    Read a band from a COG, clipping to bbox and reprojecting if needed.
+def find_reference_mask_for_output(output_path: Path) -> Path | None:
+    """Find a co-located mask raster to use as reference grid for imagery.
+
+    Prefers semantic 3-class masks, then semantic 2-class, then instance masks.
 
     Args:
-        href: URL or path to the COG
-        bbox: Target bounding box (minx, miny, maxx, maxy) in target_crs
-        target_crs: Target CRS
-        target_width: Target width in pixels
-        target_height: Target height in pixels
+        output_path: Target imagery output path (e.g. ``chip_001_2024_planting_image_s2.tif``)
 
     Returns:
-        numpy array with band data
+        Path to reference mask if available, otherwise ``None``.
     """
+    stem = output_path.stem
+
+    if stem.endswith("_planting_image_s2"):
+        base_id = stem.removesuffix("_planting_image_s2")
+    elif stem.endswith("_harvest_image_s2"):
+        base_id = stem.removesuffix("_harvest_image_s2")
+    else:
+        return None
+
+    candidates = [
+        output_path.parent / f"{base_id}_semantic_3_class.tif",
+        output_path.parent / f"{base_id}_semantic_2_class.tif",
+        output_path.parent / f"{base_id}_instance.tif",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def compute_target_grid(
+    bbox: tuple[float, float, float, float],
+    output_path: Path,
+    resolution: float,
+    reference_raster: Path | None,
+    on_progress: Callable[[str], None] | None = None,
+) -> tuple[tuple[CRS, Affine, int, int, Path | None] | None, str | None]:
+    """Compute output grid from reference mask or bbox+resolution fallback."""
+
+    def log(msg: str) -> None:
+        if on_progress:
+            on_progress(msg)
+
     minx, miny, maxx, maxy = bbox
+    reference_grid = reference_raster or find_reference_mask_for_output(output_path)
 
-    with rasterio.open(href) as src:
-        # Check if we need to reproject
-        if src.crs != target_crs:
-            # Calculate transform for target
-            transform, width, height = calculate_default_transform(
-                src.crs,
-                target_crs,
-                target_width,
-                target_height,
-                *bbox,
+    if reference_grid is not None:
+        try:
+            with rasterio.open(reference_grid) as reference_dataset:
+                target_crs = reference_dataset.crs
+                target_transform = reference_dataset.transform
+                target_width = reference_dataset.width
+                target_height = reference_dataset.height
+                if target_crs is None:
+                    raise ValueError("Reference raster has no CRS")
+
+            log(
+                f"Grid: source=reference_mask path={reference_grid.name} "
+                f"crs={target_crs} width={target_width} height={target_height}"
+            )
+            log(f"Grid: using reference transform={target_transform}")
+            log(
+                f"Grid: requested resolution={resolution}m ignored because "
+                "reference mask defines output grid"
+            )
+            log(
+                f"Using reference mask grid: {reference_grid.name} "
+                f"({target_width}x{target_height}, {target_crs})"
             )
 
-            # Read and reproject
-            data = np.empty((height, width), dtype=src.dtypes[0])
-            reproject(
-                source=rasterio.band(src, 1),
-                destination=data,
-                src_transform=src.transform,
-                src_crs=src.crs,
-                dst_transform=transform,
-                dst_crs=target_crs,
-                resampling=Resampling.bilinear,
+            return (
+                (target_crs, target_transform, target_width, target_height, reference_grid),
+                None,
             )
-            return data
-        else:
-            # Read windowed data directly
-            window = from_bounds(minx, miny, maxx, maxy, src.transform)
-            data = src.read(1, window=window, out_shape=(target_height, target_width))
-            return data
+        except Exception as error:
+            return None, f"Failed to use reference raster {reference_grid}: {error}"
+
+    if resolution <= 0:
+        return (
+            None,
+            "Invalid resolution for fallback grid construction: "
+            f"{resolution}. Resolution must be > 0 when no reference mask grid is found.",
+        )
+
+    lat_center = (miny + maxy) / 2
+    meters_per_degree_lon = 111320 * np.cos(np.radians(lat_center))
+    meters_per_degree_lat = 111320
+
+    width_meters = (maxx - minx) * meters_per_degree_lon
+    height_meters = (maxy - miny) * meters_per_degree_lat
+
+    target_width = max(1, int(width_meters / resolution))
+    target_height = max(1, int(height_meters / resolution))
+    target_crs = CRS.from_epsg(4326)
+    target_transform = transform_from_bounds(minx, miny, maxx, maxy, target_width, target_height)
+
+    log(
+        f"Grid: source=fallback_bbox_resolution bbox=({minx:.6f}, {miny:.6f}, "
+        f"{maxx:.6f}, {maxy:.6f}) resolution_m={resolution}"
+    )
+    log(
+        f"Grid: computed crs={target_crs} width={target_width} "
+        f"height={target_height} transform={target_transform}"
+    )
+    log(f"No reference mask found, using EPSG:4326 fallback grid: {target_width}x{target_height}")
+
+    return (target_crs, target_transform, target_width, target_height, None), None
+
+
+def read_single_band(
+    band_name: str,
+    href: str,
+    target_crs: CRS,
+    target_transform: Affine,
+    target_width: int,
+    target_height: int,
+) -> tuple[str, np.ndarray]:
+    """Read one band reprojected to the target grid."""
+    resampling = (
+        Resampling.nearest if band_name in {"scl", "cloud", "snow"} else Resampling.bilinear
+    )
+
+    with (
+        rasterio.open(href) as source_dataset,
+        WarpedVRT(
+            source_dataset,
+            crs=target_crs,
+            transform=target_transform,
+            width=target_width,
+            height=target_height,
+            resampling=resampling,
+        ) as warped_dataset,
+    ):
+        data = warped_dataset.read(1)
+
+    return band_name, data
+
+
+def write_cog(
+    output_path: Path,
+    stacked: np.ndarray,
+    found_bands: list[str],
+    profile: dict,
+) -> str | None:
+    """Write stacked imagery as a COG and set band descriptions."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with rasterio.open(output_path, "w", **profile) as destination_dataset:
+            destination_dataset.write(stacked)
+            for band_index, band_name in enumerate(found_bands, start=1):
+                destination_dataset.set_band_description(band_index, band_name)
+    except Exception as error:
+        return f"Failed to write output: {error}"
+
+    return None
+
+
+def validate_alignment(output_path: Path, reference_grid: Path | None) -> str | None:
+    """Validate output alignment against reference mask; cleanup output on failure."""
+    if reference_grid is None:
+        return None
+
+    try:
+        with (
+            rasterio.open(output_path) as output_dataset,
+            rasterio.open(reference_grid) as reference_dataset,
+        ):
+            if (
+                output_dataset.crs != reference_dataset.crs
+                or output_dataset.transform != reference_dataset.transform
+                or output_dataset.width != reference_dataset.width
+                or output_dataset.height != reference_dataset.height
+            ):
+                output_path.unlink(missing_ok=True)
+                return f"Output image does not match reference mask grid ({reference_grid.name})"
+    except Exception as error:
+        output_path.unlink(missing_ok=True)
+        return f"Failed to validate output alignment: {error}"
+
+    return None
 
 
 def download_and_clip_scene(
@@ -132,6 +269,7 @@ def download_and_clip_scene(
     output_path: Path,
     bands: list[str] | None = None,
     resolution: float = 10.0,
+    reference_raster: Path | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> DownloadResult:
     """
@@ -143,6 +281,9 @@ def download_and_clip_scene(
         output_path: Path for output GeoTIFF
         bands: Bands to download (default: red, green, blue, nir)
         resolution: Target resolution in meters (default: 10.0)
+        reference_raster: Optional mask raster path used as exact output grid
+            reference (CRS, transform, width, height). If not provided, the
+            function auto-detects a co-located mask from ``output_path``.
         on_progress: Optional callback for progress messages
 
     Returns:
@@ -175,31 +316,15 @@ def download_and_clip_scene(
     found_bands = list(band_hrefs.keys())
     log(f"Found {len(found_bands)} bands: {found_bands}")
 
-    minx, miny, maxx, maxy = bbox
+    target_grid, target_grid_error = compute_target_grid(
+        bbox=bbox,
+        output_path=output_path,
+        resolution=resolution,
+        reference_raster=reference_raster,
+        on_progress=on_progress,
+    )
 
-    # Calculate target dimensions based on resolution
-    # Approximate degrees to meters conversion at the equator
-    # For more accuracy, this should consider latitude
-    lat_center = (miny + maxy) / 2
-    meters_per_degree_lon = 111320 * np.cos(np.radians(lat_center))
-    meters_per_degree_lat = 111320
-
-    width_meters = (maxx - minx) * meters_per_degree_lon
-    height_meters = (maxy - miny) * meters_per_degree_lat
-
-    target_width = max(1, int(width_meters / resolution))
-    target_height = max(1, int(height_meters / resolution))
-
-    log(f"Target dimensions: {target_width}x{target_height} pixels")
-
-    # Use UTM CRS for the output (based on center of bbox)
-    # For simplicity, we'll use the CRS of the first band
-    first_href = next(iter(band_hrefs.values()))
-
-    try:
-        with rasterio.open(first_href) as src:
-            source_crs = src.crs
-    except Exception as e:
+    if target_grid_error is not None or target_grid is None:
         return DownloadResult(
             output_path=output_path,
             scene_id=scene.id,
@@ -209,28 +334,12 @@ def download_and_clip_scene(
             height=0,
             crs="",
             success=False,
-            error=f"Failed to open source imagery: {e}",
+            error=target_grid_error,
         )
 
-    # Transform bbox to source CRS once (used by all bands)
-    if source_crs != CRS.from_epsg(4326):
-        from rasterio.warp import transform_bounds
+    target_crs, target_transform, target_width, target_height, reference_grid = target_grid
 
-        src_bbox = transform_bounds(CRS.from_epsg(4326), source_crs, minx, miny, maxx, maxy)
-    else:
-        src_bbox = bbox
-
-    def read_single_band(band_name: str, href: str) -> tuple[str, np.ndarray]:
-        """Read a single band from a COG."""
-        with rasterio.open(href) as src:
-            window = from_bounds(*src_bbox, src.transform)
-            data = src.read(
-                1,
-                window=window,
-                out_shape=(target_height, target_width),
-                resampling=Resampling.bilinear,
-            )
-            return band_name, data
+    log(f"Target dimensions: {target_width}x{target_height} pixels")
 
     # Read bands in parallel for faster network throughput
     log(f"Reading {len(found_bands)} bands in parallel...")
@@ -240,7 +349,15 @@ def download_and_clip_scene(
 
     with ThreadPoolExecutor(max_workers=min(4, len(found_bands))) as executor:
         futures = {
-            executor.submit(read_single_band, band_name, href): band_name
+            executor.submit(
+                read_single_band,
+                band_name,
+                href,
+                target_crs,
+                target_transform,
+                target_width,
+                target_height,
+            ): band_name
             for band_name, href in band_hrefs.items()
         }
 
@@ -277,34 +394,21 @@ def download_and_clip_scene(
     stacked = np.stack(band_data, axis=0)
     log(f"Stacked shape: {stacked.shape}")
 
-    # Calculate transform for output (reuse src_bbox computed earlier)
-    from rasterio.transform import from_bounds as transform_from_bounds
-
-    out_transform = transform_from_bounds(*src_bbox, target_width, target_height)
-
-    # Write output as COG
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
     profile = {
         "driver": "COG",
         "dtype": stacked.dtype,
         "width": target_width,
         "height": target_height,
         "count": len(found_bands),
-        "crs": source_crs,
-        "transform": out_transform,
+        "crs": target_crs,
+        "transform": target_transform,
         "compress": "deflate",
     }
 
     log(f"Writing to {output_path}...")
 
-    try:
-        with rasterio.open(output_path, "w", **profile) as dst:
-            dst.write(stacked)
-            # Add band descriptions
-            for i, band_name in enumerate(found_bands, start=1):
-                dst.set_band_description(i, band_name)
-    except Exception as e:
+    write_error = write_cog(output_path, stacked, found_bands, profile)
+    if write_error is not None:
         return DownloadResult(
             output_path=output_path,
             scene_id=scene.id,
@@ -314,10 +418,24 @@ def download_and_clip_scene(
             height=0,
             crs="",
             success=False,
-            error=f"Failed to write output: {e}",
+            error=write_error,
         )
 
     log(f"Successfully wrote {output_path}")
+
+    alignment_error = validate_alignment(output_path, reference_grid)
+    if alignment_error is not None:
+        return DownloadResult(
+            output_path=output_path,
+            scene_id=scene.id,
+            season=scene.season,
+            bands=bands,
+            width=0,
+            height=0,
+            crs="",
+            success=False,
+            error=alignment_error,
+        )
 
     return DownloadResult(
         output_path=output_path,
@@ -326,7 +444,7 @@ def download_and_clip_scene(
         bands=found_bands,
         width=target_width,
         height=target_height,
-        crs=str(source_crs),
+        crs=str(target_crs),
         success=True,
     )
 
