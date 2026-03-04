@@ -63,7 +63,10 @@ VALID_BANDS: tuple[str, ...] = (
     type=float,
     default=10.0,
     show_default=True,
-    help="Target resolution in meters.",
+    help=(
+        "Target resolution in meters when no reference mask grid is found. "
+        "If a co-located mask exists, its CRS/transform/size is used instead."
+    ),
 )
 @click.option(
     "--resume",
@@ -188,7 +191,8 @@ def download_images_cmd(
 
     # Progress callback
     def on_progress(msg: str) -> None:
-        pass  # Suppress individual band progress for cleaner output
+        if msg.startswith("Grid:"):
+            tqdm.write(f"  {msg}")
 
     # Process each child item
     with tqdm(total=len(child_items), desc="Downloading imagery", unit="scene") as pbar:
