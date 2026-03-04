@@ -202,6 +202,22 @@ def download_and_clip_scene(
     else:
         # Fallback grid in EPSG:4326 using the requested metric resolution
         # approximated to degrees at chip latitude.
+        if resolution <= 0:
+            return DownloadResult(
+                output_path=output_path,
+                scene_id=scene.id,
+                season=scene.season,
+                bands=bands,
+                width=0,
+                height=0,
+                crs="",
+                success=False,
+                error=(
+                    "Invalid resolution for fallback grid construction: "
+                    f"{resolution}. Resolution must be > 0 when no reference mask grid is found."
+                ),
+            )
+
         lat_center = (miny + maxy) / 2
         meters_per_degree_lon = 111320 * np.cos(np.radians(lat_center))
         meters_per_degree_lat = 111320
