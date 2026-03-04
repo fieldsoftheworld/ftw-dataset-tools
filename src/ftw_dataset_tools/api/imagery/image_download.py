@@ -28,6 +28,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from affine import Affine
+
     from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 
 __all__ = [
@@ -108,6 +110,151 @@ def find_reference_mask_for_output(output_path: Path) -> Path | None:
     return None
 
 
+def compute_target_grid(
+    bbox: tuple[float, float, float, float],
+    output_path: Path,
+    resolution: float,
+    reference_raster: Path | None,
+    on_progress: Callable[[str], None] | None = None,
+) -> tuple[tuple[CRS, Affine, int, int, Path | None] | None, str | None]:
+    """Compute output grid from reference mask or bbox+resolution fallback."""
+
+    def log(msg: str) -> None:
+        if on_progress:
+            on_progress(msg)
+
+    minx, miny, maxx, maxy = bbox
+    reference_grid = reference_raster or find_reference_mask_for_output(output_path)
+
+    if reference_grid is not None:
+        try:
+            with rasterio.open(reference_grid) as reference_dataset:
+                target_crs = reference_dataset.crs
+                target_transform = reference_dataset.transform
+                target_width = reference_dataset.width
+                target_height = reference_dataset.height
+                if target_crs is None:
+                    raise ValueError("Reference raster has no CRS")
+
+            log(
+                f"Grid: source=reference_mask path={reference_grid.name} "
+                f"crs={target_crs} width={target_width} height={target_height}"
+            )
+            log(f"Grid: using reference transform={target_transform}")
+            log(
+                f"Grid: requested resolution={resolution}m ignored because "
+                "reference mask defines output grid"
+            )
+            log(
+                f"Using reference mask grid: {reference_grid.name} "
+                f"({target_width}x{target_height}, {target_crs})"
+            )
+
+            return (
+                (target_crs, target_transform, target_width, target_height, reference_grid),
+                None,
+            )
+        except Exception as error:
+            return None, f"Failed to use reference raster {reference_grid}: {error}"
+
+    if resolution <= 0:
+        return (
+            None,
+            "Invalid resolution for fallback grid construction: "
+            f"{resolution}. Resolution must be > 0 when no reference mask grid is found.",
+        )
+
+    lat_center = (miny + maxy) / 2
+    meters_per_degree_lon = 111320 * np.cos(np.radians(lat_center))
+    meters_per_degree_lat = 111320
+
+    width_meters = (maxx - minx) * meters_per_degree_lon
+    height_meters = (maxy - miny) * meters_per_degree_lat
+
+    target_width = max(1, int(width_meters / resolution))
+    target_height = max(1, int(height_meters / resolution))
+    target_crs = CRS.from_epsg(4326)
+    target_transform = transform_from_bounds(minx, miny, maxx, maxy, target_width, target_height)
+
+    log(
+        f"Grid: source=fallback_bbox_resolution bbox=({minx:.6f}, {miny:.6f}, "
+        f"{maxx:.6f}, {maxy:.6f}) resolution_m={resolution}"
+    )
+    log(
+        f"Grid: computed crs={target_crs} width={target_width} "
+        f"height={target_height} transform={target_transform}"
+    )
+    log(f"No reference mask found, using EPSG:4326 fallback grid: {target_width}x{target_height}")
+
+    return (target_crs, target_transform, target_width, target_height, None), None
+
+
+def read_single_band(
+    band_name: str,
+    href: str,
+    target_crs: CRS,
+    target_transform: Affine,
+    target_width: int,
+    target_height: int,
+) -> tuple[str, np.ndarray]:
+    """Read one band reprojected to the target grid."""
+    resampling = Resampling.nearest if band_name in {"scl", "cloud", "snow"} else Resampling.bilinear
+
+    with rasterio.open(href) as source_dataset, WarpedVRT(
+        source_dataset,
+        crs=target_crs,
+        transform=target_transform,
+        width=target_width,
+        height=target_height,
+        resampling=resampling,
+    ) as warped_dataset:
+        data = warped_dataset.read(1)
+
+    return band_name, data
+
+
+def write_cog(
+    output_path: Path,
+    stacked: np.ndarray,
+    found_bands: list[str],
+    profile: dict,
+) -> str | None:
+    """Write stacked imagery as a COG and set band descriptions."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with rasterio.open(output_path, "w", **profile) as destination_dataset:
+            destination_dataset.write(stacked)
+            for band_index, band_name in enumerate(found_bands, start=1):
+                destination_dataset.set_band_description(band_index, band_name)
+    except Exception as error:
+        return f"Failed to write output: {error}"
+
+    return None
+
+
+def validate_alignment(output_path: Path, reference_grid: Path | None) -> str | None:
+    """Validate output alignment against reference mask; cleanup output on failure."""
+    if reference_grid is None:
+        return None
+
+    try:
+        with rasterio.open(output_path) as output_dataset, rasterio.open(reference_grid) as reference_dataset:
+            if (
+                output_dataset.crs != reference_dataset.crs
+                or output_dataset.transform != reference_dataset.transform
+                or output_dataset.width != reference_dataset.width
+                or output_dataset.height != reference_dataset.height
+            ):
+                output_path.unlink(missing_ok=True)
+                return f"Output image does not match reference mask grid ({reference_grid.name})"
+    except Exception as error:
+        output_path.unlink(missing_ok=True)
+        return f"Failed to validate output alignment: {error}"
+
+    return None
+
+
 def download_and_clip_scene(
     scene: SelectedScene,
     bbox: tuple[float, float, float, float],
@@ -161,109 +308,30 @@ def download_and_clip_scene(
     found_bands = list(band_hrefs.keys())
     log(f"Found {len(found_bands)} bands: {found_bands}")
 
-    minx, miny, maxx, maxy = bbox
+    target_grid, target_grid_error = compute_target_grid(
+        bbox=bbox,
+        output_path=output_path,
+        resolution=resolution,
+        reference_raster=reference_raster,
+        on_progress=on_progress,
+    )
 
-    reference_grid = reference_raster or find_reference_mask_for_output(output_path)
-
-    if reference_grid is not None:
-        try:
-            with rasterio.open(reference_grid) as ref:
-                target_crs = ref.crs
-                target_transform = ref.transform
-                target_width = ref.width
-                target_height = ref.height
-                if target_crs is None:
-                    raise ValueError("Reference raster has no CRS")
-            log(
-                f"Grid: source=reference_mask path={reference_grid.name} "
-                f"crs={target_crs} width={target_width} height={target_height}"
-            )
-            log(f"Grid: using reference transform={target_transform}")
-            log(
-                f"Grid: requested resolution={resolution}m ignored because "
-                "reference mask defines output grid"
-            )
-            log(
-                f"Using reference mask grid: {reference_grid.name} "
-                f"({target_width}x{target_height}, {target_crs})"
-            )
-        except Exception as e:
-            return DownloadResult(
-                output_path=output_path,
-                scene_id=scene.id,
-                season=scene.season,
-                bands=bands,
-                width=0,
-                height=0,
-                crs="",
-                success=False,
-                error=f"Failed to use reference raster {reference_grid}: {e}",
-            )
-    else:
-        # Fallback grid in EPSG:4326 using the requested metric resolution
-        # approximated to degrees at chip latitude.
-        if resolution <= 0:
-            return DownloadResult(
-                output_path=output_path,
-                scene_id=scene.id,
-                season=scene.season,
-                bands=bands,
-                width=0,
-                height=0,
-                crs="",
-                success=False,
-                error=(
-                    "Invalid resolution for fallback grid construction: "
-                    f"{resolution}. Resolution must be > 0 when no reference mask grid is found."
-                ),
-            )
-
-        lat_center = (miny + maxy) / 2
-        meters_per_degree_lon = 111320 * np.cos(np.radians(lat_center))
-        meters_per_degree_lat = 111320
-
-        width_meters = (maxx - minx) * meters_per_degree_lon
-        height_meters = (maxy - miny) * meters_per_degree_lat
-
-        target_width = max(1, int(width_meters / resolution))
-        target_height = max(1, int(height_meters / resolution))
-        target_crs = CRS.from_epsg(4326)
-        target_transform = transform_from_bounds(
-            minx, miny, maxx, maxy, target_width, target_height
+    if target_grid_error is not None or target_grid is None:
+        return DownloadResult(
+            output_path=output_path,
+            scene_id=scene.id,
+            season=scene.season,
+            bands=bands,
+            width=0,
+            height=0,
+            crs="",
+            success=False,
+            error=target_grid_error,
         )
-        log(
-            f"Grid: source=fallback_bbox_resolution bbox=({minx:.6f}, {miny:.6f}, "
-            f"{maxx:.6f}, {maxy:.6f}) resolution_m={resolution}"
-        )
-        log(
-            f"Grid: computed crs={target_crs} width={target_width} "
-            f"height={target_height} transform={target_transform}"
-        )
-        log(
-            f"No reference mask found, using EPSG:4326 fallback grid: "
-            f"{target_width}x{target_height}"
-        )
+
+    target_crs, target_transform, target_width, target_height, reference_grid = target_grid
 
     log(f"Target dimensions: {target_width}x{target_height} pixels")
-
-    def read_single_band(band_name: str, href: str) -> tuple[str, np.ndarray]:
-        """Read a single band projected to the target grid."""
-        # Use nearest neighbor for categorical/probability layers.
-        resampling = (
-            Resampling.nearest if band_name in {"scl", "cloud", "snow"} else Resampling.bilinear
-        )
-
-        with rasterio.open(href) as src:
-            with WarpedVRT(
-                src,
-                crs=target_crs,
-                transform=target_transform,
-                width=target_width,
-                height=target_height,
-                resampling=resampling,
-            ) as vrt:
-                data = vrt.read(1)
-            return band_name, data
 
     # Read bands in parallel for faster network throughput
     log(f"Reading {len(found_bands)} bands in parallel...")
@@ -273,7 +341,15 @@ def download_and_clip_scene(
 
     with ThreadPoolExecutor(max_workers=min(4, len(found_bands))) as executor:
         futures = {
-            executor.submit(read_single_band, band_name, href): band_name
+            executor.submit(
+                read_single_band,
+                band_name,
+                href,
+                target_crs,
+                target_transform,
+                target_width,
+                target_height,
+            ): band_name
             for band_name, href in band_hrefs.items()
         }
 
@@ -310,9 +386,6 @@ def download_and_clip_scene(
     stacked = np.stack(band_data, axis=0)
     log(f"Stacked shape: {stacked.shape}")
 
-    # Write output as COG
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
     profile = {
         "driver": "COG",
         "dtype": stacked.dtype,
@@ -326,13 +399,8 @@ def download_and_clip_scene(
 
     log(f"Writing to {output_path}...")
 
-    try:
-        with rasterio.open(output_path, "w", **profile) as dst:
-            dst.write(stacked)
-            # Add band descriptions
-            for i, band_name in enumerate(found_bands, start=1):
-                dst.set_band_description(i, band_name)
-    except Exception as e:
+    write_error = write_cog(output_path, stacked, found_bands, profile)
+    if write_error is not None:
         return DownloadResult(
             output_path=output_path,
             scene_id=scene.id,
@@ -342,48 +410,24 @@ def download_and_clip_scene(
             height=0,
             crs="",
             success=False,
-            error=f"Failed to write output: {e}",
+            error=write_error,
         )
 
     log(f"Successfully wrote {output_path}")
 
-    if reference_grid is not None:
-        try:
-            with rasterio.open(output_path) as out_ds, rasterio.open(reference_grid) as ref_ds:
-                if (
-                    out_ds.crs != ref_ds.crs
-                    or out_ds.transform != ref_ds.transform
-                    or out_ds.width != ref_ds.width
-                    or out_ds.height != ref_ds.height
-                ):
-                    output_path.unlink(missing_ok=True)
-                    return DownloadResult(
-                        output_path=output_path,
-                        scene_id=scene.id,
-                        season=scene.season,
-                        bands=bands,
-                        width=0,
-                        height=0,
-                        crs="",
-                        success=False,
-                        error=(
-                            "Output image does not match reference mask grid "
-                            f"({reference_grid.name})"
-                        ),
-                    )
-        except Exception as e:
-            output_path.unlink(missing_ok=True)
-            return DownloadResult(
-                output_path=output_path,
-                scene_id=scene.id,
-                season=scene.season,
-                bands=bands,
-                width=0,
-                height=0,
-                crs="",
-                success=False,
-                error=f"Failed to validate output alignment: {e}",
-            )
+    alignment_error = validate_alignment(output_path, reference_grid)
+    if alignment_error is not None:
+        return DownloadResult(
+            output_path=output_path,
+            scene_id=scene.id,
+            season=scene.season,
+            bands=bands,
+            width=0,
+            height=0,
+            crs="",
+            success=False,
+            error=alignment_error,
+        )
 
     return DownloadResult(
         output_path=output_path,
