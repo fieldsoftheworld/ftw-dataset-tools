@@ -1,0 +1,74 @@
+# Example config for the ftwd config-driven workflow.
+#
+# Run the full pipeline with:
+#     ftwd run examples/config.yaml
+#
+# Run or re-run individual stages with:
+#     ftwd run examples/config.yaml --only masks
+#     ftwd run examples/config.yaml --from select_images
+#     ftwd run examples/config.yaml --through stac
+#
+# Preview what would run without executing:
+#     ftwd run examples/config.yaml --dry-run
+#
+# A fully-resolved copy of this config (with all defaults filled in, plus the
+# ftwd version and a timestamp) is written to the output directory as
+# `ftwd-config.resolved.yaml` and embedded in the STAC catalog under `ftw:config`.
+
+# Config schema version (optional; informational).
+version: 1
+
+# Path to the input GeoParquet field boundaries.
+fields_file: austria_fields.parquet
+
+# Output directory. If omitted, defaults to "{input_stem}-dataset".
+output_dir: ./austria-dataset
+
+# Dataset name used in output filenames. If omitted, defaults to the input stem.
+name: austria
+
+# Calendar year for temporal extent. Optional if the fields file has a
+# determination_datetime column.
+year: 2023
+
+# If true, fail instead of auto-reprojecting non-EPSG:4326 input.
+skip_reproject: false
+
+stages:
+  chips:
+    # Minimum field-coverage percentage for a grid cell to be kept.
+    min_coverage: 0.01
+    # Drop chips on the outer border of the dataset (partial coverage).
+    drop_border_chips: false
+
+  splits:
+    # One of: block3x3, predefined, random-uniform.
+    split_type: random-uniform
+    # Train / val / test percentages (must sum to 100).
+    split_percents: [80, 10, 10]
+    random_seed: 42
+
+  masks:
+    # Any subset of: instance, semantic_2_class, semantic_3_class.
+    mask_types: [instance, semantic_2_class, semantic_3_class]
+    # Pixel resolution in meters.
+    resolution: 10.0
+    # Parallel workers (null = half of CPUs).
+    workers: null
+    # Presence-only labels: background class value becomes 3 instead of 0.
+    presence_only: false
+
+  select_images:
+    # Set to false to skip imagery selection entirely.
+    enabled: true
+    cloud_cover_chip: 2.0
+    nodata_max: 0.0
+    buffer_days: 14
+    num_buffer_expansions: 3
+    buffer_expansion_size: 14
+
+  download_images:
+    # Disabled by default; imagery selection creates STAC references only.
+    enabled: false
+    bands: [red, green, blue, nir]
+    resolution: 10.0

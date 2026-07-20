@@ -23,6 +23,56 @@ uv sync --dev
 ftwd --help
 ```
 
+### run (config-driven workflow)
+
+Run the whole pipeline from a single YAML config file instead of a long chain of
+CLI flags. This keeps every setting in one place and records exactly what went
+into a dataset: a fully-resolved copy of the config (all defaults filled in, plus
+the `ftwd` version and a timestamp) is written to the output directory as
+`ftwd-config.resolved.yaml` and embedded in the STAC root catalog under the
+`ftw:config` field.
+
+```bash
+# Run the full pipeline from a config
+ftwd run config.yaml
+
+# Preview the resolved config and the stages that would run (no execution)
+ftwd run config.yaml --dry-run
+
+# List the pipeline stages in order
+ftwd run config.yaml --list-stages
+
+# Run or re-run a single stage (forced, even if disabled in the config)
+ftwd run config.yaml --only masks
+
+# Run from a stage to the end, or from the start through a stage
+ftwd run config.yaml --from select_images
+ftwd run config.yaml --through stac
+```
+
+Stages run in this order: `reproject`, `chips`, `splits`, `boundaries`, `masks`,
+`stac`, `select_images`, `download_images`. Intermediate outputs follow a fixed
+naming convention in the output directory, so individual stages can be re-run on
+their own as long as their inputs already exist.
+
+See [`examples/config.yaml`](examples/config.yaml) for a fully documented config.
+A minimal config:
+
+```yaml
+fields_file: austria_fields.parquet
+output_dir: ./austria-dataset
+name: austria
+year: 2023
+
+stages:
+  splits:
+    split_type: random-uniform
+  select_images:
+    enabled: true
+  download_images:
+    enabled: false
+```
+
 ### create-dataset
 
 Create a complete training dataset from a single fields file. This is the main command that orchestrates the entire pipeline.
