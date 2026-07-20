@@ -261,13 +261,16 @@ def _extract_chips_info(
 def _create_root_catalog(
     dataset_name: str,
     description: str | None = None,
+    provenance: dict | None = None,
 ) -> Catalog:
-    """Create the root STAC catalog."""
+    """Create the root STAC catalog, embedding provenance under ``ftw:config``."""
     catalog = Catalog(
         id=dataset_name,
         description=description or f"FTW training dataset: {dataset_name}",
         title=f"{dataset_name} Dataset",
     )
+    if provenance is not None:
+        catalog.extra_fields["ftw:config"] = provenance
     return catalog
 
 
@@ -519,6 +522,7 @@ def generate_stac_catalog(
     chips_base_dir: Path | None = None,
     mask_dirs: dict[str, Path] | None = None,
     year: int | None = None,
+    provenance: dict | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> STACGenerationResult:
     """
@@ -535,6 +539,8 @@ def generate_stac_catalog(
         mask_dirs: Legacy - Dict mapping mask type name to directory path.
                    Ignored if chips_base_dir is provided.
         year: Optional year for temporal extent (required if no determination_datetime)
+        provenance: Optional resolved-config record embedded on the root catalog
+                    under the ``ftw:config`` extra field for reproducibility.
         on_progress: Optional callback for progress messages
 
     Returns:
@@ -604,7 +610,7 @@ def generate_stac_catalog(
 
     # Create root catalog
     log("Creating root catalog...")
-    catalog = _create_root_catalog(field_dataset)
+    catalog = _create_root_catalog(field_dataset, provenance=provenance)
 
     # Create source collection
     log("Creating source collection...")
