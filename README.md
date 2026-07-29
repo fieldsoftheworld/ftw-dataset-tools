@@ -55,6 +55,33 @@ Stages run in this order: `reproject`, `chips`, `splits`, `boundaries`, `masks`,
 naming convention in the output directory, so individual stages can be re-run on
 their own as long as their inputs already exist.
 
+#### Class filter (optional)
+
+If your fields file has a crop-type / class column, you can restrict which
+classes count as *field* vs *background*. Store the lists in their own YAML and
+reference it under `stages.masks.class_filter` (path is relative to the config
+file):
+
+```yaml
+# config.yaml
+stages:
+  masks:
+    class_filter: class_filter.yaml
+
+# class_filter.yaml
+column: crop_type
+include: [wheat, barley, maize]      # count as field
+exclude: [urban, water, forest]     # count as background
+```
+
+The filter is applied up front, so coverage stats, boundary lines, and masks all
+reflect only the included classes (the full, unfiltered fields file is still kept
+and published as the STAC source asset). Every distinct value in the column must
+appear in `include` or `exclude` — any unlisted value aborts the run so no class
+is silently mishandled. Values are compared as strings (numeric crop codes work).
+The same filter is available on `create-dataset` via `--class-filter <path>`.
+See [`examples/class_filter.yaml`](examples/class_filter.yaml).
+
 See [`examples/config.yaml`](examples/config.yaml) for a fully documented config.
 A minimal config:
 

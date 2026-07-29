@@ -1,0 +1,32 @@
+# Example class filter for the ftwd workflow.
+#
+# Referenced from a config with:
+#   stages:
+#     masks:
+#       class_filter: class_filter.yaml   # path is relative to the config file
+#
+# Semantics:
+#   - `column`  : the column in the fields file holding the class / crop type.
+#   - `include` : class values that count as FIELD (rasterized as foreground).
+#   - `exclude` : class values that count as BACKGROUND.
+#
+# Every distinct value found in `column` MUST appear in include or exclude,
+# otherwise the run aborts and lists the unhandled values (this prevents a class
+# from being silently mishandled). Classes listed here but absent from the data
+# produce a warning. Values are compared as strings, so numeric crop codes work.
+
+column: crop_type
+
+include:
+  - wheat
+  - barley
+  - maize
+  - rapeseed
+  - sunflower
+
+exclude:
+  - urban
+  - water
+  - forest
+  - bare_soil
+  - grassland

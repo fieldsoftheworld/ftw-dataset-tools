@@ -209,3 +209,32 @@ class TestLoadConfig:
         config_path.write_text("fields_file: [unclosed")
         with pytest.raises(ConfigError, match="parse"):
             config_module.load_config(config_path)
+
+    def test_class_filter_resolved_relative_to_config(self, tmp_path: Path) -> None:
+        (tmp_path / "filter.yaml").write_text(
+            yaml.safe_dump({"column": "crop", "include": ["wheat"], "exclude": ["water"]})
+        )
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "fields_file": "f.parquet",
+                    "year": 2023,
+                    "stages": {"masks": {"class_filter": "filter.yaml"}},
+                }
+            )
+        )
+        config = config_module.load_config(config_path)
+        assert config.class_filter is not None
+        assert config.class_filter.column == "crop"
+        assert config.class_filter.include == ["wheat"]
+
+    def test_no_class_filter_leaves_none(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.safe_dump({"fields_file": "f.parquet", "year": 2023}))
+        assert config_module.load_config(config_path).class_filter is None
+
+    def test_top_level_class_filter_key_rejected(self) -> None:
+        # class_filter is resolved from stages.masks, not a valid top-level key.
+        with pytest.raises(ConfigError, match="Unknown key"):
+            DatasetConfig.from_dict({"fields_file": "f.parquet", "class_filter": "x.yaml"})

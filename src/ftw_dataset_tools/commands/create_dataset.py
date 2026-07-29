@@ -159,6 +159,17 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     default=False,
     help="Remove chips touching outer boundary (edges of convex hull). Useful when fields at boundary may have partial coverage.",
 )
+@click.option(
+    "--class-filter",
+    "class_filter",
+    type=click.Path(exists=True),
+    default=None,
+    help=(
+        "Path to a class filter YAML (column + include/exclude lists). Include "
+        "classes count as field; all other classes are treated as background. "
+        "Every distinct class value must be listed in include or exclude."
+    ),
+)
 def create_dataset_cmd(
     fields_file: str,
     output_dir: str | None,
@@ -180,6 +191,7 @@ def create_dataset_cmd(
     mask_types: str,
     presence_only: bool,
     drop_border_chips: bool,
+    class_filter: str | None,
 ) -> None:
     """Create a complete training dataset from a fields file.
 
@@ -301,6 +313,7 @@ def create_dataset_cmd(
             mask_types=mask_types_list,
             presence_only=presence_only,
             drop_border_chips=drop_border_chips,
+            class_filter=class_filter,
             on_progress=on_progress,
             on_mask_progress=on_mask_progress,
             on_mask_start=on_mask_start,
