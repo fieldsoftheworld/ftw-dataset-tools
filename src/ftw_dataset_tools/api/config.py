@@ -148,6 +148,12 @@ class ChipsConfig:
 
     min_coverage: float = 0.01
     drop_border_chips: bool = False
+    # Local FTW grid parquet to use instead of fetching from Source Coop. Path is
+    # resolved relative to the config file. Optional.
+    grid_file: str | None = None
+    # Alternate remote grid source (URL / S3 glob) overriding the Source Coop
+    # default. Ignored when grid_file is set. Optional.
+    grid_source: str | None = None
 
 
 @dataclass
@@ -383,6 +389,14 @@ def load_config(path: str | Path) -> DatasetConfig:
         if not filter_path.is_absolute():
             filter_path = (config_path.parent / filter_path).resolve()
         config.class_filter = ClassFilter.from_file(filter_path)
+
+    # Resolve an optional local grid file relative to the config file's directory.
+    grid_ref = config.stages.chips.grid_file
+    if grid_ref is not None:
+        grid_path = Path(grid_ref)
+        if not grid_path.is_absolute():
+            grid_path = (config_path.parent / grid_path).resolve()
+        config.stages.chips.grid_file = str(grid_path)
 
     return config
 

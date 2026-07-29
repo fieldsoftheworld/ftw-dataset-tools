@@ -238,3 +238,24 @@ class TestLoadConfig:
         # class_filter is resolved from stages.masks, not a valid top-level key.
         with pytest.raises(ConfigError, match="Unknown key"):
             DatasetConfig.from_dict({"fields_file": "f.parquet", "class_filter": "x.yaml"})
+
+    def test_grid_file_resolved_relative_to_config(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "fields_file": "f.parquet",
+                    "year": 2023,
+                    "stages": {"chips": {"grid_file": "grid.parquet"}},
+                }
+            )
+        )
+        config = config_module.load_config(config_path)
+        assert config.stages.chips.grid_file == str((tmp_path / "grid.parquet").resolve())
+
+    def test_grid_source_passthrough(self) -> None:
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"chips": {"grid_source": "s3://x/*.parquet"}}}
+        )
+        assert config.stages.chips.grid_source == "s3://x/*.parquet"
+        assert config.stages.chips.grid_file is None

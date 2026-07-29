@@ -213,6 +213,78 @@ def _fields_with_classes(tmp_path: Path) -> Path:
     return path
 
 
+class TestLocalGridSubset:
+    """Tests for bbox-subsetting a local grid before chips loads it."""
+
+    def _ctx(self, fields_path: Path, out_dir: Path) -> pipeline.PipelineContext:
+        config = DatasetConfig.from_dict({"fields_file": str(fields_path)})
+        ctx = pipeline.PipelineContext(
+            config=config,
+            fields_input=fields_path,
+            output_dir=out_dir,
+            field_dataset="t",
+            effective_year=None,
+            has_temporal=False,
+        )
+        ctx.field_polygons_path = fields_path  # fields file carries a bbox column
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return ctx
+
+    def _write_grid(self, path: Path) -> None:
+        import duckdb
+
+        conn = duckdb.connect()
+        # Three cells; only the first overlaps the fields' [0.2,0.2,0.8,0.8] extent.
+        conn.execute(
+            f"""
+            COPY (
+                SELECT * FROM (VALUES
+                    ('a', {{'xmin': 0.0, 'ymin': 0.0, 'xmax': 1.0, 'ymax': 1.0}}),
+                    ('b', {{'xmin': 1.0, 'ymin': 0.0, 'xmax': 2.0, 'ymax': 1.0}}),
+                    ('c', {{'xmin': 5.0, 'ymin': 5.0, 'xmax': 6.0, 'ymax': 6.0}})
+                ) AS t(id, bbox)
+            ) TO '{path}' (FORMAT PARQUET)
+            """
+        )
+        conn.close()
+
+    def _write_fields(self, path: Path) -> None:
+        import duckdb
+
+        conn = duckdb.connect()
+        conn.execute(
+            f"""
+            COPY (SELECT 1 AS id, {{'xmin': 0.2, 'ymin': 0.2, 'xmax': 0.8, 'ymax': 0.8}} AS bbox)
+            TO '{path}' (FORMAT PARQUET)
+            """
+        )
+        conn.close()
+
+    def test_subset_keeps_only_overlapping_cells(self, tmp_path: Path) -> None:
+        import duckdb
+
+        fields = tmp_path / "fields.parquet"
+        grid = tmp_path / "grid.parquet"
+        self._write_fields(fields)
+        self._write_grid(grid)
+        ctx = self._ctx(fields, tmp_path / "out")
+
+        subset = pipeline._subset_local_grid(ctx, str(grid))
+        ids = [r[0] for r in duckdb.connect().execute(f"SELECT id FROM '{subset}'").fetchall()]
+        assert ids == ["a"]  # only the overlapping cell survives
+
+    def test_grid_without_bbox_is_passed_through(self, tmp_path: Path) -> None:
+        import duckdb
+
+        fields = tmp_path / "fields.parquet"
+        self._write_fields(fields)
+        grid = tmp_path / "nobbox.parquet"
+        duckdb.connect().execute(f"COPY (SELECT 'a' AS id) TO '{grid}' (FORMAT PARQUET)")
+        ctx = self._ctx(fields, tmp_path / "out")
+        # No bbox column -> return the original path unchanged (no subset written).
+        assert pipeline._subset_local_grid(ctx, str(grid)) == str(grid)
+
+
 class TestFilterStage:
     """Tests for the optional class-filter stage (no network required)."""
 

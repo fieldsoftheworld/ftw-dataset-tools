@@ -310,13 +310,57 @@ def stage_filter(ctx: PipelineContext) -> None:
     )
 
 
+def _subset_local_grid(ctx: PipelineContext, grid_file: str) -> str:
+    """Pre-filter a local grid to the fields' bounds so chips never loads a huge grid.
+
+    A global FTW grid can have tens of millions of cells; loading it whole would
+    exhaust memory. When the grid has a ``bbox`` column, DuckDB prunes row groups
+    by bbox statistics, so this is fast. Returns the (small) subset path, or the
+    original path if the grid has no bbox column to filter on.
+    """
+    conn = duckdb.connect(":memory:")
+    ensure_spatial_loaded(conn)
+    try:
+        grid_cols = [r[0] for r in conn.execute(f"DESCRIBE SELECT * FROM '{grid_file}'").fetchall()]
+        if "bbox" not in grid_cols:
+            ctx.log("Local grid has no bbox column; loading it in full (may be slow).")
+            return grid_file
+
+        # Fields bounds from their bbox column (present after reproject/filter).
+        xmin, ymin, xmax, ymax = conn.execute(
+            f"SELECT MIN(bbox.xmin), MIN(bbox.ymin), MAX(bbox.xmax), MAX(bbox.ymax) "
+            f"FROM '{ctx.field_polygons_path}'"
+        ).fetchone()
+
+        subset_path = ctx.output_dir / f"{ctx.field_dataset}_grid.parquet"
+        conn.execute(
+            f"COPY (SELECT * FROM '{grid_file}' WHERE bbox.xmin <= {xmax} "
+            f"AND bbox.xmax >= {xmin} AND bbox.ymin <= {ymax} AND bbox.ymax >= {ymin}) "
+            f"TO '{subset_path}' (FORMAT PARQUET)"
+        )
+        n = conn.execute(f"SELECT COUNT(*) FROM '{subset_path}'").fetchone()[0]
+        ctx.log(f"Subset local grid to {n:,} cells within fields bounds -> {subset_path.name}")
+        return str(subset_path)
+    finally:
+        conn.close()
+
+
 def stage_chips(ctx: PipelineContext) -> None:
     """Create chips with field coverage statistics."""
     _require(ctx.field_polygons_path, stage="chips", produced_by=ctx.field_polygons_producer)
+    chips_cfg = ctx.config.stages.chips
+    grid_file = chips_cfg.grid_file
+    grid_source = chips_cfg.grid_source or field_stats.DEFAULT_FTW_GRID_SOURCE
+    if grid_file:
+        ctx.log(f"Using local FTW grid: {grid_file}")
+        grid_file = _subset_local_grid(ctx, grid_file)
+    elif chips_cfg.grid_source:
+        ctx.log(f"Using grid source: {grid_source}")
     ctx.log("Creating chips with field coverage statistics...")
     ctx.chips_result = field_stats.add_field_stats(
         fields_file=str(ctx.field_polygons_path),
-        grid_file=None,
+        grid_file=grid_file,
+        grid_source=grid_source,
         output_file=str(ctx.chips_path),
         min_coverage=ctx.config.stages.chips.min_coverage,
         drop_border_chips=ctx.config.stages.chips.drop_border_chips,
