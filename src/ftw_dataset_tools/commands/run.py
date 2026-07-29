@@ -87,7 +87,7 @@ def run_cmd(
     the STAC catalog for provenance.
 
     \b
-    CONFIG_FILE: Path to a YAML config file (see examples/config.yaml).
+    CONFIG_FILE: Path to a YAML config file (see configs/examples/config.yaml).
 
     \b
     Examples:

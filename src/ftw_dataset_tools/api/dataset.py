@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from ftw_dataset_tools.api import boundaries, field_stats, masks, pipeline, splits, stac
-from ftw_dataset_tools.api.config import DatasetConfig
+from ftw_dataset_tools.api.config import ClassFilter, DatasetConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -51,6 +51,7 @@ def create_dataset(
     mask_types: list[str] | None = None,
     presence_only: bool = False,
     drop_border_chips: bool = False,
+    class_filter: str | Path | None = None,
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int], None] | None = None,
@@ -80,6 +81,8 @@ def create_dataset(
         mask_types: List of mask types to generate (e.g., ["instance", "semantic_2_class"]). If None, generates all types.
         presence_only: If True, background class value is 3 instead of 0 (for presence-only labels)
         drop_border_chips: If True, remove chips touching outer boundary (edges of convex hull). Useful when fields at boundary may have partial coverage.
+        class_filter: Optional path to a class filter YAML (column + include/exclude
+            lists). Include classes count as field; all others become background.
         on_progress: Optional callback for progress messages
         on_mask_progress: Optional callback (current, total) for mask creation progress
         on_mask_start: Optional callback (total_grids, filtered_grids) for mask start
@@ -109,6 +112,9 @@ def create_dataset(
         presence_only=presence_only,
         drop_border_chips=drop_border_chips,
     )
+    if class_filter is not None:
+        config.stages.masks.class_filter = str(class_filter)
+        config.class_filter = ClassFilter.from_file(class_filter)
     provenance = config.provenance_dict()
 
     ctx = pipeline.build_context(

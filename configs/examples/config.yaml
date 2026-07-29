@@ -1,15 +1,15 @@
 # Example config for the ftwd config-driven workflow.
 #
 # Run the full pipeline with:
-#     ftwd run examples/config.yaml
+#     ftwd run configs/examples/config.yaml
 #
 # Run or re-run individual stages with:
-#     ftwd run examples/config.yaml --only masks
-#     ftwd run examples/config.yaml --from select_images
-#     ftwd run examples/config.yaml --through stac
+#     ftwd run configs/examples/config.yaml --only masks
+#     ftwd run configs/examples/config.yaml --from select_images
+#     ftwd run configs/examples/config.yaml --through stac
 #
 # Preview what would run without executing:
-#     ftwd run examples/config.yaml --dry-run
+#     ftwd run configs/examples/config.yaml --dry-run
 #
 # A fully-resolved copy of this config (with all defaults filled in, plus the
 # ftwd version and a timestamp) is written to the output directory as
@@ -57,6 +57,12 @@ stages:
     workers: null
     # Presence-only labels: background class value becomes 3 instead of 0.
     presence_only: false
+    # Optional class filter: path (relative to THIS config file) to a YAML with
+    # `column`, `include`, and `exclude`. Include classes count as field; all
+    # others become background. Applied up front, so coverage, boundaries, and
+    # masks all reflect the filter. Omit for datasets without crop-type info.
+    # See configs/examples/class_filter.yaml.
+    # class_filter: class_filter.yaml
 
   select_images:
     # Set to false to skip imagery selection entirely.

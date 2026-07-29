@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 
-from ftw_dataset_tools.api import boundaries, field_stats, masks, splits, stac
+from ftw_dataset_tools.api import boundaries, class_filter, field_stats, masks, splits, stac
 from ftw_dataset_tools.api import config as config_module
 from ftw_dataset_tools.api.geo import (
     detect_crs,
@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 # Ordered list of all pipeline stages.
 STAGE_ORDER = [
     "reproject",
+    "filter",
     "chips",
     "splits",
     "boundaries",
@@ -91,6 +92,7 @@ class PipelineContext:
 
     # Derived output paths (fixed naming convention).
     output_fields_path: Path = field(init=False)
+    field_polygons_path: Path = field(init=False)
     chips_path: Path = field(init=False)
     boundary_lines_path: Path = field(init=False)
     chips_base_dir: Path = field(init=False)
@@ -98,9 +100,21 @@ class PipelineContext:
     def __post_init__(self) -> None:
         name = self.field_dataset
         self.output_fields_path = self.output_dir / f"{name}_fields.parquet"
+        # Field polygons consumed by chips/splits/boundaries/masks. When a class
+        # filter is configured, these stages read the filtered file; otherwise the
+        # full reprojected fields file. STAC always references output_fields_path.
+        if self.config.class_filter is not None:
+            self.field_polygons_path = self.output_dir / f"{name}_fields_filtered.parquet"
+        else:
+            self.field_polygons_path = self.output_fields_path
         self.chips_path = self.output_dir / f"{name}_chips.parquet"
         self.boundary_lines_path = self.output_dir / f"{name}_boundary_lines.parquet"
         self.chips_base_dir = self.output_dir / f"{name}-chips"
+
+    @property
+    def field_polygons_producer(self) -> str:
+        """Which stage produces field_polygons_path (for input-error messages)."""
+        return "filter" if self.config.class_filter is not None else "reproject"
 
     def log(self, msg: str) -> None:
         if self.on_progress:
@@ -194,6 +208,8 @@ def resolve_stages(
 
 
 def _stage_enabled(stage: str, config: DatasetConfig) -> bool:
+    if stage == "filter":
+        return config.class_filter is not None
     if stage == "select_images":
         return config.stages.select_images.enabled
     if stage == "download_images":
@@ -274,13 +290,77 @@ def stage_reproject(ctx: PipelineContext) -> None:
         shutil.copy2(ctx.fields_input, ctx.output_fields_path)
 
 
+def stage_filter(ctx: PipelineContext) -> None:
+    """Apply the class filter, writing field-only polygons for downstream stages.
+
+    No-op when no class filter is configured. The full source stays in
+    output_fields_path; only include-classes are written to field_polygons_path.
+    """
+    cf = ctx.config.class_filter
+    if cf is None:
+        return
+    _require(ctx.output_fields_path, stage="filter", produced_by="reproject")
+
+    ctx.log(f"Filtering fields by column '{cf.column}'...")
+    distinct = class_filter.get_distinct_classes(ctx.output_fields_path, cf.column)
+    cf.validate_against(distinct, on_progress=ctx.log)
+    class_filter.write_filtered_fields(ctx.output_fields_path, ctx.field_polygons_path, cf)
+    ctx.log(
+        f"Wrote filtered fields ({len(cf.include)} field class(es)): {ctx.field_polygons_path.name}"
+    )
+
+
+def _subset_local_grid(ctx: PipelineContext, grid_file: str) -> str:
+    """Pre-filter a local grid to the fields' bounds so chips never loads a huge grid.
+
+    A global FTW grid can have tens of millions of cells; loading it whole would
+    exhaust memory. When the grid has a ``bbox`` column, DuckDB prunes row groups
+    by bbox statistics, so this is fast. Returns the (small) subset path, or the
+    original path if the grid has no bbox column to filter on.
+    """
+    conn = duckdb.connect(":memory:")
+    ensure_spatial_loaded(conn)
+    try:
+        grid_cols = [r[0] for r in conn.execute(f"DESCRIBE SELECT * FROM '{grid_file}'").fetchall()]
+        if "bbox" not in grid_cols:
+            ctx.log("Local grid has no bbox column; loading it in full (may be slow).")
+            return grid_file
+
+        # Fields bounds from their bbox column (present after reproject/filter).
+        xmin, ymin, xmax, ymax = conn.execute(
+            f"SELECT MIN(bbox.xmin), MIN(bbox.ymin), MAX(bbox.xmax), MAX(bbox.ymax) "
+            f"FROM '{ctx.field_polygons_path}'"
+        ).fetchone()
+
+        subset_path = ctx.output_dir / f"{ctx.field_dataset}_grid.parquet"
+        conn.execute(
+            f"COPY (SELECT * FROM '{grid_file}' WHERE bbox.xmin <= {xmax} "
+            f"AND bbox.xmax >= {xmin} AND bbox.ymin <= {ymax} AND bbox.ymax >= {ymin}) "
+            f"TO '{subset_path}' (FORMAT PARQUET)"
+        )
+        n = conn.execute(f"SELECT COUNT(*) FROM '{subset_path}'").fetchone()[0]
+        ctx.log(f"Subset local grid to {n:,} cells within fields bounds -> {subset_path.name}")
+        return str(subset_path)
+    finally:
+        conn.close()
+
+
 def stage_chips(ctx: PipelineContext) -> None:
     """Create chips with field coverage statistics."""
-    _require(ctx.output_fields_path, stage="chips", produced_by="reproject")
+    _require(ctx.field_polygons_path, stage="chips", produced_by=ctx.field_polygons_producer)
+    chips_cfg = ctx.config.stages.chips
+    grid_file = chips_cfg.grid_file
+    grid_source = chips_cfg.grid_source or field_stats.DEFAULT_FTW_GRID_SOURCE
+    if grid_file:
+        ctx.log(f"Using local FTW grid: {grid_file}")
+        grid_file = _subset_local_grid(ctx, grid_file)
+    elif chips_cfg.grid_source:
+        ctx.log(f"Using grid source: {grid_source}")
     ctx.log("Creating chips with field coverage statistics...")
     ctx.chips_result = field_stats.add_field_stats(
-        fields_file=str(ctx.output_fields_path),
-        grid_file=None,
+        fields_file=str(ctx.field_polygons_path),
+        grid_file=grid_file,
+        grid_source=grid_source,
         output_file=str(ctx.chips_path),
         min_coverage=ctx.config.stages.chips.min_coverage,
         drop_border_chips=ctx.config.stages.chips.drop_border_chips,
@@ -302,17 +382,17 @@ def stage_splits(ctx: PipelineContext) -> None:
         split_type=split_cfg.split_type,
         split_percents=split_cfg.split_percents,
         random_seed=split_cfg.random_seed,
-        fields_file=str(ctx.output_fields_path),
+        fields_file=str(ctx.field_polygons_path),
         on_progress=ctx.log,
     )
 
 
 def stage_boundaries(ctx: PipelineContext) -> None:
     """Create boundary lines from field polygons."""
-    _require(ctx.output_fields_path, stage="boundaries", produced_by="reproject")
+    _require(ctx.field_polygons_path, stage="boundaries", produced_by=ctx.field_polygons_producer)
     ctx.log("Creating boundary lines...")
     result = boundaries.create_boundaries(
-        input_path=str(ctx.output_fields_path),
+        input_path=str(ctx.field_polygons_path),
         output_dir=str(ctx.output_dir),
         output_prefix=f"{ctx.field_dataset}_boundary_lines_",
         on_progress=ctx.log,
@@ -356,7 +436,7 @@ def _build_chip_dirs(ctx: PipelineContext) -> dict[str, Path]:
 def stage_masks(ctx: PipelineContext) -> None:
     """Create the requested raster mask types for each chip."""
     _require(ctx.chips_path, stage="masks", produced_by="chips")
-    _require(ctx.output_fields_path, stage="masks", produced_by="reproject")
+    _require(ctx.field_polygons_path, stage="masks", produced_by=ctx.field_polygons_producer)
     _require(ctx.boundary_lines_path, stage="masks", produced_by="boundaries")
 
     chip_dirs = _build_chip_dirs(ctx)
@@ -374,7 +454,7 @@ def stage_masks(ctx: PipelineContext) -> None:
         ctx.log(f"Creating {mask_type.value} masks...")
         mask_result = masks.create_masks(
             chips_file=str(ctx.chips_path),
-            boundaries_file=str(ctx.output_fields_path),
+            boundaries_file=str(ctx.field_polygons_path),
             boundary_lines_file=str(ctx.boundary_lines_path),
             output_dir=str(ctx.chips_base_dir),
             field_dataset=ctx.field_dataset,
@@ -450,6 +530,7 @@ def stage_download_images(ctx: PipelineContext) -> None:
 
 _STAGE_FUNCS: dict[str, Callable[[PipelineContext], None]] = {
     "reproject": stage_reproject,
+    "filter": stage_filter,
     "chips": stage_chips,
     "splits": stage_splits,
     "boundaries": stage_boundaries,

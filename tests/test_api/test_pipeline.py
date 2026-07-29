@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import geopandas as gpd
 import pytest
+from shapely.geometry import box
 
 from ftw_dataset_tools.api import pipeline
-from ftw_dataset_tools.api.config import DatasetConfig
+from ftw_dataset_tools.api.config import ClassFilter, ClassFilterError, DatasetConfig
 from ftw_dataset_tools.api.pipeline import StageInputError
 
 if TYPE_CHECKING:
@@ -194,3 +196,154 @@ class TestRunPipelineProvenance:
         assert ctx.output_fields_path.exists()
         prov_file = ctx.output_dir / "ftwd-config.resolved.yaml"
         assert prov_file.exists()
+
+
+def _fields_with_classes(tmp_path: Path) -> Path:
+    gdf = gpd.GeoDataFrame(
+        {"id": [1, 2, 3], "crop": ["wheat", "water", "maize"]},
+        geometry=[
+            box(10.0, 50.0, 10.01, 50.01),
+            box(10.02, 50.0, 10.03, 50.01),
+            box(10.0, 50.02, 10.01, 50.03),
+        ],
+        crs="EPSG:4326",
+    )
+    path = tmp_path / "fields_crop.parquet"
+    gdf.to_parquet(path)
+    return path
+
+
+class TestLocalGridSubset:
+    """Tests for bbox-subsetting a local grid before chips loads it."""
+
+    def _ctx(self, fields_path: Path, out_dir: Path) -> pipeline.PipelineContext:
+        config = DatasetConfig.from_dict({"fields_file": str(fields_path)})
+        ctx = pipeline.PipelineContext(
+            config=config,
+            fields_input=fields_path,
+            output_dir=out_dir,
+            field_dataset="t",
+            effective_year=None,
+            has_temporal=False,
+        )
+        ctx.field_polygons_path = fields_path  # fields file carries a bbox column
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return ctx
+
+    def _write_grid(self, path: Path) -> None:
+        import duckdb
+
+        conn = duckdb.connect()
+        # Three cells; only the first overlaps the fields' [0.2,0.2,0.8,0.8] extent.
+        conn.execute(
+            f"""
+            COPY (
+                SELECT * FROM (VALUES
+                    ('a', {{'xmin': 0.0, 'ymin': 0.0, 'xmax': 1.0, 'ymax': 1.0}}),
+                    ('b', {{'xmin': 1.0, 'ymin': 0.0, 'xmax': 2.0, 'ymax': 1.0}}),
+                    ('c', {{'xmin': 5.0, 'ymin': 5.0, 'xmax': 6.0, 'ymax': 6.0}})
+                ) AS t(id, bbox)
+            ) TO '{path}' (FORMAT PARQUET)
+            """
+        )
+        conn.close()
+
+    def _write_fields(self, path: Path) -> None:
+        import duckdb
+
+        conn = duckdb.connect()
+        conn.execute(
+            f"""
+            COPY (SELECT 1 AS id, {{'xmin': 0.2, 'ymin': 0.2, 'xmax': 0.8, 'ymax': 0.8}} AS bbox)
+            TO '{path}' (FORMAT PARQUET)
+            """
+        )
+        conn.close()
+
+    def test_subset_keeps_only_overlapping_cells(self, tmp_path: Path) -> None:
+        import duckdb
+
+        fields = tmp_path / "fields.parquet"
+        grid = tmp_path / "grid.parquet"
+        self._write_fields(fields)
+        self._write_grid(grid)
+        ctx = self._ctx(fields, tmp_path / "out")
+
+        subset = pipeline._subset_local_grid(ctx, str(grid))
+        ids = [r[0] for r in duckdb.connect().execute(f"SELECT id FROM '{subset}'").fetchall()]
+        assert ids == ["a"]  # only the overlapping cell survives
+
+    def test_grid_without_bbox_is_passed_through(self, tmp_path: Path) -> None:
+        import duckdb
+
+        fields = tmp_path / "fields.parquet"
+        self._write_fields(fields)
+        grid = tmp_path / "nobbox.parquet"
+        duckdb.connect().execute(f"COPY (SELECT 'a' AS id) TO '{grid}' (FORMAT PARQUET)")
+        ctx = self._ctx(fields, tmp_path / "out")
+        # No bbox column -> return the original path unchanged (no subset written).
+        assert pipeline._subset_local_grid(ctx, str(grid)) == str(grid)
+
+
+class TestFilterStage:
+    """Tests for the optional class-filter stage (no network required)."""
+
+    def test_field_polygons_path_switches_with_filter(
+        self, sample_geoparquet_4326: Path, tmp_path: Path
+    ) -> None:
+        config = _config(sample_geoparquet_4326, tmp_path / "out", name="ds", year=2023)
+        # Without a filter, downstream reads the full reprojected fields file.
+        ctx = pipeline.build_context(config)
+        assert ctx.field_polygons_path == ctx.output_fields_path
+        assert ctx.field_polygons_producer == "reproject"
+
+        # With a filter, downstream reads the filtered file.
+        config.class_filter = ClassFilter("crop", ["wheat"], ["water"])
+        ctx2 = pipeline.build_context(config)
+        assert ctx2.field_polygons_path.name == "ds_fields_filtered.parquet"
+        assert ctx2.field_polygons_producer == "filter"
+
+    def test_resolve_stages_gates_filter_on_config(
+        self, sample_geoparquet_4326: Path, tmp_path: Path
+    ) -> None:
+        config = _config(sample_geoparquet_4326, tmp_path / "out", year=2023)
+        assert "filter" not in pipeline.resolve_stages(config=config)
+        config.class_filter = ClassFilter("crop", ["wheat"], ["water"])
+        assert "filter" in pipeline.resolve_stages(config=config)
+
+    def test_run_reproject_then_filter_writes_filtered(self, tmp_path: Path) -> None:
+        fields = _fields_with_classes(tmp_path)
+        config = _config(fields, tmp_path / "out", name="ds", year=2023)
+        config.class_filter = ClassFilter("crop", ["wheat", "maize"], ["water"])
+        ctx = pipeline.build_context(config)
+        pipeline.run_pipeline(ctx, ["reproject", "filter"])
+
+        assert ctx.output_fields_path.exists()  # full source preserved
+        assert ctx.field_polygons_path.exists()  # filtered field polygons
+        import duckdb
+
+        rows = (
+            duckdb.connect()
+            .execute(f"SELECT DISTINCT crop FROM '{ctx.field_polygons_path}'")
+            .fetchall()
+        )
+        assert {r[0] for r in rows} == {"wheat", "maize"}
+
+    def test_unhandled_class_aborts(self, tmp_path: Path) -> None:
+        fields = _fields_with_classes(tmp_path)  # has wheat/water/maize
+        config = _config(fields, tmp_path / "out", name="ds", year=2023)
+        config.class_filter = ClassFilter("crop", ["wheat"], ["water"])  # maize unhandled
+        ctx = pipeline.build_context(config)
+        with pytest.raises(ClassFilterError, match="not covered"):
+            pipeline.run_pipeline(ctx, ["reproject", "filter"])
+
+    def test_masks_requires_filtered_fields_when_configured(self, tmp_path: Path) -> None:
+        fields = _fields_with_classes(tmp_path)
+        config = _config(fields, tmp_path / "out", name="ds", year=2023)
+        config.class_filter = ClassFilter("crop", ["wheat", "maize"], ["water"])
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        ctx.chips_path.touch()  # chips present so we reach the field-polygons check
+        # filtered fields do not exist yet -> error points at the filter stage.
+        with pytest.raises(StageInputError, match="filter"):
+            pipeline.stage_masks(ctx)

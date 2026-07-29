@@ -29,9 +29,117 @@ VALID_MASK_TYPES = ("instance", "semantic_2_class", "semantic_3_class")
 # Current config schema version. Bump when the schema changes incompatibly.
 CONFIG_SCHEMA_VERSION = 1
 
+# YAML keys allowed at the top level of a config file. `class_filter` on
+# DatasetConfig is resolved from stages.masks.class_filter, not set via YAML.
+_ALLOWED_TOP_KEYS = ("fields_file", "output_dir", "name", "year", "skip_reproject", "stages")
+
 
 class ConfigError(ValueError):
     """Raised when a config file is malformed or contains invalid values."""
+
+
+class ClassFilterError(ConfigError):
+    """Raised when a class filter file is malformed or inconsistent with the data."""
+
+
+@dataclass
+class ClassFilter:
+    """A field/background class filter loaded from a self-contained YAML file.
+
+    Attributes:
+        column: Column in the fields file holding the class/crop-type value.
+        include: Class values that count as field (rasterized as foreground).
+        exclude: Class values that count as background.
+        source: Path the filter was loaded from (for provenance).
+
+    Class values are compared as strings, so numeric crop codes work too.
+    """
+
+    column: str
+    include: list[str]
+    exclude: list[str]
+    source: str | None = None
+
+    @classmethod
+    def from_file(cls, path: str | Path) -> ClassFilter:
+        """Load and structurally validate a class filter YAML file."""
+        filter_path = Path(path)
+        if not filter_path.exists():
+            raise ClassFilterError(f"Class filter file not found: {filter_path}")
+
+        try:
+            raw = yaml.safe_load(filter_path.read_text())
+        except yaml.YAMLError as err:
+            raise ClassFilterError(
+                f"Could not parse class filter YAML {filter_path}: {err}"
+            ) from err
+
+        if not isinstance(raw, dict):
+            raise ClassFilterError(
+                f"Class filter {filter_path} must be a mapping with 'column', "
+                "'include', and 'exclude'."
+            )
+        unknown = set(raw) - {"column", "include", "exclude"}
+        if unknown:
+            raise ClassFilterError(
+                f"Unknown key(s) in class filter {filter_path.name}: "
+                f"{', '.join(sorted(unknown))}. Allowed: column, include, exclude."
+            )
+
+        column = raw.get("column")
+        if not isinstance(column, str) or not column:
+            raise ClassFilterError(f"Class filter {filter_path} must specify a string 'column'.")
+
+        include = _as_str_list(raw.get("include"), "include", filter_path)
+        exclude = _as_str_list(raw.get("exclude"), "exclude", filter_path)
+        if not include and not exclude:
+            raise ClassFilterError(
+                f"Class filter {filter_path} must list at least one class in "
+                "'include' or 'exclude'."
+            )
+
+        overlap = sorted(set(include) & set(exclude))
+        if overlap:
+            raise ClassFilterError(
+                f"Class filter {filter_path}: classes appear in both include and exclude: {overlap}"
+            )
+
+        return cls(column=column, include=include, exclude=exclude, source=str(filter_path))
+
+    def handled(self) -> set[str]:
+        """Return the set of all classes the filter accounts for."""
+        return set(self.include) | set(self.exclude)
+
+    def validate_against(self, distinct: set[str | None], on_progress: Any = None) -> None:
+        """Enforce that every class in the data is handled; warn on stale entries.
+
+        Args:
+            distinct: Distinct class values found in the data (may contain None).
+            on_progress: Optional callback for the listed-but-absent warning.
+
+        Raises:
+            ClassFilterError: If any value in the data is in neither include nor
+                exclude (NULLs are reported as ``<null>``).
+        """
+        handled = self.handled()
+        offenders = sorted(
+            "<null>" if value is None else value
+            for value in distinct
+            if value is None or value not in handled
+        )
+        if offenders:
+            raise ClassFilterError(
+                f"Column '{self.column}' has values not covered by the class filter. "
+                f"Add each to include or exclude: {offenders}"
+            )
+
+        present = {value for value in distinct if value is not None}
+        absent = sorted(handled - present)
+        if absent and on_progress is not None:
+            on_progress(
+                f"Warning: class filter lists {len(absent)} class(es) not present "
+                f"in the data: {absent}"
+            )
 
 
 @dataclass
@@ -40,6 +148,12 @@ class ChipsConfig:
 
     min_coverage: float = 0.01
     drop_border_chips: bool = False
+    # Local FTW grid parquet to use instead of fetching from Source Coop. Path is
+    # resolved relative to the config file. Optional.
+    grid_file: str | None = None
+    # Alternate remote grid source (URL / S3 glob) overriding the Source Coop
+    # default. Ignored when grid_file is set. Optional.
+    grid_source: str | None = None
 
 
 @dataclass
@@ -61,6 +175,8 @@ class MasksConfig:
     resolution: float = 10.0
     workers: int | None = None
     presence_only: bool = False
+    # Path to a class filter YAML (resolved relative to the config file). Optional.
+    class_filter: str | None = None
 
 
 @dataclass
@@ -107,6 +223,8 @@ class DatasetConfig:
             a determination_datetime column).
         skip_reproject: If True, fail instead of reprojecting non-4326 input.
         stages: Per-stage settings.
+        class_filter: Resolved class filter (loaded from stages.masks.class_filter).
+            Not set directly from YAML; populated by load_config / create_dataset.
     """
 
     fields_file: str
@@ -115,6 +233,7 @@ class DatasetConfig:
     year: int | None = None
     skip_reproject: bool = False
     stages: StagesConfig = field(default_factory=StagesConfig)
+    class_filter: ClassFilter | None = None
 
     # ---- construction ---------------------------------------------------
 
@@ -127,8 +246,9 @@ class DatasetConfig:
         # Ignore a documented schema-version key if present.
         data = {k: v for k, v in data.items() if k != "version"}
 
-        top_keys = {f.name for f in fields(cls)}
-        _reject_unknown(data, top_keys, context="config")
+        # class_filter is resolved from stages.masks.class_filter, never set at the
+        # top level via YAML, so it is excluded from the allowed top-level keys.
+        _reject_unknown(data, set(_ALLOWED_TOP_KEYS), context="config")
 
         if "fields_file" not in data or data["fields_file"] is None:
             raise ConfigError("Config must specify 'fields_file'.")
@@ -260,7 +380,25 @@ def load_config(path: str | Path) -> DatasetConfig:
     if raw is None:
         raise ConfigError(f"Config file is empty: {config_path}")
 
-    return DatasetConfig.from_dict(raw)
+    config = DatasetConfig.from_dict(raw)
+
+    # Resolve the optional class filter relative to the config file's directory.
+    filter_ref = config.stages.masks.class_filter
+    if filter_ref is not None:
+        filter_path = Path(filter_ref)
+        if not filter_path.is_absolute():
+            filter_path = (config_path.parent / filter_path).resolve()
+        config.class_filter = ClassFilter.from_file(filter_path)
+
+    # Resolve an optional local grid file relative to the config file's directory.
+    grid_ref = config.stages.chips.grid_file
+    if grid_ref is not None:
+        grid_path = Path(grid_ref)
+        if not grid_path.is_absolute():
+            grid_path = (config_path.parent / grid_path).resolve()
+        config.stages.chips.grid_file = str(grid_path)
+
+    return config
 
 
 def write_provenance_file(
@@ -290,6 +428,23 @@ def _reject_unknown(data: dict[str, Any], known: set[str], context: str) -> None
 
 def _opt_str(value: Any) -> str | None:
     return str(value) if value is not None else None
+
+
+def _as_str_list(value: Any, key: str, source: Path) -> list[str]:
+    """Coerce a YAML list into a list of unique strings (order preserved)."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ClassFilterError(f"Class filter {source.name}: '{key}' must be a list.")
+    seen: dict[str, None] = {}
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, str | int | float):
+            raise ClassFilterError(
+                f"Class filter {source.name}: '{key}' entries must be strings or "
+                f"numbers, got {item!r}."
+            )
+        seen.setdefault(str(item), None)
+    return list(seen)
 
 
 _STAGE_TYPES: dict[str, type] = {
