@@ -93,9 +93,9 @@ and published as the STAC source asset). Every distinct value in the column must
 appear in `include` or `exclude` — any unlisted value aborts the run so no class
 is silently mishandled. Values are compared as strings (numeric crop codes work).
 The same filter is available on `create-dataset` via `--class-filter <path>`.
-See [`examples/class_filter.yaml`](examples/class_filter.yaml).
+See [`configs/examples/class_filter.yaml`](configs/examples/class_filter.yaml).
 
-See [`examples/config.yaml`](examples/config.yaml) for a fully documented config.
+See [`configs/examples/config.yaml`](configs/examples/config.yaml) for a fully documented config.
 A minimal config:
 
 ```yaml
