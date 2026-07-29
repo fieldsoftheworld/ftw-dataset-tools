@@ -16,6 +16,19 @@ cd ftw-dataset-tools
 uv sync --dev
 ```
 
+`uv sync` creates a project virtual environment in `.venv`. Activate it so the
+`ftwd` command and dependencies are on your `PATH`:
+
+```bash
+source .venv/bin/activate        # macOS/Linux
+# .venv\Scripts\activate         # Windows (PowerShell/cmd)
+
+ftwd --help                      # verify it works
+```
+
+Alternatively, run commands without activating by prefixing them with `uv run`,
+e.g. `uv run ftwd --help`.
+
 ## Usage
 
 ```bash
@@ -99,6 +112,34 @@ stages:
   download_images:
     enabled: false
 ```
+
+### inspect-fields
+
+Quickly summarize a fields (Geo)Parquet file before building a dataset: columns,
+per-column value counts and stats, and a geometry/CRS summary. Columns that look
+like good class-filter candidates are highlighted, so this pairs well with the
+class filter above.
+
+```bash
+# Summarize a fields file
+ftwd inspect-fields austria_fields.parquet
+
+# Show ALL values for a class column (handy when writing a class filter)
+ftwd inspect-fields austria_fields.parquet -c crop:name --top 0
+
+# Skip the geometry scan (faster), or emit machine-readable JSON
+ftwd inspect-fields austria_fields.parquet --no-geometry
+ftwd inspect-fields austria_fields.parquet --json
+```
+
+It reports row/column counts and file size; a geometry summary (geometry types,
+total bounds, and CRS name/kind/EPSG); and, per column, the dtype, distinct and
+null counts, plus value counts (categorical), min/max/mean/median/quantiles
+(numeric), or the min→max range (temporal). High-cardinality unique columns are
+detected as identifiers and their values are not dumped.
+
+Options: `--top N` (max values per categorical column; `0` = all, safety-capped),
+`-c/--column` (show all values for a column, repeatable), `--no-geometry`, `--json`.
 
 ### create-dataset
 
