@@ -171,15 +171,21 @@ def _print_column(col: ColumnSummary, num_rows: int) -> None:
         click.echo(f"      range: {col.stats['min']}  →  {col.stats['max']}")
 
 
+def _looks_like_url(value: str) -> bool:
+    return value.startswith(("http://", "https://"))
+
+
 def _print_value_counts(col: ColumnSummary) -> None:
     if not col.value_counts:
         click.echo("      (no non-null values)")
         return
-    width = max((len(v) for v, _ in col.value_counts), default=0)
+    # Base the padding on non-URL values; URLs are printed in full (see below).
+    width = max((len(v) for v, _ in col.value_counts if not _looks_like_url(v)), default=0)
     width = min(width, 50)
     for value, count in col.value_counts:
         pct = (100 * count / col.non_null) if col.non_null else 0.0
-        label = value if len(value) <= 50 else value[:47] + "..."
+        # Never truncate URLs so they stay complete and clickable in the terminal.
+        label = value if (_looks_like_url(value) or len(value) <= 50) else value[:47] + "..."
         click.echo(f"      {label:<{width}}  {count:>12,}  ({pct:5.1f}%)")
     if col.value_counts_truncated:
         remaining = col.distinct - len(col.value_counts)

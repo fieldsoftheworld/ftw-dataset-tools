@@ -50,3 +50,18 @@ class TestInspectFieldsCommand:
     def test_missing_file_errors(self, tmp_path: Path) -> None:
         result = CliRunner().invoke(inspect_fields, [str(tmp_path / "nope.parquet")])
         assert result.exit_code != 0
+
+    def test_long_url_value_not_truncated(self, tmp_path: Path) -> None:
+        url = (
+            "https://raw.githubusercontent.com/example/repo/main/csvs/country_mappings/at_2021.csv"
+        )
+        gdf = gpd.GeoDataFrame(
+            {"code_list": [url, url]},
+            geometry=[box(0, 0, 1, 1), box(1, 1, 2, 2)],
+            crs="EPSG:4326",
+        )
+        path = tmp_path / "urls.parquet"
+        gdf.to_parquet(path)
+        result = CliRunner().invoke(inspect_fields, [str(path), "--no-geometry"])
+        assert result.exit_code == 0, result.output
+        assert url in result.output  # full URL present, not truncated with "..."
