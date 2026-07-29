@@ -481,18 +481,22 @@ def reproject(
     # when out_path equals the input file (in-place reprojection)
     tmp_path = None
     tmp_out_path = None
+    # Create temp files in the output directory so the final rename is on the
+    # same filesystem (Path.replace/os.rename fails across devices, e.g. when
+    # the output lives on a different mount than the system temp dir).
+    tmp_dir = out_path.parent
     try:
-        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False, dir=tmp_dir) as tmp:
             tmp_path = Path(tmp.name)
         # Write reprojected data to temp file
         table.reproject(target_crs).write(str(tmp_path))
 
         # Read back and add bbox, write to a second temp file for atomic replacement
-        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp_out:
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False, dir=tmp_dir) as tmp_out:
             tmp_out_path = Path(tmp_out.name)
         gpio.read(str(tmp_path)).add_bbox().write(str(tmp_out_path))
 
-        # Atomically replace the output file
+        # Atomically replace the output file (same-filesystem rename)
         tmp_out_path.replace(out_path)
         tmp_out_path = None  # Mark as moved, no cleanup needed
     finally:
