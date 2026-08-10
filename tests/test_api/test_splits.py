@@ -139,6 +139,101 @@ class TestAssignSplits:
                     f"Block ({block_east}, {block_north}) has mixed splits"
                 )
 
+    def test_block3x3_split_with_km_size_spacing(self, tmp_path: Path) -> None:
+        """Test block3x3 with real FTW grid coordinate spacing (km_size=2).
+
+        Real FTW grid IDs encode easting/northing as multiples of km_size
+        (e.g. 0, 2, 4, 6...), not sequential integers. Blocks must group every
+        3 grid cells regardless of the coordinate step size, or they end up
+        lopsided (see issue #31).
+        """
+        chips_file = tmp_path / "chips.parquet"
+
+        # 18x18 km grid at km_size=2 -> coordinates 0,2,4,...,34 (18 steps -> 6 blocks)
+        step = 2
+        n_steps = 18
+        chip_ids = []
+        for i in range(n_steps):
+            for j in range(n_steps):
+                chip_ids.append(f"ftw-36NXF{i * step:02d}{j * step:02d}")
+
+        n_chips = len(chip_ids)
+        gdf = gpd.GeoDataFrame(
+            {"id": chip_ids, "geometry": [Point(k, k) for k in range(n_chips)]},
+            crs="EPSG:4326",
+        )
+        gdf.to_parquet(chips_file)
+
+        assign_splits(
+            chips_file=chips_file,
+            split_type="block3x3",
+            split_percents=(70, 20, 10),
+            random_seed=42,
+        )
+
+        updated_gdf = gpd.read_parquet(chips_file)
+        updated_gdf["easting"] = updated_gdf["id"].str[-4:-2].astype(int)
+        updated_gdf["northing"] = updated_gdf["id"].str[-2:].astype(int)
+        updated_gdf["block_east"] = (updated_gdf["easting"] // step) // 3
+        updated_gdf["block_north"] = (updated_gdf["northing"] // step) // 3
+
+        n_blocks_per_side = n_steps // 3
+        for block_east in range(n_blocks_per_side):
+            for block_north in range(n_blocks_per_side):
+                block_mask = (updated_gdf["block_east"] == block_east) & (
+                    updated_gdf["block_north"] == block_north
+                )
+                block_chips = updated_gdf[block_mask]
+                # Every full block should contain exactly 9 chips (3x3)
+                assert len(block_chips) == 9, (
+                    f"Block ({block_east}, {block_north}) has {len(block_chips)} chips, expected 9"
+                )
+                assert len(block_chips["split"].unique()) == 1, (
+                    f"Block ({block_east}, {block_north}) has mixed splits"
+                )
+
+    def test_block3x3_single_column_falls_back_to_step_one(self, tmp_path: Path) -> None:
+        """Test block3x3 when one axis has a single distinct coordinate.
+
+        A north-south strip of chips gives the easting axis only one unique
+        value, so its spacing cannot be observed and _infer_grid_step falls back
+        to 1. Blocking must still group the populated axis correctly.
+        """
+        chips_file = tmp_path / "chips.parquet"
+
+        # Single easting column; northings spaced by 2 -> 9 chips in 3 blocks
+        step = 2
+        n_steps = 9
+        fixed_easting = 10
+        chip_ids = [f"ftw-36NXF{fixed_easting:02d}{j * step:02d}" for j in range(n_steps)]
+
+        gdf = gpd.GeoDataFrame(
+            {"id": chip_ids, "geometry": [Point(k, k) for k in range(len(chip_ids))]},
+            crs="EPSG:4326",
+        )
+        gdf.to_parquet(chips_file)
+
+        result = assign_splits(
+            chips_file=chips_file,
+            split_type="block3x3",
+            split_percents=(70, 20, 10),
+            random_seed=42,
+        )
+
+        assert result.total_chips == n_steps
+
+        updated_gdf = gpd.read_parquet(chips_file)
+        updated_gdf["northing"] = updated_gdf["id"].str[-2:].astype(int)
+        updated_gdf["block_north"] = (updated_gdf["northing"] // step) // 3
+
+        # 9 chips spaced by 2 along one axis -> 3 blocks of 3, each internally consistent
+        assert updated_gdf["block_north"].nunique() == 3
+        for block_north, block_chips in updated_gdf.groupby("block_north"):
+            assert len(block_chips) == 3, (
+                f"Block {block_north} has {len(block_chips)} chips, expected 3"
+            )
+            assert len(block_chips["split"].unique()) == 1, f"Block {block_north} has mixed splits"
+
     def test_block3x3_invalid_chip_id_format(self, tmp_path: Path) -> None:
         """Test that malformed chip IDs raise an error in block3x3."""
         chips_file = tmp_path / "chips.parquet"
