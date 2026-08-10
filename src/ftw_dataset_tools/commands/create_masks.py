@@ -16,9 +16,16 @@ from ftw_dataset_tools.api.masks import MaskType
     "-o",
     "--output-dir",
     type=click.Path(),
-    default="./masks",
+    default="./output",
     show_default=True,
-    help="Output directory for mask files.",
+    help="Dataset output root. Masks are written under {output-dir}/{field-dataset}-chips/.",
+)
+@click.option(
+    "--year",
+    type=int,
+    default=None,
+    help="Calendar year for the crop cycle. When set, it is included in chip "
+    "directory and mask file names (e.g. ftw-34UFF1628_2024).",
 )
 @click.option(
     "--field-dataset",
@@ -70,6 +77,7 @@ def create_masks_cmd(
     boundaries_file: str,
     boundary_lines_file: str,
     output_dir: str,
+    year: int | None,
     field_dataset: str,
     grid_id_col: str,
     mask_type: str,
@@ -83,8 +91,13 @@ def create_masks_cmd(
     Takes a chips file (from create-chips), boundaries file (polygons),
     and boundary lines file to create raster masks for training data.
 
-    Output files are Cloud Optimized GeoTIFFs (COGs) named:
-    {field_dataset}_{grid_id}_{mask_type}.tif
+    Masks are Cloud Optimized GeoTIFFs (COGs) written into per-chip directories,
+    matching the catalog structure produced by create-dataset:
+
+    \b
+        {output-dir}/{field-dataset}-chips/{item_id}/{item_id}_{mask_type}.tif
+
+    where item_id is {grid_id}_{year} when --year is given, otherwise {grid_id}.
 
     \b
     CHIPS_FILE: GeoParquet file with chip definitions (from create-chips)
@@ -96,9 +109,10 @@ def create_masks_cmd(
         ftwd create-masks chips.parquet fields.parquet boundary_lines_fields.parquet --field-dataset austria
         ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset france --mask-type instance
         ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spain --coverage-col field_coverage_pct --min-coverage 1.0
+        ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset austria --year 2024
     """
     click.echo(f"Creating {mask_type} masks for {field_dataset}")
-    click.echo(f"Output: {output_dir}")
+    click.echo(f"Output: {masks.get_chips_base_dir(output_dir, field_dataset)}")
 
     # Convert mask type string to enum
     mask_type_enum = MaskType(mask_type)
@@ -133,6 +147,7 @@ def create_masks_cmd(
             field_dataset=field_dataset,
             grid_id_col=grid_id_col,
             mask_type=mask_type_enum,
+            year=year,
             coverage_col=coverage_col,
             min_coverage=min_coverage,
             resolution=resolution,

@@ -35,7 +35,7 @@ from ftw_dataset_tools.api.imagery import (
     download_imagery_for_catalog,
     select_imagery_for_catalog,
 )
-from ftw_dataset_tools.api.masks import MaskType, get_item_id
+from ftw_dataset_tools.api.masks import MaskType
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -416,21 +416,12 @@ _MASK_TYPE_MAPPING = [
 
 def _build_chip_dirs(ctx: PipelineContext) -> dict[str, Path]:
     """Create per-chip directories for grids above the coverage threshold."""
-    min_coverage = ctx.config.stages.chips.min_coverage
-    conn = duckdb.connect(":memory:")
-    ensure_spatial_loaded(conn)
-    grid_ids = conn.execute(
-        f"SELECT id FROM '{ctx.chips_path}' WHERE field_coverage_pct >= {min_coverage}"
-    ).fetchall()
-    conn.close()
-
-    chip_dirs: dict[str, Path] = {}
-    for (grid_id,) in grid_ids:
-        item_id = get_item_id(str(grid_id), ctx.effective_year)
-        chip_dir = ctx.chips_base_dir / item_id
-        chip_dir.mkdir(exist_ok=True)
-        chip_dirs[item_id] = chip_dir
-    return chip_dirs
+    return masks.build_chip_dirs(
+        chips_file=ctx.chips_path,
+        chips_base_dir=ctx.chips_base_dir,
+        min_coverage=ctx.config.stages.chips.min_coverage,
+        year=ctx.effective_year,
+    )
 
 
 def stage_masks(ctx: PipelineContext) -> None:
