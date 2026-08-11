@@ -233,7 +233,7 @@ Create raster masks from vector boundaries for each grid cell. Outputs Cloud Opt
 
 Masks are written into per-chip directories, matching the catalog structure `create-dataset` produces:
 
-```
+```text
 {output-dir}/{field-dataset}-chips/{item_id}/{item_id}_{mask_type}.tif
 ```
 

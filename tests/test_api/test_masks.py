@@ -230,6 +230,62 @@ class TestBuildChipDirs:
         assert set(chip_dirs) == {"grid_001_2024", "grid_002_2024", "grid_003_2024"}
         assert chip_dirs["grid_001_2024"].name == "grid_001_2024"
 
+    def test_missing_grid_id_column_raises_value_error(
+        self, sample_chips_with_coverage: Path, tmp_path: Path
+    ) -> None:
+        """Test an unknown grid ID column surfaces as a ValueError, not a DuckDB error."""
+        import pytest
+
+        from ftw_dataset_tools.api.masks import build_chip_dirs
+
+        with pytest.raises(ValueError, match="Grid ID column 'not_a_column' not found"):
+            build_chip_dirs(
+                chips_file=sample_chips_with_coverage,
+                chips_base_dir=tmp_path / "chips",
+                min_coverage=0.01,
+                grid_id_col="not_a_column",
+            )
+
+    def test_missing_coverage_column_raises_value_error(
+        self, sample_chips_with_coverage: Path, tmp_path: Path
+    ) -> None:
+        """Test an unknown coverage column surfaces as a ValueError."""
+        import pytest
+
+        from ftw_dataset_tools.api.masks import build_chip_dirs
+
+        with pytest.raises(ValueError, match="Coverage column 'nope' not found"):
+            build_chip_dirs(
+                chips_file=sample_chips_with_coverage,
+                chips_base_dir=tmp_path / "chips",
+                min_coverage=0.01,
+                coverage_col="nope",
+            )
+
+    def test_handles_quote_in_chips_path(self, tmp_path: Path) -> None:
+        """Test a path containing a single quote does not break the query."""
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.masks import build_chip_dirs
+
+        quoted_dir = tmp_path / "O'Brien"
+        quoted_dir.mkdir()
+        chips_file = quoted_dir / "chips.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["grid_001"], "field_coverage_pct": [50.0]},
+            geometry=[box(10.0, 50.0, 10.01, 50.01)],
+            crs="EPSG:4326",
+        ).to_parquet(chips_file)
+
+        chip_dirs = build_chip_dirs(
+            chips_file=chips_file,
+            chips_base_dir=tmp_path / "chips",
+            min_coverage=0.01,
+        )
+
+        assert set(chip_dirs) == {"grid_001"}
+
 
 class TestCreateMasksCatalogStructure:
     """Tests that standalone create_masks writes the create-dataset catalog structure."""
@@ -324,3 +380,40 @@ class TestCreateMasksCatalogStructure:
         assert result.masks_created[0].output_path == custom_dir / "grid_001_semantic_3_class.tif"
         # Nothing should be written to the derived location
         assert not (tmp_path / "output" / "austria-chips").exists()
+
+    def test_create_masks_handles_quote_in_input_paths(self, tmp_path: Path) -> None:
+        """Test create_masks runs end-to-end when input paths contain a single quote."""
+        import geopandas as gpd
+        from shapely.geometry import LineString, box
+
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        quoted_dir = tmp_path / "O'Brien"
+        quoted_dir.mkdir()
+        gpd.GeoDataFrame(
+            {"id": ["grid_001"], "field_coverage_pct": [50.0]},
+            geometry=[box(10.0, 50.0, 10.01, 50.01)],
+            crs="EPSG:4326",
+        ).to_parquet(quoted_dir / "chips.parquet")
+        gpd.GeoDataFrame(
+            {"id": [1]},
+            geometry=[box(10.0, 50.0, 10.005, 50.005)],
+            crs="EPSG:4326",
+        ).to_parquet(quoted_dir / "fields.parquet")
+        gpd.GeoDataFrame(
+            {"id": [1]},
+            geometry=[LineString([(10.0, 50.0), (10.005, 50.005)])],
+            crs="EPSG:4326",
+        ).to_parquet(quoted_dir / "lines.parquet")
+
+        result = create_masks(
+            chips_file=quoted_dir / "chips.parquet",
+            boundaries_file=quoted_dir / "fields.parquet",
+            boundary_lines_file=quoted_dir / "lines.parquet",
+            output_dir=tmp_path / "output",
+            field_dataset="austria",
+            mask_type=MaskType.SEMANTIC_3_CLASS,
+            num_workers=1,
+        )
+
+        assert result.total_created == 1

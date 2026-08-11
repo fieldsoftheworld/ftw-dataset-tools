@@ -127,12 +127,27 @@ def build_chip_dirs(
 
     Returns:
         Dict mapping item_id (grid_id or grid_id_year) to its chip directory
+
+    Raises:
+        ValueError: If the grid ID or coverage column is not present in the chips file
     """
     conn = duckdb.connect(":memory:")
     try:
         ensure_spatial_loaded(conn)
+        # Bind the path and threshold as parameters so paths containing quotes
+        # (e.g. "O'Brien/chips.parquet") do not break the statement.
+        schema = conn.execute(
+            "DESCRIBE SELECT * FROM read_parquet(?)", [str(chips_file)]
+        ).fetchall()
+        columns = {row[0] for row in schema}
+        if grid_id_col not in columns:
+            raise ValueError(f"Grid ID column '{grid_id_col}' not found in chips file")
+        if coverage_col not in columns:
+            raise ValueError(f"Coverage column '{coverage_col}' not found in chips file")
+
         rows = conn.execute(
-            f'SELECT "{grid_id_col}" FROM \'{chips_file}\' WHERE "{coverage_col}" >= {min_coverage}'
+            f'SELECT "{grid_id_col}" FROM read_parquet(?) WHERE "{coverage_col}" >= ?',
+            [str(chips_file), min_coverage],
         ).fetchall()
     finally:
         conn.close()
@@ -221,16 +236,18 @@ def _get_geometries_in_bounds(
     else:
         select_cols = f'ST_AsText("{geom_col}") as wkt'
 
+    # The path is bound as a parameter so paths containing quotes
+    # (e.g. "O'Brien/fields.parquet") do not break the statement.
     query = f"""
         SELECT {select_cols}
-        FROM '{file_path}'
+        FROM read_parquet(?)
         WHERE ST_Intersects(
             "{geom_col}",
             ST_GeomFromText('POLYGON(({minx} {miny}, {maxx} {miny}, {maxx} {maxy}, {minx} {maxy}, {minx} {miny}))')
         )
     """
 
-    return conn.execute(query).fetchall()
+    return conn.execute(query, [str(file_path)]).fetchall()
 
 
 def _wkt_to_geometry(wkt: str):
@@ -452,7 +469,7 @@ def create_masks(
     chips_file: str | Path,
     boundaries_file: str | Path,
     boundary_lines_file: str | Path,
-    output_dir: str | Path = "./masks",
+    output_dir: str | Path = "./output",
     field_dataset: str = "unknown",
     grid_id_col: str = "id",
     mask_type: MaskType = MaskType.SEMANTIC_2_CLASS,
@@ -473,7 +490,8 @@ def create_masks(
         chips_file: Path to chips GeoParquet file (from create-chips)
         boundaries_file: Path to boundaries GeoParquet file (polygons)
         boundary_lines_file: Path to boundary lines GeoParquet file
-        output_dir: Output directory for masks (default: ./masks)
+        output_dir: Dataset output root; masks are written under
+                    ``{output_dir}/{field_dataset}-chips`` (default: ./output)
         field_dataset: Name of the field dataset (used in output filenames)
         grid_id_col: Column name for grid cell ID (default: "id")
         mask_type: Type of mask to create (default: semantic_2_class)
@@ -523,14 +541,19 @@ def create_masks(
     conn = duckdb.connect(":memory:")
     ensure_spatial_loaded(conn)
 
-    # Get total grid count (before filtering)
-    total_count_result = conn.execute(f"SELECT COUNT(*) FROM '{chips_path}'").fetchone()
+    # Get total grid count (before filtering). The path is bound as a parameter so
+    # paths containing quotes (e.g. "O'Brien/chips.parquet") do not break the statement.
+    total_count_result = conn.execute(
+        "SELECT COUNT(*) FROM read_parquet(?)", [str(chips_path)]
+    ).fetchone()
     total_grids = total_count_result[0] if total_count_result else 0
 
     # Build query with optional coverage filter
+    query_params: list[object] = [str(chips_path)]
     coverage_filter = ""
     if coverage_col:
-        coverage_filter = f'WHERE "{coverage_col}" >= {min_coverage}'
+        coverage_filter = f'WHERE "{coverage_col}" >= ?'
+        query_params.append(min_coverage)
 
     # Get grid cells with bounds
     query = f"""
@@ -540,12 +563,12 @@ def create_masks(
             ST_YMin("{grid_geom_col}") as miny,
             ST_XMax("{grid_geom_col}") as maxx,
             ST_YMax("{grid_geom_col}") as maxy
-        FROM '{chips_path}'
+        FROM read_parquet(?)
         {coverage_filter}
     """
 
     try:
-        grid_cells = conn.execute(query).fetchall()
+        grid_cells = conn.execute(query, query_params).fetchall()
     except duckdb.BinderException as e:
         if grid_id_col in str(e):
             raise ValueError(f"Grid ID column '{grid_id_col}' not found in grid file") from e
@@ -595,7 +618,9 @@ def create_masks(
     if mask_type == MaskType.INSTANCE:
         # Try to find an ID column in boundaries file
         try:
-            schema = conn.execute(f"DESCRIBE SELECT * FROM '{boundaries_path}'").fetchall()
+            schema = conn.execute(
+                "DESCRIBE SELECT * FROM read_parquet(?)", [str(boundaries_path)]
+            ).fetchall()
             col_names = [row[0] for row in schema]
             for candidate in ["id", "ID", "fid", "FID", "objectid", "OBJECTID"]:
                 if candidate in col_names:
