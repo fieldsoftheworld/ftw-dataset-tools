@@ -1,0 +1,341 @@
+# Class filter used for Belgium (Flanders) field boundaries.
+# Excluded classes are those that are not considered agricultural fields, e.g. forest, ecological protection areas.
+# Notable exclusions: grassland, pasture, meadows, orchards, fruit & nut trees, vineyards, grasses and
+# grass/cover mixtures, flowers and ornamental plants, greenhouse / "protected cultivation", mushrooms,
+# fallow / derelict land, and non-agricultural areas (buildings, water, infrastructure).
+# Notable inclusions: cereals, maize, legumes, oilseeds, potatoes, sugar & fodder beet, field vegetables,
+# medicinal plants/herbs, flax, hemp, hops, clover, alfalfa, strawberries.
+# Covers crop codes across be_vlg years 2018-2025. Codes from EuroCrops be_vlg_2021.csv plus data-only additions:
+# https://raw.githubusercontent.com/maja601/EuroCrops/refs/heads/main/csvs/country_mappings/be_vlg_2021.csv
+
+column: ["crop_code", "crop:code"]
+
+include:
+  - 34  # Japanese oats
+  - 35  # Triticale
+  - 36  # Spelt
+  - 37  # Buckwheat
+  - 39  # Other grains (e.g. mixed wheat)
+  - 42  # sunflower seeds
+  - 43  # soybeans
+  - 44  # Other oilseeds
+  - 45  # Oil flax (no fiber flax)
+  - 47  # Marigold / Calendula
+  - 48  # Camelina / false flax
+  - 51  # Field peas (not for human consumption)
+  - 52  # Broad and field beans (not for human consumption)
+  - 53  # Sweet Lupins
+  - 71  # fodder beets
+  - 91  # sugar beets
+  - 94  # String beans - fresh
+  - 99  # Crop cannot be determined (data-only)
+  - 201  # Silage maize
+  - 202  # grain corn
+  - 311  # winter wheat
+  - 312  # summer wheat
+  - 321  # winter barley
+  - 322  # summer barley
+  - 323  # brewing barley
+  - 331  # winter rye
+  - 332  # summer rye
+  - 341  # winter oats
+  - 342  # summer oats
+  - 381  # Sorghum
+  - 382  # Quinoa
+  - 383  # Millet
+  - 391  # Mixed crop: other winter cereals + winter legume
+  - 392  # Mixed crop: spring cereals + spring legume
+  - 395  # Mixed crop: winter wheat/triticale + winter legume
+  - 396  # Mixed crop: maize + legume
+  - 451  # Winter flax (oil production)
+  - 511  # Fodder peas (winter, non-food)
+  - 512  # Fodder peas (spring, non-food)
+  - 513  # Dry-harvested peas (food)
+  - 521  # Winter field beans (non-food)
+  - 522  # Spring field beans (non-food)
+  - 523  # Dry-harvested Vicia beans (food)
+  - 524  # Dry-harvested Phaseolus beans (food)
+  - 541  # Mixed cultivation of winter wheat or triticale and leguminous plants
+  - 542  # Mixed cultivation of other cereals and leguminous plants (e.g. peas and barley)
+  - 603  # Seed cereals
+  - 604  # Seed oil and fiber plants
+  - 605  # Seed vegetables
+  - 606  # Seeds for fodder plants
+  - 634  # Cover mix: mostly Japanese oats + legumes
+  - 639  # cutting rye
+  - 643  # Yellow mustard
+  - 644  # Lupins
+  - 645  # Phacelia
+  - 646  # Tagetes (marigold)
+  - 648  # Other leguminous green cover plants
+  - 652  # Borage
+  - 653  # Sudan grass
+  - 655  # Brown (Sarepta) mustard
+  - 656  # fodder radish
+  - 658  # Cover mix with 1+ legume green cover crops
+  - 660  # Grass alfalfa
+  - 700  # grass clover
+  - 721  # annual clover
+  - 722  # Perennial Clover
+  - 723  # red clover
+  - 731  # Annual Alfalfa
+  - 732  # Perennial alfalfa
+  - 741  # Feed cabbage (leafy cabbage)
+  - 742  # Fodder carrots
+  - 743  # Other fodder crops
+  - 744  # Mixture of legumes
+  - 746  # Fodder Turnips
+  - 747  # vetch
+  - 749  # Mix with 1+ legumes
+  - 831  # Peas (other than dry harvested) - industry
+  - 832  # Broad and field beans (Vicia faba) - industry
+  - 856  # Other herbs - industry
+  - 858  # Other perennial herbs - industry
+  - 859  # Parsley - industry
+  - 860  # Chervil - industry
+  - 863  # Parsley root - industry
+  - 864  # Basil - industry
+  - 865  # Chives - industry
+  - 872  # Hemp other than fiber hemp (not for human consumption)
+  - 881  # Angelica - fresh
+  - 899  # Rotational vegetable cultivation (e.g. pick-your-own)
+  - 901  # Potatoes (planned harvest from 1/9)
+  - 902  # Potatoes (seed potatoes)
+  - 904  # Potatoes (planned harvest for 1/9)
+  - 905  # Potatoes (early, lifted before 20/6)
+  - 906  # Sweet potato
+  - 907  # Potatoes (certified seed)
+  - 908  # Potatoes (farm seed)
+  - 921  # Fiber flax (intended for fiber production)
+  - 922  # Fiber hemp (intended for fiber production)
+  - 923  # Winter flax (fibre / industrial)
+  - 931  # Peas (other than dry harvested) - fresh
+  - 932  # Broad beans (Vicia faba) - fresh
+  - 933  # Chickpeas
+  - 934  # Lentils
+  - 951  # Other vegetables - fresh
+  - 956  # Other herbs - fresh
+  - 957  # Medicinal and aromatic plants and herbs
+  - 959  # Parsley - fresh
+  - 960  # Chervil - fresh
+  - 961  # Carrot parsley - fresh consumption
+  - 964  # Basil - fresh consumption
+  - 965  # Chives - fresh consumption
+  - 983  # Angelica - industry
+  - 999  # Unspecified crop - small farmer
+  - 4111  # winter rapeseed
+  - 4112  # Winter rapeseed
+  - 4121  # summer rapeseed
+  - 4122  # summer rapeseed
+  - 6031  # Winter wheat or triticale seed
+  - 6041  # Seed winter flax
+  - 8409  # Parsnip - industry
+  - 8410  # Standard green beans/green beans - industry
+  - 8411  # String beans - industry
+  - 8412  # Flageolets (for the bean) - industry
+  - 8456  # Butternut Squashes - Industry
+  - 8511  # Asparagus - industry
+  - 8512  # Brussels sprouts - industry
+  - 8513  # Shallots - industry
+  - 8514  # Onions (non-early) - industry
+  - 8515  # Chicory (force) - industry
+  - 8517  # Rhubarb - industry
+  - 8518  # lettuce - industry
+  - 8519  # Spinach - industry
+  - 8523  # Cauliflower - industry
+  - 8524  # Kale - industry
+  - 8525  # Broccoli - industry
+  - 8526  # Chinese cabbage - industry
+  - 8527  # Red cabbage - industry
+  - 8528  # Turnip - Industry
+  - 8529  # Kohlrabi - industry
+  - 8530  # Turnip - industry
+  - 8531  # Radish - industry
+  - 8532  # Red beet - industry
+  - 8533  # Salsify - industry
+  - 8534  # Fennel (tuber) - industry
+  - 8535  # Carrot (non-early) (consumption) - industry
+  - 8537  # Endive - industry
+  - 8538  # Leek - industry
+  - 8539  # Celery leaves - industry
+  - 8540  # White cabbage - industry
+  - 8541  # Zucchini - industry
+  - 8542  # Lambs lettuce - industry
+  - 8543  # Celeriac - industry
+  - 8544  # Iceberg lettuce - industry
+  - 8545  # Rocket / arugula - industry
+  - 8546  # Savoy cabbage - industry
+  - 8548  # Green celery - industry
+  - 8550  # Black radish - industry
+  - 8551  # Celery - industry
+  - 8552  # Tomatoes - industry
+  - 8553  # Bell pepper - industry
+  - 8556  # Pumpkins - industry
+  - 8557  # Other alternative lettuce varieties - industry
+  - 8559  # Other vegetables - industry
+  - 8563  # Onions (early) - industry
+  - 8564  # Carrot (early) (consumption) - industry
+  - 8581  # Other perennial herbs - fresh
+  - 8620  # Other cabbages - industry
+  - 9409  # Parsnip - fresh
+  - 9410  # Green beans/green beans - fresh
+  - 9412  # Flageolets (for the bean) - fresh
+  - 9456  # Butternut Squashes - Fresh
+  - 9511  # Asparagus - fresh
+  - 9512  # Brussels sprouts - fresh
+  - 9513  # Shallots - fresh
+  - 9514  # Onions (not early) - fresh
+  - 9515  # Chicory (forcery) - fresh
+  - 9516  # strawberries
+  - 9517  # Rhubarb - fresh
+  - 9518  # head lettuce - fresh
+  - 9519  # Spinach - fresh
+  - 9523  # Cauliflower - fresh
+  - 9524  # Kale - fresh
+  - 9525  # Broccoli - fresh
+  - 9526  # Chinese cabbage - fresh
+  - 9527  # Red cabbage - fresh
+  - 9528  # Turnip - fresh
+  - 9529  # Kohlrabi - fresh
+  - 9530  # Turnip - fresh
+  - 9531  # Radish - fresh
+  - 9532  # Beetroot - fresh
+  - 9533  # Salsify - fresh
+  - 9534  # (tuber) fennel - fresh
+  - 9535  # Carrot (non-early) (consumption) - fresh
+  - 9537  # Endive - fresh
+  - 9538  # Leek - fresh
+  - 9539  # Celery leaves - fresh
+  - 9540  # White cabbage - fresh
+  - 9541  # Zucchini - fresh
+  - 9542  # Lamss lettuce - fresh
+  - 9543  # Celeriac - fresh
+  - 9544  # Iceberg lettuce - fresh
+  - 9545  # Rocket salad - Arugula - fresh
+  - 9546  # Savoy cabbage - fresh
+  - 9548  # Green celery - fresh
+  - 9550  # Black radish - fresh
+  - 9551  # Celery - fresh
+  - 9556  # Pumpkins - fresh
+  - 9557  # Other alternative lettuce varieties - fresh
+  - 9561  # Chicory root
+  - 9563  # Onions (early) - fresh
+  - 9564  # Carrot (early) (consumption) - fresh
+  - 9568  # Planting material and propagating material of leguminous vegetables
+  - 9569  # Planting material and propagating material of non-leguminous vegetables
+  - 9586  # Artichoke - fresh
+  - 9620  # Other cabbages - fresh
+  - 9724  # strawberry plants
+  - 9811  # Chicory (inulin)
+  - 9812  # Chicory (coffee substitute)
+  - 9821  # Tobacco
+  - 9822  # Hop
+
+exclude:
+  - 1  # Main buildings
+  - 2  # Other stables and buildings
+  - 3  # Pools <= 0.1 ha
+  - 4  # Wooded edges and wooded banks <= 10 m wide
+  - 6  # grazed non-agricultural land
+  - 8  # People garden park
+  - 9  # Unpaved runway or airport safety zones
+  - 10  # Rows of trees
+  - 11  # stable
+  - 12  # Shed (e.g. for machines storage)
+  - 13  # Building not specified
+  - 14  # Residential building
+  - 15  # Building i.c.v. widening
+  - 16  # Other building
+  - 17  # Organic non-agricultural land
+  - 60  # Grassland
+  - 63  # Grass herb mixture
+  - 81  # Derelict land with no minimum activity
+  - 82  # Derelict land with minimal activity without EAG
+  - 85  # Other cover
+  - 89  # Derelict land with minimal activity with EAG
+  - 96  # Non-edible horticultural crops
+  - 98  # Fauna mixture
+  - 100  # Unsown arable land (data-only)
+  - 601  # Seed grasses
+  - 602  # Cultivation material vines
+  - 635  # Cover mix: mostly Japanese oats, no legumes
+  - 638  # Festulolium
+  - 647  # Other non-flowery green cover plants
+  - 659  # Mixture of non-leguminous green cover crops (data-only)
+  - 662  # Cover mix: fodder radish + yellow mustard
+  - 745  # Mixture of grass and leguminous plants (other than grass clover or grass alfalfa)
+  - 883  # Afforestation (short rotation)
+  - 884  # miscanthus
+  - 886  # Non-subsidizable short-rotation coppice
+  - 894  # Afforestation with contract for 2008
+  - 895  # Group trees
+  - 897  # Forest
+  - 898  # permaculture
+  - 954  # Other non-woody ornamental plants
+  - 955  # Grass Turf
+  - 962  # Christmas trees
+  - 963  # vine plantations
+  - 972  # Other annual fruit crops
+  - 8910  # Afforestation deciduous trees-ecological
+  - 8911  # Afforestation of deciduous trees-economical
+  - 8912  # Afforestation of conifers
+  - 8915  # Poplar afforestation
+  - 9201  # hazelnuts
+  - 9202  # walnuts
+  - 9536  # Mushrooms (shed)
+  - 9547  # pot chrysanthemums
+  - 9552  # Tomatoes - fresh
+  - 9553  # Bell pepper - fresh
+  - 9554  # Cucumbers - fresh
+  - 9555  # Eggplants - fresh
+  - 9560  # Tree cultivation - forest and hedge plants
+  - 9565  # Young plants for floriculture
+  - 9566  # Seeds for floriculture
+  - 9570  # Azalea
+  - 9571  # Begonia (for tuber)
+  - 9572  # Flower bulbs and tubers
+  - 9573  # Green houseplants (ficus ...)
+  - 9574  # Flowering houseplants (kalanchoe ...)
+  - 9575  # Cut plants < 5 years
+  - 9576  # Cut flowers - roses
+  - 9577  # Cut flowers other than roses < 5 years
+  - 9578  # Bedding and balcony plants
+  - 9580  # Perennials
+  - 9581  # avenue trees
+  - 9582  # Roses
+  - 9583  # Flowering Shrubs
+  - 9584  # Hardy ornamental plants
+  - 9585  # Cut plants >= 5 years
+  - 9587  # Cut flowers other than roses >= 5 years
+  - 9589  # Non-flowering shrubs
+  - 9590  # Solitary Trees
+  - 9602  # Tree cultivation - fruit cultivation
+  - 9603  # Tree nursery - ornamental
+  - 9604  # Tree nursery - other
+  - 9710  # Perennial fruit crops (apple)
+  - 9711  # Perennial fruit crops (pear)
+  - 9713  # Perennial fruit crops (plum)
+  - 9714  # Other perennial fruit crops
+  - 9715  # Grapes
+  - 9716  # Vines
+  - 9717  # raspberries
+  - 9718  # Redcurrant
+  - 9719  # gooseberries
+  - 9720  # Blackcurrants
+  - 9721  # blackberries
+  - 9722  # Blueberries
+  - 9723  # Other berries
+  - 9725  # Perennial fruit crops (sweet cherry
+  - 9726  # Perennial fruit crops (sweet cherry standard)
+  - 9727  # Perennial fruit crops (sour cherry)
+  - 9728  # Perennial fruit crops (peach)
+  - 9729  # kiwi berry
+  - 9730  # Perennial fruit crops standard (apple)
+  - 9731  # Perennial fruit crops standard (pear)
+  - 9823  # Pasture with non-harvestable trees (> 100 trees per ha)
+  - 9825  # Heath in nature management
+  - 9827  # Pasture with harvestable standard trees (> 100 trees/ha)
+  - 9828  # Natural grassland with minimum activity
+  - 9829  # Natural grassland with no minimum activity
+  - 9831  # Flower mixture
+  - 9832  # Flower mixture for EAG Braak

@@ -1,0 +1,157 @@
+# Class filter used for Belgium (Wallonia) field boundaries.
+# Excluded classes are those that are not considered agricultural fields, e.g. forest, ecological protection areas.
+# Notable exclusions: grassland/meadow & fodder, fallow (jachere), orchards, fruit & nut trees, vineyards,
+# ornamental plants & nurseries, greenhouse / "sous serre / sous verre", Christmas trees, short-rotation
+# coppice & miscanthus, scrub/woodland, and non-agricultural parcels (buildings, water, sport/leisure).
+# Notable inclusions: cereals, maize, legumes, oilseeds, potatoes, sugar & fodder beet, field vegetables,
+# medicinal/aromatic plants, flax, hemp, hops, chicory, clover, alfalfa, sainfoin, strawberries.
+# HCAT taxonomy and crop codes from be_wal.parquet (EuroCrops).
+
+column: ["crop:code", "crop_code"]
+
+include:
+  - 36  # Epeautre
+  - 37  # Sarrasin
+  - 42  # Tournesol
+  - 43  # Soja
+  - 45  # Lin oléagineux
+  - 46  # Autres oléagineux
+  - 53  # Lupin doux
+  - 56  # Luzerne lupuline
+  - 58  # Sainfoin (Onobrychis sativa)
+  - 71  # Betterave fourragère
+  - 72  # Trèfles
+  - 73  # Luzerne
+  - 77  # Autres mélanges (avec moins de 50 % de graminées) que ceux déjà listés *
+  - 91  # Betterave sucrière
+  - 99  # Autres
+  - 201  # Maïs ensilage
+  - 202  # Maïs grain
+  - 311  # Froment d'hiver
+  - 312  # Froment de printemps
+  - 321  # Orge d'hiver
+  - 322  # Orge de printemps
+  - 323  # Orge de brasserie
+  - 331  # Seigle d'hiver
+  - 332  # Seigle de printemps
+  - 341  # Avoine d'hiver
+  - 342  # Avoine de printemps
+  - 351  # Triticale d'hiver
+  - 352  # Triticale de printemps
+  - 361  # Epeautre de printemps
+  - 362  # Petit épeautre
+  - 381  # Sorgho
+  - 382  # Quinoa
+  - 391  # Mélange de céréales d'hiver ( plus de 50%) et de  légumineuses (plus de 20%)
+  - 392  # Mélange de céréales de printemps ( plus de 50%) et de  légumineuses (plus de 20%)
+  - 393  # Mélange de céréales d'hiver uniquement
+  - 394  # Mélange de céréales de printemps uniquement
+  - 511  # Pois protéagineux d'hiver
+  - 512  # Pois protéagineux de printemps
+  - 521  # Fèves et Féveroles d'hiver
+  - 522  # Fèves et Féveroles de printemps
+  - 541  # Mélange protéagineux d'hiver + céréales ou autres espèces
+  - 542  # Mélange protéagineux de printemps + céréales ou autres espèces
+  - 742  # Carottes fourragères
+  - 746  # Navets fourragers
+  - 748  # Silphie
+  - 872  # Chanvre non textile (culture soumise à autorisation préalable au semis)
+  - 881  # Angélique
+  - 901  # Pomme de terre (non hâtives)
+  - 902  # Pomme de terre (plants)
+  - 903  # Pomme de terre féculière
+  - 904  # Pomme de terre hâtives
+  - 905  # Pomme de terre (primeur, arrachage avant le 20 juin)
+  - 921  # Lin textile
+  - 922  # Chanvre textile (culture soumise à autorisation préalable au semis)
+  - 931  # Pois récoltés à l'état frais, pois de conserverie
+  - 951  # Autres légumes de plein air
+  - 953  # Plantes aromatiques
+  - 957  # Plantes médicinales
+  - 959  # Persil (consommation au frais)
+  - 961  # Persil à grosse racine
+  - 966  # Légume légumineuse
+  - 4111  # Colza d'hiver
+  - 4121  # Colza de printemps
+  - 4122  # Navette de printemps (graines)
+  - 7431  # Ortie
+  - 7433  # Carotte
+  - 8517  # Rhubarbe (transformation industrielle)
+  - 8548  # Céleri vert (transformation industrielle)
+  - 8561  # Endives de Bruxelles (pour la racine) (transformation industrielle)
+  - 9410  # Haricots de conserverie
+  - 9456  # Courges butternut (consommation au frais)
+  - 9511  # Asperges (consommation au frais)
+  - 9512  # Chou de Bruxelles (consommation au frais)
+  - 9513  # Echalotes (consommation au frais)
+  - 9514  # Oignons (non-hâtifs) (consommation au frais)
+  - 9515  # Endives (chicons)
+  - 9516  # Cultures fruitières annuelles - Fraises
+  - 9517  # Rhubarbe (consommation au frais)
+  - 9518  # Laitues pommées (consommation au frais)
+  - 9519  # Epinards (consommation au frais)
+  - 9523  # Chou-fleur (consommation au choix)
+  - 9524  # Chou frisé (consommation au choix)
+  - 9525  # Brocoli (consommation au frais)
+  - 9527  # Choux rouge (consommation au frais)
+  - 9533  # Scorsonère
+  - 9534  # Fenouil (de Florence)(consommation au frais)
+  - 9535  # Carotte (non hâtive)(consommation) (consommation au frais)
+  - 9538  # Poireau (consommation au frais)
+  - 9540  # Chou blanc (consommation au frais)
+  - 9541  # Courgettes (consommation au frais)
+  - 9543  # Céleri-rave (consommation au frais)
+  - 9548  # Choux - Légumes
+  - 9551  # Céleri-branche (consommation au frais)
+  - 9563  # Oignons (hâtifs) (consommation au frais)
+  - 9564  # Carotte (hâtive)(consommation) (consommation au frais)
+  - 9724  # Fraisiers
+  - 9811  # Chicorée à inuline
+  - 9812  # Chicorée à café
+  - 9821  # Tabac
+  - 9822  # Houblon
+
+exclude:
+  - 6  # Prairie et fourrage
+  - 80  # Jachère
+  - 85  # Autres couverts semés
+  - 96  # Cultures horticoles non-comestibles
+  - 812  # jachère non herbacée
+  - 813  # Jachère mellifère
+  - 817  # Jachère Maïs - Dérogation SIE
+  - 818  # Jachère Fauche, pâturage - Dérogation SIE
+  - 819  # Jachère Légumineuses - Dérogation SIE
+  - 883  # Cultures forestières à rotation courte (taillis à très courte rotation)
+  - 884  # Miscanthus
+  - 885  # Cultures permanentes sous serre
+  - 952  # Cultures maraîchères sous verre
+  - 954  # Autres plantes ornementales de plein air
+  - 958  # Autres plantes ornementales sous serre
+  - 962  # Sapins de Noël
+  - 991  # Parcelle bâtie, ou zone artificialisée
+  - 992  # Parcelle de sport ou loisir
+  - 993  # Utilisation non agricole (stockage de grume, ..) ou terrain vague
+  - 994  # Mare, étang, lac, plan d'eau
+  - 8516  # Cultures fruitières annuelles - Fraise sous serre
+  - 9201  # Noisetier
+  - 9202  # Noyer
+  - 9520  # Pépinières de plants fruitiers ou de plantes ornementales
+  - 9521  # Autres cultures de légumes sous serre
+  - 9552  # Tomates (consommation au frais)
+  - 9560  # Pépinières de plants forestiers
+  - 9584  # Plantes ornementales rustiques
+  - 9588  # Fleurs et plantes ornementales sous serre
+  - 9710  # cultures fruitières pluriannuelles (pommes) - basses tiges
+  - 9711  # cultures fruitières pluriannuelles (poires) - basses tiges
+  - 9713  # cultures fruitières pluriannuelles (prunes) - basses tiges
+  - 9716  # Vignes
+  - 9717  # Cultures fruitières annuelles - Framboises
+  - 9725  # cultures fruitières pluriannuelles (cerises) - basses tiges
+  - 9726  # cultures fruitières pluriannuelles (cerises) -hautes tiges
+  - 9730  # cultures fruitières pluriannuelles (pommes) -hautes tiges
+  - 9731  # cultures fruitières pluriannuelles (poires) - hautes tiges
+  - 9732  # cultures fruitières pluriannuelles (prunes) - hautes tiges
+  - 9741  # Cultures fruitière pluriannuelles-basses tiges
+  - 9742  # Cultures fruitière pluriannuelles-hautes tiges
+  - 9942  # Brousailles, ronces, ligneux bas, buissons sur parcelle non paturée
+  - 9943  # parcelle boisée présentant un couvert forestier

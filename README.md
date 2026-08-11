@@ -89,11 +89,19 @@ exclude: [urban, water, forest]     # count as background
 
 The filter is applied up front, so coverage stats, boundary lines, and masks all
 reflect only the included classes (the full, unfiltered fields file is still kept
-and published as the STAC source asset). Every distinct value in the column must
-appear in `include` or `exclude` — any unlisted value aborts the run so no class
-is silently mishandled. Values are compared as strings (numeric crop codes work).
-The same filter is available on `create-dataset` via `--class-filter <path>`.
+and published as the STAC source asset). Every distinct non-null value in the
+column must appear in `include` or `exclude` — any unlisted value aborts the run
+so no class is silently mishandled. NULL class values are treated as background.
+Values are compared as strings (numeric crop codes work). The same filter is
+available on `create-dataset` via `--class-filter <path>`.
 See [`configs/examples/class_filter.yaml`](configs/examples/class_filter.yaml).
+
+`column` may also be a list of candidate names, tried in order — handy when the
+same filter is reused across datasets that name the column differently:
+
+```yaml
+column: [crop_code, "crop:code"]   # use whichever one the fields file has
+```
 
 See [`configs/examples/config.yaml`](configs/examples/config.yaml) for a fully documented config.
 A minimal config:

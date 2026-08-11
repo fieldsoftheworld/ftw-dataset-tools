@@ -79,6 +79,37 @@ class TestClassFilterFromFile:
         assert cf.include == ["1", "2"]
         assert cf.exclude == ["9"]
 
+    def test_column_list_becomes_primary_plus_aliases(self, tmp_path: Path) -> None:
+        path = self._write(
+            tmp_path, {"column": ["crop_code", "crop:code"], "include": ["1"], "exclude": ["2"]}
+        )
+        cf = ClassFilter.from_file(path)
+        assert cf.column == "crop_code"
+        assert cf.column_aliases == ["crop:code"]
+        assert cf.column_candidates() == ["crop_code", "crop:code"]
+
+    def test_empty_column_list_rejected(self, tmp_path: Path) -> None:
+        path = self._write(tmp_path, {"column": [], "include": ["1"], "exclude": ["2"]})
+        with pytest.raises(ClassFilterError, match="column"):
+            ClassFilter.from_file(path)
+
+
+class TestResolveColumn:
+    def test_picks_first_available(self) -> None:
+        cf = ClassFilter("crop_code", ["1"], ["2"], column_aliases=["crop:code"])
+        assert cf.resolve_column(["id", "crop:code", "geom"]) == "crop:code"
+        assert cf.resolve_column(["id", "crop_code", "geom"]) == "crop_code"
+
+    def test_errors_when_no_candidate_present(self) -> None:
+        cf = ClassFilter("crop_code", ["1"], ["2"], column_aliases=["crop:code"])
+        with pytest.raises(ClassFilterError, match="None of the class filter columns"):
+            cf.resolve_column(["id", "geometry"])
+
+    def test_dataplane_resolve_column(self, fields_with_classes: Path) -> None:
+        # fields_with_classes has a 'crop' column; primary is missing, alias matches.
+        cf = ClassFilter("crop_code", ["wheat"], ["water"], column_aliases=["crop"])
+        assert cf_module.resolve_column(fields_with_classes, cf) == "crop"
+
 
 class TestValidateAgainst:
     def test_full_coverage_passes(self) -> None:
@@ -90,10 +121,12 @@ class TestValidateAgainst:
         with pytest.raises(ClassFilterError, match="not covered"):
             cf.validate_against({"wheat", "water", "rye"})
 
-    def test_null_value_errors_as_placeholder(self) -> None:
+    def test_null_treated_as_background(self) -> None:
         cf = ClassFilter("crop", ["wheat"], ["water"])
-        with pytest.raises(ClassFilterError, match="<null>"):
-            cf.validate_against({"wheat", "water", None})
+        msgs: list[str] = []
+        # NULL is background, not an error.
+        cf.validate_against({"wheat", "water", None}, on_progress=msgs.append)
+        assert any("null" in m.lower() and "background" in m.lower() for m in msgs)
 
     def test_absent_listed_class_warns(self) -> None:
         cf = ClassFilter("crop", ["wheat", "rye"], ["water"])

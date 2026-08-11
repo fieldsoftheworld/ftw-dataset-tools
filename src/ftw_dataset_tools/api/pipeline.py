@@ -301,10 +301,13 @@ def stage_filter(ctx: PipelineContext) -> None:
         return
     _require(ctx.output_fields_path, stage="filter", produced_by="reproject")
 
-    ctx.log(f"Filtering fields by column '{cf.column}'...")
-    distinct = class_filter.get_distinct_classes(ctx.output_fields_path, cf.column)
+    column = class_filter.resolve_column(ctx.output_fields_path, cf)
+    ctx.log(f"Filtering fields by column '{column}'...")
+    distinct = class_filter.get_distinct_classes(ctx.output_fields_path, column)
     cf.validate_against(distinct, on_progress=ctx.log)
-    class_filter.write_filtered_fields(ctx.output_fields_path, ctx.field_polygons_path, cf)
+    class_filter.write_filtered_fields(
+        ctx.output_fields_path, ctx.field_polygons_path, cf, column=column
+    )
     ctx.log(
         f"Wrote filtered fields ({len(cf.include)} field class(es)): {ctx.field_polygons_path.name}"
     )

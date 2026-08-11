@@ -15,12 +15,15 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
 from ftw_dataset_tools import __version__
 from ftw_dataset_tools.api import splits
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 # Mask types that ``create-masks`` understands. Kept here so config validation
 # gives the same error the CLI does.
@@ -51,6 +54,9 @@ class ClassFilter:
         include: Class values that count as field (rasterized as foreground).
         exclude: Class values that count as background.
         source: Path the filter was loaded from (for provenance).
+        column_aliases: Fallback column names, tried (in order) when ``column`` is
+            not present in the fields file. Lets one filter work across datasets
+            that name the column differently (e.g. ``crop_code`` vs ``crop:code``).
 
     Class values are compared as strings, so numeric crop codes work too.
     """
@@ -59,6 +65,7 @@ class ClassFilter:
     include: list[str]
     exclude: list[str]
     source: str | None = None
+    column_aliases: list[str] = field(default_factory=list)
 
     @classmethod
     def from_file(cls, path: str | Path) -> ClassFilter:
@@ -86,9 +93,21 @@ class ClassFilter:
                 f"{', '.join(sorted(unknown))}. Allowed: column, include, exclude."
             )
 
-        column = raw.get("column")
-        if not isinstance(column, str) or not column:
-            raise ClassFilterError(f"Class filter {filter_path} must specify a string 'column'.")
+        # 'column' may be a single name or a list of candidate names (first is
+        # primary; the rest are fallbacks tried when the primary is absent).
+        raw_col = raw.get("column")
+        if isinstance(raw_col, str) and raw_col:
+            column, aliases = raw_col, []
+        elif isinstance(raw_col, list) and raw_col:
+            names = [str(x).strip() for x in raw_col if str(x).strip()]
+            if not names:
+                raise ClassFilterError(f"Class filter {filter_path}: 'column' list is empty.")
+            column, aliases = names[0], names[1:]
+        else:
+            raise ClassFilterError(
+                f"Class filter {filter_path} must specify 'column' as a string or "
+                "a non-empty list of strings."
+            )
 
         include = _as_str_list(raw.get("include"), "include", filter_path)
         exclude = _as_str_list(raw.get("exclude"), "exclude", filter_path)
@@ -104,34 +123,61 @@ class ClassFilter:
                 f"Class filter {filter_path}: classes appear in both include and exclude: {overlap}"
             )
 
-        return cls(column=column, include=include, exclude=exclude, source=str(filter_path))
+        return cls(
+            column=column,
+            include=include,
+            exclude=exclude,
+            source=str(filter_path),
+            column_aliases=aliases,
+        )
 
     def handled(self) -> set[str]:
         """Return the set of all classes the filter accounts for."""
         return set(self.include) | set(self.exclude)
 
+    def column_candidates(self) -> list[str]:
+        """Column names to try, primary first."""
+        return [self.column, *self.column_aliases]
+
+    def resolve_column(self, available: Iterable[str]) -> str:
+        """Return the first candidate column present in ``available``.
+
+        Raises:
+            ClassFilterError: If none of the candidate columns are present.
+        """
+        available = set(available)
+        for candidate in self.column_candidates():
+            if candidate in available:
+                return candidate
+        raise ClassFilterError(
+            f"None of the class filter columns {self.column_candidates()} are in the "
+            f"fields file. Available columns: {sorted(available)}"
+        )
+
     def validate_against(self, distinct: set[str | None], on_progress: Any = None) -> None:
-        """Enforce that every class in the data is handled; warn on stale entries.
+        """Enforce that every non-null class in the data is handled.
+
+        NULL class values are treated as background (they fall outside ``include``,
+        so they are not rasterized as field) and never block the run.
 
         Args:
             distinct: Distinct class values found in the data (may contain None).
-            on_progress: Optional callback for the listed-but-absent warning.
+            on_progress: Optional callback for informational notes/warnings.
 
         Raises:
-            ClassFilterError: If any value in the data is in neither include nor
-                exclude (NULLs are reported as ``<null>``).
+            ClassFilterError: If any non-null value in the data is in neither
+                include nor exclude.
         """
         handled = self.handled()
-        offenders = sorted(
-            "<null>" if value is None else value
-            for value in distinct
-            if value is None or value not in handled
-        )
+        offenders = sorted(v for v in distinct if v is not None and v not in handled)
         if offenders:
             raise ClassFilterError(
                 f"Column '{self.column}' has values not covered by the class filter. "
                 f"Add each to include or exclude: {offenders}"
             )
+
+        if None in distinct and on_progress is not None:
+            on_progress("Note: null class values are present and treated as background.")
 
         present = {value for value in distinct if value is not None}
         absent = sorted(handled - present)

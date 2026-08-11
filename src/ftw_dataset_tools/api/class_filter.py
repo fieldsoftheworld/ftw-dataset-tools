@@ -26,6 +26,25 @@ def _safe_column(column: str) -> str:
     return f'"{column}"'
 
 
+def resolve_column(fields_file: str | Path, class_filter: ClassFilter) -> str:
+    """Return the filter's class column that actually exists in ``fields_file``.
+
+    Tries the filter's primary column then its aliases, so one filter can be used
+    across datasets that name the column differently (e.g. crop_code / crop:code).
+
+    Raises:
+        ClassFilterError: If none of the candidate columns are present.
+    """
+    conn = duckdb.connect(":memory:")
+    try:
+        columns = [
+            row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM '{fields_file}'").fetchall()
+        ]
+    finally:
+        conn.close()
+    return class_filter.resolve_column(columns)
+
+
 def get_distinct_classes(fields_file: str | Path, column: str) -> set[str | None]:
     """Return the distinct values of ``column`` in ``fields_file`` (as strings).
 
@@ -58,14 +77,20 @@ def write_filtered_fields(
     fields_file: str | Path,
     output_path: str | Path,
     class_filter: ClassFilter,
+    column: str | None = None,
 ) -> Path:
     """Write a fields file containing only the filter's ``include`` classes.
 
     The geometry column and GeoParquet metadata are preserved via
     :func:`~ftw_dataset_tools.api.geo.write_geoparquet`. If ``include`` is empty,
     the result is an empty field set (everything is background).
+
+    Args:
+        column: Class column to filter on. Defaults to the filter's primary
+            column; pass a resolved name (see :func:`resolve_column`) when the
+            dataset uses a fallback name.
     """
-    quoted = _safe_column(class_filter.column)
+    quoted = _safe_column(column or class_filter.column)
     if class_filter.include:
         # Escape single quotes for safe string literals; matching is on VARCHAR.
         literals = ", ".join("'" + value.replace("'", "''") + "'" for value in class_filter.include)
