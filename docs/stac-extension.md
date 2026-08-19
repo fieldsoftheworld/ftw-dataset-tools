@@ -29,6 +29,11 @@ These properties are added to parent chip items after image selection:
 | `ftw:buffer_days` | integer | Search buffer in days around crop calendar dates |
 | `ftw:num_buffer_expansions` | integer | Number of times to expand buffer if no cloud-free scenes found |
 | `ftw:buffer_expansion_size` | integer | Days added to buffer on each expansion |
+| `ftw:planting_buffer_used` | integer | Buffer in days that actually produced the planting scene |
+| `ftw:harvest_buffer_used` | integer | Buffer in days that actually produced the harvest scene |
+| `ftw:expansions_performed` | integer | Number of buffer expansions performed before a scene was found |
+| `ftw:planting_cloud_cover` | number | Cloud cover percentage of the selected planting scene |
+| `ftw:harvest_cloud_cover` | number | Cloud cover percentage of the selected harvest scene |
 
 ### Child S2 Item Properties
 
@@ -45,7 +50,7 @@ Standard EO extension property:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `eo:cloud_cover` | number | Cloud cover percentage (only set if < 0.1% or after pixel check) |
+| `eo:cloud_cover` | number | Cloud cover percentage of the source scene, rounded to 2 decimal places |
 
 ## Item Structure
 
@@ -58,8 +63,8 @@ After image selection, a parent chip item contains:
   "id": "ftw-34UFF1628_2024",
   "type": "Feature",
   "properties": {
-    "start_datetime": "2024-01-01T00:00:00Z",
-    "end_datetime": "2024-12-31T23:59:59Z",
+    "start_datetime": "2024-03-15T10:30:00Z",
+    "end_datetime": "2024-09-28T10:28:00Z",
     "ftw:calendar_year": 2024,
     "ftw:planting_day": 75,
     "ftw:harvest_day": 274,
@@ -67,10 +72,21 @@ After image selection, a parent chip item contains:
     "ftw:cloud_cover_chip_threshold": 2.0,
     "ftw:buffer_days": 14,
     "ftw:num_buffer_expansions": 3,
-    "ftw:buffer_expansion_size": 14
-  }
+    "ftw:buffer_expansion_size": 14,
+    "ftw:planting_cloud_cover": 0.42,
+    "ftw:harvest_cloud_cover": 1.13
+  },
+  "links": [
+    {"rel": "ftw:planting", "href": "./ftw-34UFF1628_2024_planting_s2.json"},
+    {"rel": "ftw:harvest", "href": "./ftw-34UFF1628_2024_harvest_s2.json"}
+  ]
 }
 ```
+
+`start_datetime` / `end_datetime` span the acquisition dates of the two selected
+scenes. The `ftw:planting` and `ftw:harvest` links are what mark a chip as having
+imagery: `ftwd select-images` skips chips that already have both (use `--force` to
+re-select).
 
 ### Child S2 Item
 
@@ -99,7 +115,7 @@ Child items reference the source Sentinel-2 scene and contain remote asset links
     }
   },
   "links": [
-    {"rel": "derived_from", "href": "./ftw-34UFF1628_2024.json"},
+    {"rel": "ftw:parent_chip", "href": "./ftw-34UFF1628_2024.json"},
     {"rel": "via", "href": "https://earth-search.aws.element84.com/.../S2A_....json"}
   ]
 }
@@ -109,7 +125,9 @@ Child items reference the source Sentinel-2 scene and contain remote asset links
 
 | Relation | Description |
 |----------|-------------|
-| `derived_from` | Links child S2 item to its parent chip item |
+| `ftw:planting` | Links a parent chip item to its planting-season S2 child item |
+| `ftw:harvest` | Links a parent chip item to its harvest-season S2 child item |
+| `ftw:parent_chip` | Links a child S2 item back to its parent chip item |
 | `via` | Links to the original source STAC item in the remote catalog |
 
 ## Asset Roles

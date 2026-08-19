@@ -115,10 +115,10 @@ raise BadParameter("Invalid value for --option")
 
 The `create-dataset` command is a pipeline that combines multiple standalone operations. Some functionality exists in both places:
 
-| Standalone Command | `create-dataset` Function |
-|--------------------|---------------------------|
-| `download-images`  | `_run_image_download()`   |
-| `select-images`    | `_run_image_selection()`  |
+| Standalone Command | `create-dataset` Function | Shared `api/` function            |
+|--------------------|---------------------------|-----------------------------------|
+| `download-images`  | `_run_image_download()`   | (not yet shared)                  |
+| `select-images`    | (uses shared function)    | `select_imagery_for_catalog()`    |
 
 **IMPORTANT:** When adding or modifying functionality in these commands:
 
