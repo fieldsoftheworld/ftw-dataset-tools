@@ -18,10 +18,13 @@ from rasterio import features
 from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 
+from ftw_dataset_tools.api import decode
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from affine import Affine
 
 
 class MaskType(str, Enum):
@@ -30,6 +33,8 @@ class MaskType(str, Enum):
     INSTANCE = "instance"
     SEMANTIC_2_CLASS = "semantic_2_class"
     SEMANTIC_3_CLASS = "semantic_3_class"
+    DECODE_BOUNDARY = "decode_boundary"
+    DECODE_DISTANCE = "decode_distance"
 
 
 def get_mask_filename(grid_id: str, mask_type: MaskType, year: int | None = None) -> str:
@@ -176,22 +181,17 @@ def _wkt_to_geometry(wkt: str):
     return shapely_wkt.loads(wkt)
 
 
-def _create_single_mask(
-    conn: duckdb.DuckDBPyConnection,
-    grid_id: str,
+# Mask types derived from an already-rasterized semantic mask rather than burned
+# in from vectors. See api/decode.py.
+_DERIVED_MASK_TYPES = frozenset({MaskType.DECODE_BOUNDARY, MaskType.DECODE_DISTANCE})
+
+
+def _grid_raster_geometry(
     bounds: tuple[float, float, float, float],
     crs: CRS,
-    boundaries_path: Path,
-    boundary_lines_path: Path,
-    boundaries_geom_col: str,
-    boundary_lines_geom_col: str,
-    output_path: Path,
-    mask_type: MaskType,
-    resolution: float = 10.0,
-    id_col: str | None = None,
-    background_class_value: int = 0,
-) -> MaskResult:
-    """Create a single mask for a grid cell."""
+    resolution: float,
+) -> tuple[Affine, int, int]:
+    """Compute the raster transform and pixel dimensions for a grid cell."""
     minx, miny, maxx, maxy = bounds
 
     # Adjust resolution for geographic CRS (lat/long)
@@ -211,9 +211,24 @@ def _create_single_mask(
             f"Grid cell too small for resolution {resolution}m: calculated {width}x{height} pixels"
         )
 
-    # Create transform
-    transform = from_bounds(minx, miny, maxx, maxy, width, height)
+    return from_bounds(minx, miny, maxx, maxy, width, height), width, height
 
+
+def _rasterize_mask(
+    conn: duckdb.DuckDBPyConnection,
+    boundaries_path: Path,
+    boundary_lines_path: Path,
+    boundaries_geom_col: str,
+    boundary_lines_geom_col: str,
+    bounds: tuple[float, float, float, float],
+    transform: Affine,
+    width: int,
+    height: int,
+    mask_type: MaskType,
+    id_col: str | None,
+    background_class_value: int,
+) -> np.ndarray:
+    """Burn field polygons and boundary lines into a label array."""
     # Set data type based on mask type
     dtype = np.uint32 if mask_type == MaskType.INSTANCE else np.uint8
 
@@ -242,45 +257,123 @@ def _create_single_mask(
     )
 
     if boundary_lines:
-        if mask_type == MaskType.SEMANTIC_3_CLASS:
-            # Burn boundary lines as class 2
-            features.rasterize(
-                [(_wkt_to_geometry(wkt), 2) for (wkt,) in boundary_lines],
-                out=mask,
-                transform=transform,
-                all_touched=True,
-            )
-        else:
-            # Burn boundary lines as background
-            features.rasterize(
-                [(_wkt_to_geometry(wkt), background_class_value) for (wkt,) in boundary_lines],
-                out=mask,
-                transform=transform,
-                all_touched=True,
-            )
+        # 3-class keeps the lines as their own class; every other type burns them
+        # as background, which is what separates two adjacent fields.
+        line_value = 2 if mask_type == MaskType.SEMANTIC_3_CLASS else background_class_value
+        features.rasterize(
+            [(_wkt_to_geometry(wkt), line_value) for (wkt,) in boundary_lines],
+            out=mask,
+            transform=transform,
+            all_touched=True,
+        )
+
+    return mask
+
+
+def _derive_decode_layer(
+    mask_type: MaskType,
+    source: np.ndarray,
+) -> tuple[np.ndarray, dict[str, str]]:
+    """
+    Derive a DECODE layer from a rasterized 2-class mask.
+
+    Both layers are written with plain deflate. The floating-point predictor is
+    tempting for the float32 distance map but measures about twice as large on
+    real chips: a distance transform is mostly exact zeros and holds only a few
+    dozen distinct values, so deflate is already compressing long byte runs that
+    the predictor would shuffle apart.
+
+    Returns:
+        Tuple of (array to write, extra raster tags)
+    """
+    if mask_type == MaskType.DECODE_BOUNDARY:
+        return decode.boundary_from_mask(source), {}
+
+    distance, max_distance_px = decode.distance_from_mask(source)
+    # Record the divisor used to normalize into [0, 1] so consumers that need
+    # absolute distances can undo the per-chip scaling.
+    return distance, {"decode_distance_max_px": f"{max_distance_px:.6f}"}
+
+
+def _write_mask_raster(
+    mask: np.ndarray,
+    output_path: Path,
+    crs: CRS,
+    transform: Affine,
+    tags: dict[str, str] | None = None,
+) -> None:
+    """Write a label array to disk as a Cloud Optimized GeoTIFF."""
+    height, width = mask.shape
+
+    profile = {
+        "driver": "GTiff",
+        "height": height,
+        "width": width,
+        "count": 1,
+        "dtype": mask.dtype,
+        "crs": crs,
+        "transform": transform,
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+        "compress": "deflate",
+    }
 
     # Write as GeoTIFF first
     temp_path = output_path.with_suffix(".tmp.tif")
-    with rasterio.open(
-        temp_path,
-        "w",
-        driver="GTiff",
-        height=height,
-        width=width,
-        count=1,
-        dtype=dtype,
-        crs=crs,
-        transform=transform,
-        tiled=True,
-        blockxsize=256,
-        blockysize=256,
-        compress="deflate",
-    ) as dst:
+    with rasterio.open(temp_path, "w", **profile) as dst:
         dst.write(mask, 1)
+        if tags:
+            dst.update_tags(**tags)
 
     # Convert to COG
     _convert_to_cog(temp_path, output_path)
     temp_path.unlink()
+
+
+def _create_single_mask(
+    conn: duckdb.DuckDBPyConnection,
+    grid_id: str,
+    bounds: tuple[float, float, float, float],
+    crs: CRS,
+    boundaries_path: Path,
+    boundary_lines_path: Path,
+    boundaries_geom_col: str,
+    boundary_lines_geom_col: str,
+    output_path: Path,
+    mask_type: MaskType,
+    resolution: float = 10.0,
+    id_col: str | None = None,
+    background_class_value: int = 0,
+) -> MaskResult:
+    """Create a single mask for a grid cell."""
+    transform, width, height = _grid_raster_geometry(bounds, crs, resolution)
+
+    # The DECODE layers are derived from the 2-class mask rather than rasterized
+    # directly, so burn that one first and post-process it below.
+    is_derived = mask_type in _DERIVED_MASK_TYPES
+    source_type = MaskType.SEMANTIC_2_CLASS if is_derived else mask_type
+
+    mask = _rasterize_mask(
+        conn=conn,
+        boundaries_path=boundaries_path,
+        boundary_lines_path=boundary_lines_path,
+        boundaries_geom_col=boundaries_geom_col,
+        boundary_lines_geom_col=boundary_lines_geom_col,
+        bounds=bounds,
+        transform=transform,
+        width=width,
+        height=height,
+        mask_type=source_type,
+        id_col=id_col,
+        background_class_value=background_class_value,
+    )
+
+    tags: dict[str, str] = {}
+    if is_derived:
+        mask, tags = _derive_decode_layer(mask_type, mask)
+
+    _write_mask_raster(mask, output_path, crs, transform, tags=tags)
 
     return MaskResult(
         grid_id=grid_id,
@@ -298,13 +391,15 @@ def _convert_to_cog(input_path: Path, output_path: Path) -> None:
             driver="COG",
             compress="deflate",
         )
-
         # Read data
         data = src.read()
+        tags = src.tags()
 
         # Write as COG
         with rasterio.open(output_path, "w", **profile) as dst:
             dst.write(data)
+            if tags:
+                dst.update_tags(**tags)
 
 
 def _process_single_grid_cell(args: tuple) -> tuple[MaskResult | None, tuple[str, str] | None]:

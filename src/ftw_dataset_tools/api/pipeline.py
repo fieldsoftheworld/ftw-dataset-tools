@@ -414,6 +414,8 @@ _MASK_TYPE_MAPPING = [
     (MaskType.INSTANCE, "instance", "instance"),
     (MaskType.SEMANTIC_2_CLASS, "semantic_2class", "semantic_2_class"),
     (MaskType.SEMANTIC_3_CLASS, "semantic_3class", "semantic_3_class"),
+    (MaskType.DECODE_BOUNDARY, "decode_boundary", "decode_boundary"),
+    (MaskType.DECODE_DISTANCE, "decode_distance", "decode_distance"),
 ]
 
 

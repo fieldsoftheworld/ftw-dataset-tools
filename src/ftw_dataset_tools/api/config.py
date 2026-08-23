@@ -27,7 +27,18 @@ if TYPE_CHECKING:
 
 # Mask types that ``create-masks`` understands. Kept here so config validation
 # gives the same error the CLI does.
-VALID_MASK_TYPES = ("instance", "semantic_2_class", "semantic_3_class")
+VALID_MASK_TYPES = (
+    "instance",
+    "semantic_2_class",
+    "semantic_3_class",
+    "decode_boundary",
+    "decode_distance",
+)
+
+# Mask types produced when no explicit set is requested. The DECODE layers are
+# opt-in: they are derived products, and the float32 distance map noticeably
+# increases dataset size.
+DEFAULT_MASK_TYPES = ("instance", "semantic_2_class", "semantic_3_class")
 
 # Current config schema version. Bump when the schema changes incompatibly.
 CONFIG_SCHEMA_VERSION = 1
@@ -215,9 +226,7 @@ class SplitsConfig:
 class MasksConfig:
     """Settings for the raster mask stage."""
 
-    mask_types: list[str] = field(
-        default_factory=lambda: ["instance", "semantic_2_class", "semantic_3_class"]
-    )
+    mask_types: list[str] = field(default_factory=lambda: list(DEFAULT_MASK_TYPES))
     resolution: float = 10.0
     workers: int | None = None
     presence_only: bool = False
@@ -354,7 +363,7 @@ class DatasetConfig:
                 masks=MasksConfig(
                     mask_types=list(mask_types)
                     if mask_types is not None
-                    else list(VALID_MASK_TYPES),
+                    else list(DEFAULT_MASK_TYPES),
                     resolution=resolution,
                     workers=num_workers,
                     presence_only=presence_only,
