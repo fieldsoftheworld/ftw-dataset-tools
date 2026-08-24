@@ -191,6 +191,23 @@ def _assign_random_uniform(
     return splits
 
 
+def _infer_grid_step(values: pd.Series) -> int:
+    """Infer the spacing between adjacent grid cells from a series of coordinates.
+
+    FTW grid IDs encode easting/northing as multiples of the grid's km_size
+    (e.g. 0, 2, 4, 6... for km_size=2), not as sequential integers. Block grouping
+    must divide by this step size rather than by 1, or blocks end up lopsided.
+
+    Falls back to a step of 1 when the axis has fewer than two distinct values
+    (e.g. a single column or row of chips), where spacing cannot be observed.
+    """
+    unique_sorted = np.sort(values.unique())
+    if len(unique_sorted) < 2:
+        return 1
+    # Sorted unique values are strictly increasing, so all diffs are positive.
+    return int(np.diff(unique_sorted).min())
+
+
 def _assign_block3x3(
     gdf: gpd.GeoDataFrame,
     split_percents: tuple[int, int, int],
@@ -237,10 +254,14 @@ def _assign_block3x3(
     # Example: ftw-36NXF6658 -> 36NXF
     mgrs_grids = chip_ids.str[4:9]
 
-    # Create 3x3 block IDs by dividing coordinates by 3 (integer division)
-    # This groups coordinates 0-2, 3-5, 6-8, etc. into the same block
-    block_east = eastings // 3
-    block_north = northings // 3
+    # Create 3x3 block IDs by grouping every 3 grid steps together.
+    # Grid coordinates are spaced by the grid's km_size (e.g. 0, 2, 4, 6... for
+    # km_size=2), not by 1, so we must divide by the actual step size before
+    # grouping into blocks of 3 cells.
+    easting_step = _infer_grid_step(eastings)
+    northing_step = _infer_grid_step(northings)
+    block_east = (eastings // easting_step) // 3
+    block_north = (northings // northing_step) // 3
 
     # Create unique block identifier combining MGRS grid and block coordinates
     block_ids = mgrs_grids + "_" + block_east.astype(str) + "_" + block_north.astype(str)
