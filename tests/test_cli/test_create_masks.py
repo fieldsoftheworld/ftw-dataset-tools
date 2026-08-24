@@ -83,4 +83,5 @@ class TestCreateMasksCommand:
                 ],
             )
             assert result.exit_code == 0
-            assert (output_dir / f"test_grid_001_{mask_type}.tif").exists()
+            chip_dir = output_dir / "test-chips" / "grid_001"
+            assert (chip_dir / f"grid_001_{mask_type}.tif").exists()
