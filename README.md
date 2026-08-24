@@ -239,6 +239,14 @@ ftwd create-chips fields.parquet --reproject
 
 Create raster masks from vector boundaries for each grid cell. Outputs Cloud Optimized GeoTIFFs (COGs).
 
+Masks are written into per-chip directories, matching the catalog structure `create-dataset` produces:
+
+```text
+{output-dir}/{field-dataset}-chips/{item_id}/{item_id}_{mask_type}.tif
+```
+
+where `item_id` is `{grid_id}_{year}` when `--year` is given, otherwise `{grid_id}`.
+
 ```bash
 # Create semantic 2-class masks
 ftwd create-masks chips.parquet fields.parquet boundary_lines.parquet --field-dataset austria
@@ -246,13 +254,17 @@ ftwd create-masks chips.parquet fields.parquet boundary_lines.parquet --field-da
 # Create instance masks
 ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset france --mask-type instance
 
+# Include the crop year in chip directory and file names
+ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset austria --year 2024
+
 # Custom settings
 ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spain --min-coverage 1.0 --resolution 5.0
 ```
 
 **Options:**
-- `-o, --output-dir` - Output directory (default: `./masks`)
-- `--field-dataset` - Dataset name for output filenames (required)
+- `-o, --output-dir` - Dataset output root (default: `./output`)
+- `--field-dataset` - Dataset name, used for the `{field-dataset}-chips` directory (required)
+- `--year` - Calendar year for the crop cycle, included in chip and mask names (default: none)
 - `--mask-type` - Type of mask: `instance`, `semantic_2_class`, or `semantic_3_class` (default: `semantic_2_class`)
 - `--grid-id-col` - Column name for grid cell ID (default: `id`)
 - `--coverage-col` - Column name for coverage percentage (default: `field_coverage_pct`)

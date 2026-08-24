@@ -21,7 +21,7 @@ from rasterio.transform import from_bounds
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
 
 class MaskType(str, Enum):
@@ -67,49 +67,128 @@ def get_item_id(grid_id: str, year: int | None = None) -> str:
     return grid_id
 
 
+def get_chips_base_dir(output_dir: str | Path, field_dataset: str) -> Path:
+    """
+    Get the chips base directory for a dataset.
+
+    This is the STAC collection root: it holds ``collection.json`` and one
+    subdirectory per chip. Mirrors the layout ``create-dataset`` produces so
+    both entry points write the same structure.
+
+    Args:
+        output_dir: Dataset output root
+        field_dataset: Name of the field dataset
+
+    Returns:
+        Path like ``{output_dir}/{field_dataset}-chips``
+    """
+    return Path(output_dir) / f"{field_dataset}-chips"
+
+
+def _make_chip_dirs(
+    grid_ids: Iterable[object],
+    chips_base_dir: str | Path,
+    year: int | None = None,
+) -> dict[str, Path]:
+    """Create a directory per grid ID and return the item_id -> directory mapping."""
+    base_dir = Path(chips_base_dir)
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    chip_dirs: dict[str, Path] = {}
+    for grid_id in grid_ids:
+        item_id = get_item_id(str(grid_id), year)
+        chip_dir = base_dir / item_id
+        chip_dir.mkdir(exist_ok=True)
+        chip_dirs[item_id] = chip_dir
+    return chip_dirs
+
+
+def build_chip_dirs(
+    chips_file: str | Path,
+    chips_base_dir: str | Path,
+    min_coverage: float,
+    year: int | None = None,
+    grid_id_col: str = "id",
+    coverage_col: str = "field_coverage_pct",
+) -> dict[str, Path]:
+    """
+    Create one directory per chip and return the item_id -> directory mapping.
+
+    Only grid cells meeting the coverage threshold get a directory, matching the
+    set of cells mask creation processes.
+
+    Args:
+        chips_file: Path to chips GeoParquet file (from create-chips)
+        chips_base_dir: Directory to create per-chip directories under
+        min_coverage: Minimum coverage percentage for a cell to be included
+        year: Optional year, included in the item ID when provided
+        grid_id_col: Column name for grid cell ID
+        coverage_col: Column name for field coverage percentage
+
+    Returns:
+        Dict mapping item_id (grid_id or grid_id_year) to its chip directory
+
+    Raises:
+        ValueError: If the grid ID or coverage column is not present in the chips file
+    """
+    conn = duckdb.connect(":memory:")
+    try:
+        ensure_spatial_loaded(conn)
+        # Bind the path and threshold as parameters so paths containing quotes
+        # (e.g. "O'Brien/chips.parquet") do not break the statement.
+        schema = conn.execute(
+            "DESCRIBE SELECT * FROM read_parquet(?)", [str(chips_file)]
+        ).fetchall()
+        columns = {row[0] for row in schema}
+        if grid_id_col not in columns:
+            raise ValueError(f"Grid ID column '{grid_id_col}' not found in chips file")
+        if coverage_col not in columns:
+            raise ValueError(f"Coverage column '{coverage_col}' not found in chips file")
+
+        rows = conn.execute(
+            f'SELECT "{grid_id_col}" FROM read_parquet(?) WHERE "{coverage_col}" >= ?',
+            [str(chips_file), min_coverage],
+        ).fetchall()
+    finally:
+        conn.close()
+
+    return _make_chip_dirs((row[0] for row in rows), chips_base_dir, year)
+
+
 def get_mask_output_path(
     grid_id: str,
     mask_type: MaskType,
-    chip_dirs: dict[str, Path] | None,
-    output_dir: Path,
-    field_dataset: str,
+    chip_dirs: dict[str, Path],
     year: int | None = None,
 ) -> Path:
     """
     Get the output path for a mask file.
 
+    Masks are co-located with their STAC item inside the chip directory.
+
     Args:
         grid_id: The grid cell ID
         mask_type: Type of mask
-        chip_dirs: Optional dict mapping item_id (grid_id or grid_id_year) to chip directory.
-                   If provided, the item_id MUST exist in the mapping.
-        output_dir: Fallback output directory (used when chip_dirs is None)
-        field_dataset: Dataset name (used in filename when chip_dirs is None)
+        chip_dirs: Dict mapping item_id (grid_id or grid_id_year) to chip directory.
+                   The item_id MUST exist in the mapping.
         year: Optional year for year-based naming convention
 
     Returns:
         Full path for the mask file
 
     Raises:
-        KeyError: If chip_dirs is provided but item_id is not in the mapping.
+        KeyError: If item_id is not in the mapping.
                   Callers should handle/skip grid cells not present in chip_dirs.
     """
     item_id = get_item_id(grid_id, year)
 
-    if chip_dirs is not None:
-        if item_id not in chip_dirs:
-            raise KeyError(
-                f"Item ID '{item_id}' not found in chip_dirs mapping for mask type "
-                f"'{mask_type.value}'. Caller should skip this grid cell or ensure "
-                f"chip_dirs contains all expected item IDs."
-            )
-        # Co-located with STAC item: simple filename
-        return chip_dirs[item_id] / get_mask_filename(grid_id, mask_type, year)
-    else:
-        # Legacy: dataset prefix in filename
-        if year is not None:
-            return output_dir / f"{field_dataset}_{grid_id}_{year}_{mask_type.value}.tif"
-        return output_dir / f"{field_dataset}_{grid_id}_{mask_type.value}.tif"
+    if item_id not in chip_dirs:
+        raise KeyError(
+            f"Item ID '{item_id}' not found in chip_dirs mapping for mask type "
+            f"'{mask_type.value}'. Caller should skip this grid cell or ensure "
+            f"chip_dirs contains all expected item IDs."
+        )
+    return chip_dirs[item_id] / get_mask_filename(grid_id, mask_type, year)
 
 
 @dataclass
@@ -157,16 +236,18 @@ def _get_geometries_in_bounds(
     else:
         select_cols = f'ST_AsText("{geom_col}") as wkt'
 
+    # The path is bound as a parameter so paths containing quotes
+    # (e.g. "O'Brien/fields.parquet") do not break the statement.
     query = f"""
         SELECT {select_cols}
-        FROM '{file_path}'
+        FROM read_parquet(?)
         WHERE ST_Intersects(
             "{geom_col}",
             ST_GeomFromText('POLYGON(({minx} {miny}, {maxx} {miny}, {maxx} {maxy}, {minx} {maxy}, {minx} {miny}))')
         )
     """
 
-    return conn.execute(query).fetchall()
+    return conn.execute(query, [str(file_path)]).fetchall()
 
 
 def _wkt_to_geometry(wkt: str):
@@ -388,7 +469,7 @@ def create_masks(
     chips_file: str | Path,
     boundaries_file: str | Path,
     boundary_lines_file: str | Path,
-    output_dir: str | Path = "./masks",
+    output_dir: str | Path = "./output",
     field_dataset: str = "unknown",
     grid_id_col: str = "id",
     mask_type: MaskType = MaskType.SEMANTIC_2_CLASS,
@@ -409,7 +490,8 @@ def create_masks(
         chips_file: Path to chips GeoParquet file (from create-chips)
         boundaries_file: Path to boundaries GeoParquet file (polygons)
         boundary_lines_file: Path to boundary lines GeoParquet file
-        output_dir: Output directory for masks (default: ./masks)
+        output_dir: Dataset output root; masks are written under
+                    ``{output_dir}/{field_dataset}-chips`` (default: ./output)
         field_dataset: Name of the field dataset (used in output filenames)
         grid_id_col: Column name for grid cell ID (default: "id")
         mask_type: Type of mask to create (default: semantic_2_class)
@@ -418,8 +500,9 @@ def create_masks(
         resolution: Pixel resolution in CRS units (default: 10.0 meters)
         num_workers: Number of parallel workers (default: number of CPUs)
         chip_dirs: Optional dict mapping item_id (grid_id or grid_id_year) to output directory.
-                   If provided, masks are written to chip-specific directories.
-                   If None, all masks go to output_dir with dataset prefix in filename.
+                   When None, per-chip directories are created under
+                   ``{output_dir}/{field_dataset}-chips`` so standalone runs produce
+                   the same catalog structure as create-dataset.
         year: Optional year for year-based naming convention (e.g., 2024).
               When provided, item IDs and filenames include the year.
         background_class_value: Value to use for background pixels (default: 0). Use 3 for presence-only labels.
@@ -458,14 +541,19 @@ def create_masks(
     conn = duckdb.connect(":memory:")
     ensure_spatial_loaded(conn)
 
-    # Get total grid count (before filtering)
-    total_count_result = conn.execute(f"SELECT COUNT(*) FROM '{chips_path}'").fetchone()
+    # Get total grid count (before filtering). The path is bound as a parameter so
+    # paths containing quotes (e.g. "O'Brien/chips.parquet") do not break the statement.
+    total_count_result = conn.execute(
+        "SELECT COUNT(*) FROM read_parquet(?)", [str(chips_path)]
+    ).fetchone()
     total_grids = total_count_result[0] if total_count_result else 0
 
     # Build query with optional coverage filter
+    query_params: list[object] = [str(chips_path)]
     coverage_filter = ""
     if coverage_col:
-        coverage_filter = f'WHERE "{coverage_col}" >= {min_coverage}'
+        coverage_filter = f'WHERE "{coverage_col}" >= ?'
+        query_params.append(min_coverage)
 
     # Get grid cells with bounds
     query = f"""
@@ -475,12 +563,12 @@ def create_masks(
             ST_YMin("{grid_geom_col}") as miny,
             ST_XMax("{grid_geom_col}") as maxx,
             ST_YMax("{grid_geom_col}") as maxy
-        FROM '{chips_path}'
+        FROM read_parquet(?)
         {coverage_filter}
     """
 
     try:
-        grid_cells = conn.execute(query).fetchall()
+        grid_cells = conn.execute(query, query_params).fetchall()
     except duckdb.BinderException as e:
         if grid_id_col in str(e):
             raise ValueError(f"Grid ID column '{grid_id_col}' not found in grid file") from e
@@ -489,6 +577,16 @@ def create_masks(
         raise
 
     total_cells = len(grid_cells)
+
+    # Standalone runs build their own chip directories so the output matches the
+    # catalog structure create-dataset produces. Building from the already
+    # filtered grid_cells keeps the keys aligned with the cells processed below.
+    if chip_dirs is None:
+        chip_dirs = _make_chip_dirs(
+            (cell[0] for cell in grid_cells),
+            get_chips_base_dir(output_path, field_dataset),
+            year,
+        )
 
     # Call on_start callback with grid counts
     if on_start:
@@ -520,7 +618,9 @@ def create_masks(
     if mask_type == MaskType.INSTANCE:
         # Try to find an ID column in boundaries file
         try:
-            schema = conn.execute(f"DESCRIBE SELECT * FROM '{boundaries_path}'").fetchall()
+            schema = conn.execute(
+                "DESCRIBE SELECT * FROM read_parquet(?)", [str(boundaries_path)]
+            ).fetchall()
             col_names = [row[0] for row in schema]
             for candidate in ["id", "ID", "fid", "FID", "objectid", "OBJECTID"]:
                 if candidate in col_names:
@@ -548,14 +648,10 @@ def create_masks(
             grid_id=grid_id_str,
             mask_type=mask_type,
             chip_dirs=chip_dirs,
-            output_dir=output_path,
-            field_dataset=field_dataset,
             year=year,
         )
 
-        # Ensure parent directory exists when using chip_dirs
-        if chip_dirs is not None:
-            mask_path.parent.mkdir(parents=True, exist_ok=True)
+        mask_path.parent.mkdir(parents=True, exist_ok=True)
 
         work_items.append(
             (
