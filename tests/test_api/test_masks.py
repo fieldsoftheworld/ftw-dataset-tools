@@ -2,6 +2,9 @@
 
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 
 class TestMaskFilenameConvention:
     """Tests for mask filename generation."""
@@ -417,3 +420,321 @@ class TestCreateMasksCatalogStructure:
         )
 
         assert result.total_created == 1
+
+
+class TestDecodeMaskTypes:
+    """End-to-end tests for the derived DECODE mask types."""
+
+    @staticmethod
+    def _build_inputs(tmp_path):
+        """Write a one-cell chips file plus two adjacent fields and their lines."""
+        import geopandas as gpd
+        from shapely.geometry import LineString, box
+
+        crs = "EPSG:3035"
+        cell = box(4000000, 3000000, 4001000, 3001000)
+
+        chips = tmp_path / "chips.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["grid_001"], "field_coverage_pct": [20.0]},
+            geometry=[cell],
+            crs=crs,
+        ).to_parquet(chips)
+
+        # Two fields with a 100m gap, so the burned boundary lines separate them.
+        fields = [
+            box(4000100, 3000100, 4000400, 3000400),
+            box(4000500, 3000100, 4000800, 3000400),
+        ]
+        boundaries = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame({"id": [1, 2]}, geometry=fields, crs=crs).to_parquet(boundaries)
+
+        lines = tmp_path / "lines.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1, 2]},
+            geometry=[LineString(f.exterior.coords) for f in fields],
+            crs=crs,
+        ).to_parquet(lines)
+
+        return chips, boundaries, lines
+
+    def _create(self, tmp_path, mask_type, **kwargs):
+        """Run create_masks for one mask type and return the written raster path."""
+        from ftw_dataset_tools.api.masks import create_masks
+
+        chips, boundaries, lines = self._build_inputs(tmp_path)
+        output_dir = tmp_path / mask_type.value
+        result = create_masks(
+            chips_file=chips,
+            boundaries_file=boundaries,
+            boundary_lines_file=lines,
+            output_dir=output_dir,
+            field_dataset="test",
+            mask_type=mask_type,
+            num_workers=1,
+            **kwargs,
+        )
+
+        assert result.total_created == 1, result.masks_skipped
+        return result.masks_created[0].output_path
+
+    def test_boundary_mask_is_uint8_and_binary(self, tmp_path) -> None:
+        """The boundary layer is stored as uint8 holding only 0 and 1."""
+        import rasterio
+
+        from ftw_dataset_tools.api.masks import MaskType
+
+        path = self._create(tmp_path, MaskType.DECODE_BOUNDARY)
+
+        with rasterio.open(path) as src:
+            data = src.read(1)
+            assert src.dtypes[0] == "uint8"
+
+        assert set(np.unique(data).tolist()) == {0, 1}
+        assert data.sum() > 0
+
+    def test_boundary_mask_traces_both_fields(self, tmp_path) -> None:
+        """Each of the two fields gets its own closed boundary ring."""
+        import rasterio
+        from scipy import ndimage
+
+        from ftw_dataset_tools.api.masks import MaskType
+
+        path = self._create(tmp_path, MaskType.DECODE_BOUNDARY)
+
+        with rasterio.open(path) as src:
+            data = src.read(1)
+
+        _, num_rings = ndimage.label(data)
+        assert num_rings == 2
+
+    def test_distance_map_is_float32_in_unit_range(self, tmp_path) -> None:
+        """The distance layer is float32 normalized into [0, 1]."""
+        import rasterio
+
+        from ftw_dataset_tools.api.masks import MaskType
+
+        path = self._create(tmp_path, MaskType.DECODE_DISTANCE)
+
+        with rasterio.open(path) as src:
+            data = src.read(1)
+            assert src.dtypes[0] == "float32"
+
+        assert data.min() == 0.0
+        assert data.max() == 1.0
+
+    def test_distance_map_records_normalization_divisor(self, tmp_path) -> None:
+        """The pre-normalization maximum survives into the COG tags."""
+        import rasterio
+
+        from ftw_dataset_tools.api.masks import MaskType
+
+        path = self._create(tmp_path, MaskType.DECODE_DISTANCE)
+
+        with rasterio.open(path) as src:
+            max_px = float(src.tags()["decode_distance_max_px"])
+            data = src.read(1)
+
+        # Fields are 300m wide at 10m resolution, so the centre sits ~15px in.
+        assert max_px == pytest.approx(15.0, abs=1.0)
+        assert (data * max_px).max() == pytest.approx(max_px)
+
+    def test_decode_layers_align_with_semantic_2_class(self, tmp_path) -> None:
+        """Derived layers share the grid and georeferencing of their source mask."""
+        import rasterio
+
+        from ftw_dataset_tools.api.masks import MaskType
+
+        semantic = self._create(tmp_path, MaskType.SEMANTIC_2_CLASS)
+        boundary = self._create(tmp_path, MaskType.DECODE_BOUNDARY)
+        distance = self._create(tmp_path, MaskType.DECODE_DISTANCE)
+
+        with rasterio.open(semantic) as src:
+            shape, transform, crs = src.shape, src.transform, src.crs
+            field = src.read(1) > 0
+
+        for path in (boundary, distance):
+            with rasterio.open(path) as src:
+                assert src.shape == shape
+                assert src.transform == transform
+                assert src.crs == crs
+                # Neither layer may light up outside the field extent.
+                assert not (src.read(1) > 0)[~field].any()
+
+    def test_presence_only_background_excluded(self, tmp_path) -> None:
+        """Background value 3 is treated as background, not as a field."""
+        import rasterio
+
+        from ftw_dataset_tools.api.masks import MaskType
+
+        path = self._create(tmp_path, MaskType.DECODE_DISTANCE, background_class_value=3)
+
+        with rasterio.open(path) as src:
+            data = src.read(1)
+
+        # Only the two fields carry distance; the rest of the chip stays at zero.
+        assert data.max() == 1.0
+        assert (data == 0).sum() > (data > 0).sum()
+
+    def test_chip_with_no_fields_writes_empty_layers(self, tmp_path) -> None:
+        """A chip whose cell contains no fields still writes valid, all-zero rasters."""
+        import geopandas as gpd
+        import rasterio
+        from shapely.geometry import LineString, box
+
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        crs = "EPSG:3035"
+        # The chip cell and the fields do not overlap.
+        chips = tmp_path / "chips.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["empty_001"], "field_coverage_pct": [0.0]},
+            geometry=[box(4000000, 3000000, 4001000, 3001000)],
+            crs=crs,
+        ).to_parquet(chips)
+
+        far_away = box(4900000, 3900000, 4900300, 3900300)
+        boundaries = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame({"id": [1]}, geometry=[far_away], crs=crs).to_parquet(boundaries)
+        lines = tmp_path / "lines.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1]}, geometry=[LineString(far_away.exterior.coords)], crs=crs
+        ).to_parquet(lines)
+
+        for mask_type in (MaskType.DECODE_BOUNDARY, MaskType.DECODE_DISTANCE):
+            result = create_masks(
+                chips_file=chips,
+                boundaries_file=boundaries,
+                boundary_lines_file=lines,
+                output_dir=tmp_path / mask_type.value,
+                field_dataset="test",
+                mask_type=mask_type,
+                min_coverage=0.0,
+                num_workers=1,
+            )
+            assert result.total_created == 1, result.masks_skipped
+
+            with rasterio.open(result.masks_created[0].output_path) as src:
+                assert src.read(1).max() == 0
+
+    def test_empty_chip_records_zero_normalization_divisor(self, tmp_path) -> None:
+        """The distance tag is still written (as 0) when there is nothing to normalize."""
+        import geopandas as gpd
+        import rasterio
+        from shapely.geometry import LineString, box
+
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        crs = "EPSG:3035"
+        chips = tmp_path / "chips.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["empty_001"], "field_coverage_pct": [0.0]},
+            geometry=[box(4000000, 3000000, 4001000, 3001000)],
+            crs=crs,
+        ).to_parquet(chips)
+        far_away = box(4900000, 3900000, 4900300, 3900300)
+        boundaries = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame({"id": [1]}, geometry=[far_away], crs=crs).to_parquet(boundaries)
+        lines = tmp_path / "lines.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1]}, geometry=[LineString(far_away.exterior.coords)], crs=crs
+        ).to_parquet(lines)
+
+        result = create_masks(
+            chips_file=chips,
+            boundaries_file=boundaries,
+            boundary_lines_file=lines,
+            output_dir=tmp_path / "dist",
+            field_dataset="test",
+            mask_type=MaskType.DECODE_DISTANCE,
+            min_coverage=0.0,
+            num_workers=1,
+        )
+
+        with rasterio.open(result.masks_created[0].output_path) as src:
+            assert float(src.tags()["decode_distance_max_px"]) == 0.0
+
+
+class TestGridRasterGeometry:
+    """Tests for the extracted grid geometry helper."""
+
+    def test_projected_crs_dimensions(self) -> None:
+        """A 1km cell at 10m resolution is 100x100 pixels."""
+        from rasterio.crs import CRS
+
+        from ftw_dataset_tools.api.masks import _grid_raster_geometry
+
+        _, width, height = _grid_raster_geometry(
+            bounds=(4000000, 3000000, 4001000, 3001000),
+            crs=CRS.from_epsg(3035),
+            resolution=10.0,
+        )
+
+        assert (width, height) == (100, 100)
+
+    def test_geographic_crs_converts_resolution_to_degrees(self) -> None:
+        """Metres are approximated as degrees for a geographic CRS."""
+        from rasterio.crs import CRS
+
+        from ftw_dataset_tools.api.masks import _grid_raster_geometry
+
+        _, width, height = _grid_raster_geometry(
+            bounds=(10.0, 50.0, 10.01, 50.01),
+            crs=CRS.from_epsg(4326),
+            resolution=10.0,
+        )
+
+        # 0.01 degrees / (10 / 111000) degrees per pixel = 110.99..., truncated by int()
+        assert width == height == 110
+
+    def test_cell_too_small_for_resolution_raises(self) -> None:
+        """A cell smaller than one pixel is an error, not a zero-sized raster."""
+        from rasterio.crs import CRS
+
+        from ftw_dataset_tools.api.masks import _grid_raster_geometry
+
+        with pytest.raises(ValueError, match="too small for resolution"):
+            _grid_raster_geometry(
+                bounds=(4000000, 3000000, 4000005, 3000005),
+                crs=CRS.from_epsg(3035),
+                resolution=10.0,
+            )
+
+
+class TestDeriveDecodeLayer:
+    """Tests for the dispatch between rasterized and derived mask types."""
+
+    def test_boundary_returns_no_tags(self) -> None:
+        """The boundary layer carries no extra metadata."""
+        from ftw_dataset_tools.api.masks import MaskType, _derive_decode_layer
+
+        source = np.zeros((8, 8), dtype=np.uint8)
+        source[2:6, 2:6] = 1
+
+        array, tags = _derive_decode_layer(MaskType.DECODE_BOUNDARY, source)
+
+        assert array.dtype == np.uint8
+        assert tags == {}
+
+    def test_distance_returns_normalization_tag(self) -> None:
+        """The distance layer records the divisor it used."""
+        from ftw_dataset_tools.api.masks import MaskType, _derive_decode_layer
+
+        source = np.zeros((12, 12), dtype=np.uint8)
+        source[1:11, 1:11] = 1
+
+        array, tags = _derive_decode_layer(MaskType.DECODE_DISTANCE, source)
+
+        assert array.dtype == np.float32
+        assert float(tags["decode_distance_max_px"]) == 5.0
+
+    def test_derived_types_are_registered(self) -> None:
+        """Both DECODE types must be in the derived set, or they'd be rasterized."""
+        from ftw_dataset_tools.api.masks import _DERIVED_MASK_TYPES, MaskType
+
+        assert MaskType.DECODE_BOUNDARY in _DERIVED_MASK_TYPES
+        assert MaskType.DECODE_DISTANCE in _DERIVED_MASK_TYPES
+        # The rasterized types must not be, or they'd be derived from 2-class.
+        assert MaskType.INSTANCE not in _DERIVED_MASK_TYPES
+        assert MaskType.SEMANTIC_2_CLASS not in _DERIVED_MASK_TYPES
+        assert MaskType.SEMANTIC_3_CLASS not in _DERIVED_MASK_TYPES

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from ftw_dataset_tools.api.config import VALID_MASK_TYPES
 from ftw_dataset_tools.cli import cli
 
 
@@ -61,7 +62,7 @@ class TestCreateMasksCommand:
         tmp_path: Path,
     ) -> None:
         """Test --mask-type option with different values."""
-        for mask_type in ["instance", "semantic_2_class", "semantic_3_class"]:
+        for mask_type in VALID_MASK_TYPES:
             output_dir = tmp_path / f"masks_{mask_type}"
             runner = CliRunner()
             result = runner.invoke(
@@ -82,3 +83,4 @@ class TestCreateMasksCommand:
                 ],
             )
             assert result.exit_code == 0
+            assert (output_dir / f"test_grid_001_{mask_type}.tif").exists()

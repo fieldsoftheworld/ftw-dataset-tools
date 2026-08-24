@@ -358,6 +358,8 @@ def _create_chip_item(
         "instance": MaskType.INSTANCE,
         "semantic_2class": MaskType.SEMANTIC_2_CLASS,
         "semantic_3class": MaskType.SEMANTIC_3_CLASS,
+        "decode_boundary": MaskType.DECODE_BOUNDARY,
+        "decode_distance": MaskType.DECODE_DISTANCE,
     }
 
     for mask_name, mask_type in mask_type_map.items():
@@ -428,6 +430,8 @@ def _get_mask_title(mask_name: str) -> str:
         "instance": "Instance segmentation mask",
         "semantic_2class": "Binary semantic mask (field/background)",
         "semantic_3class": "3-class semantic mask (field/boundary/background)",
+        "decode_boundary": "DECODE field boundary mask",
+        "decode_distance": "DECODE normalized distance-to-boundary map",
     }
     return titles.get(mask_name, f"{mask_name} mask")
 

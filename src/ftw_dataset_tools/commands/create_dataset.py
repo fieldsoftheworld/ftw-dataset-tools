@@ -11,6 +11,7 @@ import pystac
 from tqdm import tqdm
 
 from ftw_dataset_tools.api import dataset, splits
+from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
     download_and_clip_scene,
     process_downloaded_scene,
@@ -148,9 +149,13 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
 @click.option(
     "--mask-types",
     type=str,
-    default="instance,semantic_2_class,semantic_3_class",
+    default=",".join(DEFAULT_MASK_TYPES),
     show_default=True,
-    help="Comma-separated list of mask types to generate (instance, semantic_2_class, semantic_3_class).",
+    help=(
+        "Comma-separated list of mask types to generate. One or more of: "
+        f"{', '.join(VALID_MASK_TYPES)}. The decode_* layers are derived from "
+        "the 2-class mask and are off by default."
+    ),
 )
 @click.option(
     "--presence-only",
@@ -208,6 +213,7 @@ def create_dataset_cmd(
     - Train/val/test split assignments
     - Boundary lines file
     - Mask types (instance, semantic_2_class, semantic_3_class) - configurable via --mask-types
+      (decode_boundary and decode_distance are also available, off by default)
     - STAC static catalog with items for each chip
 
     If the input file is not in EPSG:4326, it will be automatically reprojected.
@@ -297,11 +303,11 @@ def create_dataset_cmd(
 
         # Parse and validate mask types
         mask_types_list = [mt.strip() for mt in mask_types.split(",")]
-        valid_mask_types = {"instance", "semantic_2_class", "semantic_3_class"}
         for mask_type in mask_types_list:
-            if mask_type not in valid_mask_types:
+            if mask_type not in VALID_MASK_TYPES:
                 raise click.BadParameter(
-                    f"Invalid mask type '{mask_type}'. Must be one of: {', '.join(sorted(valid_mask_types))}",
+                    f"Invalid mask type '{mask_type}'. "
+                    f"Must be one of: {', '.join(VALID_MASK_TYPES)}",
                     param_hint="mask-types",
                 )
 
