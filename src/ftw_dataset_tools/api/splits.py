@@ -325,10 +325,18 @@ def _validate_fields_file(fields_file: str | Path | None) -> Path:
 
 def _load_and_validate_fields(fields_path: Path) -> gpd.GeoDataFrame:
     table = gpio.read(str(fields_path))
-    fields_gdf = gpd.GeoDataFrame.from_arrow(
-        table.to_arrow(),
-        geometry=table.geometry_column,
-    )
+    geom_col = table.geometry_column
+    arrow_table = table.to_arrow()
+    try:
+        fields_gdf = gpd.GeoDataFrame.from_arrow(arrow_table, geometry=geom_col)
+    except ValueError:
+        # Some GeoParquet files round-trip through gpio as a plain WKB binary
+        # column with no per-field GeoArrow extension metadata, which
+        # from_arrow() requires. Decode the WKB directly in that case.
+        df = arrow_table.to_pandas()
+        crs = table.crs or "OGC:CRS84"
+        df[geom_col] = gpd.GeoSeries.from_wkb(df[geom_col], crs=crs)
+        fields_gdf = gpd.GeoDataFrame(df, geometry=geom_col, crs=crs)
     if "split" not in fields_gdf.columns:
         raise ValueError(
             "Fields file must contain a 'split' column when split_type is 'predefined'. "
