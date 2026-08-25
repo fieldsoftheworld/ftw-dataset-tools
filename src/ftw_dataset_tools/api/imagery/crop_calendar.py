@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import os
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import rasterio
+import requests
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -127,8 +127,14 @@ def download_crop_calendar_files(
         if file_path.exists():
             file_path.unlink()
 
-        # Download file
-        urllib.request.urlretrieve(url, str(file_path))
+        # Use requests (not urllib) so downloads verify against certifi's CA
+        # bundle instead of the OS default trust store, which is often
+        # misconfigured or missing on HPC/conda environments.
+        response = requests.get(url, stream=True, timeout=60)
+        response.raise_for_status()
+        with file_path.open("wb") as f:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                f.write(chunk)
 
     if on_progress:
         on_progress(f"Crop calendar files cached at {cache_dir}")
