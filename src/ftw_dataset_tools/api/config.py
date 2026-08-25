@@ -40,6 +40,11 @@ VALID_MASK_TYPES = (
 # increases dataset size.
 DEFAULT_MASK_TYPES = ("instance", "semantic_2_class", "semantic_3_class")
 
+# Sentinel-2 collections selectable for imagery search. "c1" (the reprocessed
+# Collection-1 baseline) is the default, but its backfill has gaps for some
+# tiles/periods; "old-baseline" covers those cases.
+VALID_S2_COLLECTIONS = ("c1", "old-baseline")
+
 # Current config schema version. Bump when the schema changes incompatibly.
 CONFIG_SCHEMA_VERSION = 1
 
@@ -244,6 +249,7 @@ class SelectImagesConfig:
     buffer_days: int = 14
     num_buffer_expansions: int = 3
     buffer_expansion_size: int = 14
+    s2_collection: str = "c1"
 
 
 @dataclass
@@ -400,6 +406,13 @@ class DatasetConfig:
                 )
         if not self.stages.masks.mask_types:
             raise ConfigError("masks.mask_types must list at least one mask type.")
+
+        s2_collection = self.stages.select_images.s2_collection
+        if s2_collection not in VALID_S2_COLLECTIONS:
+            raise ConfigError(
+                f"Invalid select_images.s2_collection '{s2_collection}'. "
+                f"Must be one of: {', '.join(VALID_S2_COLLECTIONS)}."
+            )
 
     # ---- provenance -----------------------------------------------------
 

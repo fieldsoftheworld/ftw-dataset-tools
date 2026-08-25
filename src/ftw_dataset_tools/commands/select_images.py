@@ -103,6 +103,17 @@ def _extract_year_from_item(item: pystac.Item) -> int | None:
     help="Days to add to search window on each expansion.",
 )
 @click.option(
+    "--s2-collection",
+    type=click.Choice(["c1", "old-baseline"]),
+    default="c1",
+    show_default=True,
+    help=(
+        "Sentinel-2 collection to search. 'c1' (Collection-1 baseline) has "
+        "coverage gaps for some tiles/periods; 'old-baseline' has broader "
+        "historical coverage."
+    ),
+)
+@click.option(
     "--force",
     is_flag=True,
     default=False,
@@ -149,6 +160,7 @@ def select_images_cmd(
     on_missing: Literal["skip", "fail"],
     num_buffer_expansions: int,
     buffer_expansion_size: int,
+    s2_collection: str,
     force: bool,
     output_report: str | None,
     verbose: bool,
@@ -395,6 +407,7 @@ def select_images_cmd(
                     num_buffer_expansions=num_buffer_expansions,
                     buffer_expansion_size=buffer_expansion_size,
                     on_progress=progress.on_progress,
+                    s2_collection=s2_collection,
                 )
 
                 if result.success:
@@ -488,6 +501,7 @@ def select_images_cmd(
                 "buffer_days": buffer_days,
                 "num_buffer_expansions": num_buffer_expansions,
                 "buffer_expansion_size": buffer_expansion_size,
+                "s2_collection": s2_collection,
             },
         }
         report_path = Path(output_report)

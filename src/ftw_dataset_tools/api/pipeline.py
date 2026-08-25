@@ -505,6 +505,7 @@ def stage_select_images(ctx: PipelineContext) -> None:
         buffer_days=select_cfg.buffer_days,
         num_buffer_expansions=select_cfg.num_buffer_expansions,
         buffer_expansion_size=select_cfg.buffer_expansion_size,
+        s2_collection=select_cfg.s2_collection,
     )
 
 

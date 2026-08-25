@@ -81,6 +81,7 @@ def select_imagery_for_catalog(
     force: bool = False,
     on_missing: Literal["skip", "fail"] = "skip",
     verbose: bool = False,
+    s2_collection: str = "c1",
 ) -> SelectionWorkflowResult:
     """Select imagery for all chips in a catalog.
 
@@ -100,6 +101,9 @@ def select_imagery_for_catalog(
                     - "skip": Skip and record in skipped_details
                     - "fail": Raise exception
         verbose: If True, show detailed STAC query information
+        s2_collection: Sentinel-2 collection to search ("c1" or "old-baseline").
+            "c1"'s Collection-1 backfill has coverage gaps for some tiles/periods;
+            "old-baseline" (sentinel-2-l2a) has broader historical coverage.
 
     Returns:
         SelectionWorkflowResult with success/skipped/failed counts and details
@@ -156,6 +160,7 @@ def select_imagery_for_catalog(
                     num_buffer_expansions=num_buffer_expansions,
                     buffer_expansion_size=buffer_expansion_size,
                     on_progress=progress.on_progress,
+                    s2_collection=s2_collection,
                 )
 
                 if selection_result.success:

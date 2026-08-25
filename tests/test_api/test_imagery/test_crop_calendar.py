@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import requests
@@ -12,6 +12,9 @@ from ftw_dataset_tools.api.imagery.crop_calendar import (
     download_crop_calendar_files,
     get_crop_calendar_cache_dir,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class _FakeResponse:
@@ -69,7 +72,7 @@ class TestDownloadCropCalendarFiles:
 
         call_count = 0
 
-        def fake_get(url: str, **_kwargs: object) -> _FakeResponse:
+        def fake_get(_url: str, **_kwargs: object) -> _FakeResponse:
             nonlocal call_count
             call_count += 1
             return _FakeResponse(b"fresh-bytes")
@@ -90,7 +93,7 @@ class TestDownloadCropCalendarFiles:
         for filename in CROP_CALENDAR_FILES:
             (_isolated_cache_dir / filename).write_bytes(b"stale-bytes")
 
-        def fake_get(url: str, **_kwargs: object) -> _FakeResponse:
+        def fake_get(_url: str, **_kwargs: object) -> _FakeResponse:
             return _FakeResponse(b"fresh-bytes")
 
         monkeypatch.setattr(requests, "get", fake_get)
@@ -105,7 +108,7 @@ class TestDownloadCropCalendarFiles:
     ) -> None:
         """Test a failed download raises instead of silently leaving a partial file."""
 
-        def fake_get(url: str, **_kwargs: object) -> _FakeResponse:
+        def fake_get(_url: str, **_kwargs: object) -> _FakeResponse:
             return _FakeResponse(b"", status_code=500)
 
         monkeypatch.setattr(requests, "get", fake_get)

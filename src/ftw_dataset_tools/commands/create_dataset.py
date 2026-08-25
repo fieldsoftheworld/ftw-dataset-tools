@@ -141,6 +141,17 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     help="Days to add to buffer on each expansion.",
 )
 @click.option(
+    "--s2-collection",
+    type=click.Choice(["c1", "old-baseline"]),
+    default="c1",
+    show_default=True,
+    help=(
+        "Sentinel-2 collection to search. 'c1' (Collection-1 baseline) has "
+        "coverage gaps for some tiles/periods; 'old-baseline' has broader "
+        "historical coverage."
+    ),
+)
+@click.option(
     "--force-image-selection",
     is_flag=True,
     default=False,
@@ -198,6 +209,7 @@ def create_dataset_cmd(
     buffer_days: int,
     num_buffer_expansions: int,
     buffer_expansion_size: int,
+    s2_collection: str,
     force_image_selection: bool,
     mask_types: str,
     presence_only: bool,
@@ -413,6 +425,7 @@ def create_dataset_cmd(
                 num_buffer_expansions=num_buffer_expansions,
                 buffer_expansion_size=buffer_expansion_size,
                 force=force_image_selection,
+                s2_collection=s2_collection,
             )
 
             click.echo(f"  Selected: {selection.successful}")

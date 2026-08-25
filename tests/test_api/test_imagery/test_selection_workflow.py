@@ -241,6 +241,34 @@ class TestSelectImageryForCatalog:
         assert mock_create_child.call_count == 2
 
     @patch("ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip")
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.create_child_items_from_selection")
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar")
+    def test_passes_s2_collection_through_to_scene_selection(
+        self,
+        mock_progress: MagicMock,
+        _mock_create_child: MagicMock,
+        mock_select: MagicMock,
+        mock_catalog_with_chips: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        """Test s2_collection reaches select_scenes_for_chip, defaulting to 'c1'."""
+        mock_select.return_value = mock_selection_result
+        mock_progress.return_value.__enter__ = MagicMock()
+        mock_progress.return_value.__exit__ = MagicMock()
+
+        select_imagery_for_catalog(
+            catalog_dir=mock_catalog_with_chips,
+            year=2024,
+            s2_collection="old-baseline",
+        )
+
+        assert mock_select.call_args.kwargs["s2_collection"] == "old-baseline"
+
+        select_imagery_for_catalog(catalog_dir=mock_catalog_with_chips, year=2024)
+
+        assert mock_select.call_args.kwargs["s2_collection"] == "c1"
+
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip")
     @patch("ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar")
     def test_handles_failed_selection(
         self,

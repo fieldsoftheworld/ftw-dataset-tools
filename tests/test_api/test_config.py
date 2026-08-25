@@ -113,6 +113,25 @@ class TestFromDict:
         with pytest.raises(ConfigError, match="mapping"):
             DatasetConfig.from_dict([1, 2, 3])  # type: ignore[arg-type]
 
+    def test_s2_collection_defaults_to_c1(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+        assert config.stages.select_images.s2_collection == "c1"
+
+    def test_s2_collection_old_baseline_accepted(self) -> None:
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "f.parquet",
+                "stages": {"select_images": {"s2_collection": "old-baseline"}},
+            }
+        )
+        assert config.stages.select_images.s2_collection == "old-baseline"
+
+    def test_invalid_s2_collection_raises(self) -> None:
+        with pytest.raises(ConfigError, match="Invalid select_images"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"select_images": {"s2_collection": "nope"}}}
+            )
+
 
 class TestFromKwargs:
     """Tests for building a config from create_dataset kwargs."""
