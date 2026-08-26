@@ -182,6 +182,38 @@ class TestBackgroundClassValue:
         assert sig.parameters["background_class_value"].default == 0
 
 
+class TestAvailableCpuCount:
+    """Tests for _available_cpu_count."""
+
+    def test_uses_sched_getaffinity_when_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test the cgroup/Slurm-restricted CPU count is used when the platform supports it."""
+        import os
+
+        from ftw_dataset_tools.api.masks import _available_cpu_count
+
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(3)), raising=False)
+
+        assert _available_cpu_count() == 3
+
+    def test_falls_back_to_cpu_count_when_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test multiprocessing.cpu_count() is used where sched_getaffinity doesn't exist.
+
+        This is the whole-machine CPU count, not a Slurm-restricted one - it's only
+        correct as a fallback on platforms without cgroup CPU affinity (e.g. macOS).
+        """
+        import multiprocessing
+        import os
+
+        from ftw_dataset_tools.api.masks import _available_cpu_count
+
+        monkeypatch.delattr(os, "sched_getaffinity", raising=False)
+        monkeypatch.setattr(multiprocessing, "cpu_count", lambda: 7)
+
+        assert _available_cpu_count() == 7
+
+
 class TestBuildChipDirs:
     """Tests for build_chip_dirs."""
 
