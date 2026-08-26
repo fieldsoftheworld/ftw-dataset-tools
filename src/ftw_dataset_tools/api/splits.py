@@ -294,9 +294,23 @@ def _assign_block3x3(
     return chip_splits
 
 
+_NULL_SPLIT_TEXT_VALUES = frozenset({"none", "null", "na", "n/a", "nan"})
+
+
+def _is_null_like_split(value: object) -> bool:
+    """True for real nulls and for common textual null markers (e.g. 'none').
+
+    Some source datasets (e.g. India's) use a literal string like "none"
+    rather than an actual null to mark fields with no split assignment.
+    """
+    if pd.isna(value):
+        return True
+    return str(value).strip().lower() in _NULL_SPLIT_TEXT_VALUES
+
+
 def _normalize_predefined_split(value: object) -> str | None:
     """Normalize user-provided split labels to train/val/test."""
-    if pd.isna(value):
+    if _is_null_like_split(value):
         return None
 
     text = str(value).strip().lower()
@@ -352,16 +366,16 @@ def _normalize_and_validate_splits(
     fields_gdf = fields_gdf.copy()
     fields_gdf["_split_norm"] = fields_gdf["split"].map(_normalize_predefined_split)
 
-    null_mask = fields_gdf["split"].isna()
+    null_mask = fields_gdf["split"].map(_is_null_like_split)
     if null_mask.any():
         null_count = int(null_mask.sum())
         example_indices = fields_gdf.index[null_mask][:5].tolist()
         log(
-            "Warning: Found null split values in fields file. "
+            "Warning: Found null-like split values in fields file (missing or e.g. 'none'). "
             f"Count: {null_count}. Example row indices: {example_indices}"
         )
 
-    invalid = fields_gdf[fields_gdf["_split_norm"].isna()]["split"].dropna().unique()
+    invalid = fields_gdf.loc[fields_gdf["_split_norm"].isna() & ~null_mask, "split"].unique()
     if len(invalid) > 0:
         invalid_list = ", ".join(map(str, invalid[:5]))
         raise ValueError(

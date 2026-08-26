@@ -343,6 +343,46 @@ class TestAssignSplits:
                 fields_file=fields_file,
             )
 
+    def test_predefined_treats_none_string_as_null(self, tmp_path: Path) -> None:
+        """Test a literal 'none' split value is treated as unlabeled, not invalid.
+
+        Some source datasets (e.g. India's FTW v1 export) use the text "none"
+        rather than an actual null to mark fields with no split assignment.
+        """
+        chips_file = tmp_path / "chips.parquet"
+        fields_file = tmp_path / "fields.parquet"
+
+        chips_gdf = gpd.GeoDataFrame(
+            {"id": ["ftw-36NXF0000"], "geometry": [box(0, 0, 1, 1)]},
+            crs="EPSG:4326",
+        )
+        chips_gdf.to_parquet(chips_file)
+
+        fields_gdf = gpd.GeoDataFrame(
+            {
+                "split": ["none", "train", "train"],
+                "geometry": [
+                    box(0.1, 0.1, 0.2, 0.2),
+                    box(0.2, 0.2, 0.3, 0.3),
+                    box(0.3, 0.3, 0.4, 0.4),
+                ],
+            },
+            crs="EPSG:4326",
+        )
+        fields_gdf.to_parquet(fields_file)
+
+        result = assign_splits(
+            chips_file=chips_file,
+            split_type="predefined",
+            split_percents=(80, 10, 10),
+            random_seed=42,
+            fields_file=fields_file,
+        )
+
+        assert result.total_chips == 1
+        updated_gdf = gpd.read_parquet(chips_file)
+        assert updated_gdf["split"].iloc[0] == "train"
+
     def test_predefined_majority_and_tiebreak(self, tmp_path: Path) -> None:
         """Test predefined split assigns majority and applies deterministic tie-break."""
         chips_file = tmp_path / "chips.parquet"
