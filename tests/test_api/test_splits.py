@@ -383,6 +383,51 @@ class TestAssignSplits:
         updated_gdf = gpd.read_parquet(chips_file)
         assert updated_gdf["split"].iloc[0] == "train"
 
+    def test_predefined_drops_chips_with_only_null_like_labels(self, tmp_path: Path) -> None:
+        """Test a chip whose only intersecting fields are null-like is dropped, not an error.
+
+        Matches the FTW v1 India export: 22 of 2,002 chips have every field
+        marked "none", and the documented behavior is to exclude those 22 from
+        the final train/val/test splits rather than fail the whole run.
+        """
+        chips_file = tmp_path / "chips.parquet"
+        fields_file = tmp_path / "fields.parquet"
+
+        chips_gdf = gpd.GeoDataFrame(
+            {
+                "id": ["ftw-36NXF0000", "ftw-36NXF0001"],
+                "geometry": [box(0, 0, 1, 1), box(2, 0, 3, 1)],
+            },
+            crs="EPSG:4326",
+        )
+        chips_gdf.to_parquet(chips_file)
+
+        fields_gdf = gpd.GeoDataFrame(
+            {
+                "split": ["train", "none", "none"],
+                "geometry": [
+                    box(0.1, 0.1, 0.2, 0.2),
+                    box(2.1, 0.1, 2.2, 0.2),
+                    box(2.2, 0.2, 2.3, 0.3),
+                ],
+            },
+            crs="EPSG:4326",
+        )
+        fields_gdf.to_parquet(fields_file)
+
+        result = assign_splits(
+            chips_file=chips_file,
+            split_type="predefined",
+            split_percents=(80, 10, 10),
+            random_seed=42,
+            fields_file=fields_file,
+        )
+
+        assert result.total_chips == 1
+        updated_gdf = gpd.read_parquet(chips_file)
+        assert list(updated_gdf["id"]) == ["ftw-36NXF0000"]
+        assert updated_gdf["split"].iloc[0] == "train"
+
     def test_predefined_majority_and_tiebreak(self, tmp_path: Path) -> None:
         """Test predefined split assigns majority and applies deterministic tie-break."""
         chips_file = tmp_path / "chips.parquet"

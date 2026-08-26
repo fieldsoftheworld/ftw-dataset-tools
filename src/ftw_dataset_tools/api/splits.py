@@ -128,7 +128,11 @@ def assign_splits(
     elif split_type == "block3x3":
         splits = _assign_block3x3(gdf, split_percents, random_seed)
     elif split_type == "predefined":
-        splits = _assign_predefined(gdf, fields_file, random_seed, log)
+        splits, keep_mask = _assign_predefined(gdf, fields_file, random_seed, log)
+        if not keep_mask.all():
+            gdf = gdf.loc[keep_mask].reset_index(drop=True)
+            splits = splits[keep_mask]
+            n_chips = len(gdf)
     else:
         raise ValueError(f"Unsupported split_type: {split_type}")
 
@@ -406,7 +410,8 @@ def _ensure_crs_alignment(
 def _compute_chip_majority_splits(
     fields_gdf: gpd.GeoDataFrame,
     gdf: gpd.GeoDataFrame,
-) -> tuple[pd.Series, bool]:
+    log: Callable[[str], None],
+) -> tuple[pd.Series, np.ndarray, bool]:
     joined = gpd.sjoin(
         fields_gdf[["_split_norm", "geometry"]],
         gdf[["id", "geometry"]],
@@ -441,15 +446,27 @@ def _compute_chip_majority_splits(
                 break
 
     splits = gdf["id"].map(chip_to_split)
-    missing = gdf.loc[splits.isna(), "id"].astype(str).tolist()
-    if missing:
-        missing_preview = ", ".join(missing[:5])
+    keep_mask = splits.notna().to_numpy()
+
+    if not keep_mask.any():
         raise ValueError(
-            "No predefined split assignments found for some chips. "
-            f"Example missing chip IDs: {missing_preview}"
+            "No predefined split assignments found for any chip. "
+            "Check CRS alignment and geometry validity."
         )
 
-    return splits, has_val_labels
+    dropped_count = int((~keep_mask).sum())
+    if dropped_count:
+        dropped_preview = gdf.loc[~keep_mask, "id"].astype(str).head(5).tolist()
+        log(
+            f"Dropping {dropped_count} chip(s) with no predefined split assignment "
+            "(every intersecting field has a null-like split value, e.g. 'none'). "
+            f"Example chip IDs: {', '.join(dropped_preview)}"
+        )
+        # Placeholder for dropped rows only; the caller filters them out before
+        # this value is ever used.
+        splits = splits.fillna("train")
+
+    return splits, keep_mask, has_val_labels
 
 
 def _assign_predefined(
@@ -457,16 +474,21 @@ def _assign_predefined(
     fields_file: str | Path | None,
     random_seed: int,
     log: Callable[[str], None],
-) -> np.ndarray:
-    """Assign splits by majority vote using a predefined split column in fields."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """Assign splits by majority vote using a predefined split column in fields.
+
+    Returns (splits, keep_mask): chips with no resolvable split (every
+    intersecting field is unlabeled or null-like) are flagged via keep_mask
+    rather than assigned a split; the caller drops them from the output.
+    """
     fields_path = _validate_fields_file(fields_file)
     fields_gdf = _load_and_validate_fields(fields_path)
     fields_gdf = _normalize_and_validate_splits(fields_gdf, log)
     fields_gdf = _ensure_crs_alignment(gdf, fields_gdf, log)
-    splits, has_val_labels = _compute_chip_majority_splits(fields_gdf, gdf)
+    splits, keep_mask, has_val_labels = _compute_chip_majority_splits(fields_gdf, gdf, log)
 
     if not has_val_labels:
-        train_mask = splits.eq("train")
+        train_mask = splits.eq("train") & keep_mask
         train_indices = splits[train_mask].index.to_numpy()
         train_count = len(train_indices)
         n_val = int(train_count * 0.2)
@@ -485,4 +507,4 @@ def _assign_predefined(
                 "and training set is too small to allocate 20% to validation."
             )
 
-    return splits.to_numpy()
+    return splits.to_numpy(), keep_mask
