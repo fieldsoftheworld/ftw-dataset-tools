@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import multiprocessing
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -19,7 +18,11 @@ from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 
 from ftw_dataset_tools.api import decode
-from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded
+from ftw_dataset_tools.api.geo import (
+    detect_geometry_column,
+    ensure_spatial_loaded,
+    get_available_cpu_count,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -560,21 +563,6 @@ def _process_single_grid_cell(args: tuple) -> tuple[MaskResult | None, tuple[str
         os.close(devnull_fd)
 
 
-def _available_cpu_count() -> int:
-    """CPUs actually usable by this process, not the whole machine's.
-
-    multiprocessing.cpu_count() ignores cgroup CPU restrictions (e.g. a Slurm
-    job's --cpus-per-task), so on a shared cluster node it can wildly
-    overstate what's available and cause massive worker oversubscription.
-    sched_getaffinity respects that restriction; it's Linux-only, so fall
-    back to cpu_count() where it's unavailable (e.g. macOS).
-    """
-    try:
-        return len(os.sched_getaffinity(0))
-    except AttributeError:
-        return multiprocessing.cpu_count()
-
-
 def create_masks(
     chips_file: str | Path,
     boundaries_file: str | Path,
@@ -744,7 +732,7 @@ def create_masks(
 
     # Determine number of workers (default: half of CPUs, minimum 1)
     if num_workers is None:
-        num_workers = max(1, _available_cpu_count() // 2)
+        num_workers = max(1, get_available_cpu_count() // 2)
 
     # Convert CRS to WKT for serialization
     crs_wkt = crs.to_wkt()

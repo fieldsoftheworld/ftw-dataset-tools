@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+import os
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -19,14 +21,36 @@ if TYPE_CHECKING:
     import pyproj
 
 
+def get_available_cpu_count() -> int:
+    """CPUs actually usable by this process, not the whole machine's.
+
+    multiprocessing.cpu_count() ignores cgroup CPU restrictions (e.g. a Slurm
+    job's --cpus-per-task), so on a shared cluster node it can wildly
+    overstate what's available and cause massive worker/thread oversubscription
+    (in our own multiprocessing pools, and potentially in DuckDB's own thread
+    pool too). sched_getaffinity respects that restriction; it's Linux-only,
+    so fall back to cpu_count() where it's unavailable (e.g. macOS).
+    """
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:
+        return multiprocessing.cpu_count()
+
+
 def ensure_spatial_loaded(conn: duckdb.DuckDBPyConnection) -> None:
     """
     Ensure the DuckDB spatial extension is installed and loaded.
+
+    Also caps DuckDB's thread pool to the CPUs actually allocated to this
+    process, rather than trusting DuckDB's own default (which can overstate
+    availability on a cgroup-restricted node the same way
+    multiprocessing.cpu_count() does).
 
     Args:
         conn: DuckDB connection to configure
     """
     conn.execute("INSTALL spatial; LOAD spatial;")
+    conn.execute(f"PRAGMA threads={get_available_cpu_count()};")
 
 
 def write_geoparquet(

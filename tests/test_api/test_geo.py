@@ -464,3 +464,73 @@ class TestGetBboxColumnName:
 
         result = get_bbox_column_name(path)
         assert result == "bbox"
+
+
+class TestGetAvailableCpuCount:
+    """Tests for get_available_cpu_count."""
+
+    def test_uses_sched_getaffinity_when_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test the cgroup/Slurm-restricted CPU count is used when the platform supports it."""
+        import os
+
+        from ftw_dataset_tools.api.geo import get_available_cpu_count
+
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(3)), raising=False)
+
+        assert get_available_cpu_count() == 3
+
+    def test_falls_back_to_cpu_count_when_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test multiprocessing.cpu_count() is used where sched_getaffinity doesn't exist.
+
+        This is the whole-machine CPU count, not a Slurm-restricted one - it's only
+        correct as a fallback on platforms without cgroup CPU affinity (e.g. macOS).
+        """
+        import multiprocessing
+        import os
+
+        from ftw_dataset_tools.api.geo import get_available_cpu_count
+
+        monkeypatch.delattr(os, "sched_getaffinity", raising=False)
+        monkeypatch.setattr(multiprocessing, "cpu_count", lambda: 7)
+
+        assert get_available_cpu_count() == 7
+
+
+class TestEnsureSpatialLoaded:
+    """Tests for ensure_spatial_loaded."""
+
+    def test_loads_spatial_extension(self) -> None:
+        """Test the spatial extension is usable after calling ensure_spatial_loaded."""
+        from ftw_dataset_tools.api.geo import ensure_spatial_loaded
+
+        conn = duckdb.connect(":memory:")
+        try:
+            ensure_spatial_loaded(conn)
+            # ST_Point only works if the spatial extension actually loaded.
+            result = conn.execute("SELECT ST_AsText(ST_Point(1, 2))").fetchone()
+            assert result[0] == "POINT (1 2)"
+        finally:
+            conn.close()
+
+    def test_caps_duckdb_threads_to_available_cpu_count(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test PRAGMA threads is set to the cgroup/Slurm-restricted CPU count.
+
+        DuckDB's own default thread count risks the same overstatement
+        multiprocessing.cpu_count() has on a shared, cgroup-restricted node,
+        so ensure_spatial_loaded pins it explicitly.
+        """
+        from ftw_dataset_tools.api import geo as geo_module
+
+        monkeypatch.setattr(geo_module, "get_available_cpu_count", lambda: 2)
+
+        conn = duckdb.connect(":memory:")
+        try:
+            geo_module.ensure_spatial_loaded(conn)
+            threads = conn.execute("SELECT current_setting('threads')").fetchone()[0]
+            assert int(threads) == 2
+        finally:
+            conn.close()
