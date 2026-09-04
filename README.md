@@ -68,6 +68,9 @@ Stages run in this order: `reproject`, `chips`, `splits`, `boundaries`, `masks`,
 naming convention in the output directory, so individual stages can be re-run on
 their own as long as their inputs already exist.
 
+Set `stages.stac.checksums: true` to add a `file:checksum` to every STAC asset. This is
+off by default because hashing tens of thousands of COGs is slow.
+
 #### Class filter (optional)
 
 If your fields file has a crop-type / class column, you can restrict which
