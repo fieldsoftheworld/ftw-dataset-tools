@@ -506,10 +506,7 @@ class TestSingleCollectionLayout:
         }
         assert ia["semantic_3class_mask"]["roles"] == ["labels"]
         assert ia["semantic_3class_mask"]["type"].startswith("image/tiff")
-        assert (
-            "https://stac-extensions.github.io/item-assets/v1.0.0/schema.json"
-            in coll["stac_extensions"]
-        )
+        assert "item-assets" not in " ".join(coll.get("stac_extensions", []))
 
     def test_custom_grid_ids_go_under_other(self, tmp_path: Path) -> None:
         result = TestCollectionAssetMetadata()._build_catalog(tmp_path, grid_id="grid_001")
