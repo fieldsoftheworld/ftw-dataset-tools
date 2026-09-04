@@ -52,6 +52,32 @@ Standard EO extension property:
 |----------|------|-------------|
 | `eo:cloud_cover` | number | Cloud cover percentage of the source scene, rounded to 2 decimal places |
 
+### Collection Properties
+
+These are added to the chips collection (and, for `ftw:config`, to the root catalog too),
+describing how the whole dataset was built:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `ftw:split_type` | string | Split strategy used: `random-uniform` or `block3x3` |
+| `ftw:split_seed` | integer | Random seed used for split assignment |
+| `ftw:split_percents` | integer[3] | Train/val/test split percentages |
+| `ftw:mask_types` | string[] | Mask types generated for the dataset |
+| `ftw:mask_resolution_m` | number | Mask pixel resolution in meters |
+| `ftw:presence_only` | boolean | Whether labels are presence-only (background class value is 3 instead of 0) |
+| `ftw:min_coverage_pct` | number | Minimum field-coverage percentage required to keep a grid cell |
+| `ftw:cloud_cover_chip_threshold` | number | Chip-level cloud cover threshold percentage (present only when image selection is enabled) |
+| `ftw:nodata_max` | number | Maximum allowed nodata fraction for a selected scene (present only when image selection is enabled) |
+| `ftw:buffer_days` | integer | Search buffer in days around crop calendar dates (present only when image selection is enabled) |
+| `ftw:num_buffer_expansions` | integer | Number of times to expand the buffer if no cloud-free scenes are found (present only when image selection is enabled) |
+| `ftw:buffer_expansion_size` | integer | Days added to the buffer on each expansion (present only when image selection is enabled) |
+| `ftw:config` | object | Resolved config provenance for the run that produced the dataset |
+
+`license`, `providers`, `keywords`, `version` (from the
+[version extension](https://github.com/stac-extensions/version)) and `updated` are not
+`ftw:` properties; they come from the config's `metadata` block (see
+`configs/examples/config.yaml`).
+
 ## Item Structure
 
 ### Parent Chip Item
@@ -149,6 +175,10 @@ Semantic mask assets add `classification:classes`
 
 The `items` asset on the chips collection is the stac-geoparquet mirror of the items,
 with media type `application/vnd.apache.parquet` and role `collection-mirror`.
+
+Parquet assets (fields, boundary lines, chips, items) also carry `table:columns` (name,
+type) and `table:row_count` from the
+[table extension](https://github.com/stac-extensions/table).
 
 ## Link Relations
 

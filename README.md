@@ -71,6 +71,10 @@ their own as long as their inputs already exist.
 Set `stages.stac.checksums: true` to add a `file:checksum` to every STAC asset. This is
 off by default because hashing tens of thousands of COGs is slow.
 
+Add a `metadata:` block (title, description, license, providers, keywords, version) to
+make the output publishable; see `configs/examples/config.yaml`. The stac stage warns
+when `license` is missing.
+
 #### Class filter (optional)
 
 If your fields file has a crop-type / class column, you can restrict which
@@ -191,6 +195,7 @@ ftwd create-dataset fields.parquet --split-type block3x3 --min-coverage 1.0 --re
 - `--resolution` - Pixel resolution in meters for masks (default: 10.0)
 - `--workers` - Number of parallel workers (default: half of CPUs)
 - `--skip-reproject` - Fail if input is not EPSG:4326 instead of auto-reprojecting
+- `--checksums` - Add `file:checksum` (multihash sha256) to every STAC asset; slow on large datasets
 
 **Output structure:**
 ```

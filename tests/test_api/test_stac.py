@@ -397,7 +397,14 @@ class TestChipItemAssetMetadata:
 
 
 class TestCollectionAssetMetadata:
-    def _build_catalog(self, tmp_path: Path, checksums: bool = False):
+    def _build_catalog(
+        self,
+        tmp_path: Path,
+        checksums: bool = False,
+        config=None,
+        provenance=None,
+        on_progress=None,
+    ):
         import geopandas as gpd
         from shapely.geometry import box
 
@@ -434,6 +441,9 @@ class TestCollectionAssetMetadata:
             chips_base_dir=chips_base,
             year=2024,
             checksums=checksums,
+            config=config,
+            provenance=provenance,
+            on_progress=on_progress,
         )
 
     def test_parquet_and_items_assets(self, tmp_path: Path) -> None:
@@ -474,3 +484,128 @@ class TestCollectionAssetMetadata:
         chips_coll = pystac.Collection.from_file(str(result.chips_collection_path))
         assert chips_coll.assets["chips"].extra_fields["file:checksum"].startswith("1220")
         assert chips_coll.assets["items"].extra_fields["file:checksum"].startswith("1220")
+
+
+class TestCollectionMetadata:
+    def _config(self, **metadata):
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        data = {
+            "fields_file": "unused.parquet",
+            "stages": {"splits": {"split_type": "block3x3", "random_seed": 7}},
+        }
+        if metadata:
+            data["metadata"] = metadata
+        return DatasetConfig.from_dict(data)
+
+    def test_metadata_lands_on_collections(self, tmp_path: Path) -> None:
+        import json
+
+        config = self._config(
+            title="Austria",
+            description="Chips for Austria",
+            license="CC-BY-4.0",
+            version="2.0.0-alpha.1",
+            keywords=["austria"],
+            providers=[
+                {
+                    "name": "Agrarmarkt Austria",
+                    "roles": ["producer", "licensor"],
+                    "url": "https://x",
+                }
+            ],
+        )
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, config=config)
+
+        chips = json.loads(result.chips_collection_path.read_text())
+        assert chips["title"] == "Austria"
+        assert chips["description"] == "Chips for Austria"
+        assert chips["license"] == "CC-BY-4.0"
+        assert chips["keywords"] == ["austria"]
+        assert chips["version"] == "2.0.0-alpha.1"
+        assert (
+            "https://stac-extensions.github.io/version/v1.2.0/schema.json"
+            in chips["stac_extensions"]
+        )
+        assert [p["name"] for p in chips["providers"]] == ["Agrarmarkt Austria"]
+        assert chips["providers"][0]["roles"] == ["producer", "licensor"]
+        assert all(p["roles"] != ["host"] for p in chips["providers"])
+        assert chips["updated"].endswith("Z")
+
+        source = json.loads(result.source_collection_path.read_text())
+        assert source["license"] == "CC-BY-4.0"
+        assert source["title"] == "Austria source fields"
+        assert source["version"] == "2.0.0-alpha.1"
+
+    def test_license_link_when_other(self, tmp_path: Path) -> None:
+        import json
+
+        config = self._config(license="other", license_url="https://rkg.gov.si/vstop/")
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, config=config)
+
+        chips = json.loads(result.chips_collection_path.read_text())
+        assert chips["license"] == "other"
+        links = [link for link in chips["links"] if link["rel"] == "license"]
+        assert links and links[0]["href"] == "https://rkg.gov.si/vstop/"
+
+    def test_ftw_properties_and_provenance_on_chips_collection(self, tmp_path: Path) -> None:
+        import json
+
+        config = self._config(license="CC0-1.0")
+        provenance = config.provenance_dict()
+        result = TestCollectionAssetMetadata()._build_catalog(
+            tmp_path, config=config, provenance=provenance
+        )
+
+        chips = json.loads(result.chips_collection_path.read_text())
+        assert chips["ftw:split_type"] == "block3x3"
+        assert chips["ftw:split_seed"] == 7
+        assert chips["ftw:split_percents"] == [80, 10, 10]
+        assert chips["ftw:mask_types"] == ["instance", "semantic_2_class", "semantic_3_class"]
+        assert chips["ftw:mask_resolution_m"] == 10.0
+        assert "ftw:cloud_cover_chip_threshold" in chips  # select_images enabled by default
+        assert chips["ftw:config"]["config"]["metadata"]["license"] == "CC0-1.0"
+        assert chips["updated"] == provenance["generated_at"].replace("+00:00", "Z")
+
+        root = json.loads(result.catalog_path.read_text())
+        assert root["ftw:config"]["config"]["metadata"]["license"] == "CC0-1.0"
+
+    def test_table_columns_on_parquet_assets(self, tmp_path: Path) -> None:
+        import json
+
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+
+        chips = json.loads(result.chips_collection_path.read_text())
+        chip_cols = {c["name"]: c["type"] for c in chips["assets"]["chips"]["table:columns"]}
+        assert chip_cols["id"] == "varchar"
+        assert chip_cols["field_coverage_pct"] == "double"
+        assert chip_cols["geometry"] == "geometry"
+        assert chips["assets"]["chips"]["table:row_count"] == 1
+
+        source = json.loads(result.source_collection_path.read_text())
+        assert source["assets"]["fields"]["table:row_count"] == 1
+        assert (
+            "https://stac-extensions.github.io/table/v1.2.0/schema.json"
+            in source["stac_extensions"]
+        )
+
+        assert chips["assets"]["items"]["table:row_count"] == 1
+        items_cols = {c["name"] for c in chips["assets"]["items"]["table:columns"]}
+        assert "id" in items_cols
+
+    def test_no_split_type_omitted_from_ftw_properties(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        config = DatasetConfig.from_dict({"fields_file": "unused.parquet"})
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, config=config)
+
+        chips = json.loads(result.chips_collection_path.read_text())
+        assert "ftw:split_type" not in chips
+
+    def test_warns_without_license(self, tmp_path: Path) -> None:
+        messages: list[str] = []
+        TestCollectionAssetMetadata()._build_catalog(tmp_path, on_progress=messages.append)
+
+        assert any("not Portolan-publishable" in m for m in messages)

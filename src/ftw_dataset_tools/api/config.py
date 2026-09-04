@@ -45,7 +45,15 @@ CONFIG_SCHEMA_VERSION = 1
 
 # YAML keys allowed at the top level of a config file. `class_filter` on
 # DatasetConfig is resolved from stages.masks.class_filter, not set via YAML.
-_ALLOWED_TOP_KEYS = ("fields_file", "output_dir", "name", "year", "skip_reproject", "stages")
+_ALLOWED_TOP_KEYS = (
+    "fields_file",
+    "output_dir",
+    "name",
+    "year",
+    "skip_reproject",
+    "stages",
+    "metadata",
+)
 
 
 class ConfigError(ValueError):
@@ -243,6 +251,115 @@ class StacConfig:
     checksums: bool = False
 
 
+# Provider roles ftwd may write. "host" is reserved for whoever publishes the
+# catalog (the catalog repository adds it), so a config must not claim it.
+PROVIDER_ROLES = ("licensor", "producer", "processor")
+
+_METADATA_KEYS = (
+    "title",
+    "description",
+    "license",
+    "license_url",
+    "version",
+    "attribution",
+    "keywords",
+    "providers",
+)
+
+
+@dataclass
+class ProviderConfig:
+    """One STAC provider (producer, licensor or processor) named in the config."""
+
+    name: str
+    roles: list[str] = field(default_factory=list)
+    url: str | None = None
+
+
+@dataclass
+class MetadataConfig:
+    """Publishable collection metadata (spec section 3.2).
+
+    Every field is optional so existing configs keep working; the STAC stage
+    warns when ``license`` is missing because the output is then not
+    Portolan-publishable.
+    """
+
+    title: str | None = None
+    description: str | None = None
+    license: str | None = None
+    license_url: str | None = None
+    version: str | None = None
+    attribution: str | None = None
+    keywords: list[str] = field(default_factory=list)
+    providers: list[ProviderConfig] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: Any) -> MetadataConfig:
+        if not isinstance(data, dict):
+            raise ConfigError("'metadata' must be a mapping.")
+        _reject_unknown(data, set(_METADATA_KEYS), context="metadata")
+
+        raw_keywords = data.get("keywords")
+        if raw_keywords is None:
+            raw_keywords = []
+        if not isinstance(raw_keywords, list):
+            raise ConfigError("metadata.keywords must be a list of strings.")
+
+        raw_providers = data.get("providers")
+        if raw_providers is None:
+            raw_providers = []
+        if not isinstance(raw_providers, list):
+            raise ConfigError("metadata.providers must be a list of mappings.")
+        providers = []
+        for index, raw in enumerate(raw_providers):
+            if not isinstance(raw, dict) or not raw.get("name"):
+                raise ConfigError(f"metadata.providers[{index}] must be a mapping with a 'name'.")
+            _reject_unknown(raw, {"name", "roles", "url"}, context=f"metadata.providers[{index}]")
+            roles = raw.get("roles")
+            if roles is None:
+                roles = []
+            if not isinstance(roles, list):
+                raise ConfigError(f"metadata.providers[{index}].roles must be a list.")
+            providers.append(
+                ProviderConfig(
+                    name=str(raw["name"]),
+                    roles=[str(r) for r in roles],
+                    url=_opt_str(raw.get("url")),
+                )
+            )
+
+        meta = cls(
+            title=_opt_str(data.get("title")),
+            description=_opt_str(data.get("description")),
+            license=_opt_str(data.get("license")),
+            license_url=_opt_str(data.get("license_url")),
+            version=_opt_str(data.get("version")),
+            attribution=_opt_str(data.get("attribution")),
+            keywords=[str(k) for k in raw_keywords],
+            providers=providers,
+        )
+        meta.validate()
+        return meta
+
+    def validate(self) -> None:
+        if self.license == "proprietary":
+            raise ConfigError(
+                "metadata.license 'proprietary' is not allowed; use an SPDX identifier, "
+                "or 'other' with metadata.license_url."
+            )
+        if self.license == "other" and not self.license_url:
+            raise ConfigError("metadata.license 'other' requires metadata.license_url.")
+        for provider in self.providers:
+            bad = sorted(set(provider.roles) - set(PROVIDER_ROLES))
+            if bad:
+                allowed = ", ".join(PROVIDER_ROLES)
+                raise ConfigError(
+                    f"metadata.providers '{provider.name}' has invalid roles {bad}; "
+                    f"allowed: {allowed} ('host' is added by the publishing catalog)."
+                )
+
+
 @dataclass
 class SelectImagesConfig:
     """Settings for the imagery selection stage."""
@@ -288,6 +405,8 @@ class DatasetConfig:
             a determination_datetime column).
         skip_reproject: If True, fail instead of reprojecting non-4326 input.
         stages: Per-stage settings.
+        metadata: Publishable collection metadata (title, license, providers, ...).
+            Optional.
         class_filter: Resolved class filter (loaded from stages.masks.class_filter).
             Not set directly from YAML; populated by load_config / create_dataset.
     """
@@ -298,6 +417,7 @@ class DatasetConfig:
     year: int | None = None
     skip_reproject: bool = False
     stages: StagesConfig = field(default_factory=StagesConfig)
+    metadata: MetadataConfig | None = None
     class_filter: ClassFilter | None = None
 
     # ---- construction ---------------------------------------------------
@@ -323,6 +443,10 @@ class DatasetConfig:
             raise ConfigError("'stages' must be a mapping.")
         stages = _build_stages(stages_data)
 
+        metadata = None
+        if data.get("metadata") is not None:
+            metadata = MetadataConfig.from_dict(data["metadata"])
+
         config = cls(
             fields_file=str(data["fields_file"]),
             output_dir=_opt_str(data.get("output_dir")),
@@ -330,6 +454,7 @@ class DatasetConfig:
             year=data.get("year"),
             skip_reproject=bool(data.get("skip_reproject", False)),
             stages=stages,
+            metadata=metadata,
         )
         config.validate()
         return config
@@ -410,6 +535,9 @@ class DatasetConfig:
                 )
         if not self.stages.masks.mask_types:
             raise ConfigError("masks.mask_types must list at least one mask type.")
+
+        if self.metadata is not None:
+            self.metadata.validate()
 
     # ---- provenance -----------------------------------------------------
 

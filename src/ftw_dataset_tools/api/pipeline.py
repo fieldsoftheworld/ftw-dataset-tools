@@ -496,6 +496,7 @@ def stage_stac(ctx: PipelineContext) -> None:
         checksums=ctx.config.stages.stac.checksums,
         background_class_value=3 if ctx.config.stages.masks.presence_only else 0,
         on_progress=ctx.log,
+        config=ctx.config,
     )
     ctx.log(f"Created STAC catalog with {ctx.stac_result.total_items} items")
 

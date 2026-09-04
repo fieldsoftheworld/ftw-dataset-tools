@@ -415,6 +415,8 @@ def download_and_clip_scene(
         "crs": target_crs,
         "transform": target_transform,
         "compress": "deflate",
+        # Sentinel-2 L2A uses 0 as the fill value; declaring it keeps fill out of the statistics
+        "nodata": 0,
     }
 
     log(f"Writing to {output_path}...")
