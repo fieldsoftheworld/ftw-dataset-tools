@@ -375,3 +375,15 @@ class TestMetadataBlock:
         config = DatasetConfig.from_dict(self._base({"title": "T", "license": "CC0-1.0"}))
 
         assert config.provenance_dict()["config"]["metadata"]["license"] == "CC0-1.0"
+
+    def test_dataset_validate_checks_metadata(self) -> None:
+        config = DatasetConfig(
+            fields_file="f",
+            metadata=config_module.MetadataConfig(license="proprietary"),
+        )
+        with pytest.raises(ConfigError, match="proprietary"):
+            config.validate()
+
+    def test_keywords_wrong_type_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="keywords must be a list"):
+            DatasetConfig.from_dict(self._base({"keywords": 0}))

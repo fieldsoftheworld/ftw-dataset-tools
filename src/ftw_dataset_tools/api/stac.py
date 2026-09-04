@@ -360,7 +360,7 @@ def _collection_ftw_properties(config: DatasetConfig) -> dict:
                 "ftw:buffer_expansion_size": sel.buffer_expansion_size,
             }
         )
-    return props
+    return {k: v for k, v in props.items() if v is not None}
 
 
 def _create_root_catalog(
@@ -807,6 +807,7 @@ def generate_stac_catalog(
         items_parquet_path.parent.mkdir(parents=True, exist_ok=True)
         _write_items_parquet(items, items_parquet_path)
         add_file_info(chips_collection.assets["items"], items_parquet_path, checksum=checksums)
+        add_table_columns(chips_collection.assets["items"], items_parquet_path)
 
     catalog.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
 

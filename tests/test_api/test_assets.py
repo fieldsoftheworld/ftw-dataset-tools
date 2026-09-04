@@ -301,6 +301,22 @@ class TestAddTableColumns:
         columns = {c["name"]: c["type"] for c in asset.extra_fields["table:columns"]}
         assert columns["geometry"] == "geometry"
 
+    def test_zero_row_parquet(self, tmp_path: Path) -> None:
+        import geopandas as gpd
+
+        from ftw_dataset_tools.api.assets import add_table_columns
+
+        gdf = gpd.GeoDataFrame({"id": []}, geometry=[], crs="EPSG:4326")
+        path = tmp_path / "empty.parquet"
+        gdf.to_parquet(path)
+        _, asset = _item_with_asset(path, ["data"])
+
+        add_table_columns(asset, path, geometry_column="geometry")
+
+        columns = {c["name"] for c in asset.extra_fields["table:columns"]}
+        assert "id" in columns
+        assert asset.extra_fields["table:row_count"] == 0
+
 
 class TestAddRasterBandsOpensOnce:
     def test_single_open(self, tmp_path: Path, monkeypatch) -> None:

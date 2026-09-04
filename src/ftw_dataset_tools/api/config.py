@@ -300,23 +300,25 @@ class MetadataConfig:
             raise ConfigError("'metadata' must be a mapping.")
         _reject_unknown(data, set(_METADATA_KEYS), context="metadata")
 
-        raw_keywords = data.get("keywords") or []
+        raw_keywords = data.get("keywords")
+        if raw_keywords is None:
+            raw_keywords = []
         if not isinstance(raw_keywords, list):
             raise ConfigError("metadata.keywords must be a list of strings.")
 
-        raw_providers = data.get("providers") or []
+        raw_providers = data.get("providers")
+        if raw_providers is None:
+            raw_providers = []
         if not isinstance(raw_providers, list):
             raise ConfigError("metadata.providers must be a list of mappings.")
         providers = []
         for index, raw in enumerate(raw_providers):
             if not isinstance(raw, dict) or not raw.get("name"):
                 raise ConfigError(f"metadata.providers[{index}] must be a mapping with a 'name'.")
-            unknown = set(raw) - {"name", "roles", "url"}
-            if unknown:
-                raise ConfigError(
-                    f"Unknown key(s) in metadata.providers[{index}]: {', '.join(sorted(unknown))}."
-                )
-            roles = raw.get("roles") or []
+            _reject_unknown(raw, {"name", "roles", "url"}, context=f"metadata.providers[{index}]")
+            roles = raw.get("roles")
+            if roles is None:
+                roles = []
             if not isinstance(roles, list):
                 raise ConfigError(f"metadata.providers[{index}].roles must be a list.")
             providers.append(
@@ -533,6 +535,9 @@ class DatasetConfig:
                 )
         if not self.stages.masks.mask_types:
             raise ConfigError("masks.mask_types must list at least one mask type.")
+
+        if self.metadata is not None:
+            self.metadata.validate()
 
     # ---- provenance -----------------------------------------------------
 

@@ -589,6 +589,21 @@ class TestCollectionMetadata:
             in source["stac_extensions"]
         )
 
+        assert chips["assets"]["items"]["table:row_count"] == 1
+        items_cols = {c["name"] for c in chips["assets"]["items"]["table:columns"]}
+        assert "id" in items_cols
+
+    def test_no_split_type_omitted_from_ftw_properties(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        config = DatasetConfig.from_dict({"fields_file": "unused.parquet"})
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, config=config)
+
+        chips = json.loads(result.chips_collection_path.read_text())
+        assert "ftw:split_type" not in chips
+
     def test_warns_without_license(self, tmp_path: Path) -> None:
         messages: list[str] = []
         TestCollectionAssetMetadata()._build_catalog(tmp_path, on_progress=messages.append)

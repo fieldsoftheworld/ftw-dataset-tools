@@ -89,6 +89,7 @@ def add_table_columns(asset: pystac.Asset, path: Path, geometry_column: str | No
     Types are DuckDB's, lowercased. The geometry column is typed ``geometry``
     (DuckDB reports the WKB blob). Descriptions are added by the docs stage.
     """
+    # Imported here: api.geo pulls geopandas and geoparquet-io into every assets import otherwise.
     import duckdb
     from pystac.extensions.table import Column, TableExtension
 
