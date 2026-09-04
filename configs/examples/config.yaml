@@ -34,6 +34,20 @@ year: 2023
 # If true, fail instead of auto-reprojecting non-EPSG:4326 input.
 skip_reproject: false
 
+# Publishable collection metadata. Optional, but without `license` the output is
+# not Portolan-publishable (the stac stage warns). `providers` roles may be
+# producer, licensor, processor; the publishing catalog adds the host.
+# metadata:
+#   title: Austria
+#   description: Benchmark chips for Austria (edition 2025).
+#   license: CC-BY-4.0          # SPDX id, or "other" plus license_url
+#   version: 2.0.0-alpha.1
+#   attribution: Agrarmarkt Austria
+#   keywords: [field-boundaries, benchmark, austria]
+#   providers:
+#     - {name: Agrarmarkt Austria, roles: [producer, licensor], url: https://example.org}
+#     - {name: Fields of the World, roles: [processor], url: https://fieldsofthe.world}
+
 stages:
   chips:
     # Minimum field-coverage percentage for a grid cell to be kept.

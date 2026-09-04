@@ -185,6 +185,12 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
         "Every distinct class value must be listed in include or exclude."
     ),
 )
+@click.option(
+    "--checksums",
+    is_flag=True,
+    default=False,
+    help="Add file:checksum (multihash sha256) to every STAC asset. Slow on large datasets.",
+)
 def create_dataset_cmd(
     fields_file: str,
     output_dir: str | None,
@@ -208,6 +214,7 @@ def create_dataset_cmd(
     presence_only: bool,
     drop_border_chips: bool,
     class_filter: str | None,
+    checksums: bool,
 ) -> None:
     """Create a complete training dataset from a fields file.
 
@@ -331,6 +338,7 @@ def create_dataset_cmd(
             presence_only=presence_only,
             drop_border_chips=drop_border_chips,
             class_filter=class_filter,
+            checksums=checksums,
             on_progress=on_progress,
             on_mask_progress=on_mask_progress,
             on_mask_start=on_mask_start,

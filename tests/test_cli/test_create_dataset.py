@@ -356,3 +356,34 @@ class TestCreateDatasetImageSelectionErrors:
         result = _invoke(sample_fields_geoparquet, "--cloud-cover-chip", "150")
 
         assert result.exit_code != 0
+
+
+class TestChecksumsFlag:
+    def test_checksums_flag_forwarded(
+        self, sample_fields_geoparquet: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--checksums forwards checksums=True to dataset.create_dataset."""
+        captured: dict[str, Any] = {}
+
+        def fake_create_dataset(**kwargs: Any) -> CreateDatasetResult:
+            captured.update(kwargs)
+            raise SystemExit(0)
+
+        monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
+
+        runner = CliRunner()
+        runner.invoke(
+            cli,
+            [
+                "create-dataset",
+                str(sample_fields_geoparquet),
+                "--split-type",
+                "random-uniform",
+                "--year",
+                "2024",
+                "--checksums",
+                "--skip-images",
+            ],
+        )
+
+        assert captured["checksums"] is True
