@@ -78,3 +78,8 @@ stages:
     enabled: false
     bands: [red, green, blue, nir]
     resolution: 10.0
+
+  stac:
+    # Compute file:checksum (multihash sha256) for every asset. Optional and slow
+    # on large datasets, so off by default.
+    checksums: false

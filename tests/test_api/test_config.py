@@ -109,6 +109,22 @@ class TestFromDict:
         )
         assert config.stages.masks.mask_types == ["decode_boundary", "decode_distance"]
 
+    def test_stac_checksums_defaults_false(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+
+        assert config.stages.stac.checksums is False
+
+    def test_stac_checksums_enabled(self) -> None:
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"stac": {"checksums": True}}}
+        )
+
+        assert config.stages.stac.checksums is True
+
+    def test_stac_unknown_option_raises(self) -> None:
+        with pytest.raises(ConfigError, match=r"stages\.stac"):
+            DatasetConfig.from_dict({"fields_file": "f.parquet", "stages": {"stac": {"bogus": 1}}})
+
     def test_root_must_be_mapping(self) -> None:
         with pytest.raises(ConfigError, match="mapping"):
             DatasetConfig.from_dict([1, 2, 3])  # type: ignore[arg-type]
