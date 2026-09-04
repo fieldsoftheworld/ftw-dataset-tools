@@ -493,6 +493,8 @@ def stage_stac(ctx: PipelineContext) -> None:
         chips_base_dir=ctx.chips_base_dir,
         year=ctx.effective_year,
         provenance=ctx.provenance,
+        checksums=ctx.config.stages.stac.checksums,
+        background_class_value=3 if ctx.config.stages.masks.presence_only else 0,
         on_progress=ctx.log,
     )
     ctx.log(f"Created STAC catalog with {ctx.stac_result.total_items} items")
