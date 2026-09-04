@@ -11,7 +11,8 @@ convention, so any stage can be re-run on its own as long as its inputs exist:
     {output_dir}/{name}_fields.parquet          (reproject)
     {output_dir}/{name}_chips.parquet           (chips, splits)
     {output_dir}/{name}_boundary_lines.parquet  (boundaries)
-    {output_dir}/{name}-chips/                   (masks, stac, imagery)
+    {output_dir}/collection.json                 (stac)
+    {output_dir}/chips/<mgrs100k>/<item_id>/     (masks, stac, imagery)
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from ftw_dataset_tools.api.imagery import (
     download_imagery_for_catalog,
     select_imagery_for_catalog,
 )
-from ftw_dataset_tools.api.masks import MaskType, get_item_id
+from ftw_dataset_tools.api.masks import MaskType, get_item_id, get_mgrs_square
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -109,7 +110,7 @@ class PipelineContext:
             self.field_polygons_path = self.output_fields_path
         self.chips_path = self.output_dir / f"{name}_chips.parquet"
         self.boundary_lines_path = self.output_dir / f"{name}_boundary_lines.parquet"
-        self.chips_base_dir = self.output_dir / f"{name}-chips"
+        self.chips_base_dir = self.output_dir / "chips"
 
     @property
     def field_polygons_producer(self) -> str:
@@ -432,8 +433,8 @@ def _build_chip_dirs(ctx: PipelineContext) -> dict[str, Path]:
     chip_dirs: dict[str, Path] = {}
     for (grid_id,) in grid_ids:
         item_id = get_item_id(str(grid_id), ctx.effective_year)
-        chip_dir = ctx.chips_base_dir / item_id
-        chip_dir.mkdir(exist_ok=True)
+        chip_dir = ctx.chips_base_dir / get_mgrs_square(str(grid_id)) / item_id
+        chip_dir.mkdir(parents=True, exist_ok=True)
         chip_dirs[item_id] = chip_dir
     return chip_dirs
 
