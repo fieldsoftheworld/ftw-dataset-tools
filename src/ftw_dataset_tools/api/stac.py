@@ -13,6 +13,7 @@ import duckdb
 import pystac
 from pystac import Asset, Catalog, Collection, Extent, Item, SpatialExtent, TemporalExtent
 
+from ftw_dataset_tools.api.assets import add_file_info, add_mask_classification, add_raster_bands
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded
 from ftw_dataset_tools.api.masks import MaskType
 
@@ -344,6 +345,9 @@ def _create_source_collection(
         ),
     )
 
+    add_file_info(collection.assets["fields"], fields_file)
+    add_file_info(collection.assets["boundary_lines"], boundary_lines_file)
+
     return collection
 
 
@@ -353,6 +357,8 @@ def _create_chip_item(
     temporal_extent: tuple[datetime, datetime],
     chip_dir: Path | None = None,
     mask_dirs: dict[str, Path] | None = None,
+    checksums: bool = False,
+    background_class_value: int = 0,
 ) -> Item | None:
     """
     Create a STAC Item for a single chip.
@@ -363,6 +369,9 @@ def _create_chip_item(
         temporal_extent: Tuple of (start, end) datetime
         chip_dir: Directory containing co-located masks (new structure)
         mask_dirs: Dict mapping mask type name to directory path (legacy structure)
+        checksums: Compute file:checksum (multihash sha256) for every mask asset.
+        background_class_value: Pixel value used for background in masks
+            (3 for presence-only).
 
     Returns:
         pystac Item, or None if no mask files exist
@@ -383,11 +392,14 @@ def _create_chip_item(
                 mask_filename = f"{grid_id}_{mask_type.value}.tif"
             mask_path = chip_dir / mask_filename
             if mask_path.exists():
-                mask_assets[f"{mask_name}_mask"] = Asset(
-                    href=f"./{mask_filename}",
-                    media_type=MEDIA_TYPE_COG,
-                    title=_get_mask_title(mask_name),
-                    roles=["labels"],
+                mask_assets[f"{mask_name}_mask"] = (
+                    Asset(
+                        href=f"./{mask_filename}",
+                        media_type=MEDIA_TYPE_COG,
+                        title=_get_mask_title(mask_name),
+                        roles=["labels"],
+                    ),
+                    mask_path,
                 )
         elif mask_dirs is not None and mask_name in mask_dirs:
             # Legacy structure: masks in type-based directories
@@ -398,11 +410,14 @@ def _create_chip_item(
             mask_path = mask_dirs[mask_name] / mask_filename
             if mask_path.exists():
                 rel_path = f"../../label_masks/{mask_name}/{mask_filename}"
-                mask_assets[f"{mask_name}_mask"] = Asset(
-                    href=rel_path,
-                    media_type=MEDIA_TYPE_COG,
-                    title=_get_mask_title(mask_name),
-                    roles=["labels"],
+                mask_assets[f"{mask_name}_mask"] = (
+                    Asset(
+                        href=rel_path,
+                        media_type=MEDIA_TYPE_COG,
+                        title=_get_mask_title(mask_name),
+                        roles=["labels"],
+                    ),
+                    mask_path,
                 )
 
     # Skip if no masks exist
@@ -428,9 +443,14 @@ def _create_chip_item(
         properties=properties,
     )
 
-    # Add mask assets
-    for key, asset in mask_assets.items():
+    # Add mask assets, then decorate them (owner must be set first)
+    for key, (asset, mask_path) in mask_assets.items():
         item.add_asset(key=key, asset=asset)
+        add_file_info(asset, mask_path, checksum=checksums)
+        add_raster_bands(asset, mask_path)
+        add_mask_classification(
+            asset, key.removesuffix("_mask"), background_value=background_class_value
+        )
 
     return item
 
@@ -480,15 +500,16 @@ def _create_chips_collection(
             roles=["data"],
         ),
     )
+    add_file_info(collection.assets["chips"], chips_file)
 
-    # Add stac-geoparquet as collection asset
+    # Add stac-geoparquet as collection asset (its size is set once items.parquet is written)
     collection.add_asset(
         key="items",
         asset=Asset(
             href="items.parquet",
-            media_type="application/vnd.apache.parquet; profile=stac-geoparquet",
-            title="STAC items in GeoParquet format",
-            roles=["stac-items"],
+            media_type=MEDIA_TYPE_PARQUET,
+            title="STAC items in GeoParquet format (collection mirror)",
+            roles=["collection-mirror"],
         ),
     )
 
@@ -532,6 +553,8 @@ def generate_stac_catalog(
     year: int | None = None,
     provenance: dict | None = None,
     on_progress: Callable[[str], None] | None = None,
+    checksums: bool = False,
+    background_class_value: int = 0,
 ) -> STACGenerationResult:
     """
     Generate complete STAC static catalog from dataset outputs.
@@ -550,6 +573,8 @@ def generate_stac_catalog(
         provenance: Optional resolved-config record embedded on the root catalog
                     under the ``ftw:config`` extra field for reproducibility.
         on_progress: Optional callback for progress messages
+        checksums: Compute file:checksum (multihash sha256) for every asset. Slow; default False.
+        background_class_value: Pixel value used for background in masks (3 for presence-only).
 
     Returns:
         STACGenerationResult with paths to generated files
@@ -610,6 +635,8 @@ def generate_stac_catalog(
             temporal_extent=temporal_extent,
             chip_dir=chip_dir,
             mask_dirs=mask_dirs if chip_dir is None else None,
+            checksums=checksums,
+            background_class_value=background_class_value,
         )
         if item:
             items.append(item)
@@ -660,6 +687,8 @@ def generate_stac_catalog(
     if items:
         log("Writing stac-geoparquet...")
         _write_items_parquet(items, items_parquet_path)
+        add_file_info(chips_collection.assets["items"], items_parquet_path)
+        chips_collection.save_object()
 
     log("STAC catalog generation complete")
 
