@@ -15,6 +15,7 @@ from ftw_dataset_tools.api.imagery import (
     ImageryProgressBar,
     clear_chip_selections,
     create_child_items_from_selection,
+    find_chip_items,
     find_collection_dir,
     get_imagery_stats,
     has_existing_scenes,
@@ -208,7 +209,6 @@ def select_images_cmd(
             catalog_dir = find_collection_dir(input_path_obj)
         except FileNotFoundError as e:
             raise click.ClickException(str(e)) from e
-        collection_file = catalog_dir / "collection.json"
 
         click.echo(f"Catalog: {catalog_dir}")
 
@@ -223,20 +223,9 @@ def select_images_cmd(
             except Exception as e:
                 raise click.ClickException(f"Failed to copy catalog: {e}") from e
             catalog_dir = output_dir
-            collection_file = catalog_dir / "collection.json"
-
-        # Load collection to find items
-        collection = pystac.Collection.from_file(str(collection_file))
 
         # Find all chip items (parent items, not child S2 items)
-        chip_items = []
-        for item_link in collection.get_item_links():
-            item_path = catalog_dir / item_link.href
-            if item_path.exists():
-                item = pystac.Item.from_file(str(item_path))
-                # Skip child items (they have _planting_s2 or _harvest_s2 suffix)
-                if not item.id.endswith("_planting_s2") and not item.id.endswith("_harvest_s2"):
-                    chip_items.append(item)
+        chip_items = [item for item, _item_path in find_chip_items(catalog_dir)]
 
         if not chip_items:
             raise click.ClickException("No chip items found in catalog")
