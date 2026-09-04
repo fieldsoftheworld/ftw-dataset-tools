@@ -64,6 +64,11 @@ stages:
     # See configs/examples/class_filter.yaml.
     # class_filter: class_filter.yaml
 
+  stac:
+    # Compute file:checksum (multihash sha256) for every asset. Optional and slow
+    # on large datasets, so off by default.
+    checksums: false
+
   select_images:
     # Set to false to skip imagery selection entirely.
     enabled: true

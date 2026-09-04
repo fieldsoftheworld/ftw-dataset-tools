@@ -1,5 +1,7 @@
 """Tests for the masks API."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -506,3 +508,129 @@ class TestDeriveDecodeLayer:
         assert MaskType.INSTANCE not in _DERIVED_MASK_TYPES
         assert MaskType.SEMANTIC_2_CLASS not in _DERIVED_MASK_TYPES
         assert MaskType.SEMANTIC_3_CLASS not in _DERIVED_MASK_TYPES
+
+
+class TestMaskCogStatistics:
+    """Masks must carry embedded band statistics inside the COG."""
+
+    def _write_inputs(self, tmp_path: Path) -> tuple[Path, Path]:
+        import geopandas as gpd
+        from shapely.geometry import LineString, box
+
+        fields = gpd.GeoDataFrame(
+            {"id": [1]}, geometry=[box(10.002, 50.002, 10.006, 50.006)], crs="EPSG:4326"
+        )
+        fields_path = tmp_path / "fields.parquet"
+        fields.to_parquet(fields_path)
+
+        lines = gpd.GeoDataFrame(
+            {"id": [1]},
+            geometry=[LineString([(10.002, 50.002), (10.006, 50.002)])],
+            crs="EPSG:4326",
+        )
+        lines_path = tmp_path / "lines.parquet"
+        lines.to_parquet(lines_path)
+        return fields_path, lines_path
+
+    def test_single_mask_has_embedded_stats(self, tmp_path: Path) -> None:
+        import duckdb
+        from rasterio.crs import CRS
+
+        from ftw_dataset_tools.api.geo import ensure_spatial_loaded
+        from ftw_dataset_tools.api.masks import MaskType, _create_single_mask
+        from ftw_dataset_tools.api.raster_stats import read_band_stats
+
+        fields_path, lines_path = self._write_inputs(tmp_path)
+        conn = duckdb.connect(":memory:")
+        ensure_spatial_loaded(conn)
+        out = tmp_path / "mask.tif"
+
+        _create_single_mask(
+            conn=conn,
+            grid_id="g1",
+            bounds=(10.0, 50.0, 10.01, 50.01),
+            crs=CRS.from_epsg(4326),
+            boundaries_path=fields_path,
+            boundary_lines_path=lines_path,
+            boundaries_geom_col="geometry",
+            boundary_lines_geom_col="geometry",
+            output_path=out,
+            mask_type=MaskType.SEMANTIC_3_CLASS,
+            resolution=10.0,
+        )
+
+        stats = read_band_stats(out, 1)
+        assert stats is not None
+        assert stats.minimum == 0.0
+        assert stats.maximum == 2.0
+        assert 0.0 < stats.mean < 2.0
+        assert stats.valid_percent is None
+        assert not out.with_name(out.name + ".aux.xml").exists()
+        assert not out.with_suffix(".tmp.tif").exists()
+
+    def test_single_mask_is_cog(self, tmp_path: Path) -> None:
+        import duckdb
+        import rasterio
+        from rasterio.crs import CRS
+
+        from ftw_dataset_tools.api.geo import ensure_spatial_loaded
+        from ftw_dataset_tools.api.masks import MaskType, _create_single_mask
+
+        fields_path, lines_path = self._write_inputs(tmp_path)
+        conn = duckdb.connect(":memory:")
+        ensure_spatial_loaded(conn)
+        out = tmp_path / "mask2.tif"
+
+        _create_single_mask(
+            conn=conn,
+            grid_id="g1",
+            bounds=(10.0, 50.0, 10.01, 50.01),
+            crs=CRS.from_epsg(4326),
+            boundaries_path=fields_path,
+            boundary_lines_path=lines_path,
+            boundaries_geom_col="geometry",
+            boundary_lines_geom_col="geometry",
+            output_path=out,
+            mask_type=MaskType.SEMANTIC_2_CLASS,
+            resolution=10.0,
+        )
+
+        with rasterio.open(out) as src:
+            assert src.profile["tiled"] is True
+            assert src.profile["compress"] == "deflate"
+            assert src.dtypes[0] == "uint8"
+
+    def test_decode_distance_keeps_tags_and_stats(self, tmp_path: Path) -> None:
+        import duckdb
+        import rasterio
+        from rasterio.crs import CRS
+
+        from ftw_dataset_tools.api.geo import ensure_spatial_loaded
+        from ftw_dataset_tools.api.masks import MaskType, _create_single_mask
+        from ftw_dataset_tools.api.raster_stats import read_band_stats
+
+        fields_path, lines_path = self._write_inputs(tmp_path)
+        conn = duckdb.connect(":memory:")
+        ensure_spatial_loaded(conn)
+        out = tmp_path / "dist.tif"
+
+        _create_single_mask(
+            conn=conn,
+            grid_id="g1",
+            bounds=(10.0, 50.0, 10.01, 50.01),
+            crs=CRS.from_epsg(4326),
+            boundaries_path=fields_path,
+            boundary_lines_path=lines_path,
+            boundaries_geom_col="geometry",
+            boundary_lines_geom_col="geometry",
+            output_path=out,
+            mask_type=MaskType.DECODE_DISTANCE,
+            resolution=10.0,
+        )
+
+        with rasterio.open(out) as src:
+            assert "decode_distance_max_px" in src.tags()
+            assert src.dtypes[0] == "float32"
+        stats = read_band_stats(out, 1)
+        assert stats is not None
+        assert 0.0 <= stats.minimum <= stats.maximum <= 1.0

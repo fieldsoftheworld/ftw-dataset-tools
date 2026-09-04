@@ -121,6 +121,35 @@ Child items reference the source Sentinel-2 scene and contain remote asset links
 }
 ```
 
+## Asset Metadata
+
+Every asset that points at a file ftwd itself writes (masks, clipped imagery, thumbnails,
+parquet outputs) carries `type`, at least one role, and `file:size`
+([file extension](https://github.com/stac-extensions/file)). Assets that reference remote
+source scenes (the Sentinel-2 band assets on child items) are carried through as provided
+by the upstream catalog. `file:checksum` (multihash sha2-256) is added when
+`stages.stac.checksums: true`; it is off by default because it is slow on large datasets.
+
+Raster assets (masks and clipped imagery) carry `raster:bands`
+([raster extension](https://github.com/stac-extensions/raster)) with `data_type`,
+`nodata` when set, `spatial_resolution`, and `statistics` (minimum, maximum, mean,
+stddev, and valid_percent when nodata is set). The same statistics are embedded in the
+COG as GDAL `STATISTICS_*` band tags, never in an `.aux.xml` sidecar.
+
+Semantic mask assets add `classification:classes`
+([classification extension](https://github.com/stac-extensions/classification)):
+
+| Mask | Classes |
+|------|---------|
+| `semantic_2class_mask` | 0 background, 1 field (background is 3 when `presence_only` is set) |
+| `semantic_3class_mask` | 0 background, 1 field, 2 boundary |
+| `instance_mask` | no class list; background (0, or 3 for presence-only) marks non-field pixels, other values are instance ids |
+| `decode_boundary_mask` | 0 background, 1 boundary |
+| `decode_distance_mask` | no class list; float32 normalized distance in [0, 1], with a `decode_distance_max_px` dataset tag |
+
+The `items` asset on the chips collection is the stac-geoparquet mirror of the items,
+with media type `application/vnd.apache.parquet` and role `collection-mirror`.
+
 ## Link Relations
 
 | Relation | Description |

@@ -235,6 +235,15 @@ class MasksConfig:
 
 
 @dataclass
+class StacConfig:
+    """Settings for the STAC generation stage."""
+
+    # Compute file:checksum (multihash sha256) for every asset. Optional in
+    # Portolan and slow on tens of thousands of COGs, so off by default.
+    checksums: bool = False
+
+
+@dataclass
 class SelectImagesConfig:
     """Settings for the imagery selection stage."""
 
@@ -257,13 +266,14 @@ class DownloadImagesConfig:
 
 @dataclass
 class StagesConfig:
-    """Per-stage settings. Stages with no options (boundaries, stac) still run."""
+    """Per-stage settings. Stages with no options (boundaries) still run."""
 
     chips: ChipsConfig = field(default_factory=ChipsConfig)
     splits: SplitsConfig = field(default_factory=SplitsConfig)
     masks: MasksConfig = field(default_factory=MasksConfig)
     select_images: SelectImagesConfig = field(default_factory=SelectImagesConfig)
     download_images: DownloadImagesConfig = field(default_factory=DownloadImagesConfig)
+    stac: StacConfig = field(default_factory=StacConfig)
 
 
 @dataclass
@@ -508,6 +518,7 @@ _STAGE_TYPES: dict[str, type] = {
     "masks": MasksConfig,
     "select_images": SelectImagesConfig,
     "download_images": DownloadImagesConfig,
+    "stac": StacConfig,
 }
 
 

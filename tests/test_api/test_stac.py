@@ -4,6 +4,30 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 
+def _write_mask(path: Path, values: list[list[int]], dtype: str = "uint8") -> None:
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_bounds
+
+    from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
+
+    data = np.array(values, dtype=dtype)
+    with rasterio.open(
+        path,
+        "w",
+        driver="COG",
+        width=data.shape[1],
+        height=data.shape[0],
+        count=1,
+        dtype=dtype,
+        crs="EPSG:4326",
+        transform=from_bounds(0, 0, 1, 1, data.shape[1], data.shape[0]),
+        compress="deflate",
+    ) as dst:
+        dst.write(data, 1)
+        embed_band_stats(dst, 1, compute_band_stats(data))
+
+
 class TestChipInfoWithYear:
     """Tests for ChipInfo year-based naming."""
 
@@ -60,9 +84,9 @@ class TestChipItemAssetHrefs:
         chip_dir.mkdir(parents=True)
 
         # Create dummy mask files with NEW naming convention (no dataset prefix)
-        (chip_dir / "grid_001_instance.tif").touch()
-        (chip_dir / "grid_001_semantic_2_class.tif").touch()
-        (chip_dir / "grid_001_semantic_3_class.tif").touch()
+        _write_mask(chip_dir / "grid_001_instance.tif", [[0, 1], [1, 0]], dtype="uint32")
+        _write_mask(chip_dir / "grid_001_semantic_2_class.tif", [[0, 1], [1, 0]])
+        _write_mask(chip_dir / "grid_001_semantic_3_class.tif", [[0, 1], [2, 0]])
 
         chip_info = ChipInfo(
             grid_id="grid_001",
@@ -95,9 +119,13 @@ class TestChipItemAssetHrefs:
 
         chip_dir = tmp_path / "chips" / "grid_001"
         chip_dir.mkdir(parents=True)
-        (chip_dir / "grid_001_semantic_2_class.tif").touch()
-        (chip_dir / "grid_001_decode_boundary.tif").touch()
-        (chip_dir / "grid_001_decode_distance.tif").touch()
+        _write_mask(chip_dir / "grid_001_semantic_2_class.tif", [[0, 1], [1, 0]])
+        _write_mask(chip_dir / "grid_001_decode_boundary.tif", [[0, 1], [1, 0]])
+        _write_mask(
+            chip_dir / "grid_001_decode_distance.tif",
+            [[0.0, 0.5], [1.0, 0.0]],
+            dtype="float32",
+        )
 
         item = _create_chip_item(
             chip_info=ChipInfo(
@@ -130,7 +158,7 @@ class TestChipItemAssetHrefs:
 
         chip_dir = tmp_path / "chips" / "grid_001"
         chip_dir.mkdir(parents=True)
-        (chip_dir / "grid_001_semantic_2_class.tif").touch()
+        _write_mask(chip_dir / "grid_001_semantic_2_class.tif", [[0, 1], [1, 0]])
 
         item = _create_chip_item(
             chip_info=ChipInfo(
@@ -161,8 +189,15 @@ class TestChipItemAssetHrefs:
         semantic_2class_dir.mkdir(parents=True)
 
         # Create dummy mask files with legacy naming convention (with dataset prefix)
-        (instance_dir / "test_dataset_grid_001_instance.tif").touch()
-        (semantic_2class_dir / "test_dataset_grid_001_semantic_2_class.tif").touch()
+        _write_mask(
+            instance_dir / "test_dataset_grid_001_instance.tif",
+            [[0, 1], [1, 0]],
+            dtype="uint32",
+        )
+        _write_mask(
+            semantic_2class_dir / "test_dataset_grid_001_semantic_2_class.tif",
+            [[0, 1], [1, 0]],
+        )
 
         chip_info = ChipInfo(
             grid_id="grid_001",
@@ -237,8 +272,8 @@ class TestChipItemAssetHrefs:
         chip_dir.mkdir(parents=True)
 
         # Create dummy mask files with year in filename
-        (chip_dir / "grid_001_2024_instance.tif").touch()
-        (chip_dir / "grid_001_2024_semantic_2_class.tif").touch()
+        _write_mask(chip_dir / "grid_001_2024_instance.tif", [[0, 1], [1, 0]], dtype="uint32")
+        _write_mask(chip_dir / "grid_001_2024_semantic_2_class.tif", [[0, 1], [1, 0]])
 
         chip_info = ChipInfo(
             grid_id="grid_001",
@@ -280,3 +315,162 @@ class TestGenerateStacCatalogSignature:
 
         sig = inspect.signature(generate_stac_catalog)
         assert "chips_base_dir" in sig.parameters
+
+
+class TestChipItemAssetMetadata:
+    def _chip_item(self, tmp_path: Path, checksums: bool = False):
+        from ftw_dataset_tools.api.stac import ChipInfo, _create_chip_item
+
+        chip_dir = tmp_path / "ftw-1"
+        chip_dir.mkdir()
+        _write_mask(chip_dir / "ftw-1_semantic_3_class.tif", [[0, 1], [2, 0]])
+        _write_mask(chip_dir / "ftw-1_instance.tif", [[0, 4], [4, 0]], dtype="uint32")
+        _write_mask(chip_dir / "ftw-1_decode_boundary.tif", [[0, 1], [1, 0]])
+        _write_mask(
+            chip_dir / "ftw-1_decode_distance.tif",
+            [[0.0, 0.5], [1.0, 0.0]],
+            dtype="float32",
+        )
+
+        chip_info = ChipInfo(
+            grid_id="ftw-1",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+        )
+        return _create_chip_item(
+            chip_info=chip_info,
+            field_dataset="ds",
+            temporal_extent=(datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 12, 31, tzinfo=UTC)),
+            chip_dir=chip_dir,
+            checksums=checksums,
+        )
+
+    def test_mask_assets_have_size_type_roles_and_bands(self, tmp_path: Path) -> None:
+        item = self._chip_item(tmp_path)
+        assert item is not None
+
+        semantic = item.assets["semantic_3class_mask"]
+        assert semantic.media_type == "image/tiff; application=geotiff; profile=cloud-optimized"
+        assert semantic.roles == ["labels"]
+        assert semantic.extra_fields["file:size"] > 0
+        assert "file:checksum" not in semantic.extra_fields
+        band = semantic.extra_fields["raster:bands"][0]
+        assert band["data_type"] == "uint8"
+        assert band["statistics"]["maximum"] == 2
+        assert [c["value"] for c in band["classification:classes"]] == [0, 1, 2]
+
+        instance = item.assets["instance_mask"]
+        iband = instance.extra_fields["raster:bands"][0]
+        assert iband["data_type"] == "uint32"
+        assert "classification:classes" not in iband
+
+    def test_checksums_when_enabled(self, tmp_path: Path) -> None:
+        item = self._chip_item(tmp_path, checksums=True)
+        assert item is not None
+
+        checksum = item.assets["semantic_3class_mask"].extra_fields["file:checksum"]
+        assert checksum.startswith("1220")
+        assert len(checksum) == 4 + 64
+
+    def test_extensions_registered_on_item(self, tmp_path: Path) -> None:
+        item = self._chip_item(tmp_path)
+        assert item is not None
+
+        assert "https://stac-extensions.github.io/file/v2.1.0/schema.json" in item.stac_extensions
+        assert "https://stac-extensions.github.io/raster/v1.1.0/schema.json" in item.stac_extensions
+        assert (
+            "https://stac-extensions.github.io/classification/v2.0.0/schema.json"
+            in item.stac_extensions
+        )
+
+    def test_decode_assets_classified_or_described(self, tmp_path: Path) -> None:
+        item = self._chip_item(tmp_path)
+        assert item is not None
+
+        boundary = item.assets["decode_boundary_mask"].extra_fields["raster:bands"][0]
+        assert [c["name"] for c in boundary["classification:classes"]] == ["background", "boundary"]
+
+        distance = item.assets["decode_distance_mask"].extra_fields["raster:bands"][0]
+        assert distance["data_type"] == "float32"
+        assert "classification:classes" not in distance
+        assert "decode_distance_max_px" in distance["description"]
+
+
+class TestCollectionAssetMetadata:
+    def _build_catalog(self, tmp_path: Path, checksums: bool = False):
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.stac import generate_stac_catalog
+
+        fields = gpd.GeoDataFrame(
+            {"id": [1]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        )
+        fields_path = tmp_path / "ds_fields.parquet"
+        fields.to_parquet(fields_path)
+        lines_path = tmp_path / "ds_boundary_lines.parquet"
+        fields.to_parquet(lines_path)
+        chips = gpd.GeoDataFrame(
+            {"id": ["ftw-1"], "field_coverage_pct": [50.0]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        )
+        chips_path = tmp_path / "ds_chips.parquet"
+        chips.to_parquet(chips_path)
+
+        chips_base = tmp_path / "ds-chips"
+        chip_dir = chips_base / "ftw-1_2024"
+        chip_dir.mkdir(parents=True)
+        _write_mask(chip_dir / "ftw-1_2024_semantic_2_class.tif", [[0, 1], [1, 0]])
+
+        return generate_stac_catalog(
+            output_dir=tmp_path,
+            field_dataset="ds",
+            fields_file=fields_path,
+            chips_file=chips_path,
+            boundary_lines_file=lines_path,
+            chips_base_dir=chips_base,
+            year=2024,
+            checksums=checksums,
+        )
+
+    def test_parquet_and_items_assets(self, tmp_path: Path) -> None:
+        result = self._build_catalog(tmp_path)
+        fields_path = tmp_path / "ds_fields.parquet"
+        chips_path = tmp_path / "ds_chips.parquet"
+
+        import pystac
+
+        source = pystac.Collection.from_file(str(result.source_collection_path))
+        assert source.assets["fields"].extra_fields["file:size"] == fields_path.stat().st_size
+        assert source.assets["fields"].media_type == "application/vnd.apache.parquet"
+
+        chips_coll = pystac.Collection.from_file(str(result.chips_collection_path))
+        items_asset = chips_coll.assets["items"]
+        assert items_asset.media_type == "application/vnd.apache.parquet"
+        assert items_asset.roles == ["collection-mirror"]
+        assert items_asset.extra_fields["file:size"] == result.items_parquet_path.stat().st_size
+        assert chips_coll.assets["chips"].extra_fields["file:size"] == chips_path.stat().st_size
+
+    def test_collections_have_no_self_link(self, tmp_path: Path) -> None:
+        import json
+
+        result = self._build_catalog(tmp_path)
+        for path in (result.chips_collection_path, result.source_collection_path):
+            rels = [link["rel"] for link in json.loads(path.read_text())["links"]]
+            assert "self" not in rels
+
+    def test_checksums_on_collection_and_items_assets(self, tmp_path: Path) -> None:
+        import pystac
+
+        result = self._build_catalog(tmp_path, checksums=True)
+
+        source = pystac.Collection.from_file(str(result.source_collection_path))
+        assert source.assets["fields"].extra_fields["file:checksum"].startswith("1220")
+        assert source.assets["boundary_lines"].extra_fields["file:checksum"].startswith("1220")
+
+        chips_coll = pystac.Collection.from_file(str(result.chips_collection_path))
+        assert chips_coll.assets["chips"].extra_fields["file:checksum"].startswith("1220")
+        assert chips_coll.assets["items"].extra_fields["file:checksum"].startswith("1220")

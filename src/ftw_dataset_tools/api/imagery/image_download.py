@@ -15,6 +15,7 @@ from rasterio.transform import from_bounds as transform_from_bounds
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import Resampling
 
+from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
 from ftw_dataset_tools.api.imagery.settings import BANDS_OF_INTEREST
 from ftw_dataset_tools.api.imagery.thumbnails import (
     ThumbnailError,
@@ -22,6 +23,7 @@ from ftw_dataset_tools.api.imagery.thumbnails import (
     generate_thumbnail,
     has_rgb_bands,
 )
+from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 from ftw_dataset_tools.api.stac_items import update_parent_item
 
 if TYPE_CHECKING:
@@ -223,8 +225,16 @@ def write_cog(
     stacked: np.ndarray,
     found_bands: list[str],
     profile: dict,
+    nodata: float | int | None = None,
 ) -> str | None:
-    """Write stacked imagery as a COG and set band descriptions."""
+    """Write stacked imagery as a COG with band descriptions and embedded statistics.
+
+    Statistics are embedded as GDAL band tags on the COG itself, never a sidecar
+    file. Checksums are not computed here for imagery in this PR; they are added
+    in the layout PR when item saving is centralized.
+
+    Returns an error message on failure, else None.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -232,6 +242,8 @@ def write_cog(
             destination_dataset.write(stacked)
             for band_index, band_name in enumerate(found_bands, start=1):
                 destination_dataset.set_band_description(band_index, band_name)
+                stats = compute_band_stats(stacked[band_index - 1], nodata=nodata)
+                embed_band_stats(destination_dataset, band_index, stats)
     except Exception as error:
         return f"Failed to write output: {error}"
 
@@ -407,7 +419,9 @@ def download_and_clip_scene(
 
     log(f"Writing to {output_path}...")
 
-    write_error = write_cog(output_path, stacked, found_bands, profile)
+    write_error = write_cog(
+        output_path, stacked, found_bands, profile, nodata=profile.get("nodata")
+    )
     if write_error is not None:
         return DownloadResult(
             output_path=output_path,
@@ -473,6 +487,10 @@ def process_downloaded_scene(
     This function handles all post-download processing that should be identical
     between `download-images` command and `create-dataset --download-images`.
 
+    The `image` and `thumbnail` assets get `file:size` (and `raster:bands` for
+    `image`). Checksums are not computed for imagery in this PR; they are added
+    in the layout PR when item saving is centralized.
+
     Args:
         item: Child STAC item to update
         item_path: Path to the child item JSON file
@@ -491,12 +509,17 @@ def process_downloaded_scene(
     # Replace remote band assets with single local "image" asset
     for band in band_list:
         item.assets.pop(band, None)
-    item.assets["image"] = pystac.Asset(
-        href=f"./{output_filename}",
-        media_type="image/tiff; application=geotiff; profile=cloud-optimized",
-        title=f"Clipped {len(band_list)}-band image ({','.join(band_list)})",
-        roles=["data"],
+    item.add_asset(
+        "image",
+        pystac.Asset(
+            href=f"./{output_filename}",
+            media_type="image/tiff; application=geotiff; profile=cloud-optimized",
+            title=f"Clipped {len(band_list)}-band image ({','.join(band_list)})",
+            roles=["data"],
+        ),
     )
+    add_file_info(item.assets["image"], output_path)
+    add_raster_bands(item.assets["image"], output_path)
 
     # Generate thumbnail if RGB bands available
     if generate_thumbnails and has_rgb_bands(band_list):
@@ -504,12 +527,16 @@ def process_downloaded_scene(
             thumbnail_filename = output_filename.replace(".tif", ".jpg")
             thumbnail_path = output_path.parent / thumbnail_filename
             generate_thumbnail(output_path, thumbnail_path)
-            item.assets["thumbnail"] = pystac.Asset(
-                href=f"./{thumbnail_filename}",
-                media_type=pystac.MediaType.JPEG,
-                title="JPEG preview",
-                roles=["thumbnail"],
+            item.add_asset(
+                "thumbnail",
+                pystac.Asset(
+                    href=f"./{thumbnail_filename}",
+                    media_type=pystac.MediaType.JPEG,
+                    title="JPEG preview",
+                    roles=["thumbnail"],
+                ),
             )
+            add_file_info(item.assets["thumbnail"], thumbnail_path)
             result.thumbnail_path = thumbnail_path
         except ThumbnailError:
             pass
