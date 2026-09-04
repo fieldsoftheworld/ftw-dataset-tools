@@ -21,6 +21,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import duckdb
 
@@ -37,11 +38,18 @@ from ftw_dataset_tools.api.imagery import (
     select_imagery_for_catalog,
 )
 from ftw_dataset_tools.api.masks import MaskType, get_item_id, get_mgrs_square
+from ftw_dataset_tools.api.source import (
+    describe_local_source,
+    fetch_source,
+    installed_git_commit,
+    is_url,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ftw_dataset_tools.api.config import DatasetConfig
+    from ftw_dataset_tools.api.source import SourceRecord
 
 # Ordered list of all pipeline stages.
 STAGE_ORDER = [
@@ -76,6 +84,7 @@ class PipelineContext:
     effective_year: int | None
     has_temporal: bool
     provenance: dict[str, Any] | None = None
+    source: SourceRecord | None = None
     on_progress: Callable[[str], None] | None = None
     on_mask_progress: Callable[[int, int], None] | None = None
     on_mask_start: Callable[[int, int], None] | None = None
@@ -129,41 +138,85 @@ def build_context(
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int], None] | None = None,
     provenance: dict[str, Any] | None = None,
+    resolve_source: bool = True,
 ) -> PipelineContext:
     """Resolve paths, detect temporal extent, and prepare the output directory.
 
-    Raises:
-        FileNotFoundError: If the input fields file does not exist.
-    """
-    fields_path = Path(config.fields_file).resolve()
-    if not fields_path.exists():
-        raise FileNotFoundError(f"Fields file not found: {fields_path}")
+    A URL ``fields_file`` is fetched into ``config.stages.fetch.cache_dir`` (or
+    reused from a prior fetch) when ``resolve_source`` is True; a local path is
+    hashed for provenance instead. ``resolve_source=False`` (used by
+    ``--dry-run``) skips both the fetch and the existence check, leaving
+    ``fields_input`` as the unresolved URL/path.
 
-    field_dataset = config.name or fields_path.stem
-    out_dir = (
-        Path(config.output_dir).resolve()
-        if config.output_dir is not None
-        else Path(f"{fields_path.stem}-dataset").resolve()
-    )
+    Raises:
+        FileNotFoundError: If a local input fields file does not exist.
+    """
 
     def log(msg: str) -> None:
         if on_progress:
             on_progress(msg)
 
-    # Resolve the calendar year (year arg wins; else derive from datetime column).
-    log("Checking temporal extent availability...")
-    datetime_col = stac.detect_datetime_column(fields_path)
-    effective_year = config.year
-    if datetime_col:
-        log(f"Found '{datetime_col}' column for temporal extent")
-        if effective_year is None:
-            effective_year = stac.get_year_from_datetime_column(fields_path, datetime_col)
-            if effective_year:
-                log(f"Using year {effective_year} from {datetime_col} for chip naming")
-    elif config.year is not None:
-        log(f"Using year {config.year} for temporal extent")
+    source: SourceRecord | None = None
+    url_input = is_url(config.fields_file)
 
-    has_temporal = datetime_col is not None or config.year is not None
+    if url_input:
+        name_stem = Path(urlsplit(config.fields_file).path).stem
+        if resolve_source:
+            fetch_cfg = config.stages.fetch
+            log(f"Fetching source {config.fields_file}...")
+            source = fetch_source(
+                config.fields_file,
+                Path(fetch_cfg.cache_dir).expanduser(),
+                refresh=fetch_cfg.refresh,
+            )
+            fields_path = source.local_path
+            log(
+                "Using cached copy"
+                if source.fetched_at is None
+                else f"Fetched {source.size:,} bytes"
+            )
+        else:
+            # Path() collapses "https://" to "https:/", so keep the raw URL
+            # string rather than round-tripping it through pathlib.
+            fields_path = config.fields_file
+    else:
+        fields_path = Path(config.fields_file).resolve()
+        if not fields_path.exists():
+            raise FileNotFoundError(f"Fields file not found: {fields_path}")
+        name_stem = fields_path.stem
+        if resolve_source:
+            source = describe_local_source(fields_path)
+
+    field_dataset = config.name or name_stem
+    out_dir = (
+        Path(config.output_dir).resolve()
+        if config.output_dir is not None
+        else Path(f"{name_stem}-dataset").resolve()
+    )
+
+    if provenance is not None and source is not None:
+        provenance["source"] = source.to_dict(config.source_via)
+        if provenance.get("ftwd_git_commit") is None:
+            provenance["ftwd_git_commit"] = installed_git_commit()
+
+    # Resolve the calendar year (year arg wins; else derive from datetime column).
+    # Skipped for an unresolved URL (dry run) so we never open a remote file.
+    if resolve_source or not url_input:
+        log("Checking temporal extent availability...")
+        datetime_col = stac.detect_datetime_column(fields_path)
+        effective_year = config.year
+        if datetime_col:
+            log(f"Found '{datetime_col}' column for temporal extent")
+            if effective_year is None:
+                effective_year = stac.get_year_from_datetime_column(fields_path, datetime_col)
+                if effective_year:
+                    log(f"Using year {effective_year} from {datetime_col} for chip naming")
+        elif config.year is not None:
+            log(f"Using year {config.year} for temporal extent")
+        has_temporal = datetime_col is not None or config.year is not None
+    else:
+        effective_year = config.year
+        has_temporal = config.year is not None
 
     ctx = PipelineContext(
         config=config,
@@ -173,6 +226,7 @@ def build_context(
         effective_year=effective_year,
         has_temporal=has_temporal,
         provenance=provenance,
+        source=source,
         on_progress=on_progress,
         on_mask_progress=on_mask_progress,
         on_mask_start=on_mask_start,

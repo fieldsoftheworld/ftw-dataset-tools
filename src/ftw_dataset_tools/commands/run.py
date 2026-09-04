@@ -130,6 +130,9 @@ def run_cmd(
     if dry_run:
         import yaml
 
+        click.echo(f"Source: {config.fields_file}")
+        if config.source_via:
+            click.echo(f"  via: {config.source_via}")
         click.echo(click.style("Config (resolved):", fg="cyan", bold=True))
         click.echo(yaml.safe_dump(provenance["config"], sort_keys=False))
         click.echo(click.style("Stages that would run:", fg="cyan", bold=True))

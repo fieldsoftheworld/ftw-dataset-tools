@@ -85,3 +85,30 @@ class TestRunCommand:
         assert result.exit_code == 0, result.output
         assert (out / "ds_fields.parquet").exists()
         assert (out / "ftwd-config.resolved.yaml").exists()
+
+
+class TestRunDryRunRemote:
+    def test_dry_run_url_config_reports_source_without_fetching(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from ftw_dataset_tools.api import pipeline
+        from ftw_dataset_tools.cli import cli
+
+        def boom(*_args, **_kwargs):
+            raise AssertionError("fetch_source must not be called")
+
+        monkeypatch.setattr(pipeline, "fetch_source", boom)
+        cfg = tmp_path / "c.yaml"
+        cfg.write_text(
+            "fields_file: https://x/lu.parquet\n"
+            f"output_dir: {tmp_path / 'out'}\n"
+            "year: 2024\n"
+            "stages:\n"
+            "  splits:\n"
+            "    split_type: random-uniform\n"
+        )
+
+        result = CliRunner().invoke(cli, ["run", str(cfg), "--dry-run"])
+
+        assert result.exit_code == 0, result.output
+        assert "https://x/lu.parquet" in result.output
