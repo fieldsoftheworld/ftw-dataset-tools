@@ -1,8 +1,11 @@
 """Image selection orchestration for STAC catalogs.
 
 This module provides workflow functions for selecting imagery across all chips
-in a catalog. It is used by both the standalone `select-images` command and
-the `create-dataset` pipeline to ensure identical behavior.
+in a catalog. It is used by the `create-dataset` command and the `ftwd run`
+pipeline. The standalone `select-images` command still runs its own loop (it
+supports per-chip year extraction) but shares the same writer
+(`create_child_items_from_selection`) and skip predicate (`has_existing_scenes`),
+so selection output is identical across all three paths.
 """
 
 from __future__ import annotations
@@ -84,8 +87,8 @@ def select_imagery_for_catalog(
 ) -> SelectionWorkflowResult:
     """Select imagery for all chips in a catalog.
 
-    This is the core orchestration function used by both `select-images` command
-    and `create-dataset` pipeline.
+    This is the core orchestration function used by the `create-dataset`
+    command and the `ftwd run` pipeline.
 
     Args:
         catalog_dir: Path to the chips collection directory

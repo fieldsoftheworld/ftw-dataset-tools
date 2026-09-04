@@ -12,10 +12,9 @@ from tqdm import tqdm
 
 from ftw_dataset_tools.api import dataset, splits
 from ftw_dataset_tools.api.imagery import (
-    ImageryProgressBar,
     download_and_clip_scene,
     process_downloaded_scene,
-    select_scenes_for_chip,
+    select_imagery_for_catalog,
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 from ftw_dataset_tools.api.imagery.thumbnails import has_rgb_bands
@@ -141,6 +140,17 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     help="Days to add to buffer on each expansion.",
 )
 @click.option(
+    "--force-image-selection",
+    is_flag=True,
+    default=False,
+    help=(
+        "Re-select imagery for chips that already have selections. Note: re-running "
+        "create-dataset regenerates the STAC catalog, which clears prior selections, "
+        "so every chip is re-selected either way; to resume an interrupted selection "
+        "on an existing catalog, use select-images instead."
+    ),
+)
+@click.option(
     "--mask-types",
     type=str,
     default="instance,semantic_2_class,semantic_3_class",
@@ -188,6 +198,7 @@ def create_dataset_cmd(
     buffer_days: int,
     num_buffer_expansions: int,
     buffer_expansion_size: int,
+    force_image_selection: bool,
     mask_types: str,
     presence_only: bool,
     drop_border_chips: bool,
@@ -389,8 +400,12 @@ def create_dataset_cmd(
             chips_collection_path = Path(result.stac_result.chips_collection_path)
             catalog_dir = chips_collection_path.parent
 
-            # Run image selection with full parameters
-            image_stats = _run_image_selection(
+            # Shared workflow, also used by `ftwd run`. It records
+            # ftw:planting/ftw:harvest links on each parent chip, so a later
+            # `select-images` run resumes instead of starting over. (Re-running
+            # create-dataset itself regenerates the catalog and clears those
+            # links before this point, so selection here always starts fresh.)
+            selection = select_imagery_for_catalog(
                 catalog_dir=catalog_dir,
                 year=effective_year,
                 cloud_cover_chip=cloud_cover_chip,
@@ -398,12 +413,13 @@ def create_dataset_cmd(
                 buffer_days=buffer_days,
                 num_buffer_expansions=num_buffer_expansions,
                 buffer_expansion_size=buffer_expansion_size,
+                force=force_image_selection,
             )
 
-            click.echo(f"  Selected: {image_stats['successful']}")
-            click.echo(f"  Skipped: {image_stats['skipped']}")
-            if image_stats["failed"]:
-                click.echo(click.style(f"  Failed: {image_stats['failed']}", fg="yellow"))
+            click.echo(f"  Selected: {selection.successful}")
+            click.echo(f"  Skipped: {selection.skipped}")
+            if selection.failed:
+                click.echo(click.style(f"  Failed: {selection.failed}", fg="yellow"))
 
             # Download if requested
             if download_images:
@@ -432,161 +448,6 @@ def create_dataset_cmd(
     except ValueError as e:
         click.echo(click.style(f"\nError: {e}", fg="red"))
         raise SystemExit(1) from e
-
-
-def _run_image_selection(
-    catalog_dir: Path,
-    year: int,
-    cloud_cover_chip: float,
-    nodata_max: float,
-    buffer_days: int,
-    num_buffer_expansions: int = 3,
-    buffer_expansion_size: int = 14,
-) -> dict:
-    """Run image selection for all chips in a catalog."""
-    # Find all chip items (parent items, not child S2 items)
-    chip_items = []
-    for subdir in catalog_dir.iterdir():
-        if subdir.is_dir() and not subdir.name.startswith("."):
-            for json_file in subdir.glob("*.json"):
-                # Skip child items
-                if "_planting_s2" in json_file.name or "_harvest_s2" in json_file.name:
-                    continue
-                try:
-                    item = pystac.Item.from_file(str(json_file))
-                    chip_items.append((item, json_file))
-                except Exception:
-                    pass
-
-    # Process chips with unified progress display
-    with ImageryProgressBar(total=len(chip_items), leave=False, verbose=False) as progress:
-        for item, item_path in chip_items:
-            progress.start_chip(item.id)
-            bbox = tuple(item.bbox) if item.bbox else None
-
-            if bbox is None:
-                progress.mark_skipped("No bbox in item")
-                continue
-
-            try:
-                result = select_scenes_for_chip(
-                    chip_id=item.id,
-                    bbox=bbox,
-                    year=year,
-                    cloud_cover_chip=cloud_cover_chip,
-                    nodata_max=nodata_max,
-                    buffer_days=buffer_days,
-                    num_buffer_expansions=num_buffer_expansions,
-                    buffer_expansion_size=buffer_expansion_size,
-                    on_progress=progress.on_progress,
-                )
-
-                if result.success:
-                    # Create child STAC items
-                    _create_child_items_inline(
-                        chip_dir=item_path.parent,
-                        parent_item=item,
-                        result=result,
-                        year=year,
-                        cloud_cover_chip=cloud_cover_chip,
-                        buffer_days=buffer_days,
-                        num_buffer_expansions=num_buffer_expansions,
-                        buffer_expansion_size=buffer_expansion_size,
-                    )
-                    progress.mark_success(result)
-                else:
-                    progress.mark_skipped(result.skipped_reason or "No cloud-free scenes")
-
-            except Exception as e:
-                progress.mark_failed(str(e))
-
-    return progress.get_stats_dict()
-
-
-def _create_child_items_inline(
-    chip_dir: Path,
-    parent_item: pystac.Item,
-    result,
-    year: int,
-    cloud_cover_chip: float,
-    buffer_days: int,
-    num_buffer_expansions: int = 3,
-    buffer_expansion_size: int = 14,
-) -> None:
-    """Create child STAC items for planting and harvest scenes (inline version)."""
-    # Ensure parent has self_href set (required for saving with relative links)
-    parent_path = chip_dir / f"{parent_item.id}.json"
-    if parent_item.get_self_href() is None:
-        parent_item.set_self_href(str(parent_path))
-
-    # Update parent item with FTW properties
-    parent_item.properties["ftw:calendar_year"] = year
-    parent_item.properties["ftw:planting_day"] = result.crop_calendar.planting_day
-    parent_item.properties["ftw:harvest_day"] = result.crop_calendar.harvest_day
-    parent_item.properties["ftw:stac_host"] = "earthsearch"  # Always earthsearch
-    parent_item.properties["ftw:cloud_cover_chip_threshold"] = cloud_cover_chip
-    parent_item.properties["ftw:buffer_days"] = buffer_days
-    parent_item.properties["ftw:num_buffer_expansions"] = num_buffer_expansions
-    parent_item.properties["ftw:buffer_expansion_size"] = buffer_expansion_size
-
-    # Set temporal extent to the full calendar year
-    # This represents the crop cycle year, not just the scene acquisition dates
-    from datetime import UTC, datetime
-
-    parent_item.properties["start_datetime"] = datetime(year, 1, 1, 0, 0, 0, tzinfo=UTC).isoformat()
-    parent_item.properties["end_datetime"] = datetime(
-        year, 12, 31, 23, 59, 59, tzinfo=UTC
-    ).isoformat()
-
-    # Save updated parent (parent_path already set at function start)
-    parent_item.save_object(dest_href=str(parent_path))
-
-    # Create child items for each season
-    for scene, season in [(result.planting_scene, "planting"), (result.harvest_scene, "harvest")]:
-        if scene:
-            child_id = f"{parent_item.id}_{season}_s2"
-            child_path = chip_dir / f"{child_id}.json"
-            child_item = pystac.Item(
-                id=child_id,
-                geometry=parent_item.geometry,
-                bbox=parent_item.bbox,
-                datetime=scene.datetime,
-                properties={
-                    "ftw:season": season,
-                    "ftw:source": "sentinel-2",
-                    "ftw:calendar_year": year,
-                },
-            )
-
-            # Set self_href before adding links (required for relative link resolution)
-            child_item.set_self_href(str(child_path))
-
-            # Copy relevant band assets
-            for band in ["red", "green", "blue", "nir", "scl", "visual"]:
-                if band in scene.item.assets:
-                    child_item.assets[band] = scene.item.assets[band].clone()
-
-            if "cloud" in scene.item.assets:
-                child_item.assets["cloud_probability"] = scene.item.assets["cloud"].clone()
-
-            # Add links
-            child_item.add_link(
-                pystac.Link(
-                    rel="derived_from",
-                    target=f"./{parent_item.id}.json",
-                    media_type="application/json",
-                )
-            )
-
-            if scene.stac_url:
-                child_item.add_link(
-                    pystac.Link(rel="via", target=scene.stac_url, media_type="application/json")
-                )
-
-            if scene.cloud_cover < 0.1:
-                child_item.properties["eo:cloud_cover"] = scene.cloud_cover
-
-            child_item.save_object(dest_href=str(child_path))
 
 
 def _run_image_download(

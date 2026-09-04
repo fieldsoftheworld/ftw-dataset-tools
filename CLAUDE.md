@@ -115,10 +115,10 @@ raise BadParameter("Invalid value for --option")
 
 The `create-dataset` command is a pipeline that combines multiple standalone operations. Some functionality exists in both places:
 
-| Standalone Command | `create-dataset` Function |
-|--------------------|---------------------------|
-| `download-images`  | `_run_image_download()`   |
-| `select-images`    | `_run_image_selection()`  |
+| Standalone Command | `create-dataset` Function | Shared `api/` function |
+|--------------------|---------------------------|------------------------|
+| `download-images`  | `_run_image_download()`   | (not yet shared; `ftwd run` uses `download_imagery_for_catalog()`) |
+| `select-images`    | calls `select_imagery_for_catalog()` | `select-images` keeps its own loop (per-chip years) but shares `create_child_items_from_selection()` / `has_existing_scenes()` |
 
 **IMPORTANT:** When adding or modifying functionality in these commands:
 
