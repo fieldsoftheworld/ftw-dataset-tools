@@ -11,14 +11,33 @@ from typing import TYPE_CHECKING
 
 import duckdb
 import pystac
-from pystac import Asset, Catalog, Collection, Extent, Item, SpatialExtent, TemporalExtent
+from pystac import (
+    Asset,
+    Catalog,
+    Collection,
+    Extent,
+    Item,
+    Link,
+    Provider,
+    ProviderRole,
+    SpatialExtent,
+    TemporalExtent,
+)
+from pystac.extensions.version import VersionExtension
 
-from ftw_dataset_tools.api.assets import add_file_info, add_mask_classification, add_raster_bands
+from ftw_dataset_tools.api.assets import (
+    add_file_info,
+    add_mask_classification,
+    add_raster_bands,
+    add_table_columns,
+)
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded
 from ftw_dataset_tools.api.masks import MaskType
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from ftw_dataset_tools.api.config import DatasetConfig, MetadataConfig
 
 # STAC version
 STAC_VERSION = "1.0.0"
@@ -278,6 +297,72 @@ def _extract_chips_info(
         conn.close()
 
 
+def _updated_stamp(provenance: dict | None) -> str:
+    """ISO 8601 UTC 'updated' value: the build's generated_at, else now (trailing Z)."""
+    raw = (provenance or {}).get("generated_at")
+    stamp = datetime.fromisoformat(raw) if raw else datetime.now(UTC)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    return stamp.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _apply_collection_metadata(
+    collection: Collection,
+    metadata: MetadataConfig | None,
+    *,
+    updated: str,
+    title: str | None = None,
+    description: str | None = None,
+) -> None:
+    """Stamp config metadata, the version extension and 'updated' on a collection."""
+    collection.extra_fields["updated"] = updated
+    if metadata is None:
+        return
+    if title:
+        collection.title = title
+    if description:
+        collection.description = description
+    if metadata.license:
+        collection.license = metadata.license
+    if metadata.license_url:
+        collection.add_link(Link(rel="license", target=metadata.license_url, title="License"))
+    if metadata.keywords:
+        collection.keywords = list(metadata.keywords)
+    if metadata.providers:
+        collection.providers = [
+            Provider(name=p.name, roles=[ProviderRole(r) for r in p.roles], url=p.url)
+            for p in metadata.providers
+        ]
+    if metadata.version:
+        VersionExtension.ext(collection, add_if_missing=True).version = metadata.version
+
+
+def _collection_ftw_properties(config: DatasetConfig) -> dict:
+    """Build settings a consumer needs to interpret the chips, as ftw: fields."""
+    stages = config.stages
+    props: dict = {
+        "ftw:split_type": stages.splits.split_type,
+        "ftw:split_seed": stages.splits.random_seed,
+        "ftw:split_percents": list(stages.splits.split_percents),
+        "ftw:mask_types": list(stages.masks.mask_types),
+        "ftw:mask_resolution_m": stages.masks.resolution,
+        "ftw:presence_only": stages.masks.presence_only,
+        "ftw:min_coverage_pct": stages.chips.min_coverage,
+    }
+    if stages.select_images.enabled:
+        sel = stages.select_images
+        props.update(
+            {
+                "ftw:cloud_cover_chip_threshold": sel.cloud_cover_chip,
+                "ftw:nodata_max": sel.nodata_max,
+                "ftw:buffer_days": sel.buffer_days,
+                "ftw:num_buffer_expansions": sel.num_buffer_expansions,
+                "ftw:buffer_expansion_size": sel.buffer_expansion_size,
+            }
+        )
+    return props
+
+
 def _create_root_catalog(
     dataset_name: str,
     description: str | None = None,
@@ -349,6 +434,8 @@ def _create_source_collection(
 
     add_file_info(collection.assets["fields"], fields_file, checksum=checksums)
     add_file_info(collection.assets["boundary_lines"], boundary_lines_file, checksum=checksums)
+    add_table_columns(collection.assets["fields"], fields_file)
+    add_table_columns(collection.assets["boundary_lines"], boundary_lines_file)
 
     return collection
 
@@ -505,6 +592,7 @@ def _create_chips_collection(
         ),
     )
     add_file_info(collection.assets["chips"], chips_file, checksum=checksums)
+    add_table_columns(collection.assets["chips"], chips_file)
 
     # Add stac-geoparquet as collection asset (its size is set once items.parquet is written)
     collection.add_asset(
@@ -559,6 +647,7 @@ def generate_stac_catalog(
     on_progress: Callable[[str], None] | None = None,
     checksums: bool = False,
     background_class_value: int = 0,
+    config: DatasetConfig | None = None,
 ) -> STACGenerationResult:
     """
     Generate complete STAC static catalog from dataset outputs.
@@ -579,6 +668,8 @@ def generate_stac_catalog(
         on_progress: Optional callback for progress messages
         checksums: Compute file:checksum (multihash sha256) for every asset. Slow; default False.
         background_class_value: Pixel value used for background in masks (3 for presence-only).
+        config: Resolved dataset config; supplies metadata and the ftw: build properties
+            written on the collections.
 
     Returns:
         STACGenerationResult with paths to generated files
@@ -673,13 +764,32 @@ def generate_stac_catalog(
         checksums=checksums,
     )
 
+    metadata = config.metadata if config is not None else None
+    if metadata is None or not metadata.license:
+        log("Warning: no metadata.license; the collection is not Portolan-publishable without one")
+    updated = _updated_stamp(provenance)
+    base_title = metadata.title if metadata and metadata.title else field_dataset
+    _apply_collection_metadata(
+        chips_collection,
+        metadata,
+        updated=updated,
+        title=base_title,
+        description=metadata.description if metadata else None,
+    )
+    _apply_collection_metadata(
+        source_collection, metadata, updated=updated, title=f"{base_title} source fields"
+    )
+    if config is not None:
+        chips_collection.extra_fields.update(_collection_ftw_properties(config))
+    if provenance is not None:
+        chips_collection.extra_fields["ftw:config"] = provenance
+
     # Add collections to catalog
     catalog.add_child(source_collection)
     catalog.add_child(chips_collection)
 
-    # Get actual paths after normalization
+    # Deterministic output paths (pystac names directories after collection ids)
     catalog_path = output_dir / "catalog.json"
-    # pystac creates directories named after collection IDs
     source_collection_path = output_dir / f"{field_dataset}-source" / "collection.json"
     chips_collection_path = output_dir / f"{field_dataset}-chips" / "collection.json"
     items_parquet_path = output_dir / f"{field_dataset}-chips" / "items.parquet"
