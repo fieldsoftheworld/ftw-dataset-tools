@@ -7,6 +7,7 @@ registers the extension schema URIs on the owner.
 from __future__ import annotations
 
 import hashlib
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,6 +26,10 @@ if TYPE_CHECKING:
 
 # Multihash prefix for sha2-256: code 0x12, length 0x20 (32 bytes).
 _MULTIHASH_SHA256_PREFIX = "1220"
+
+# Matches the metres-per-degree factor used in masks._grid_raster_geometry to
+# convert a metre resolution into degrees for geographic-CRS grids.
+METRES_PER_DEGREE = 111000.0
 
 # (value, name, description) per classified mask kind. The background value is
 # substituted at call time ONLY for the semantic kinds: presence-only masks use
@@ -47,7 +52,10 @@ MASK_CLASSES: dict[str, list[tuple[int, str, str]]] = {
 
 # Mask kinds that are continuous or id-valued: described, never classified.
 MASK_DESCRIPTIONS: dict[str, str] = {
-    "instance": "Instance mask: 0 is background, other values are per-field instance ids",
+    "instance": (
+        "Instance mask: the background value (0, or 3 for presence-only labels) marks "
+        "non-field pixels; other values are per-field instance ids"
+    ),
     "decode_distance": (
         "DECODE normalized Euclidean distance to the nearest field boundary in [0, 1]; "
         "multiply by the decode_distance_max_px dataset tag to recover pixels"
@@ -75,8 +83,24 @@ def add_file_info(asset: pystac.Asset, path: Path, *, checksum: bool = False) ->
         ext.checksum = multihash_sha256(path)
 
 
-def _spatial_resolution(transform: rasterio.Affine) -> float:
-    return float(abs(transform.a))
+def _spatial_resolution(transform: rasterio.Affine, crs: rasterio.crs.CRS | None) -> float:
+    """Return the pixel size in metres, per the raster extension's ``spatial_resolution``.
+
+    The transform's pixel size is in CRS units, which is degrees for a geographic
+    CRS. Convert those to metres using the same factor as
+    ``masks._grid_raster_geometry`` uses to go the other way.
+    """
+    pixel_size = abs(transform.a)
+    if crs is not None and crs.is_geographic:
+        pixel_size *= METRES_PER_DEGREE
+    return round(pixel_size, 6)
+
+
+def _band_nodata(value: float | int | None) -> float | int | str | None:
+    """Return a JSON-safe nodata value, using the raster extension's ``"nan"`` string form."""
+    if isinstance(value, float) and math.isnan(value):
+        return "nan"
+    return value
 
 
 def add_raster_bands(asset: pystac.Asset, path: Path) -> None:
@@ -85,7 +109,7 @@ def add_raster_bands(asset: pystac.Asset, path: Path) -> None:
     with rasterio.open(path) as src:
         dtypes = list(src.dtypes)
         nodatas = list(src.nodatavals)
-        resolution = _spatial_resolution(src.transform)
+        resolution = _spatial_resolution(src.transform, src.crs)
         descriptions = list(src.descriptions)
 
     bands: list[RasterBand] = []
@@ -101,7 +125,7 @@ def add_raster_bands(asset: pystac.Asset, path: Path) -> None:
                 valid_percent=stats.valid_percent,
             )
         band = RasterBand.create(
-            nodata=nodatas[index - 1],
+            nodata=_band_nodata(nodatas[index - 1]),
             data_type=DataType(dtype),
             spatial_resolution=resolution,
             statistics=statistics,
