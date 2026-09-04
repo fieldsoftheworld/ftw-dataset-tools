@@ -47,7 +47,11 @@ def compute_band_stats(data: np.ndarray, nodata: float | int | None = None) -> B
         valid = values.reshape(-1)
         valid_percent: float | None = None
     else:
-        mask = values != nodata
+        # Handle NaN nodata: NaN != NaN is True, so use isnan for NaN values
+        if isinstance(nodata, float) and np.isnan(nodata):
+            mask = ~np.isnan(values)
+        else:
+            mask = values != nodata
         valid = values[mask]
         valid_percent = float(100.0 * valid.size / values.size) if values.size else 0.0
 

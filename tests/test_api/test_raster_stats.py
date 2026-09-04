@@ -43,6 +43,18 @@ class TestComputeBandStats:
         assert stats.mean == 0.0
         assert stats.stddev == 0.0
 
+    def test_nan_nodata_excluded(self) -> None:
+        from ftw_dataset_tools.api.raster_stats import compute_band_stats
+
+        data = np.array([[np.nan, 1.0], [2.0, np.nan]], dtype=np.float32)
+        stats = compute_band_stats(data, nodata=float("nan"))
+
+        assert stats.minimum == 1.0
+        assert stats.maximum == 2.0
+        assert stats.mean == 1.5
+        assert stats.valid_percent == 50.0
+        assert not np.isnan(stats.stddev)
+
 
 class TestEmbedAndRead:
     def _write(self, path: Path, data: np.ndarray, nodata: int | None = None) -> None:
