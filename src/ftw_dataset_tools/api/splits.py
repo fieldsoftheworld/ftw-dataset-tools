@@ -198,14 +198,18 @@ def _infer_grid_step(values: pd.Series) -> int:
     (e.g. 0, 2, 4, 6... for km_size=2), not as sequential integers. Block grouping
     must divide by this step size rather than by 1, or blocks end up lopsided.
 
-    Falls back to a step of 1 when the axis has fewer than two distinct values
-    (e.g. a single column or row of chips), where spacing cannot be observed.
+    Coordinates are 0-aligned multiples of km_size, so the GCD of the gaps
+    recovers the step even when no two adjacent cells are populated (sparse
+    coverage such as 0, 6, 10 still yields 2), where the smallest gap would
+    overestimate it.
+
+    Returns 0 when the axis has fewer than two distinct values (e.g. a single
+    column or row of chips), meaning the spacing cannot be observed.
     """
     unique_sorted = np.sort(values.unique())
     if len(unique_sorted) < 2:
-        return 1
-    # Sorted unique values are strictly increasing, so all diffs are positive.
-    return int(np.diff(unique_sorted).min())
+        return 0
+    return int(np.gcd.reduce(np.diff(unique_sorted)))
 
 
 def _assign_block3x3(
@@ -258,10 +262,12 @@ def _assign_block3x3(
     # Grid coordinates are spaced by the grid's km_size (e.g. 0, 2, 4, 6... for
     # km_size=2), not by 1, so we must divide by the actual step size before
     # grouping into blocks of 3 cells.
-    easting_step = _infer_grid_step(eastings)
-    northing_step = _infer_grid_step(northings)
-    block_east = (eastings // easting_step) // 3
-    block_north = (northings // northing_step) // 3
+    # km_size is a single value for the whole grid, so share one step across
+    # both axes; np.gcd treats an unobservable axis (0) as neutral, and the
+    # final fallback of 1 only applies when neither axis has two distinct values.
+    grid_step = int(np.gcd(_infer_grid_step(eastings), _infer_grid_step(northings))) or 1
+    block_east = (eastings // grid_step) // 3
+    block_north = (northings // grid_step) // 3
 
     # Create unique block identifier combining MGRS grid and block coordinates
     block_ids = mgrs_grids + "_" + block_east.astype(str) + "_" + block_north.astype(str)
