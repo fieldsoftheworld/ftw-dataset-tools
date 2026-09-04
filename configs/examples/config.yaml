@@ -42,7 +42,7 @@ skip_reproject: false
 #   description: Benchmark chips for Austria (edition 2025).
 #   license: CC-BY-4.0          # SPDX id, or "other" plus license_url
 #   version: 2.0.0-alpha.1
-#   attribution: Agrarmarkt Austria
+#   attribution: Agrarmarkt Austria  # recorded in the provenance; written to the README by the docs stage
 #   keywords: [field-boundaries, benchmark, austria]
 #   providers:
 #     - {name: Agrarmarkt Austria, roles: [producer, licensor], url: https://example.org}
