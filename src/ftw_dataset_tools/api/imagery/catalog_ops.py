@@ -8,20 +8,44 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     import pystac
 
 __all__ = [
     "ClearResult",
     "ImageryStats",
     "clear_chip_selections",
+    "find_collection_dir",
     "get_imagery_stats",
     "has_existing_scenes",
+    "iter_chip_dirs",
 ]
+
+
+def iter_chip_dirs(collection_dir: Path) -> list[Path]:
+    """Every chip item directory under ``<collection>/chips/<square>/``, sorted."""
+    chips_root = Path(collection_dir) / "chips"
+    if not chips_root.is_dir():
+        return []
+    dirs = [
+        chip
+        for square in chips_root.iterdir()
+        if square.is_dir() and not square.name.startswith(".")
+        for chip in square.iterdir()
+        if chip.is_dir() and not chip.name.startswith(".")
+    ]
+    return sorted(dirs)
+
+
+def find_collection_dir(path: Path) -> Path:
+    """The collection directory for a user-supplied path (must hold collection.json)."""
+    path = Path(path)
+    if (path / "collection.json").exists():
+        return path
+    raise FileNotFoundError(f"No collection.json in {path}; pass the dataset output directory")
 
 
 def has_existing_scenes(item: pystac.Item) -> bool:
@@ -115,13 +139,15 @@ def clear_chip_selections(catalog_dir: Path, item: pystac.Item) -> ClearResult:
     from the parent item. Restores the item's datetime to a valid state.
 
     Args:
-        catalog_dir: Path to the catalog directory
+        catalog_dir: Path to the catalog directory (used as a fallback if the
+            item has no self href)
         item: Parent chip STAC item (will be modified and saved)
 
     Returns:
         ClearResult with counts of deleted items
     """
-    chip_dir = catalog_dir / item.id
+    item_self_href = item.get_self_href()
+    chip_dir = Path(item_self_href).parent if item_self_href else catalog_dir / item.id
     result = ClearResult()
 
     # Delete planting and harvest child STAC items and their GeoTIFFs

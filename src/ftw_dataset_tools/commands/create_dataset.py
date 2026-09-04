@@ -14,6 +14,7 @@ from ftw_dataset_tools.api import dataset, splits
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
     download_and_clip_scene,
+    iter_chip_dirs,
     process_downloaded_scene,
     select_imagery_for_catalog,
 )
@@ -236,17 +237,14 @@ def create_dataset_cmd(
     Output structure::
 
         {name}-dataset/
-        ├── catalog.json
-        ├── {name}-source/
-        │   └── collection.json
-        ├── {name}-chips/
-        │   ├── collection.json
-        │   ├── items.parquet
-        │   └── {grid_id}/
-        │       ├── {grid_id}.json
-        │       ├── {grid_id}_instance.tif
-        │       ├── {grid_id}_semantic_2_class.tif
-        │       └── {grid_id}_semantic_3_class.tif
+        ├── collection.json
+        ├── chips/
+        │   └── {mgrs_square}/
+        │       └── {grid_id}/
+        │           ├── {grid_id}.json
+        │           ├── {grid_id}_instance.tif
+        │           ├── {grid_id}_semantic_2_class.tif
+        │           └── {grid_id}_semantic_3_class.tif
         ├── {name}_fields.parquet
         ├── {name}_chips.parquet
         └── {name}_boundary_lines.parquet
@@ -375,7 +373,7 @@ def create_dataset_cmd(
         click.echo(f"  Boundary lines: {result.boundary_lines_file}")
         click.echo("  Masks:")
         if result.chips_base_dir:
-            click.echo(f"    Location: {result.chips_base_dir}/{{grid_id}}/")
+            click.echo(f"    Location: {result.chips_base_dir}/<mgrs>/{{grid_id}}/")
         for mask_type, mask_result in result.masks_results.items():
             click.echo(f"    {mask_type}: {mask_result.total_created:,} files")
 
@@ -477,15 +475,14 @@ def _run_image_download(
     """
     # Find all child S2 items
     child_items = []
-    for subdir in catalog_dir.iterdir():
-        if subdir.is_dir() and not subdir.name.startswith("."):
-            for json_file in subdir.glob("*_s2.json"):
-                try:
-                    item = pystac.Item.from_file(str(json_file))
-                    if item.id.endswith("_planting_s2") or item.id.endswith("_harvest_s2"):
-                        child_items.append((item, json_file))
-                except Exception:
-                    pass
+    for subdir in iter_chip_dirs(catalog_dir):
+        for json_file in subdir.glob("*_s2.json"):
+            try:
+                item = pystac.Item.from_file(str(json_file))
+                if item.id.endswith("_planting_s2") or item.id.endswith("_harvest_s2"):
+                    child_items.append((item, json_file))
+            except Exception:
+                pass
 
     successful = 0
     skipped = 0

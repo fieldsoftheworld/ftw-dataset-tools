@@ -43,7 +43,7 @@ def create_dataset_summary_cmd(
     Generates a markdown report with statistics, visualizations, and example
     chips from a completed dataset.
 
-    The dataset directory should contain a *-chips/ subdirectory with STAC items
+    The dataset directory should contain a chips/ subdirectory with STAC items
     and a chips_*.parquet file with split information.
 
     The report includes:
@@ -54,7 +54,7 @@ def create_dataset_summary_cmd(
     - Example chip visualizations
 
     \b
-    DATASET_DIR: Path to the dataset directory (containing *-chips/ subdirectory)
+    DATASET_DIR: Path to the dataset directory (containing chips/ subdirectory)
 
     \b
     Examples:

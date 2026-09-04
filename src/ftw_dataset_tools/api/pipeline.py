@@ -516,7 +516,7 @@ def stage_select_images(ctx: PipelineContext) -> None:
     select_cfg = ctx.config.stages.select_images
     ctx.log("Selecting imagery...")
     ctx.selection_result = select_imagery_for_catalog(
-        catalog_dir=ctx.chips_base_dir,
+        catalog_dir=ctx.output_dir,
         year=ctx.effective_year,
         cloud_cover_chip=select_cfg.cloud_cover_chip,
         nodata_max=select_cfg.nodata_max,
@@ -536,7 +536,7 @@ def stage_download_images(ctx: PipelineContext) -> None:
     download_cfg = ctx.config.stages.download_images
     ctx.log("Downloading imagery...")
     ctx.download_result = download_imagery_for_catalog(
-        catalog_dir=ctx.chips_base_dir,
+        catalog_dir=ctx.output_dir,
         bands=download_cfg.bands,
         resolution=download_cfg.resolution,
     )

@@ -4,8 +4,10 @@ from ftw_dataset_tools.api.imagery.catalog_ops import (
     ClearResult,
     ImageryStats,
     clear_chip_selections,
+    find_collection_dir,
     get_imagery_stats,
     has_existing_scenes,
+    iter_chip_dirs,
 )
 from ftw_dataset_tools.api.imagery.cloud_analysis import calculate_pixel_cloud_cover
 from ftw_dataset_tools.api.imagery.crop_calendar import (
@@ -64,10 +66,12 @@ __all__ = [
     "download_and_clip_scene",
     "download_imagery_for_catalog",
     "find_chip_items",
+    "find_collection_dir",
     "find_s2_child_items",
     "get_crop_calendar_dates",
     "get_imagery_stats",
     "has_existing_scenes",
+    "iter_chip_dirs",
     "process_downloaded_scene",
     "select_imagery_for_catalog",
     "select_scenes_for_chip",
