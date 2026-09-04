@@ -492,6 +492,9 @@ def stage_stac(ctx: PipelineContext) -> None:
         chips_file=ctx.chips_path,
         boundary_lines_file=ctx.boundary_lines_path,
         chips_base_dir=ctx.chips_base_dir,
+        filtered_fields_file=(
+            ctx.field_polygons_path if ctx.config.class_filter is not None else None
+        ),
         year=ctx.effective_year,
         provenance=ctx.provenance,
         checksums=ctx.config.stages.stac.checksums,
@@ -499,12 +502,14 @@ def stage_stac(ctx: PipelineContext) -> None:
         on_progress=ctx.log,
         config=ctx.config,
     )
-    ctx.log(f"Created STAC catalog with {ctx.stac_result.total_items} items")
+    n = ctx.stac_result.total_items
+    k = len(ctx.stac_result.subcatalog_paths)
+    ctx.log(f"Created STAC collection with {n} items in {k} sub-catalog(s)")
 
 
 def stage_select_images(ctx: PipelineContext) -> None:
     """Select cloud-free Sentinel-2 scenes for each chip."""
-    _require(ctx.chips_base_dir / "collection.json", stage="select_images", produced_by="stac")
+    _require(ctx.output_dir / "collection.json", stage="select_images", produced_by="stac")
     if ctx.effective_year is None:
         raise ValueError("A year is required for image selection.")
 
@@ -524,7 +529,7 @@ def stage_select_images(ctx: PipelineContext) -> None:
 def stage_download_images(ctx: PipelineContext) -> None:
     """Download selected imagery and generate thumbnails."""
     _require(
-        ctx.chips_base_dir / "collection.json",
+        ctx.output_dir / "collection.json",
         stage="download_images",
         produced_by="stac",
     )

@@ -131,7 +131,7 @@ class TestBuildContext:
         assert ctx.output_fields_path == out.resolve() / "myds_fields.parquet"
         assert ctx.chips_path == out.resolve() / "myds_chips.parquet"
         assert ctx.boundary_lines_path == out.resolve() / "myds_boundary_lines.parquet"
-        assert ctx.chips_base_dir == out.resolve() / "myds-chips"
+        assert ctx.chips_base_dir == out.resolve() / "chips"
         assert ctx.effective_year == 2023
         assert ctx.has_temporal is True
 
@@ -407,10 +407,9 @@ class TestStacStageFlags:
         def fake_generate(**kwargs):
             captured.update(kwargs)
             return stac.STACGenerationResult(
-                catalog_path=tmp_path / "catalog.json",
-                source_collection_path=tmp_path / "s.json",
-                chips_collection_path=tmp_path / "c.json",
+                collection_path=tmp_path / "collection.json",
                 items_parquet_path=tmp_path / "items.parquet",
+                subcatalog_paths={},
                 total_items=0,
                 temporal_extent=(
                     datetime(2024, 1, 1, tzinfo=UTC),
@@ -449,10 +448,9 @@ class TestStacStageFlags:
         def fake_generate(**kwargs):
             captured.update(kwargs)
             return stac.STACGenerationResult(
-                catalog_path=tmp_path / "catalog.json",
-                source_collection_path=tmp_path / "s.json",
-                chips_collection_path=tmp_path / "c.json",
+                collection_path=tmp_path / "collection.json",
                 items_parquet_path=tmp_path / "items.parquet",
+                subcatalog_paths={},
                 total_items=0,
                 temporal_extent=(
                     datetime(2024, 1, 1, tzinfo=UTC),

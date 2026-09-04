@@ -382,9 +382,8 @@ def create_dataset_cmd(
         if result.stac_result:
             click.echo("")
             click.echo("STAC Catalog:")
-            click.echo(f"  Catalog: {result.stac_result.catalog_path}")
-            click.echo(f"  Source collection: {result.stac_result.source_collection_path}")
-            click.echo(f"  Chips collection: {result.stac_result.chips_collection_path}")
+            click.echo(f"  Collection: {result.stac_result.collection_path}")
+            click.echo(f"  Sub-catalogs: {len(result.stac_result.subcatalog_paths):,}")
             click.echo(f"  Items: {result.stac_result.total_items:,}")
             click.echo(f"  Items parquet: {result.stac_result.items_parquet_path}")
 
@@ -410,9 +409,8 @@ def create_dataset_cmd(
             click.echo("")
             click.echo(click.style("Selecting imagery...", fg="cyan", bold=True))
 
-            # Get chips collection path
-            chips_collection_path = Path(result.stac_result.chips_collection_path)
-            catalog_dir = chips_collection_path.parent
+            # The imagery workflow walks the collection directory's chip sub-catalogs.
+            catalog_dir = Path(result.stac_result.collection_path).parent
 
             # Shared workflow, also used by `ftwd run`. It records
             # ftw:planting/ftw:harvest links on each parent chip, so a later

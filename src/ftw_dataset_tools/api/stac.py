@@ -23,7 +23,9 @@ from pystac import (
     SpatialExtent,
     TemporalExtent,
 )
+from pystac.extensions.item_assets import AssetDefinition, ItemAssetsExtension
 from pystac.extensions.version import VersionExtension
+from pystac.layout import TemplateLayoutStrategy
 
 from ftw_dataset_tools.api.assets import (
     add_file_info,
@@ -32,7 +34,7 @@ from ftw_dataset_tools.api.assets import (
     add_table_columns,
 )
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded
-from ftw_dataset_tools.api.masks import MaskType
+from ftw_dataset_tools.api.masks import MaskType, get_mgrs_square
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -45,6 +47,13 @@ STAC_VERSION = "1.0.0"
 # Media types
 MEDIA_TYPE_PARQUET = "application/vnd.apache.parquet"
 MEDIA_TYPE_COG = "image/tiff; application=geotiff; profile=cloud-optimized"
+MEDIA_TYPE_JPEG = "image/jpeg"
+
+# Layout strategy for the single collection: sub-catalogs per MGRS square, items
+# co-located with their assets inside the square's sub-catalog directory.
+CHIP_LAYOUT = TemplateLayoutStrategy(
+    catalog_template="chips/${id}/catalog.json", item_template="${id}/${id}.json"
+)
 
 __all__ = [
     "STACGenerationResult",
@@ -75,12 +84,11 @@ _MASK_TITLES = {
 
 @dataclass
 class STACGenerationResult:
-    """Result of STAC catalog generation."""
+    """Result of STAC collection generation."""
 
-    catalog_path: Path
-    source_collection_path: Path
-    chips_collection_path: Path
-    items_parquet_path: Path
+    collection_path: Path
+    items_parquet_path: Path | None
+    subcatalog_paths: dict[str, Path]
     total_items: int
     temporal_extent: tuple[datetime, datetime]
 
@@ -363,89 +371,134 @@ def _collection_ftw_properties(config: DatasetConfig) -> dict:
     return {k: v for k, v in props.items() if v is not None}
 
 
-def _create_root_catalog(
-    dataset_name: str,
-    description: str | None = None,
-    provenance: dict | None = None,
-) -> Catalog:
-    """Create the root STAC catalog, embedding provenance under ``ftw:config``."""
-    catalog = Catalog(
-        id=dataset_name,
-        description=description or f"FTW training dataset: {dataset_name}",
-        title=f"{dataset_name} Dataset",
+def _group_items_by_square(items: list[Item]) -> dict[str, list[Item]]:
+    """Group chip items by MGRS 100 km square, keyed by the square id, sorted."""
+    groups: dict[str, list[Item]] = {}
+    for item in items:
+        grid_id = item.id.split("_", 1)[0]
+        groups.setdefault(get_mgrs_square(grid_id), []).append(item)
+    return {square: groups[square] for square in sorted(groups)}
+
+
+def _build_item_assets() -> dict[str, AssetDefinition]:
+    """Declare the assets a chip item may carry (item-assets extension)."""
+    defs: dict[str, AssetDefinition] = {}
+    for mask_name in _MASK_TYPE_BY_ASSET_NAME:
+        defs[f"{mask_name}_mask"] = AssetDefinition(
+            {"type": MEDIA_TYPE_COG, "roles": ["labels"], "title": _MASK_TITLES[mask_name]}
+        )
+    for season in ("planting", "harvest"):
+        defs[f"{season}_image"] = AssetDefinition(
+            {
+                "type": MEDIA_TYPE_COG,
+                "roles": ["data"],
+                "title": f"{season.capitalize()} season imagery",
+            }
+        )
+    defs["thumbnail"] = AssetDefinition(
+        {"type": MEDIA_TYPE_JPEG, "roles": ["thumbnail"], "title": "Chip preview"}
     )
-    if provenance is not None:
-        catalog.extra_fields["ftw:config"] = provenance
-    return catalog
+    return defs
 
 
-def _create_source_collection(
+def _create_collection(
     dataset_name: str,
     fields_file: Path,
     boundary_lines_file: Path,
+    chips_file: Path,
     temporal_extent: tuple[datetime, datetime],
     spatial_extent: list[float],
+    *,
+    filtered_fields_file: Path | None = None,
     checksums: bool = False,
 ) -> Collection:
     """
-    Create 'source' collection with parquet assets.
+    Create the single dataset collection with source-data and chip-definition assets.
 
     Args:
-        dataset_name: Name of the dataset
+        dataset_name: Name of the dataset (used as the collection id)
         fields_file: Path to fields parquet file
         boundary_lines_file: Path to boundary lines parquet file
+        chips_file: Path to chips parquet file
         temporal_extent: Tuple of (start, end) datetime
         spatial_extent: Bounding box [xmin, ymin, xmax, ymax]
+        filtered_fields_file: Optional path to the class-filtered fields parquet file
         checksums: Compute file:checksum (multihash sha256) for every asset.
 
     Returns:
         pystac Collection
     """
     collection = Collection(
-        id=f"{dataset_name}-source",
-        description=f"Source vector data for {dataset_name} dataset",
-        title=f"{dataset_name} Source Data",
+        id=dataset_name,
+        description=f"Benchmark chips with label masks for {dataset_name}",
+        title=dataset_name,
         extent=Extent(
             spatial=SpatialExtent(bboxes=[spatial_extent]),
             temporal=TemporalExtent(intervals=[[temporal_extent[0], temporal_extent[1]]]),
         ),
     )
 
-    # Add assets with relative paths from source/ directory
     collection.add_asset(
         key="fields",
         asset=Asset(
-            href=f"../{fields_file.name}",
+            href=f"./{fields_file.name}",
             media_type=MEDIA_TYPE_PARQUET,
             title="Field boundary polygons",
             roles=["data"],
         ),
     )
+    add_file_info(collection.assets["fields"], fields_file, checksum=checksums)
+    add_table_columns(collection.assets["fields"], fields_file)
+
+    if filtered_fields_file is not None:
+        collection.add_asset(
+            key="fields_filtered",
+            asset=Asset(
+                href=f"./{filtered_fields_file.name}",
+                media_type=MEDIA_TYPE_PARQUET,
+                title="Field polygons after the class filter",
+                roles=["data"],
+            ),
+        )
+        add_file_info(
+            collection.assets["fields_filtered"], filtered_fields_file, checksum=checksums
+        )
+        add_table_columns(collection.assets["fields_filtered"], filtered_fields_file)
 
     collection.add_asset(
         key="boundary_lines",
         asset=Asset(
-            href=f"../{boundary_lines_file.name}",
+            href=f"./{boundary_lines_file.name}",
             media_type=MEDIA_TYPE_PARQUET,
             title="Field boundary lines",
             roles=["data"],
         ),
     )
-
-    add_file_info(collection.assets["fields"], fields_file, checksum=checksums)
     add_file_info(collection.assets["boundary_lines"], boundary_lines_file, checksum=checksums)
-    add_table_columns(collection.assets["fields"], fields_file)
     add_table_columns(collection.assets["boundary_lines"], boundary_lines_file)
+
+    collection.add_asset(
+        key="chips",
+        asset=Asset(
+            href=f"./{chips_file.name}",
+            media_type=MEDIA_TYPE_PARQUET,
+            title="Chip definitions with field coverage",
+            roles=["data"],
+        ),
+    )
+    add_file_info(collection.assets["chips"], chips_file, checksum=checksums)
+    add_table_columns(collection.assets["chips"], chips_file)
+
+    ItemAssetsExtension.ext(collection, add_if_missing=True).item_assets = _build_item_assets()
 
     return collection
 
 
 def _create_chip_item(
     chip_info: ChipInfo,
-    field_dataset: str,
+    field_dataset: str,  # noqa: ARG001 - kept for API/test-call symmetry with other stages
     temporal_extent: tuple[datetime, datetime],
-    chip_dir: Path | None = None,
-    mask_dirs: dict[str, Path] | None = None,
+    chip_dir: Path,
     checksums: bool = False,
     background_class_value: int = 0,
 ) -> Item | None:
@@ -456,8 +509,7 @@ def _create_chip_item(
         chip_info: ChipInfo with geometry and bbox (includes optional year)
         field_dataset: Dataset name
         temporal_extent: Tuple of (start, end) datetime
-        chip_dir: Directory containing co-located masks (new structure)
-        mask_dirs: Dict mapping mask type name to directory path (legacy structure)
+        chip_dir: Directory containing co-located masks
         checksums: Compute file:checksum (multihash sha256) for every mask asset.
         background_class_value: Pixel value used for background in masks
             (3 for presence-only).
@@ -469,45 +521,25 @@ def _create_chip_item(
     item_id = chip_info.item_id  # Includes year if set
     year = chip_info.year
 
-    # Check which mask files exist
+    # Check which mask files exist (masks co-located with the item)
     mask_assets = {}
     for mask_name, mask_type in _MASK_TYPE_BY_ASSET_NAME.items():
-        if chip_dir is not None:
-            # New structure: masks co-located with item
-            # Filename includes year if year is set
-            if year is not None:
-                mask_filename = f"{grid_id}_{year}_{mask_type.value}.tif"
-            else:
-                mask_filename = f"{grid_id}_{mask_type.value}.tif"
-            mask_path = chip_dir / mask_filename
-            if mask_path.exists():
-                mask_assets[f"{mask_name}_mask"] = (
-                    Asset(
-                        href=f"./{mask_filename}",
-                        media_type=MEDIA_TYPE_COG,
-                        title=_get_mask_title(mask_name),
-                        roles=["labels"],
-                    ),
-                    mask_path,
-                )
-        elif mask_dirs is not None and mask_name in mask_dirs:
-            # Legacy structure: masks in type-based directories
-            if year is not None:
-                mask_filename = f"{field_dataset}_{grid_id}_{year}_{mask_type.value}.tif"
-            else:
-                mask_filename = f"{field_dataset}_{grid_id}_{mask_type.value}.tif"
-            mask_path = mask_dirs[mask_name] / mask_filename
-            if mask_path.exists():
-                rel_path = f"../../label_masks/{mask_name}/{mask_filename}"
-                mask_assets[f"{mask_name}_mask"] = (
-                    Asset(
-                        href=rel_path,
-                        media_type=MEDIA_TYPE_COG,
-                        title=_get_mask_title(mask_name),
-                        roles=["labels"],
-                    ),
-                    mask_path,
-                )
+        # Filename includes year if year is set
+        if year is not None:
+            mask_filename = f"{grid_id}_{year}_{mask_type.value}.tif"
+        else:
+            mask_filename = f"{grid_id}_{mask_type.value}.tif"
+        mask_path = chip_dir / mask_filename
+        if mask_path.exists():
+            mask_assets[f"{mask_name}_mask"] = (
+                Asset(
+                    href=f"./{mask_filename}",
+                    media_type=MEDIA_TYPE_COG,
+                    title=_get_mask_title(mask_name),
+                    roles=["labels"],
+                ),
+                mask_path,
+            )
 
     # Skip if no masks exist
     if not mask_assets:
@@ -549,69 +581,6 @@ def _get_mask_title(mask_name: str) -> str:
     return _MASK_TITLES.get(mask_name, f"{mask_name} mask")
 
 
-def _create_chips_collection(
-    dataset_name: str,
-    chips_file: Path,
-    items: list[Item],
-    temporal_extent: tuple[datetime, datetime],
-    spatial_extent: list[float],
-    checksums: bool = False,
-) -> Collection:
-    """
-    Create 'chips' collection.
-
-    Args:
-        dataset_name: Name of the dataset
-        chips_file: Path to chips parquet file
-        items: List of STAC items
-        temporal_extent: Tuple of (start, end) datetime
-        spatial_extent: Bounding box [xmin, ymin, xmax, ymax]
-        checksums: Compute file:checksum (multihash sha256) for every asset.
-
-    Returns:
-        pystac Collection with items
-    """
-    collection = Collection(
-        id=f"{dataset_name}-chips",
-        description=f"Chip items with label masks for {dataset_name} dataset",
-        title=f"{dataset_name} Chips",
-        extent=Extent(
-            spatial=SpatialExtent(bboxes=[spatial_extent]),
-            temporal=TemporalExtent(intervals=[[temporal_extent[0], temporal_extent[1]]]),
-        ),
-    )
-
-    # Add chips parquet as collection asset
-    collection.add_asset(
-        key="chips",
-        asset=Asset(
-            href=f"../{chips_file.name}",
-            media_type=MEDIA_TYPE_PARQUET,
-            title="Chip definitions with field coverage",
-            roles=["data"],
-        ),
-    )
-    add_file_info(collection.assets["chips"], chips_file, checksum=checksums)
-    add_table_columns(collection.assets["chips"], chips_file)
-
-    # Add stac-geoparquet as collection asset (its size is set once items.parquet is written)
-    collection.add_asset(
-        key="items",
-        asset=Asset(
-            href="items.parquet",
-            media_type=MEDIA_TYPE_PARQUET,
-            title="STAC items in GeoParquet format (collection mirror)",
-            roles=["collection-mirror"],
-        ),
-    )
-
-    # Add items to collection
-    for item in items:
-        collection.add_item(item)
-
-    return collection
-
-
 async def _write_items_parquet_async(
     items: list[Item],
     output_path: Path,
@@ -640,36 +609,42 @@ def generate_stac_catalog(
     fields_file: Path | str,
     chips_file: Path | str,
     boundary_lines_file: Path | str,
-    chips_base_dir: Path | None = None,
-    mask_dirs: dict[str, Path] | None = None,
+    chips_base_dir: Path | str,
+    *,
+    filtered_fields_file: Path | None = None,
     year: int | None = None,
     provenance: dict | None = None,
+    config: DatasetConfig | None = None,
     on_progress: Callable[[str], None] | None = None,
     checksums: bool = False,
     background_class_value: int = 0,
-    config: DatasetConfig | None = None,
 ) -> STACGenerationResult:
     """
-    Generate complete STAC static catalog from dataset outputs.
+    Generate a single self-contained STAC collection from dataset outputs.
+
+    The output is one collection at ``output_dir/collection.json`` whose children
+    are per-MGRS-square sub-catalogs holding the chip items (custom, non-FTW grid
+    ids are grouped under an ``other`` sub-catalog).
 
     Args:
         output_dir: Base directory for dataset and STAC output
-        field_dataset: Dataset name (used in IDs and paths)
+        field_dataset: Dataset name (used as the collection id)
         fields_file: Path to fields parquet file
         chips_file: Path to chips parquet file
         boundary_lines_file: Path to boundary lines parquet file
-        chips_base_dir: Base directory containing chip subdirectories with co-located masks.
-                        If provided, expects structure: {chips_base_dir}/{grid_id}/{grid_id}_*.tif
-        mask_dirs: Legacy - Dict mapping mask type name to directory path.
-                   Ignored if chips_base_dir is provided.
+        chips_base_dir: Base directory containing chip subdirectories with co-located
+                        masks, nested by MGRS square:
+                        {chips_base_dir}/{square}/{item_id}/{item_id}_*.tif
+        filtered_fields_file: Optional path to the class-filtered fields parquet file;
+            when given, a ``fields_filtered`` asset is added to the collection.
         year: Optional year for temporal extent (required if no determination_datetime)
-        provenance: Optional resolved-config record embedded on the root catalog
-                    under the ``ftw:config`` extra field for reproducibility.
+        provenance: Optional resolved-config record embedded on the collection under
+                    the ``ftw:config`` extra field for reproducibility.
+        config: Resolved dataset config; supplies metadata and the ftw: build properties
+            written on the collection.
         on_progress: Optional callback for progress messages
         checksums: Compute file:checksum (multihash sha256) for every asset. Slow; default False.
         background_class_value: Pixel value used for background in masks (3 for presence-only).
-        config: Resolved dataset config; supplies metadata and the ftw: build properties
-            written on the collections.
 
     Returns:
         STACGenerationResult with paths to generated files
@@ -681,6 +656,8 @@ def generate_stac_catalog(
     fields_file = Path(fields_file)
     chips_file = Path(chips_file)
     boundary_lines_file = Path(boundary_lines_file)
+    chips_base_dir = Path(chips_base_dir)
+    filtered_fields_file = Path(filtered_fields_file) if filtered_fields_file else None
 
     def log(msg: str) -> None:
         if on_progress:
@@ -711,25 +688,20 @@ def generate_stac_catalog(
     chip_infos = _extract_chips_info(chips_file, year=year)
     log(f"Found {len(chip_infos)} chips")
 
-    # Create items for each chip
+    # Create items for each chip, nested by MGRS square
     log("Creating STAC items...")
     items = []
     for chip_info in chip_infos:
-        # Determine chip directory if using new structure
-        chip_dir = None
-        if chips_base_dir is not None:
-            # Use dir_name which includes year if set
-            chip_dir = chips_base_dir / chip_info.dir_name
-            if not chip_dir.exists():
-                # Skip chips without directories (no masks generated)
-                continue
+        chip_dir = chips_base_dir / get_mgrs_square(chip_info.grid_id) / chip_info.dir_name
+        if not chip_dir.exists():
+            # Skip chips without directories (no masks generated)
+            continue
 
         item = _create_chip_item(
             chip_info=chip_info,
             field_dataset=field_dataset,
             temporal_extent=temporal_extent,
             chip_dir=chip_dir,
-            mask_dirs=mask_dirs if chip_dir is None else None,
             checksums=checksums,
             background_class_value=background_class_value,
         )
@@ -738,86 +710,84 @@ def generate_stac_catalog(
 
     log(f"Created {len(items)} items with mask assets")
 
-    # Create root catalog
-    log("Creating root catalog...")
-    catalog = _create_root_catalog(field_dataset, provenance=provenance)
-
-    # Create source collection
-    log("Creating source collection...")
-    source_collection = _create_source_collection(
-        dataset_name=field_dataset,
-        fields_file=fields_file,
-        boundary_lines_file=boundary_lines_file,
-        temporal_extent=temporal_extent,
-        spatial_extent=spatial_extent,
-        checksums=checksums,
-    )
-
-    # Create chips collection with items
-    log("Creating chips collection...")
-    chips_collection = _create_chips_collection(
-        dataset_name=field_dataset,
-        chips_file=chips_file,
-        items=items,
-        temporal_extent=temporal_extent,
-        spatial_extent=spatial_extent,
-        checksums=checksums,
-    )
-
+    # Create the single collection
+    log("Creating collection...")
     metadata = config.metadata if config is not None else None
     if metadata is None or not metadata.license:
         log("Warning: no metadata.license; the collection is not Portolan-publishable without one")
+
+    collection = _create_collection(
+        dataset_name=field_dataset,
+        fields_file=fields_file,
+        boundary_lines_file=boundary_lines_file,
+        chips_file=chips_file,
+        temporal_extent=temporal_extent,
+        spatial_extent=spatial_extent,
+        filtered_fields_file=filtered_fields_file,
+        checksums=checksums,
+    )
+
     updated = _updated_stamp(provenance)
-    base_title = metadata.title if metadata and metadata.title else field_dataset
+    base_title = metadata.title if (metadata and metadata.title) else field_dataset
     _apply_collection_metadata(
-        chips_collection,
+        collection,
         metadata,
         updated=updated,
         title=base_title,
         description=metadata.description if metadata else None,
     )
-    _apply_collection_metadata(
-        source_collection, metadata, updated=updated, title=f"{base_title} source fields"
-    )
     if config is not None:
-        chips_collection.extra_fields.update(_collection_ftw_properties(config))
+        collection.extra_fields.update(_collection_ftw_properties(config))
     if provenance is not None:
-        chips_collection.extra_fields["ftw:config"] = provenance
+        collection.extra_fields["ftw:config"] = provenance
 
-    # Add collections to catalog
-    catalog.add_child(source_collection)
-    catalog.add_child(chips_collection)
-
-    # Deterministic output paths (pystac names directories after collection ids)
-    catalog_path = output_dir / "catalog.json"
-    source_collection_path = output_dir / f"{field_dataset}-source" / "collection.json"
-    chips_collection_path = output_dir / f"{field_dataset}-chips" / "collection.json"
-    items_parquet_path = output_dir / f"{field_dataset}-chips" / "items.parquet"
+    # Group items by MGRS square and add one sub-catalog per square
+    groups = _group_items_by_square(items)
+    for square, square_items in groups.items():
+        sub = Catalog(
+            id=square,
+            description=f"Chips in MGRS 100 km square {square}",
+            title=square,
+        )
+        for item in square_items:
+            sub.add_item(item)
+        collection.add_child(sub)
 
     # normalize_hrefs assigns each item's self href in-memory (needed for rustac to
     # serialize them below) without writing any files yet.
     log("Writing STAC catalog...")
-    catalog.normalize_hrefs(str(output_dir))
+    collection.normalize_hrefs(str(output_dir), strategy=CHIP_LAYOUT)
 
-    # Write stac-geoparquet before the single catalog.save() below so its file:size
+    # Write stac-geoparquet before the single collection.save() below so its file:size
     # lands in the collection.json that save writes; a second save_object() call
     # would otherwise write an absolute filesystem self link into that file.
+    items_parquet_path: Path | None = None
     if items:
         log("Writing stac-geoparquet...")
-        items_parquet_path.parent.mkdir(parents=True, exist_ok=True)
+        items_parquet_path = output_dir / "items.parquet"
         _write_items_parquet(items, items_parquet_path)
-        add_file_info(chips_collection.assets["items"], items_parquet_path, checksum=checksums)
-        add_table_columns(chips_collection.assets["items"], items_parquet_path)
+        collection.add_asset(
+            key="items",
+            asset=Asset(
+                href="items.parquet",
+                media_type=MEDIA_TYPE_PARQUET,
+                title="STAC items in GeoParquet format (collection mirror)",
+                roles=["collection-mirror"],
+            ),
+        )
+        add_file_info(collection.assets["items"], items_parquet_path, checksum=checksums)
+        add_table_columns(collection.assets["items"], items_parquet_path)
 
-    catalog.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
+    collection.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
 
     log("STAC catalog generation complete")
 
     return STACGenerationResult(
-        catalog_path=catalog_path,
-        source_collection_path=source_collection_path,
-        chips_collection_path=chips_collection_path,
+        collection_path=output_dir / "collection.json",
         items_parquet_path=items_parquet_path,
+        subcatalog_paths={
+            square: output_dir / "chips" / square / "catalog.json" for square in groups
+        },
         total_items=len(items),
         temporal_extent=temporal_extent,
     )
