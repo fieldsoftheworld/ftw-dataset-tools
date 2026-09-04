@@ -12,6 +12,8 @@ from typing import Literal
 
 import pystac
 
+from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
+
 
 class STACSaveError(Exception):
     """Error saving STAC item."""
@@ -81,12 +83,19 @@ def update_parent_item(
     added_thumbnail = False
 
     try:
-        parent_item.assets[asset_key] = pystac.Asset(
-            href=f"./{output_filename}",
-            media_type="image/tiff; application=geotiff; profile=cloud-optimized",
-            title=f"{season.capitalize()} season imagery ({','.join(band_list)})",
-            roles=["data"],
+        parent_item.add_asset(
+            asset_key,
+            pystac.Asset(
+                href=f"./{output_filename}",
+                media_type="image/tiff; application=geotiff; profile=cloud-optimized",
+                title=f"{season.capitalize()} season imagery ({','.join(band_list)})",
+                roles=["data"],
+            ),
         )
+        image_path = parent_path.parent / output_filename
+        if image_path.exists():
+            add_file_info(parent_item.assets[asset_key], image_path)
+            add_raster_bands(parent_item.assets[asset_key], image_path)
 
         # Add planting thumbnail as the chip's thumbnail
         if thumbnail_filename and season == "planting":
@@ -95,12 +104,18 @@ def update_parent_item(
                 if is_overlay
                 else "Chip preview (planting season)"
             )
-            parent_item.assets["thumbnail"] = pystac.Asset(
-                href=f"./{thumbnail_filename}",
-                media_type=pystac.MediaType.JPEG,
-                title=thumb_title,
-                roles=["thumbnail"],
+            parent_item.add_asset(
+                "thumbnail",
+                pystac.Asset(
+                    href=f"./{thumbnail_filename}",
+                    media_type=pystac.MediaType.JPEG,
+                    title=thumb_title,
+                    roles=["thumbnail"],
+                ),
             )
+            thumbnail_path = parent_path.parent / thumbnail_filename
+            if thumbnail_path.exists():
+                add_file_info(parent_item.assets["thumbnail"], thumbnail_path)
             added_thumbnail = True
 
         parent_item.save_object(str(parent_path))
