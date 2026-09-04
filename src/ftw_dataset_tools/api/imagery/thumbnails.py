@@ -45,17 +45,13 @@ def has_rgb_bands(band_list: list[str]) -> bool:
 def generate_thumbnail(
     tif_path: str | Path,
     output_path: str | Path,
-    max_size: int = 512,
     quality: int = 85,
 ) -> Path:
     """Generate JPEG thumbnail from a multi-band GeoTIFF.
 
-    Uses rasterio's out_shape to leverage COG overviews automatically.
-
     Args:
         tif_path: Path to GeoTIFF (must have at least 3 bands for RGB)
         output_path: Output path for JPEG
-        max_size: Maximum dimension in pixels
         quality: JPEG quality (1-100)
 
     Returns:
@@ -75,16 +71,9 @@ def generate_thumbnail(
             if src.count < 3:
                 raise ThumbnailError(f"Need at least 3 bands for RGB thumbnail, got {src.count}")
 
-            # Calculate output dimensions maintaining aspect ratio
-            scale = min(max_size / src.width, max_size / src.height)
-            out_width = max(1, int(src.width * scale))
-            out_height = max(1, int(src.height * scale))
-
-            # Read RGB bands at thumbnail size (uses overviews automatically)
+            # Read at native dimensions so the preview matches the model-input TIF.
             data = src.read(
                 indexes=[1, 2, 3],
-                out_shape=(3, out_height, out_width),
-                resampling=Resampling.bilinear,
                 masked=True,
             )
 
