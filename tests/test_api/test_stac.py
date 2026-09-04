@@ -470,6 +470,19 @@ class TestSingleCollectionLayout:
             item["assets"]["semantic_2class_mask"]["href"]
             == "./ftw-33UXP0410_2024_semantic_2_class.tif"
         )
+        assert item["collection"] == "ds"
+        collection_links = [link["href"] for link in item["links"] if link["rel"] == "collection"]
+        assert collection_links == ["../../../collection.json"]
+
+        import duckdb
+
+        con = duckdb.connect()
+        con.install_extension("spatial")
+        con.load_extension("spatial")
+        distinct_collections = con.execute(
+            f"SELECT DISTINCT collection FROM read_parquet('{result.items_parquet_path}')"
+        ).fetchall()
+        assert distinct_collections == [("ds",)]
 
     def test_filtered_fields_asset(self, tmp_path: Path) -> None:
         import json

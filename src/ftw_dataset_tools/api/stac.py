@@ -751,6 +751,7 @@ def generate_stac_catalog(
         )
         for item in square_items:
             sub.add_item(item)
+            item.set_collection(collection)
         collection.add_child(sub)
 
     # normalize_hrefs assigns each item's self href in-memory (needed for rustac to

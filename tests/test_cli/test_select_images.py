@@ -91,3 +91,99 @@ class TestSelectImagesSingleChipMode:
 
         assert result.exit_code != 0
         assert "collection.json" in result.output
+
+
+class TestSelectImagesDirectoryMode:
+    """Tests for directory-mode chip discovery under the single-collection layout.
+
+    Items no longer hang off ``collection.get_item_links()`` -- they live under
+    per-square sub-catalogs at ``chips/<square>/<item>/<item>.json``. Directory
+    mode must find them via `find_chip_items`, not the (now-empty) collection
+    item links.
+    """
+
+    def test_finds_chips_under_square_subcatalogs(self, tmp_path: Path) -> None:
+        """Directory mode discovers chips nested under chips/<square>/<item>/."""
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        _write_minimal_collection(dataset_dir / "collection.json")
+
+        _write_chip_item(dataset_dir / "chips" / "33UXP" / "ftw-item1", "ftw-item1")
+        _write_chip_item(dataset_dir / "chips" / "34UFF" / "ftw-item2", "ftw-item2")
+
+        result = CliRunner().invoke(
+            cli,
+            ["select-images", str(dataset_dir), "--year", "2024", "--show-stats"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Total chips: 2" in result.output
+
+    def test_writes_child_items_into_chip_directories(self, tmp_path: Path, monkeypatch) -> None:
+        """A successful selection writes child STAC items under the chip's own directory."""
+        from datetime import timedelta
+
+        from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
+        from ftw_dataset_tools.api.imagery.scene_selection import (
+            SceneSelectionResult,
+            SelectedScene,
+        )
+        from ftw_dataset_tools.commands import select_images as select_images_module
+
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        _write_minimal_collection(dataset_dir / "collection.json")
+
+        chip_dir = dataset_dir / "chips" / "33UXP" / "ftw-item1"
+        _write_chip_item(chip_dir, "ftw-item1")
+
+        scene_datetime = datetime(2024, 6, 1, tzinfo=UTC)
+
+        def _fake_select_scenes_for_chip(**kwargs) -> SceneSelectionResult:
+            chip_id = kwargs["chip_id"]
+            year = kwargs["year"]
+            scene_item = pystac.Item(
+                id=f"{chip_id}_source_scene",
+                geometry={
+                    "type": "Polygon",
+                    "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+                },
+                bbox=(0.0, 0.0, 1.0, 1.0),
+                datetime=scene_datetime,
+                properties={},
+            )
+            scene = SelectedScene(
+                item=scene_item,
+                season="planting",
+                cloud_cover=1.0,
+                datetime=scene_datetime,
+                stac_url="https://example.com/scene",
+            )
+            harvest_scene = SelectedScene(
+                item=scene_item,
+                season="harvest",
+                cloud_cover=1.5,
+                datetime=scene_datetime + timedelta(days=90),
+                stac_url="https://example.com/scene",
+            )
+            return SceneSelectionResult(
+                chip_id=chip_id,
+                bbox=(0.0, 0.0, 1.0, 1.0),
+                year=year,
+                crop_calendar=CropCalendarDates(planting_day=1, harvest_day=180),
+                planting_scene=scene,
+                harvest_scene=harvest_scene,
+            )
+
+        monkeypatch.setattr(
+            select_images_module, "select_scenes_for_chip", _fake_select_scenes_for_chip
+        )
+
+        result = CliRunner().invoke(
+            cli,
+            ["select-images", str(dataset_dir), "--year", "2024"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert (chip_dir / "ftw-item1_planting_s2.json").exists()
+        assert (chip_dir / "ftw-item1_harvest_s2.json").exists()
