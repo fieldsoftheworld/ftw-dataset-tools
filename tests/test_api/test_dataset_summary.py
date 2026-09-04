@@ -60,16 +60,16 @@ class TestCreateDatasetSummaryValidation:
         dataset_dir = tmp_path / "dataset"
         dataset_dir.mkdir()
 
-        with pytest.raises(FileNotFoundError, match=r"No \*-chips directory found"):
+        with pytest.raises(FileNotFoundError, match=r"No chips directory found"):
             create_dataset_summary(dataset_dir)
 
     def test_no_parquet_file_found(self, tmp_path: Path) -> None:
         """Test FileNotFoundError when chips directory has no parquet file."""
         from ftw_dataset_tools.api.dataset_summary import create_dataset_summary
 
-        # Create chips dir without parquet file (use -chips naming convention)
+        # Create chips dir without parquet file
         dataset_dir = tmp_path / "dataset"
-        chips_dir = dataset_dir / "test-chips"
+        chips_dir = dataset_dir / "chips"
         chips_dir.mkdir(parents=True)
 
         with pytest.raises(FileNotFoundError, match=r"No \*_chips.parquet file found"):
@@ -83,9 +83,9 @@ class TestFindChipsDirAndParquet:
         """Test finding chips directory and parquet file."""
         from ftw_dataset_tools.api.dataset_summary import _find_chips_dir_and_parquet
 
-        # Create valid structure (*-chips directory and *_chips.parquet file)
+        # Create valid structure (chips/ directory and *_chips.parquet file)
         dataset_dir = tmp_path / "dataset"
-        chips_dir = dataset_dir / "austria-chips"
+        chips_dir = dataset_dir / "chips"
         chips_dir.mkdir(parents=True)
         parquet_file = dataset_dir / "austria_chips.parquet"
         parquet_file.touch()
@@ -99,14 +99,14 @@ class TestFindChipsDirAndParquet:
         """Test raises FileNotFoundError when no chips directory found."""
         from ftw_dataset_tools.api.dataset_summary import _find_chips_dir_and_parquet
 
-        with pytest.raises(FileNotFoundError, match=r"No \*-chips directory found"):
+        with pytest.raises(FileNotFoundError, match=r"No chips directory found"):
             _find_chips_dir_and_parquet(tmp_path, lambda _: None)
 
     def test_raises_when_no_parquet_file(self, tmp_path: Path) -> None:
         """Test raises FileNotFoundError when no parquet file found."""
         from ftw_dataset_tools.api.dataset_summary import _find_chips_dir_and_parquet
 
-        chips_dir = tmp_path / "test-chips"
+        chips_dir = tmp_path / "chips"
         chips_dir.mkdir()
 
         with pytest.raises(FileNotFoundError, match=r"No \*_chips.parquet file found"):
@@ -205,8 +205,7 @@ class TestCollectStacMetadata:
 
         from ftw_dataset_tools.api.dataset_summary import _collect_stac_metadata
 
-        chips_dir = tmp_path / "chips"
-        chip_dir = chips_dir / "chip1"
+        chip_dir = tmp_path / "chips" / "33UXP" / "chip1"
         chip_dir.mkdir(parents=True)
 
         # Create valid STAC item JSON
@@ -223,7 +222,7 @@ class TestCollectStacMetadata:
         planting_file = chip_dir / "chip1_planting_s2.json"
         planting_file.write_text(json.dumps(stac_item))
 
-        result = _collect_stac_metadata(chips_dir, lambda _: None)
+        result = _collect_stac_metadata(tmp_path, lambda _: None)
 
         assert len(result["planting_items"]) == 1
         # Dates and cloud cover are only collected if datetime is present and parseable
@@ -237,8 +236,7 @@ class TestCollectStacMetadata:
         """Test handling malformed STAC JSON files."""
         from ftw_dataset_tools.api.dataset_summary import _collect_stac_metadata
 
-        chips_dir = tmp_path / "chips"
-        chip_dir = chips_dir / "chip1"
+        chip_dir = tmp_path / "chips" / "33UXP" / "chip1"
         chip_dir.mkdir(parents=True)
 
         # Create malformed JSON
@@ -246,7 +244,7 @@ class TestCollectStacMetadata:
         malformed_file.write_text("{ invalid json")
 
         # Should not raise - files are found but parsing fails silently
-        result = _collect_stac_metadata(chips_dir, lambda _: None)
+        result = _collect_stac_metadata(tmp_path, lambda _: None)
 
         # The file path is still added to planting_items
         assert len(result["planting_items"]) == 1
@@ -259,8 +257,7 @@ class TestCollectStacMetadata:
 
         from ftw_dataset_tools.api.dataset_summary import _collect_stac_metadata
 
-        chips_dir = tmp_path / "chips"
-        chip_dir = chips_dir / "chip1"
+        chip_dir = tmp_path / "chips" / "33UXP" / "chip1"
         chip_dir.mkdir(parents=True)
 
         # Create STAC item without datetime
@@ -274,7 +271,7 @@ class TestCollectStacMetadata:
         planting_file.write_text(json.dumps(stac_item))
 
         # Should not raise
-        result = _collect_stac_metadata(chips_dir, lambda _: None)
+        result = _collect_stac_metadata(tmp_path, lambda _: None)
 
         assert len(result["planting_items"]) == 1
         # Dates list should be empty since datetime is missing
@@ -284,10 +281,9 @@ class TestCollectStacMetadata:
         """Test handling empty chips directory."""
         from ftw_dataset_tools.api.dataset_summary import _collect_stac_metadata
 
-        chips_dir = tmp_path / "chips"
-        chips_dir.mkdir()
+        (tmp_path / "chips").mkdir()
 
-        result = _collect_stac_metadata(chips_dir, lambda _: None)
+        result = _collect_stac_metadata(tmp_path, lambda _: None)
 
         assert len(result["planting_items"]) == 0
         assert len(result["planting_dates"]) == 0
@@ -301,17 +297,16 @@ class TestSelectExampleChips:
         """Test selecting chips that have both planting and harvest JPGs."""
         from ftw_dataset_tools.api.dataset_summary import _select_example_chips
 
-        chips_dir = tmp_path / "chips"
-        chip1_dir = chips_dir / "chip1"
+        chip1_dir = tmp_path / "chips" / "33UXP" / "chip1"
         chip1_dir.mkdir(parents=True)
 
         # Create JPG files
         (chip1_dir / "chip1_planting_image_s2.jpg").touch()
         (chip1_dir / "chip1_harvest_image_s2.jpg").touch()
 
-        planting_items = [Path("chip1_planting_s2.json")]
+        planting_items = [chip1_dir / "chip1_planting_s2.json"]
 
-        result = _select_example_chips(chips_dir, planting_items, 1, lambda _: None)
+        result = _select_example_chips(planting_items, 1, lambda _: None)
 
         assert len(result) == 1
         assert result[0] == "chip1"
@@ -320,16 +315,15 @@ class TestSelectExampleChips:
         """Test skipping chips missing harvest image."""
         from ftw_dataset_tools.api.dataset_summary import _select_example_chips
 
-        chips_dir = tmp_path / "chips"
-        chip1_dir = chips_dir / "chip1"
+        chip1_dir = tmp_path / "chips" / "33UXP" / "chip1"
         chip1_dir.mkdir(parents=True)
 
         # Only create planting image
         (chip1_dir / "chip1_planting_image_s2.jpg").touch()
 
-        planting_items = [Path("chip1_planting_s2.json")]
+        planting_items = [chip1_dir / "chip1_planting_s2.json"]
 
-        result = _select_example_chips(chips_dir, planting_items, 1, lambda _: None)
+        result = _select_example_chips(planting_items, 1, lambda _: None)
 
         assert len(result) == 0
 
@@ -337,17 +331,15 @@ class TestSelectExampleChips:
         """Test respecting num_examples limit."""
         from ftw_dataset_tools.api.dataset_summary import _select_example_chips
 
-        chips_dir = tmp_path / "chips"
-
         planting_items = []
         for i in range(5):
-            chip_dir = chips_dir / f"chip{i}"
+            chip_dir = tmp_path / "chips" / "33UXP" / f"chip{i}"
             chip_dir.mkdir(parents=True)
             (chip_dir / f"chip{i}_planting_image_s2.jpg").touch()
             (chip_dir / f"chip{i}_harvest_image_s2.jpg").touch()
-            planting_items.append(Path(f"chip{i}_planting_s2.json"))
+            planting_items.append(chip_dir / f"chip{i}_planting_s2.json")
 
-        result = _select_example_chips(chips_dir, planting_items, 3, lambda _: None)
+        result = _select_example_chips(planting_items, 3, lambda _: None)
 
         assert len(result) == 3
 
@@ -361,10 +353,9 @@ class TestCreateDatasetSummaryIntegration:
 
         from ftw_dataset_tools.api.dataset_summary import create_dataset_summary
 
-        # Create valid dataset structure (*-chips directory, *_chips.parquet file)
+        # Create valid dataset structure (chips/ directory, *_chips.parquet file)
         dataset_dir = tmp_path / "dataset"
-        chips_dir = dataset_dir / "belgium-chips"
-        chip1_dir = chips_dir / "chip1"
+        chip1_dir = dataset_dir / "chips" / "33UXP" / "chip1"
         chip1_dir.mkdir(parents=True)
 
         # Create parquet file using GeoDataFrame
@@ -418,9 +409,9 @@ class TestCreateDatasetSummaryIntegration:
         """Test that on_progress callback is invoked."""
         from ftw_dataset_tools.api.dataset_summary import create_dataset_summary
 
-        # Create minimal valid structure (*-chips directory, *_chips.parquet file)
+        # Create minimal valid structure (chips/ directory, *_chips.parquet file)
         dataset_dir = tmp_path / "dataset"
-        chips_dir = dataset_dir / "test-chips"
+        chips_dir = dataset_dir / "chips"
         chips_dir.mkdir(parents=True)
 
         df = pd.DataFrame({"chip_id": ["chip1"]})
@@ -482,29 +473,27 @@ class TestCountEmptyMasks:
         """Test counting mix of empty and non-empty masks."""
         from ftw_dataset_tools.api.dataset_summary import _count_empty_masks
 
-        chips_dir = tmp_path / "chips"
-
         # Create chip directories with masks
         # Empty mask (all zeros)
-        chip1_dir = chips_dir / "chip1"
+        chip1_dir = tmp_path / "chips" / "33UXP" / "chip1"
         chip1_dir.mkdir(parents=True)
         mask1_path = chip1_dir / "chip1_semantic_3_class.tif"
         self._create_test_mask(mask1_path, all_zeros=True)
 
         # Non-empty mask
-        chip2_dir = chips_dir / "chip2"
+        chip2_dir = tmp_path / "chips" / "33UXP" / "chip2"
         chip2_dir.mkdir(parents=True)
         mask2_path = chip2_dir / "chip2_semantic_3_class.tif"
         self._create_test_mask(mask2_path, all_zeros=False)
 
         # Another empty mask
-        chip3_dir = chips_dir / "chip3"
+        chip3_dir = tmp_path / "chips" / "33UXQ" / "chip3"
         chip3_dir.mkdir(parents=True)
         mask3_path = chip3_dir / "chip3_semantic_3_class.tif"
         self._create_test_mask(mask3_path, all_zeros=True)
 
         messages = []
-        result = _count_empty_masks(chips_dir, messages.append)
+        result = _count_empty_masks(tmp_path, messages.append)
 
         assert result == 2  # Two empty masks
         assert any("Found 2 empty masks" in msg for msg in messages)
@@ -513,21 +502,19 @@ class TestCountEmptyMasks:
         """Test handling chips without mask files."""
         from ftw_dataset_tools.api.dataset_summary import _count_empty_masks
 
-        chips_dir = tmp_path / "chips"
-
         # Chip with mask
-        chip1_dir = chips_dir / "chip1"
+        chip1_dir = tmp_path / "chips" / "33UXP" / "chip1"
         chip1_dir.mkdir(parents=True)
         mask1_path = chip1_dir / "chip1_semantic_3_class.tif"
         self._create_test_mask(mask1_path, all_zeros=True)
 
         # Chip without mask
-        chip2_dir = chips_dir / "chip2"
+        chip2_dir = tmp_path / "chips" / "33UXP" / "chip2"
         chip2_dir.mkdir(parents=True)
         # No mask file created
 
         messages = []
-        result = _count_empty_masks(chips_dir, messages.append)
+        result = _count_empty_masks(tmp_path, messages.append)
 
         # Should only count the one chip with a mask
         assert result == 1
@@ -537,10 +524,8 @@ class TestCountEmptyMasks:
         """Test handling rasterio read errors gracefully."""
         from ftw_dataset_tools.api.dataset_summary import _count_empty_masks
 
-        chips_dir = tmp_path / "chips"
-
         # Create chip directory with mask
-        chip1_dir = chips_dir / "chip1"
+        chip1_dir = tmp_path / "chips" / "33UXP" / "chip1"
         chip1_dir.mkdir(parents=True)
         mask1_path = chip1_dir / "chip1_semantic_3_class.tif"
         self._create_test_mask(mask1_path, all_zeros=True)
@@ -551,7 +536,7 @@ class TestCountEmptyMasks:
         with patch("rasterio.open") as mock_open:
             mock_open.side_effect = Exception("Simulated read error")
 
-            result = _count_empty_masks(chips_dir, messages.append)
+            result = _count_empty_masks(tmp_path, messages.append)
 
         # Should return 0 and log warning
         assert result == 0
@@ -561,15 +546,14 @@ class TestCountEmptyMasks:
         """Test graceful handling when rasterio is not available."""
         from ftw_dataset_tools.api.dataset_summary import _count_empty_masks
 
-        chips_dir = tmp_path / "chips"
-        chip_dir = chips_dir / "chip1"
+        chip_dir = tmp_path / "chips" / "33UXP" / "chip1"
         chip_dir.mkdir(parents=True)
 
         messages = []
 
         # Mock the rasterio import to fail
         with patch.dict("sys.modules", {"rasterio": None}):
-            result = _count_empty_masks(chips_dir, messages.append)
+            result = _count_empty_masks(tmp_path, messages.append)
 
         assert result == 0
         assert any("rasterio not available" in msg for msg in messages)

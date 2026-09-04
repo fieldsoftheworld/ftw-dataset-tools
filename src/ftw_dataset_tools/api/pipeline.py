@@ -11,7 +11,8 @@ convention, so any stage can be re-run on its own as long as its inputs exist:
     {output_dir}/{name}_fields.parquet          (reproject)
     {output_dir}/{name}_chips.parquet           (chips, splits)
     {output_dir}/{name}_boundary_lines.parquet  (boundaries)
-    {output_dir}/{name}-chips/                   (masks, stac, imagery)
+    {output_dir}/collection.json                 (stac)
+    {output_dir}/chips/<mgrs100k>/<item_id>/     (masks, stac, imagery)
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from ftw_dataset_tools.api.imagery import (
     download_imagery_for_catalog,
     select_imagery_for_catalog,
 )
-from ftw_dataset_tools.api.masks import MaskType, get_item_id
+from ftw_dataset_tools.api.masks import MaskType, get_item_id, get_mgrs_square
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -109,7 +110,7 @@ class PipelineContext:
             self.field_polygons_path = self.output_fields_path
         self.chips_path = self.output_dir / f"{name}_chips.parquet"
         self.boundary_lines_path = self.output_dir / f"{name}_boundary_lines.parquet"
-        self.chips_base_dir = self.output_dir / f"{name}-chips"
+        self.chips_base_dir = self.output_dir / "chips"
 
     @property
     def field_polygons_producer(self) -> str:
@@ -432,8 +433,8 @@ def _build_chip_dirs(ctx: PipelineContext) -> dict[str, Path]:
     chip_dirs: dict[str, Path] = {}
     for (grid_id,) in grid_ids:
         item_id = get_item_id(str(grid_id), ctx.effective_year)
-        chip_dir = ctx.chips_base_dir / item_id
-        chip_dir.mkdir(exist_ok=True)
+        chip_dir = ctx.chips_base_dir / get_mgrs_square(str(grid_id)) / item_id
+        chip_dir.mkdir(parents=True, exist_ok=True)
         chip_dirs[item_id] = chip_dir
     return chip_dirs
 
@@ -491,6 +492,9 @@ def stage_stac(ctx: PipelineContext) -> None:
         chips_file=ctx.chips_path,
         boundary_lines_file=ctx.boundary_lines_path,
         chips_base_dir=ctx.chips_base_dir,
+        filtered_fields_file=(
+            ctx.field_polygons_path if ctx.config.class_filter is not None else None
+        ),
         year=ctx.effective_year,
         provenance=ctx.provenance,
         checksums=ctx.config.stages.stac.checksums,
@@ -498,19 +502,21 @@ def stage_stac(ctx: PipelineContext) -> None:
         on_progress=ctx.log,
         config=ctx.config,
     )
-    ctx.log(f"Created STAC catalog with {ctx.stac_result.total_items} items")
+    n = ctx.stac_result.total_items
+    k = len(ctx.stac_result.subcatalog_paths)
+    ctx.log(f"Created STAC collection with {n} items in {k} sub-catalog(s)")
 
 
 def stage_select_images(ctx: PipelineContext) -> None:
     """Select cloud-free Sentinel-2 scenes for each chip."""
-    _require(ctx.chips_base_dir / "collection.json", stage="select_images", produced_by="stac")
+    _require(ctx.output_dir / "collection.json", stage="select_images", produced_by="stac")
     if ctx.effective_year is None:
         raise ValueError("A year is required for image selection.")
 
     select_cfg = ctx.config.stages.select_images
     ctx.log("Selecting imagery...")
     ctx.selection_result = select_imagery_for_catalog(
-        catalog_dir=ctx.chips_base_dir,
+        catalog_dir=ctx.output_dir,
         year=ctx.effective_year,
         cloud_cover_chip=select_cfg.cloud_cover_chip,
         nodata_max=select_cfg.nodata_max,
@@ -523,14 +529,14 @@ def stage_select_images(ctx: PipelineContext) -> None:
 def stage_download_images(ctx: PipelineContext) -> None:
     """Download selected imagery and generate thumbnails."""
     _require(
-        ctx.chips_base_dir / "collection.json",
+        ctx.output_dir / "collection.json",
         stage="download_images",
         produced_by="stac",
     )
     download_cfg = ctx.config.stages.download_images
     ctx.log("Downloading imagery...")
     ctx.download_result = download_imagery_for_catalog(
-        catalog_dir=ctx.chips_base_dir,
+        catalog_dir=ctx.output_dir,
         bands=download_cfg.bands,
         resolution=download_cfg.resolution,
     )

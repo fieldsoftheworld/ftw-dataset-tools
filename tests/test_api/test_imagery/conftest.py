@@ -275,8 +275,8 @@ def mock_catalog_with_chips(tmp_path: Path) -> Generator[Path, None, None]:
         Path to the catalog directory
     """
     for chip_id in ["chip_001", "chip_002"]:
-        chip_dir = tmp_path / chip_id
-        chip_dir.mkdir()
+        chip_dir = tmp_path / "chips" / "33UXP" / chip_id
+        chip_dir.mkdir(parents=True)
 
         item = create_mock_stac_item(
             item_id=chip_id,
@@ -298,8 +298,8 @@ def mock_catalog_with_s2_children(tmp_path: Path) -> Generator[Path, None, None]
         Path to the catalog directory
     """
     for chip_id in ["chip_001", "chip_002"]:
-        chip_dir = tmp_path / chip_id
-        chip_dir.mkdir()
+        chip_dir = tmp_path / "chips" / "33UXP" / chip_id
+        chip_dir.mkdir(parents=True)
 
         # Create parent item
         parent_item = create_mock_stac_item(
@@ -341,8 +341,8 @@ def mock_catalog_with_existing_scenes(tmp_path: Path) -> Generator[Path, None, N
     Yields:
         Path to the catalog directory
     """
-    chip_dir = tmp_path / "chip_001"
-    chip_dir.mkdir()
+    chip_dir = tmp_path / "chips" / "33UXP" / "chip_001"
+    chip_dir.mkdir(parents=True)
 
     item = create_mock_stac_item(
         item_id="chip_001",
@@ -388,16 +388,16 @@ def mock_catalog_with_hidden_dir(tmp_path: Path) -> Generator[Path, None, None]:
     Yields:
         Path to the catalog directory
     """
-    # Create hidden directory with an item
-    hidden_dir = tmp_path / ".hidden"
-    hidden_dir.mkdir()
+    # Create hidden square directory with an item (skipped by iter_chip_dirs)
+    hidden_dir = tmp_path / "chips" / ".hidden"
+    hidden_dir.mkdir(parents=True)
     hidden_item = create_mock_stac_item(item_id="hidden_chip")
     hidden_item.set_self_href(str(hidden_dir / "hidden_chip.json"))
     hidden_item.save_object(dest_href=str(hidden_dir / "hidden_chip.json"))
 
     # Create normal directory with an item
-    normal_dir = tmp_path / "chip_001"
-    normal_dir.mkdir()
+    normal_dir = tmp_path / "chips" / "33UXP" / "chip_001"
+    normal_dir.mkdir(parents=True)
     normal_item = create_mock_stac_item(
         item_id="chip_001",
         bbox=(10.0, 50.0, 10.01, 50.01),
@@ -416,14 +416,14 @@ def mock_catalog_with_invalid_json(tmp_path: Path) -> Generator[Path, None, None
         Path to the catalog directory
     """
     # Create directory with invalid JSON
-    chip_dir = tmp_path / "invalid_chip"
-    chip_dir.mkdir()
+    chip_dir = tmp_path / "chips" / "33UXP" / "invalid_chip"
+    chip_dir.mkdir(parents=True)
     invalid_json = chip_dir / "invalid_chip.json"
     invalid_json.write_text("{ invalid json content }")
 
     # Create directory with valid item
-    valid_dir = tmp_path / "chip_001"
-    valid_dir.mkdir()
+    valid_dir = tmp_path / "chips" / "33UXP" / "chip_001"
+    valid_dir.mkdir(parents=True)
     valid_item = create_mock_stac_item(
         item_id="chip_001",
         bbox=(10.0, 50.0, 10.01, 50.01),
@@ -441,8 +441,8 @@ def mock_catalog_no_bbox(tmp_path: Path) -> Generator[Path, None, None]:
     Yields:
         Path to the catalog directory
     """
-    chip_dir = tmp_path / "chip_001"
-    chip_dir.mkdir()
+    chip_dir = tmp_path / "chips" / "33UXP" / "chip_001"
+    chip_dir.mkdir(parents=True)
 
     item = create_mock_stac_item(
         item_id="chip_001",

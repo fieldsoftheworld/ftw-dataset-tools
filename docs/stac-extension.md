@@ -180,6 +180,38 @@ Parquet assets (fields, boundary lines, chips, items) also carry `table:columns`
 type) and `table:row_count` from the
 [table extension](https://github.com/stac-extensions/table).
 
+## Output Layout
+
+The output directory is a self-contained STAC collection. `collection.json` sits at the root, and chip items are organized into sub-catalogs by MGRS 100 km square to keep directory sizes manageable:
+
+```
+{name}/
+├── collection.json                   # STAC collection root
+├── {name}_fields.parquet             # Field boundaries in EPSG:4326
+├── {name}_fields_filtered.parquet    # Filtered fields (if class filter applied)
+├── {name}_boundary_lines.parquet     # Boundary lines from vector data
+├── items.parquet                     # Collection mirror (STAC items as Parquet; only if any chip has masks)
+└── chips/
+    ├── {mgrs100k}/
+    │   ├── catalog.json              # Sub-catalog for MGRS 100 km square
+    │   └── {item_id}/
+    │       ├── {item_id}.json        # Chip item
+    │       ├── masks/                # Mask files (if masks generated)
+    │       ├── imagery/              # Clipped imagery (if selected/downloaded)
+    │       └── ...
+    └── other/                         # For non-FTW grid ids
+        ├── catalog.json
+        └── {item_id}/...
+```
+
+**MGRS square rule:** The sub-catalog id is the MGRS 100 km square extracted from FTW grid ids (e.g., `33UXP` from `ftw-33UXP0410`). Grid ids that don't match the FTW naming convention are placed under `other`.
+
+**Items parquet:** The `items.parquet` asset with role `collection-mirror` exists only if at least one chip item has masks. It is a geoparquet mirror of all chip items in the collection.
+
+**Item assets:** The collection's `item_assets` declares the possible assets on chip items: mask types (`instance_mask`, `semantic_2class_mask`, `semantic_3class_mask`, `decode_boundary_mask`, `decode_distance_mask`), imagery (`planting_image`, `harvest_image`), and `thumbnail`.
+
+**Collection reference:** Every chip item carries a `collection` field and link pointing to the dataset collection (the one holding `collection.json`). The collection's `root` link points to itself (downstream Portolan catalogs rewrite `root` when ingesting the output).
+
 ## Link Relations
 
 | Relation | Description |
@@ -203,12 +235,14 @@ type) and `table:row_count` from the
 
 ## File Naming Convention
 
-All files include the calendar year for consistency:
+All files include the calendar year for consistency. Chip item files and their assets live in `chips/{mgrs100k}/{item_id}/`:
 
-- Parent item: `{grid_id}_{year}.json`
-- Child S2 items: `{grid_id}_{year}_{season}_s2.json`
-- Clipped imagery: `{grid_id}_{year}_{season}_image_s2.tif`
-- Mask files: `{grid_id}_{year}_{mask_type}.tif`
+- Parent item: `chips/{mgrs100k}/{item_id}/{item_id}.json`
+- Child S2 items: `chips/{mgrs100k}/{item_id}/{item_id}_{season}_s2.json`
+- Clipped imagery: `chips/{mgrs100k}/{item_id}/{item_id}_{season}_image_s2.tif`
+- Mask files: `chips/{mgrs100k}/{item_id}/{item_id}_{mask_type}.tif`
+
+where `{mgrs100k}` is the MGRS 100 km square (or `other` for custom grids) and `{item_id}` is the chip identifier.
 
 ## Future Work
 

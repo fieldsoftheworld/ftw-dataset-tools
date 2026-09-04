@@ -15,6 +15,8 @@ from ftw_dataset_tools.api.imagery import (
     ImageryProgressBar,
     clear_chip_selections,
     create_child_items_from_selection,
+    find_chip_items,
+    find_collection_dir,
     get_imagery_stats,
     has_existing_scenes,
     select_scenes_for_chip,
@@ -167,17 +169,15 @@ def select_images_cmd(
 
     \b
     INPUT_PATH: One of:
-                - Dataset directory (containing *-chips/ subdirectory with collection.json)
-                - Chips collection directory (containing collection.json directly)
+                - Dataset directory (containing collection.json directly)
                 - Single chip JSON file for testing
 
     \b
     Examples:
-        ftwd select-images ./my-dataset              # Dataset directory
-        ftwd select-images ./my-dataset-chips        # Chips collection directory
-        ftwd select-images ./chips/ftw-34UFF1628_2024/ftw-34UFF1628_2024.json -v
-        ftwd select-images ./chips --year 2023 --cloud-cover-chip 5
-        ftwd select-images ./chips --force  # Overwrite existing selections
+        ftwd select-images ./my-dataset
+        ftwd select-images ./my-dataset/chips/33UXP/ftw-34UFF1628_2024/ftw-34UFF1628_2024.json -v
+        ftwd select-images ./my-dataset --year 2023 --cloud-cover-chip 5
+        ftwd select-images ./my-dataset --force  # Overwrite existing selections
     """
     input_path_obj = Path(input_path)
 
@@ -194,33 +194,21 @@ def select_images_cmd(
 
         item = pystac.Item.from_file(str(input_path_obj))
         chip_items = [item]
-        # Catalog dir is parent of the chip directory (grandparent of the JSON file)
-        catalog_dir = input_path_obj.parent.parent
+        # The item lives at <collection_dir>/chips/<mgrs_square>/<item_id>/<item_id>.json
+        try:
+            catalog_dir = find_collection_dir(input_path_obj.resolve().parents[3])
+        except (FileNotFoundError, IndexError) as e:
+            raise click.ClickException(
+                f"Could not locate collection.json above chip file: {input_path}"
+            ) from e
 
         click.echo(f"Single chip: {item.id}")
     else:
-        # Catalog directory - check for collection.json here or in a chips subdirectory
-        collection_file = input_path_obj / "collection.json"
-
-        if collection_file.exists():
-            # collection.json directly in input path (chips directory)
-            catalog_dir = input_path_obj
-        else:
-            # Look for *-chips subdirectory with collection.json (dataset directory)
-            chips_dirs = list(input_path_obj.glob("*-chips"))
-            chips_dir_with_collection = None
-            for chips_dir in chips_dirs:
-                if (chips_dir / "collection.json").exists():
-                    chips_dir_with_collection = chips_dir
-                    break
-
-            if chips_dir_with_collection:
-                catalog_dir = chips_dir_with_collection
-                collection_file = catalog_dir / "collection.json"
-            else:
-                raise click.ClickException(
-                    f"No collection.json found in {input_path} or in any *-chips subdirectory"
-                )
+        # Dataset directory - collection.json lives directly in it
+        try:
+            catalog_dir = find_collection_dir(input_path_obj)
+        except FileNotFoundError as e:
+            raise click.ClickException(str(e)) from e
 
         click.echo(f"Catalog: {catalog_dir}")
 
@@ -235,20 +223,9 @@ def select_images_cmd(
             except Exception as e:
                 raise click.ClickException(f"Failed to copy catalog: {e}") from e
             catalog_dir = output_dir
-            collection_file = catalog_dir / "collection.json"
-
-        # Load collection to find items
-        collection = pystac.Collection.from_file(str(collection_file))
 
         # Find all chip items (parent items, not child S2 items)
-        chip_items = []
-        for item_link in collection.get_item_links():
-            item_path = catalog_dir / item_link.href
-            if item_path.exists():
-                item = pystac.Item.from_file(str(item_path))
-                # Skip child items (they have _planting_s2 or _harvest_s2 suffix)
-                if not item.id.endswith("_planting_s2") and not item.id.endswith("_harvest_s2"):
-                    chip_items.append(item)
+        chip_items = [item for item, _item_path in find_chip_items(catalog_dir)]
 
         if not chip_items:
             raise click.ClickException("No chip items found in catalog")
@@ -399,8 +376,12 @@ def select_images_cmd(
 
                 if result.success:
                     # Create child STAC items for planting and harvest
+                    item_self_href = item.get_self_href()
+                    chip_dir = (
+                        Path(item_self_href).parent if item_self_href else catalog_dir / item.id
+                    )
                     create_child_items_from_selection(
-                        chip_dir=catalog_dir / item.id,
+                        chip_dir=chip_dir,
                         parent_item=item,
                         result=result,
                         year=chip_year,

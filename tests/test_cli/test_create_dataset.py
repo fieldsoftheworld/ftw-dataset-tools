@@ -156,22 +156,22 @@ def stub_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SelectionS
     Dataset creation is replaced with a fixed result pointing at an empty chips
     catalog, so tests exercise only the imagery handling in the command.
     """
-    chips_base_dir = tmp_path / "out" / "fields-chips"
+    output_dir = tmp_path / "out"
+    chips_base_dir = output_dir / "chips"
     chips_base_dir.mkdir(parents=True)
 
     def fake_create_dataset(**_kwargs: Any) -> CreateDatasetResult:
         return CreateDatasetResult(
-            output_dir=tmp_path / "out",
+            output_dir=output_dir,
             field_dataset="fields",
-            fields_file=tmp_path / "out" / "fields_fields.parquet",
-            chips_file=tmp_path / "out" / "fields_chips.parquet",
-            boundary_lines_file=tmp_path / "out" / "fields_boundary_lines.parquet",
+            fields_file=output_dir / "fields_fields.parquet",
+            chips_file=output_dir / "fields_chips.parquet",
+            boundary_lines_file=output_dir / "fields_boundary_lines.parquet",
             chips_base_dir=chips_base_dir,
             stac_result=STACGenerationResult(
-                catalog_path=tmp_path / "out" / "catalog.json",
-                source_collection_path=tmp_path / "out" / "fields-source" / "collection.json",
-                chips_collection_path=chips_base_dir / "collection.json",
-                items_parquet_path=chips_base_dir / "items.parquet",
+                collection_path=output_dir / "collection.json",
+                items_parquet_path=output_dir / "fields_chips.parquet",
+                subcatalog_paths={},
                 total_items=3,
                 temporal_extent=(
                     datetime(2023, 1, 1, tzinfo=UTC),
@@ -205,7 +205,7 @@ class TestCreateDatasetImageSelection:
     """Tests for how create-dataset delegates image selection."""
 
     def test_uses_shared_selection_workflow(
-        self, stub_pipeline: SelectionStub, sample_fields_geoparquet: Path
+        self, stub_pipeline: SelectionStub, sample_fields_geoparquet: Path, tmp_path: Path
     ) -> None:
         """Selection is delegated to select_imagery_for_catalog with CLI options."""
         result = _invoke(sample_fields_geoparquet)
@@ -216,7 +216,7 @@ class TestCreateDatasetImageSelection:
         assert kwargs["year"] == 2023
         assert kwargs["cloud_cover_chip"] == 2.0
         assert kwargs["buffer_days"] == 14
-        assert kwargs["catalog_dir"].name == "fields-chips"
+        assert kwargs["catalog_dir"] == tmp_path / "out"
 
     def test_passes_through_selection_options(
         self, stub_pipeline: SelectionStub, sample_fields_geoparquet: Path
