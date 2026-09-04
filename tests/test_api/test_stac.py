@@ -102,7 +102,6 @@ class TestChipItemAssetHrefs:
         # Call with chip_dir for co-located assets
         item = _create_chip_item(
             chip_info=chip_info,
-            field_dataset="test_dataset",
             chip_dir=chip_dir,
             temporal_extent=temporal_extent,
         )
@@ -133,7 +132,6 @@ class TestChipItemAssetHrefs:
                 geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
                 bbox=(0.0, 0.0, 1.0, 1.0),
             ),
-            field_dataset="test_dataset",
             chip_dir=chip_dir,
             temporal_extent=(
                 datetime(2023, 1, 1, tzinfo=UTC),
@@ -166,7 +164,6 @@ class TestChipItemAssetHrefs:
                 geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
                 bbox=(0.0, 0.0, 1.0, 1.0),
             ),
-            field_dataset="test_dataset",
             chip_dir=chip_dir,
             temporal_extent=(
                 datetime(2023, 1, 1, tzinfo=UTC),
@@ -200,7 +197,6 @@ class TestChipItemAssetHrefs:
         # Call with chip_dir but no mask files
         item = _create_chip_item(
             chip_info=chip_info,
-            field_dataset="test_dataset",
             chip_dir=chip_dir,
             temporal_extent=temporal_extent,
         )
@@ -233,7 +229,6 @@ class TestChipItemAssetHrefs:
 
         item = _create_chip_item(
             chip_info=chip_info,
-            field_dataset="test_dataset",
             chip_dir=chip_dir,
             temporal_extent=temporal_extent,
         )
@@ -283,7 +278,6 @@ class TestChipItemAssetMetadata:
         )
         return _create_chip_item(
             chip_info=chip_info,
-            field_dataset="ds",
             temporal_extent=(datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 12, 31, tzinfo=UTC)),
             chip_dir=chip_dir,
             checksums=checksums,
@@ -456,6 +450,7 @@ class TestSingleCollectionLayout:
         assert not [link for link in coll["links"] if link["rel"] == "item"]
         assert set(coll["assets"]) >= {"fields", "boundary_lines", "chips", "items"}
         assert coll["assets"]["fields"]["href"] == "./ds_fields.parquet"
+        assert coll["assets"]["items"]["href"] == "./items.parquet"
         assert "ftw:config" not in coll
 
         sub = json.loads(result.subcatalog_paths["33UXP"].read_text())

@@ -74,7 +74,7 @@ def get_item_id(grid_id: str, year: int | None = None) -> str:
     return grid_id
 
 
-_FTW_GRID_ID = re.compile(r"^ftw-(?P<square>.+?)(?P<cell>\d{4})$")
+_FTW_GRID_ID = re.compile(r"^ftw-(?P<square>.+?)\d{4}$")
 
 
 def get_mgrs_square(grid_id: str) -> str:

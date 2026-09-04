@@ -41,9 +41,6 @@ if TYPE_CHECKING:
 
     from ftw_dataset_tools.api.config import DatasetConfig, MetadataConfig
 
-# STAC version
-STAC_VERSION = "1.0.0"
-
 # Media types
 MEDIA_TYPE_PARQUET = "application/vnd.apache.parquet"
 MEDIA_TYPE_COG = "image/tiff; application=geotiff; profile=cloud-optimized"
@@ -371,12 +368,17 @@ def _collection_ftw_properties(config: DatasetConfig) -> dict:
     return {k: v for k, v in props.items() if v is not None}
 
 
-def _group_items_by_square(items: list[Item]) -> dict[str, list[Item]]:
-    """Group chip items by MGRS 100 km square, keyed by the square id, sorted."""
+def _group_items_by_square(items: list[Item], squares: dict[str, str]) -> dict[str, list[Item]]:
+    """Group chip items by MGRS 100 km square, keyed by the square id, sorted.
+
+    Args:
+        items: Chip items to group.
+        squares: Mapping of item id to MGRS square, as derived when the items were
+            created (so grouping agrees with where each item's directory lives).
+    """
     groups: dict[str, list[Item]] = {}
     for item in items:
-        grid_id = item.id.split("_", 1)[0]
-        groups.setdefault(get_mgrs_square(grid_id), []).append(item)
+        groups.setdefault(squares.get(item.id, "other"), []).append(item)
     return {square: groups[square] for square in sorted(groups)}
 
 
@@ -399,6 +401,29 @@ def _build_item_assets() -> dict[str, ItemAssetDefinition]:
         {"type": MEDIA_TYPE_JPEG, "roles": ["thumbnail"], "title": "Chip preview"}
     )
     return defs
+
+
+def _add_parquet_asset(
+    collection: Collection,
+    key: str,
+    path: Path,
+    title: str,
+    *,
+    checksums: bool = False,
+    roles: list[str] | None = None,
+) -> None:
+    """Add a GeoParquet asset to a collection, with file info and column stats."""
+    collection.add_asset(
+        key=key,
+        asset=Asset(
+            href=f"./{path.name}",
+            media_type=MEDIA_TYPE_PARQUET,
+            title=title,
+            roles=roles if roles is not None else ["data"],
+        ),
+    )
+    add_file_info(collection.assets[key], path, checksum=checksums)
+    add_table_columns(collection.assets[key], path)
 
 
 def _create_collection(
@@ -438,56 +463,34 @@ def _create_collection(
         ),
     )
 
-    collection.add_asset(
-        key="fields",
-        asset=Asset(
-            href=f"./{fields_file.name}",
-            media_type=MEDIA_TYPE_PARQUET,
-            title="Field boundary polygons",
-            roles=["data"],
-        ),
+    _add_parquet_asset(
+        collection, "fields", fields_file, "Field boundary polygons", checksums=checksums
     )
-    add_file_info(collection.assets["fields"], fields_file, checksum=checksums)
-    add_table_columns(collection.assets["fields"], fields_file)
 
     if filtered_fields_file is not None:
-        collection.add_asset(
-            key="fields_filtered",
-            asset=Asset(
-                href=f"./{filtered_fields_file.name}",
-                media_type=MEDIA_TYPE_PARQUET,
-                title="Field polygons after the class filter",
-                roles=["data"],
-            ),
+        _add_parquet_asset(
+            collection,
+            "fields_filtered",
+            filtered_fields_file,
+            "Field polygons after the class filter",
+            checksums=checksums,
         )
-        add_file_info(
-            collection.assets["fields_filtered"], filtered_fields_file, checksum=checksums
-        )
-        add_table_columns(collection.assets["fields_filtered"], filtered_fields_file)
 
-    collection.add_asset(
-        key="boundary_lines",
-        asset=Asset(
-            href=f"./{boundary_lines_file.name}",
-            media_type=MEDIA_TYPE_PARQUET,
-            title="Field boundary lines",
-            roles=["data"],
-        ),
+    _add_parquet_asset(
+        collection,
+        "boundary_lines",
+        boundary_lines_file,
+        "Field boundary lines",
+        checksums=checksums,
     )
-    add_file_info(collection.assets["boundary_lines"], boundary_lines_file, checksum=checksums)
-    add_table_columns(collection.assets["boundary_lines"], boundary_lines_file)
 
-    collection.add_asset(
-        key="chips",
-        asset=Asset(
-            href=f"./{chips_file.name}",
-            media_type=MEDIA_TYPE_PARQUET,
-            title="Chip definitions with field coverage",
-            roles=["data"],
-        ),
+    _add_parquet_asset(
+        collection,
+        "chips",
+        chips_file,
+        "Chip definitions with field coverage",
+        checksums=checksums,
     )
-    add_file_info(collection.assets["chips"], chips_file, checksum=checksums)
-    add_table_columns(collection.assets["chips"], chips_file)
 
     collection.item_assets = _build_item_assets()
 
@@ -496,7 +499,6 @@ def _create_collection(
 
 def _create_chip_item(
     chip_info: ChipInfo,
-    field_dataset: str,  # noqa: ARG001 - kept for API/test-call symmetry with other stages
     temporal_extent: tuple[datetime, datetime],
     chip_dir: Path,
     checksums: bool = False,
@@ -507,7 +509,6 @@ def _create_chip_item(
 
     Args:
         chip_info: ChipInfo with geometry and bbox (includes optional year)
-        field_dataset: Dataset name
         temporal_extent: Tuple of (start, end) datetime
         chip_dir: Directory containing co-located masks
         checksums: Compute file:checksum (multihash sha256) for every mask asset.
@@ -691,15 +692,16 @@ def generate_stac_catalog(
     # Create items for each chip, nested by MGRS square
     log("Creating STAC items...")
     items = []
+    item_squares: dict[str, str] = {}
     for chip_info in chip_infos:
-        chip_dir = chips_base_dir / get_mgrs_square(chip_info.grid_id) / chip_info.dir_name
+        square = get_mgrs_square(chip_info.grid_id)
+        chip_dir = chips_base_dir / square / chip_info.dir_name
         if not chip_dir.exists():
             # Skip chips without directories (no masks generated)
             continue
 
         item = _create_chip_item(
             chip_info=chip_info,
-            field_dataset=field_dataset,
             temporal_extent=temporal_extent,
             chip_dir=chip_dir,
             checksums=checksums,
@@ -707,6 +709,7 @@ def generate_stac_catalog(
         )
         if item:
             items.append(item)
+            item_squares[item.id] = square
 
     log(f"Created {len(items)} items with mask assets")
 
@@ -742,7 +745,7 @@ def generate_stac_catalog(
         collection.extra_fields["ftw:config"] = provenance
 
     # Group items by MGRS square and add one sub-catalog per square
-    groups = _group_items_by_square(items)
+    groups = _group_items_by_square(items, item_squares)
     for square, square_items in groups.items():
         sub = Catalog(
             id=square,
@@ -767,17 +770,14 @@ def generate_stac_catalog(
         log("Writing stac-geoparquet...")
         items_parquet_path = output_dir / "items.parquet"
         _write_items_parquet(items, items_parquet_path)
-        collection.add_asset(
-            key="items",
-            asset=Asset(
-                href="items.parquet",
-                media_type=MEDIA_TYPE_PARQUET,
-                title="STAC items in GeoParquet format (collection mirror)",
-                roles=["collection-mirror"],
-            ),
+        _add_parquet_asset(
+            collection,
+            "items",
+            items_parquet_path,
+            "STAC items in GeoParquet format (collection mirror)",
+            checksums=checksums,
+            roles=["collection-mirror"],
         )
-        add_file_info(collection.assets["items"], items_parquet_path, checksum=checksums)
-        add_table_columns(collection.assets["items"], items_parquet_path)
 
     collection.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
 
