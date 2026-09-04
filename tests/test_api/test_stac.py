@@ -89,6 +89,67 @@ class TestChipItemAssetHrefs:
         assert item.assets["semantic_2class_mask"].href == "./grid_001_semantic_2_class.tif"
         assert item.assets["semantic_3class_mask"].href == "./grid_001_semantic_3_class.tif"
 
+    def test_decode_masks_registered_as_assets(self, tmp_path: Path) -> None:
+        """DECODE layers become STAC assets with their own titles when present."""
+        from ftw_dataset_tools.api.stac import ChipInfo, _create_chip_item
+
+        chip_dir = tmp_path / "chips" / "grid_001"
+        chip_dir.mkdir(parents=True)
+        (chip_dir / "grid_001_semantic_2_class.tif").touch()
+        (chip_dir / "grid_001_decode_boundary.tif").touch()
+        (chip_dir / "grid_001_decode_distance.tif").touch()
+
+        item = _create_chip_item(
+            chip_info=ChipInfo(
+                grid_id="grid_001",
+                geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+                bbox=(0.0, 0.0, 1.0, 1.0),
+            ),
+            field_dataset="test_dataset",
+            chip_dir=chip_dir,
+            temporal_extent=(
+                datetime(2023, 1, 1, tzinfo=UTC),
+                datetime(2023, 12, 31, tzinfo=UTC),
+            ),
+        )
+
+        assert item is not None
+        assert item.assets["decode_boundary_mask"].href == "./grid_001_decode_boundary.tif"
+        assert item.assets["decode_distance_mask"].href == "./grid_001_decode_distance.tif"
+        # Titles are specific, not the generic "<name> mask" fallback.
+        assert item.assets["decode_boundary_mask"].title == "DECODE field boundary mask"
+        assert item.assets["decode_distance_mask"].title == (
+            "DECODE normalized distance-to-boundary map"
+        )
+        # Mask types that were not written must not appear.
+        assert "instance_mask" not in item.assets
+
+    def test_decode_masks_absent_when_not_generated(self, tmp_path: Path) -> None:
+        """A dataset built without the DECODE layers gets no DECODE assets."""
+        from ftw_dataset_tools.api.stac import ChipInfo, _create_chip_item
+
+        chip_dir = tmp_path / "chips" / "grid_001"
+        chip_dir.mkdir(parents=True)
+        (chip_dir / "grid_001_semantic_2_class.tif").touch()
+
+        item = _create_chip_item(
+            chip_info=ChipInfo(
+                grid_id="grid_001",
+                geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+                bbox=(0.0, 0.0, 1.0, 1.0),
+            ),
+            field_dataset="test_dataset",
+            chip_dir=chip_dir,
+            temporal_extent=(
+                datetime(2023, 1, 1, tzinfo=UTC),
+                datetime(2023, 12, 31, tzinfo=UTC),
+            ),
+        )
+
+        assert item is not None
+        assert "decode_boundary_mask" not in item.assets
+        assert "decode_distance_mask" not in item.assets
+
     def test_asset_href_legacy_mask_dirs(self, tmp_path: Path) -> None:
         """Test asset hrefs use legacy paths when mask_dirs is provided."""
         from ftw_dataset_tools.api.stac import ChipInfo, _create_chip_item

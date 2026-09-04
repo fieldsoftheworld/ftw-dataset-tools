@@ -33,6 +33,25 @@ __all__ = [
     "get_year_from_datetime_column",
 ]
 
+# Registry of mask asset names. Module-level so the drift-guard tests can
+# assert it stays in sync with the other mask-type registries: a missing entry
+# here silently drops that mask from the STAC items.
+_MASK_TYPE_BY_ASSET_NAME = {
+    "instance": MaskType.INSTANCE,
+    "semantic_2class": MaskType.SEMANTIC_2_CLASS,
+    "semantic_3class": MaskType.SEMANTIC_3_CLASS,
+    "decode_boundary": MaskType.DECODE_BOUNDARY,
+    "decode_distance": MaskType.DECODE_DISTANCE,
+}
+
+_MASK_TITLES = {
+    "instance": "Instance segmentation mask",
+    "semantic_2class": "Binary semantic mask (field/background)",
+    "semantic_3class": "3-class semantic mask (field/boundary/background)",
+    "decode_boundary": "DECODE field boundary mask",
+    "decode_distance": "DECODE normalized distance-to-boundary map",
+}
+
 
 @dataclass
 class STACGenerationResult:
@@ -354,13 +373,7 @@ def _create_chip_item(
 
     # Check which mask files exist
     mask_assets = {}
-    mask_type_map = {
-        "instance": MaskType.INSTANCE,
-        "semantic_2class": MaskType.SEMANTIC_2_CLASS,
-        "semantic_3class": MaskType.SEMANTIC_3_CLASS,
-    }
-
-    for mask_name, mask_type in mask_type_map.items():
+    for mask_name, mask_type in _MASK_TYPE_BY_ASSET_NAME.items():
         if chip_dir is not None:
             # New structure: masks co-located with item
             # Filename includes year if year is set
@@ -424,12 +437,7 @@ def _create_chip_item(
 
 def _get_mask_title(mask_name: str) -> str:
     """Get human-readable title for mask type."""
-    titles = {
-        "instance": "Instance segmentation mask",
-        "semantic_2class": "Binary semantic mask (field/background)",
-        "semantic_3class": "3-class semantic mask (field/boundary/background)",
-    }
-    return titles.get(mask_name, f"{mask_name} mask")
+    return _MASK_TITLES.get(mask_name, f"{mask_name} mask")
 
 
 def _create_chips_collection(

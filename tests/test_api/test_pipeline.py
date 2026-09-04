@@ -22,6 +22,51 @@ def _config(fields_file: Path, output_dir: Path, **kwargs: object) -> DatasetCon
     return DatasetConfig.from_dict(data)
 
 
+class TestMaskTypeRegistries:
+    """A mask type has to be registered in several places to actually work.
+
+    Adding one to VALID_MASK_TYPES but forgetting the pipeline mapping makes
+    ``create-dataset`` silently skip it; forgetting the STAC map makes the file
+    get written but never referenced by any item. These guard that drift.
+    """
+
+    def test_every_valid_mask_type_is_in_the_pipeline_mapping(self) -> None:
+        from ftw_dataset_tools.api.config import VALID_MASK_TYPES
+        from ftw_dataset_tools.api.pipeline import _MASK_TYPE_MAPPING
+
+        mapped = {type_name for _, _, type_name in _MASK_TYPE_MAPPING}
+        assert mapped == set(VALID_MASK_TYPES)
+
+    def test_every_valid_mask_type_is_a_mask_type_enum_member(self) -> None:
+        from ftw_dataset_tools.api.config import VALID_MASK_TYPES
+        from ftw_dataset_tools.api.masks import MaskType
+
+        assert {m.value for m in MaskType} == set(VALID_MASK_TYPES)
+
+    def test_every_mask_type_can_become_a_stac_asset(self) -> None:
+        from ftw_dataset_tools.api.pipeline import _MASK_TYPE_MAPPING
+        from ftw_dataset_tools.api.stac import _get_mask_title
+
+        for mask_type, subdir_name, _ in _MASK_TYPE_MAPPING:
+            title = _get_mask_title(subdir_name)
+            # The fallback title means the type was never given a real one.
+            assert title != f"{subdir_name} mask", f"{mask_type.value} has no STAC title"
+
+    def test_defaults_are_a_subset_of_valid_types(self) -> None:
+        from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, VALID_MASK_TYPES
+
+        assert set(DEFAULT_MASK_TYPES) <= set(VALID_MASK_TYPES)
+
+    def test_every_mask_type_is_in_the_stac_asset_registry(self) -> None:
+        from ftw_dataset_tools.api.pipeline import _MASK_TYPE_MAPPING
+        from ftw_dataset_tools.api.stac import _MASK_TYPE_BY_ASSET_NAME
+
+        # A mask type missing here gets written to disk but silently dropped
+        # from the STAC items.
+        expected = {subdir_name: mask_type for mask_type, subdir_name, _ in _MASK_TYPE_MAPPING}
+        assert expected == _MASK_TYPE_BY_ASSET_NAME
+
+
 class TestResolveStages:
     """Tests for stage selection logic."""
 

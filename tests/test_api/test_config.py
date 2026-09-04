@@ -100,6 +100,15 @@ class TestFromDict:
                 {"fields_file": "f.parquet", "stages": {"masks": {"mask_types": ["nope"]}}}
             )
 
+    def test_decode_mask_types_accepted(self) -> None:
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "f.parquet",
+                "stages": {"masks": {"mask_types": ["decode_boundary", "decode_distance"]}},
+            }
+        )
+        assert config.stages.masks.mask_types == ["decode_boundary", "decode_distance"]
+
     def test_root_must_be_mapping(self) -> None:
         with pytest.raises(ConfigError, match="mapping"):
             DatasetConfig.from_dict([1, 2, 3])  # type: ignore[arg-type]
@@ -134,7 +143,7 @@ class TestFromKwargs:
         assert config.stages.select_images.enabled is False
         assert config.stages.download_images.enabled is False
 
-    def test_none_mask_types_defaults_to_all(self) -> None:
+    def test_none_mask_types_defaults_to_standard_set(self) -> None:
         config = DatasetConfig.from_kwargs(
             fields_file="f.parquet",
             output_dir=None,
@@ -150,7 +159,10 @@ class TestFromKwargs:
             presence_only=False,
             drop_border_chips=False,
         )
-        assert config.stages.masks.mask_types == list(config_module.VALID_MASK_TYPES)
+        assert config.stages.masks.mask_types == list(config_module.DEFAULT_MASK_TYPES)
+        # The DECODE layers are valid but opt-in, so they are not in the default set.
+        assert "decode_boundary" not in config.stages.masks.mask_types
+        assert "decode_distance" not in config.stages.masks.mask_types
 
 
 class TestProvenance:
