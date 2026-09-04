@@ -387,3 +387,43 @@ class TestMetadataBlock:
     def test_keywords_wrong_type_rejected(self) -> None:
         with pytest.raises(ConfigError, match="keywords must be a list"):
             DatasetConfig.from_dict(self._base({"keywords": 0}))
+
+
+class TestSourceKeys:
+    def test_source_via_and_fetch_defaults(self) -> None:
+        config = DatasetConfig.from_dict(
+            {"fields_file": "https://x/y.parquet", "source_via": "https://x/collection.json"}
+        )
+
+        assert config.source_via == "https://x/collection.json"
+        assert config.stages.fetch.cache_dir == "~/.cache/ftwd/sources"
+        assert config.stages.fetch.refresh is False
+
+    def test_fetch_options(self) -> None:
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "f.parquet",
+                "stages": {"fetch": {"cache_dir": "/tmp/c", "refresh": True}},
+            }
+        )
+
+        assert config.stages.fetch.cache_dir == "/tmp/c"
+        assert config.stages.fetch.refresh is True
+
+    def test_source_via_must_be_url(self) -> None:
+        with pytest.raises(ConfigError, match="source_via"):
+            DatasetConfig.from_dict({"fields_file": "f.parquet", "source_via": "not a url"})
+
+    def test_provenance_carries_source_and_commit(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+        prov = config.provenance_dict(source={"href": "x"}, git_commit="a" * 40)
+
+        assert prov["source"] == {"href": "x"}
+        assert prov["ftwd_git_commit"] == "a" * 40
+
+    def test_provenance_defaults_null(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+        prov = config.provenance_dict()
+
+        assert prov["source"] is None
+        assert prov["ftwd_git_commit"] is None
