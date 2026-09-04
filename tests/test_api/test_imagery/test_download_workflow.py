@@ -52,9 +52,9 @@ class TestFindS2ChildItems:
         """Test that hidden directories are skipped."""
         from .conftest import create_mock_s2_assets, create_mock_stac_item
 
-        # Create hidden directory with S2 child item
-        hidden_dir = tmp_path / ".hidden"
-        hidden_dir.mkdir()
+        # Create hidden square directory with S2 child item (skipped by iter_chip_dirs)
+        hidden_dir = tmp_path / "chips" / ".hidden"
+        hidden_dir.mkdir(parents=True)
         hidden_item = create_mock_stac_item(
             item_id="hidden_planting_s2",
             assets=create_mock_s2_assets(),
@@ -63,8 +63,8 @@ class TestFindS2ChildItems:
         hidden_item.save_object(dest_href=str(hidden_dir / "hidden_planting_s2.json"))
 
         # Create normal directory with S2 child item
-        normal_dir = tmp_path / "chip_001"
-        normal_dir.mkdir()
+        normal_dir = tmp_path / "chips" / "33UXP" / "chip_001"
+        normal_dir.mkdir(parents=True)
         normal_item = create_mock_stac_item(
             item_id="chip_001_planting_s2",
             bbox=(10.0, 50.0, 10.01, 50.01),
@@ -84,14 +84,14 @@ class TestFindS2ChildItems:
         from .conftest import create_mock_s2_assets, create_mock_stac_item
 
         # Create directory with invalid JSON
-        invalid_dir = tmp_path / "invalid"
-        invalid_dir.mkdir()
+        invalid_dir = tmp_path / "chips" / "33UXP" / "invalid"
+        invalid_dir.mkdir(parents=True)
         invalid_json = invalid_dir / "invalid_planting_s2.json"
         invalid_json.write_text("{ invalid json }")
 
         # Create directory with valid item
-        valid_dir = tmp_path / "chip_001"
-        valid_dir.mkdir()
+        valid_dir = tmp_path / "chips" / "33UXP" / "chip_001"
+        valid_dir.mkdir(parents=True)
         valid_item = create_mock_stac_item(
             item_id="chip_001_planting_s2",
             bbox=(10.0, 50.0, 10.01, 50.01),
@@ -154,8 +154,8 @@ class TestDownloadImageryForCatalog:
         import json
 
         # Create child item without bbox in JSON
-        chip_dir = tmp_path / "chip_001"
-        chip_dir.mkdir()
+        chip_dir = tmp_path / "chips" / "33UXP" / "chip_001"
+        chip_dir.mkdir(parents=True)
 
         # Write a minimal STAC item JSON without bbox
         item_json = {
@@ -189,8 +189,8 @@ class TestDownloadImageryForCatalog:
         from .conftest import create_mock_s2_assets, create_mock_stac_item
 
         # Create child item with local image asset
-        chip_dir = tmp_path / "chip_001"
-        chip_dir.mkdir()
+        chip_dir = tmp_path / "chips" / "33UXP" / "chip_001"
+        chip_dir.mkdir(parents=True)
 
         item = create_mock_stac_item(
             item_id="chip_001_planting_s2",
@@ -226,8 +226,8 @@ class TestDownloadImageryForCatalog:
         from .conftest import create_mock_s2_assets, create_mock_stac_item
 
         # Create child item with image asset but no local file
-        chip_dir = tmp_path / "chip_001"
-        chip_dir.mkdir()
+        chip_dir = tmp_path / "chips" / "33UXP" / "chip_001"
+        chip_dir.mkdir(parents=True)
 
         item = create_mock_stac_item(
             item_id="chip_001_planting_s2",

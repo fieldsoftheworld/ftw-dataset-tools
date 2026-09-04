@@ -15,6 +15,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pystac
 
+from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -57,7 +59,7 @@ def create_dataset_summary(
     Create a markdown summary report for a dataset.
 
     Args:
-        dataset_dir: Path to dataset directory containing *-chips/ subdirectory
+        dataset_dir: Path to dataset directory containing a chips/ subdirectory
         output_path: Output path for markdown file (default: dataset_dir/summary.md)
         num_examples: Number of example chips to include (default: 10)
         on_progress: Optional callback for progress messages
@@ -86,12 +88,10 @@ def create_dataset_summary(
     df, total_chips, train_chips, val_chips, test_chips = _load_chips_df(chips_parquet, log)
 
     # Collect STAC metadata from chip items
-    stac_metadata = _collect_stac_metadata(chips_dir, log)
+    stac_metadata = _collect_stac_metadata(dataset_dir, log)
 
     # Select example chips with imagery
-    example_chips = _select_example_chips(
-        chips_dir, stac_metadata["planting_items"], num_examples, log
-    )
+    example_chips = _select_example_chips(stac_metadata["planting_items"], num_examples, log)
 
     # Get field coverage statistics
     field_coverage_pct = (
@@ -99,7 +99,7 @@ def create_dataset_summary(
     )
 
     # Count empty masks
-    empty_mask_count = _count_empty_masks(chips_dir, log)
+    empty_mask_count = _count_empty_masks(dataset_dir, log)
 
     # Generate visualizations
     figures_dir = dataset_dir / "figures"
@@ -161,10 +161,9 @@ def create_dataset_summary(
 
 def _find_chips_dir_and_parquet(dataset_dir: Path, log: Callable[[str], None]) -> tuple[Path, Path]:
     """Find chips directory and parquet file in dataset directory."""
-    chips_dirs = list(dataset_dir.glob("*-chips"))
-    if not chips_dirs:
-        raise FileNotFoundError(f"No *-chips directory found in {dataset_dir}")
-    chips_dir = chips_dirs[0]
+    chips_dir = dataset_dir / "chips"
+    if not chips_dir.is_dir():
+        raise FileNotFoundError(f"No chips directory found in {dataset_dir}")
     log(f"Found chips directory: {chips_dir.name}")
 
     chips_parquet_files = list(dataset_dir.glob("*_chips.parquet"))
@@ -237,12 +236,12 @@ def _extract_dates_and_cloud_cover(
     return dates, cloud_cover
 
 
-def _collect_stac_metadata(chips_dir: Path, log: Callable[[str], None]) -> dict:
+def _collect_stac_metadata(dataset_dir: Path, log: Callable[[str], None]) -> dict:
     """Collect STAC metadata from chip items."""
     log("Scanning STAC items...")
 
-    # Find all chip subdirectories
-    chip_subdirs = [d for d in chips_dir.iterdir() if d.is_dir()]
+    # Find all chip item directories (chips/<square>/<chip_id>/)
+    chip_subdirs = iter_chip_dirs(dataset_dir)
     log(f"Found {len(chip_subdirs)} chip subdirectories")
 
     # Collect all JSON files from chip subdirectories
@@ -316,18 +315,18 @@ def _collect_stac_metadata(chips_dir: Path, log: Callable[[str], None]) -> dict:
 
 
 def _select_example_chips(
-    chips_dir: Path, planting_items: list[Path], num_examples: int, log: Callable[[str], None]
+    planting_items: list[Path], num_examples: int, log: Callable[[str], None]
 ) -> list[str]:
     """Select example chips with imagery."""
     example_chips = []
-    chip_ids_with_planting = set()
+    chip_dir_by_id: dict[str, Path] = {}
 
     for planting_file in planting_items:
         chip_id = planting_file.stem.replace("_planting_s2", "")
-        chip_ids_with_planting.add(chip_id)
+        chip_dir_by_id[chip_id] = planting_file.parent
 
     # Randomly sample chip IDs to get diverse examples
-    chip_ids_list = list(chip_ids_with_planting)
+    chip_ids_list = list(chip_dir_by_id)
 
     # Guard against empty chip list
     if not chip_ids_list:
@@ -339,7 +338,7 @@ def _select_example_chips(
     chip_ids_to_check = rng.choice(chip_ids_list, size=sample_size, replace=False)
 
     for chip_id in chip_ids_to_check:
-        preview_dir = chips_dir / chip_id
+        preview_dir = chip_dir_by_id[chip_id]
         if preview_dir.exists() and preview_dir.is_dir():
             planting_jpg = preview_dir / f"{chip_id}_planting_image_s2.jpg"
             harvest_jpg = preview_dir / f"{chip_id}_harvest_image_s2.jpg"
@@ -352,11 +351,12 @@ def _select_example_chips(
     return example_chips
 
 
-def _count_empty_masks(chips_dir: Path, log: Callable[[str], None]) -> int:
+def _count_empty_masks(dataset_dir: Path, log: Callable[[str], None]) -> int:
     """Count the number of chips with empty masks (no field pixels).
 
     Args:
-        chips_dir: Directory containing chip subdirectories
+        dataset_dir: Dataset directory whose chips/<square>/<chip_id>/
+                     subdirectories hold the chip masks
         log: Logging function
 
     Returns:
@@ -373,10 +373,7 @@ def _count_empty_masks(chips_dir: Path, log: Callable[[str], None]) -> int:
     empty_count = 0
     total_checked = 0
 
-    for chip_dir in sorted(chips_dir.iterdir()):
-        if not chip_dir.is_dir():
-            continue
-
+    for chip_dir in iter_chip_dirs(dataset_dir):
         # Look for mask file
         mask_files = list(chip_dir.glob("*_semantic_3_class.tif"))
         if not mask_files:
@@ -722,10 +719,12 @@ def _write_markdown_summary(
             f.write("|---------|----------|---------|----------|\n")
 
             for chip_id in example_chips:
-                chip_img_dir = chips_dir / chip_id
-                planting_img = f"{chips_dir.name}/{chip_id}/{chip_id}_planting_image_s2.jpg"
-                harvest_img = f"{chips_dir.name}/{chip_id}/{chip_id}_harvest_image_s2.jpg"
-                overlay_img = f"{chips_dir.name}/{chip_id}/{chip_id}_overlay.jpg"
+                # Chips live under chips/<square>/<chip_id>/; find the square.
+                chip_img_dir = next(chips_dir.glob(f"*/{chip_id}"), chips_dir / chip_id)
+                rel_dir = chip_img_dir.relative_to(dataset_dir).as_posix()
+                planting_img = f"{rel_dir}/{chip_id}_planting_image_s2.jpg"
+                harvest_img = f"{rel_dir}/{chip_id}_harvest_image_s2.jpg"
+                overlay_img = f"{rel_dir}/{chip_id}_overlay.jpg"
 
                 # Check if images exist
                 planting_exists = (chip_img_dir / f"{chip_id}_planting_image_s2.jpg").exists()

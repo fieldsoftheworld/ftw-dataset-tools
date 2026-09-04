@@ -151,8 +151,8 @@ class TestSelectImageryForCatalog:
     def test_skips_chips_without_bbox(self, tmp_path: Path) -> None:
         """Test that chips without bbox are skipped."""
         # Create a mock item with bbox=None that we can patch
-        chip_dir = tmp_path / "chip_001"
-        chip_dir.mkdir()
+        chip_dir = tmp_path / "chips" / "33UXP" / "chip_001"
+        chip_dir.mkdir(parents=True)
 
         # Write a minimal STAC item JSON without bbox
         import json
