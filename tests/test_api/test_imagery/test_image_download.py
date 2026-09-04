@@ -374,3 +374,41 @@ class TestProcessDownloadedSceneAssets:
         parent_image = saved_parent.assets["planting_image"]
         assert parent_image.extra_fields["file:size"] == image_path.stat().st_size
         assert len(parent_image.extra_fields["raster:bands"]) == 4
+
+
+class TestImageryNodata:
+    def test_clip_profile_declares_zero_nodata(self) -> None:
+        import inspect
+
+        from ftw_dataset_tools.api.imagery import image_download
+
+        source = inspect.getsource(image_download.download_and_clip_scene)
+        assert '"nodata": 0' in source
+
+    def test_write_cog_with_zero_nodata_reports_valid_percent(self, tmp_path: Path) -> None:
+        import numpy as np
+        from rasterio.transform import from_bounds
+
+        from ftw_dataset_tools.api.imagery.image_download import write_cog
+        from ftw_dataset_tools.api.raster_stats import read_band_stats
+
+        stacked = np.array([[[0, 5], [7, 0]]], dtype=np.uint16)
+        profile = {
+            "driver": "COG",
+            "dtype": "uint16",
+            "width": 2,
+            "height": 2,
+            "count": 1,
+            "crs": "EPSG:4326",
+            "transform": from_bounds(0, 0, 1, 1, 2, 2),
+            "compress": "deflate",
+            "nodata": 0,
+        }
+        out = tmp_path / "img.tif"
+
+        assert write_cog(out, stacked, ["red"], profile, nodata=profile["nodata"]) is None
+
+        stats = read_band_stats(out, 1)
+        assert stats is not None
+        assert stats.minimum == 5
+        assert stats.valid_percent == 50.0
