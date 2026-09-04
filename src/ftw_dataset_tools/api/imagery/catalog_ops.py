@@ -60,7 +60,11 @@ IMAGERY_ASSET_KEYS = ("planting_image", "harvest_image", "thumbnail")
 
 
 def iter_chip_dirs(collection_dir: Path) -> list[Path]:
-    """Every chip item directory under ``<collection>/chips/<square>/``, sorted."""
+    """Every chip item directory under ``<collection>/chips/<square>/``, sorted.
+
+    Despite the ``iter_`` name, this returns a materialized (sorted) list, not a
+    generator.
+    """
     chips_root = Path(collection_dir) / "chips"
     if not chips_root.is_dir():
         return []
@@ -77,7 +81,7 @@ def iter_chip_dirs(collection_dir: Path) -> list[Path]:
 def find_collection_dir(path: Path) -> Path:
     """The collection directory for a user-supplied path (must hold collection.json)."""
     path = Path(path)
-    if (path / "collection.json").exists():
+    if (path / "collection.json").is_file():
         return path
     raise FileNotFoundError(f"No collection.json in {path}; pass the dataset output directory")
 
