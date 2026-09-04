@@ -634,3 +634,17 @@ class TestMaskCogStatistics:
         stats = read_band_stats(out, 1)
         assert stats is not None
         assert 0.0 <= stats.minimum <= stats.maximum <= 1.0
+
+
+class TestMgrsSquare:
+    def test_ftw_grid_id(self) -> None:
+        from ftw_dataset_tools.api.masks import get_mgrs_square
+
+        assert get_mgrs_square("ftw-33UXP0410") == "33UXP"
+        assert get_mgrs_square("ftw-1CDE0001") == "1CDE"
+
+    def test_non_ftw_id_goes_to_other(self) -> None:
+        from ftw_dataset_tools.api.masks import get_mgrs_square
+
+        assert get_mgrs_square("grid_001") == "other"
+        assert get_mgrs_square("ftw-abc") == "other"

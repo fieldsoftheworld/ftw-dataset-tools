@@ -476,3 +476,57 @@ class TestStacStageFlags:
         pipeline.stage_stac(ctx)
 
         assert captured["config"] is config
+
+
+class TestChipDirLayout:
+    def test_chips_base_dir_is_chips_subdir(
+        self, sample_geoparquet_4326: Path, tmp_path: Path
+    ) -> None:
+        from ftw_dataset_tools.api import pipeline
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(sample_geoparquet_4326),
+                "output_dir": str(tmp_path / "out"),
+                "year": 2024,
+            }
+        )
+        ctx = pipeline.build_context(config)
+
+        assert ctx.chips_base_dir == (tmp_path / "out").resolve() / "chips"
+
+    def test_build_chip_dirs_nests_by_square(
+        self, sample_geoparquet_4326: Path, tmp_path: Path
+    ) -> None:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api import pipeline
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(sample_geoparquet_4326),
+                "output_dir": str(tmp_path / "out"),
+                "year": 2024,
+            }
+        )
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir()
+        chips = gpd.GeoDataFrame(
+            {
+                "id": ["ftw-33UXP0410", "ftw-33UXQ0001", "grid_001"],
+                "field_coverage_pct": [5.0, 5.0, 5.0],
+            },
+            geometry=[box(0, 0, 1, 1)] * 3,
+            crs="EPSG:4326",
+        )
+        chips.to_parquet(ctx.chips_path)
+
+        dirs = pipeline._build_chip_dirs(ctx)
+
+        assert dirs["ftw-33UXP0410_2024"] == ctx.chips_base_dir / "33UXP" / "ftw-33UXP0410_2024"
+        assert dirs["ftw-33UXQ0001_2024"] == ctx.chips_base_dir / "33UXQ" / "ftw-33UXQ0001_2024"
+        assert dirs["grid_001_2024"] == ctx.chips_base_dir / "other" / "grid_001_2024"
+        assert all(p.is_dir() for p in dirs.values())
