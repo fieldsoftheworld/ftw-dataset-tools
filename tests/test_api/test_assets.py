@@ -9,7 +9,13 @@ import rasterio
 from rasterio.transform import from_bounds
 
 
-def _write_cog(path: Path, data: np.ndarray, nodata: int | None = None) -> None:
+def _write_cog(
+    path: Path,
+    data: np.ndarray,
+    nodata: int | float | None = None,
+    crs: str = "EPSG:4326",
+    transform: rasterio.Affine | None = None,
+) -> None:
     from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 
     profile = {
@@ -18,8 +24,8 @@ def _write_cog(path: Path, data: np.ndarray, nodata: int | None = None) -> None:
         "height": data.shape[0],
         "count": 1,
         "dtype": data.dtype,
-        "crs": "EPSG:4326",
-        "transform": from_bounds(10, 50, 10.02, 50.02, data.shape[1], data.shape[0]),
+        "crs": crs,
+        "transform": transform or from_bounds(10, 50, 10.02, 50.02, data.shape[1], data.shape[0]),
         "compress": "deflate",
     }
     if nodata is not None:
@@ -96,10 +102,29 @@ class TestAddRasterBands:
         assert len(bands) == 1
         assert bands[0]["data_type"] == "uint8"
         assert "nodata" not in bands[0]
-        assert abs(bands[0]["spatial_resolution"] - 0.01) < 1e-9
+        # 0.01 degrees at EPSG:4326, converted to metres per the raster extension's
+        # spatial_resolution contract (matching masks._grid_raster_geometry's factor).
+        assert abs(bands[0]["spatial_resolution"] - 1110.0) < 1e-6
         assert bands[0]["statistics"]["minimum"] == 0
         assert bands[0]["statistics"]["maximum"] == 2
         assert "https://stac-extensions.github.io/raster/v1.1.0/schema.json" in item.stac_extensions
+
+    def test_spatial_resolution_projected_crs_stays_in_metres(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import add_raster_bands
+
+        p = tmp_path / "utm.tif"
+        _write_cog(
+            p,
+            np.array([[0, 1], [2, 0]], dtype=np.uint8),
+            crs="EPSG:32633",
+            transform=from_bounds(500000, 5000000, 500020, 5000020, 2, 2),
+        )
+        _, asset = _item_with_asset(p, ["data"])
+
+        add_raster_bands(asset, p)
+
+        band = asset.extra_fields["raster:bands"][0]
+        assert band["spatial_resolution"] == 10.0
 
     def test_nodata_and_valid_percent(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.assets import add_raster_bands
@@ -113,6 +138,22 @@ class TestAddRasterBands:
         band = asset.extra_fields["raster:bands"][0]
         assert band["nodata"] == 9
         assert band["statistics"]["valid_percent"] == 50.0
+
+    def test_nan_nodata_serializes_as_string(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import add_raster_bands
+
+        p = tmp_path / "nan.tif"
+        _write_cog(
+            p,
+            np.array([[0.0, 1.0], [2.0, 0.0]], dtype=np.float32),
+            nodata=float("nan"),
+        )
+        _, asset = _item_with_asset(p, ["data"])
+
+        add_raster_bands(asset, p)
+
+        band = asset.extra_fields["raster:bands"][0]
+        assert band["nodata"] == "nan"
 
 
 class TestAddMaskClassification:

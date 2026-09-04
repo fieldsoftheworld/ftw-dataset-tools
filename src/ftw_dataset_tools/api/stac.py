@@ -300,6 +300,7 @@ def _create_source_collection(
     boundary_lines_file: Path,
     temporal_extent: tuple[datetime, datetime],
     spatial_extent: list[float],
+    checksums: bool = False,
 ) -> Collection:
     """
     Create 'source' collection with parquet assets.
@@ -310,6 +311,7 @@ def _create_source_collection(
         boundary_lines_file: Path to boundary lines parquet file
         temporal_extent: Tuple of (start, end) datetime
         spatial_extent: Bounding box [xmin, ymin, xmax, ymax]
+        checksums: Compute file:checksum (multihash sha256) for every asset.
 
     Returns:
         pystac Collection
@@ -345,8 +347,8 @@ def _create_source_collection(
         ),
     )
 
-    add_file_info(collection.assets["fields"], fields_file)
-    add_file_info(collection.assets["boundary_lines"], boundary_lines_file)
+    add_file_info(collection.assets["fields"], fields_file, checksum=checksums)
+    add_file_info(collection.assets["boundary_lines"], boundary_lines_file, checksum=checksums)
 
     return collection
 
@@ -466,6 +468,7 @@ def _create_chips_collection(
     items: list[Item],
     temporal_extent: tuple[datetime, datetime],
     spatial_extent: list[float],
+    checksums: bool = False,
 ) -> Collection:
     """
     Create 'chips' collection.
@@ -476,6 +479,7 @@ def _create_chips_collection(
         items: List of STAC items
         temporal_extent: Tuple of (start, end) datetime
         spatial_extent: Bounding box [xmin, ymin, xmax, ymax]
+        checksums: Compute file:checksum (multihash sha256) for every asset.
 
     Returns:
         pystac Collection with items
@@ -500,7 +504,7 @@ def _create_chips_collection(
             roles=["data"],
         ),
     )
-    add_file_info(collection.assets["chips"], chips_file)
+    add_file_info(collection.assets["chips"], chips_file, checksum=checksums)
 
     # Add stac-geoparquet as collection asset (its size is set once items.parquet is written)
     collection.add_asset(
@@ -655,6 +659,7 @@ def generate_stac_catalog(
         boundary_lines_file=boundary_lines_file,
         temporal_extent=temporal_extent,
         spatial_extent=spatial_extent,
+        checksums=checksums,
     )
 
     # Create chips collection with items
@@ -665,16 +670,12 @@ def generate_stac_catalog(
         items=items,
         temporal_extent=temporal_extent,
         spatial_extent=spatial_extent,
+        checksums=checksums,
     )
 
     # Add collections to catalog
     catalog.add_child(source_collection)
     catalog.add_child(chips_collection)
-
-    # Normalize and save catalog
-    log("Writing STAC catalog...")
-    catalog.normalize_hrefs(str(output_dir))
-    catalog.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
 
     # Get actual paths after normalization
     catalog_path = output_dir / "catalog.json"
@@ -683,12 +684,21 @@ def generate_stac_catalog(
     chips_collection_path = output_dir / f"{field_dataset}-chips" / "collection.json"
     items_parquet_path = output_dir / f"{field_dataset}-chips" / "items.parquet"
 
-    # Write stac-geoparquet to the correct location
+    # normalize_hrefs assigns each item's self href in-memory (needed for rustac to
+    # serialize them below) without writing any files yet.
+    log("Writing STAC catalog...")
+    catalog.normalize_hrefs(str(output_dir))
+
+    # Write stac-geoparquet before the single catalog.save() below so its file:size
+    # lands in the collection.json that save writes; a second save_object() call
+    # would otherwise write an absolute filesystem self link into that file.
     if items:
         log("Writing stac-geoparquet...")
+        items_parquet_path.parent.mkdir(parents=True, exist_ok=True)
         _write_items_parquet(items, items_parquet_path)
-        add_file_info(chips_collection.assets["items"], items_parquet_path)
-        chips_collection.save_object()
+        add_file_info(chips_collection.assets["items"], items_parquet_path, checksum=checksums)
+
+    catalog.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
 
     log("STAC catalog generation complete")
 

@@ -397,7 +397,7 @@ class TestChipItemAssetMetadata:
 
 
 class TestCollectionAssetMetadata:
-    def test_parquet_and_items_assets(self, tmp_path: Path) -> None:
+    def _build_catalog(self, tmp_path: Path, checksums: bool = False):
         import geopandas as gpd
         from shapely.geometry import box
 
@@ -425,7 +425,7 @@ class TestCollectionAssetMetadata:
         chip_dir.mkdir(parents=True)
         _write_mask(chip_dir / "ftw-1_2024_semantic_2_class.tif", [[0, 1], [1, 0]])
 
-        result = generate_stac_catalog(
+        return generate_stac_catalog(
             output_dir=tmp_path,
             field_dataset="ds",
             fields_file=fields_path,
@@ -433,7 +433,13 @@ class TestCollectionAssetMetadata:
             boundary_lines_file=lines_path,
             chips_base_dir=chips_base,
             year=2024,
+            checksums=checksums,
         )
+
+    def test_parquet_and_items_assets(self, tmp_path: Path) -> None:
+        result = self._build_catalog(tmp_path)
+        fields_path = tmp_path / "ds_fields.parquet"
+        chips_path = tmp_path / "ds_chips.parquet"
 
         import pystac
 
@@ -447,3 +453,24 @@ class TestCollectionAssetMetadata:
         assert items_asset.roles == ["collection-mirror"]
         assert items_asset.extra_fields["file:size"] == result.items_parquet_path.stat().st_size
         assert chips_coll.assets["chips"].extra_fields["file:size"] == chips_path.stat().st_size
+
+    def test_collections_have_no_self_link(self, tmp_path: Path) -> None:
+        import json
+
+        result = self._build_catalog(tmp_path)
+        for path in (result.chips_collection_path, result.source_collection_path):
+            rels = [link["rel"] for link in json.loads(path.read_text())["links"]]
+            assert "self" not in rels
+
+    def test_checksums_on_collection_and_items_assets(self, tmp_path: Path) -> None:
+        import pystac
+
+        result = self._build_catalog(tmp_path, checksums=True)
+
+        source = pystac.Collection.from_file(str(result.source_collection_path))
+        assert source.assets["fields"].extra_fields["file:checksum"].startswith("1220")
+        assert source.assets["boundary_lines"].extra_fields["file:checksum"].startswith("1220")
+
+        chips_coll = pystac.Collection.from_file(str(result.chips_collection_path))
+        assert chips_coll.assets["chips"].extra_fields["file:checksum"].startswith("1220")
+        assert chips_coll.assets["items"].extra_fields["file:checksum"].startswith("1220")

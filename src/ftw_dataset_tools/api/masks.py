@@ -308,6 +308,8 @@ def _write_mask_raster(
     height, width = mask.shape
     stats = compute_band_stats(mask)
 
+    # Overviews are left to the COG driver default (OVERVIEWS=AUTO): none for
+    # single-tile chips, built automatically for larger rasters.
     with rasterio.open(
         output_path,
         "w",
