@@ -17,13 +17,13 @@ from pystac import (
     Collection,
     Extent,
     Item,
+    ItemAssetDefinition,
     Link,
     Provider,
     ProviderRole,
     SpatialExtent,
     TemporalExtent,
 )
-from pystac.extensions.item_assets import AssetDefinition, ItemAssetsExtension
 from pystac.extensions.version import VersionExtension
 from pystac.layout import TemplateLayoutStrategy
 
@@ -380,22 +380,22 @@ def _group_items_by_square(items: list[Item]) -> dict[str, list[Item]]:
     return {square: groups[square] for square in sorted(groups)}
 
 
-def _build_item_assets() -> dict[str, AssetDefinition]:
-    """Declare the assets a chip item may carry (item-assets extension)."""
-    defs: dict[str, AssetDefinition] = {}
+def _build_item_assets() -> dict[str, ItemAssetDefinition]:
+    """Declare the assets a chip item may carry (core ``item_assets`` collection field)."""
+    defs: dict[str, ItemAssetDefinition] = {}
     for mask_name in _MASK_TYPE_BY_ASSET_NAME:
-        defs[f"{mask_name}_mask"] = AssetDefinition(
+        defs[f"{mask_name}_mask"] = ItemAssetDefinition(
             {"type": MEDIA_TYPE_COG, "roles": ["labels"], "title": _MASK_TITLES[mask_name]}
         )
     for season in ("planting", "harvest"):
-        defs[f"{season}_image"] = AssetDefinition(
+        defs[f"{season}_image"] = ItemAssetDefinition(
             {
                 "type": MEDIA_TYPE_COG,
                 "roles": ["data"],
                 "title": f"{season.capitalize()} season imagery",
             }
         )
-    defs["thumbnail"] = AssetDefinition(
+    defs["thumbnail"] = ItemAssetDefinition(
         {"type": MEDIA_TYPE_JPEG, "roles": ["thumbnail"], "title": "Chip preview"}
     )
     return defs
@@ -489,7 +489,7 @@ def _create_collection(
     add_file_info(collection.assets["chips"], chips_file, checksum=checksums)
     add_table_columns(collection.assets["chips"], chips_file)
 
-    ItemAssetsExtension.ext(collection, add_if_missing=True).item_assets = _build_item_assets()
+    collection.item_assets = _build_item_assets()
 
     return collection
 
