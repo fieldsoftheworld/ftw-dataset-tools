@@ -143,7 +143,12 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     "--force-image-selection",
     is_flag=True,
     default=False,
-    help="Re-select imagery for chips that already have selections (skipped by default).",
+    help=(
+        "Re-select imagery for chips that already have selections. Note: re-running "
+        "create-dataset regenerates the STAC catalog, which clears prior selections, "
+        "so every chip is re-selected either way; to resume an interrupted selection "
+        "on an existing catalog, use select-images instead."
+    ),
 )
 @click.option(
     "--mask-types",
@@ -395,9 +400,11 @@ def create_dataset_cmd(
             chips_collection_path = Path(result.stac_result.chips_collection_path)
             catalog_dir = chips_collection_path.parent
 
-            # Shared workflow, also used by `select-images` and `ftwd run`. It
-            # records ftw:planting/ftw:harvest links on each parent chip, so a
-            # later `select-images` run resumes instead of starting over.
+            # Shared workflow, also used by `ftwd run`. It records
+            # ftw:planting/ftw:harvest links on each parent chip, so a later
+            # `select-images` run resumes instead of starting over. (Re-running
+            # create-dataset itself regenerates the catalog and clears those
+            # links before this point, so selection here always starts fresh.)
             selection = select_imagery_for_catalog(
                 catalog_dir=catalog_dir,
                 year=effective_year,
