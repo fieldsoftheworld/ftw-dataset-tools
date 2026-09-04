@@ -287,3 +287,91 @@ class TestLoadConfig:
         )
         assert config.stages.chips.grid_source == "s3://x/*.parquet"
         assert config.stages.chips.grid_file is None
+
+
+class TestMetadataBlock:
+    def _base(self, metadata: dict | None) -> dict:
+        data: dict = {"fields_file": "f.parquet"}
+        if metadata is not None:
+            data["metadata"] = metadata
+        return data
+
+    def test_absent_metadata_is_none(self) -> None:
+        config = DatasetConfig.from_dict(self._base(None))
+
+        assert config.metadata is None
+        assert config.config_dict()["metadata"] is None
+
+    def test_full_block_parses(self) -> None:
+        config = DatasetConfig.from_dict(
+            self._base(
+                {
+                    "title": "Austria",
+                    "description": "Chips for Austria",
+                    "license": "CC-BY-4.0",
+                    "version": "2.0.0-alpha.1",
+                    "attribution": "Agrarmarkt Austria",
+                    "keywords": ["field-boundaries", "austria"],
+                    "providers": [
+                        {
+                            "name": "Agrarmarkt Austria",
+                            "roles": ["producer", "licensor"],
+                            "url": "https://x",
+                        },
+                        {"name": "Fields of the World", "roles": ["processor"]},
+                    ],
+                }
+            )
+        )
+
+        meta = config.metadata
+        assert meta is not None
+        assert meta.title == "Austria"
+        assert meta.license == "CC-BY-4.0"
+        assert meta.version == "2.0.0-alpha.1"
+        assert meta.keywords == ["field-boundaries", "austria"]
+        assert [p.name for p in meta.providers] == ["Agrarmarkt Austria", "Fields of the World"]
+        assert meta.providers[0].roles == ["producer", "licensor"]
+        assert meta.providers[1].url is None
+        assert config.config_dict()["metadata"]["providers"][0]["url"] == "https://x"
+
+    def test_other_license_requires_url(self) -> None:
+        with pytest.raises(ConfigError, match="license_url"):
+            DatasetConfig.from_dict(self._base({"license": "other"}))
+
+        config = DatasetConfig.from_dict(
+            self._base({"license": "other", "license_url": "https://rkg.gov.si/vstop/"})
+        )
+        assert config.metadata is not None
+        assert config.metadata.license_url == "https://rkg.gov.si/vstop/"
+
+    def test_proprietary_license_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="proprietary"):
+            DatasetConfig.from_dict(self._base({"license": "proprietary"}))
+
+    def test_host_role_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="host"):
+            DatasetConfig.from_dict(
+                self._base({"providers": [{"name": "Source Cooperative", "roles": ["host"]}]})
+            )
+
+    def test_unknown_role_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="roles"):
+            DatasetConfig.from_dict(self._base({"providers": [{"name": "X", "roles": ["owner"]}]}))
+
+    def test_provider_requires_name(self) -> None:
+        with pytest.raises(ConfigError, match="name"):
+            DatasetConfig.from_dict(self._base({"providers": [{"roles": ["producer"]}]}))
+
+    def test_unknown_metadata_key_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="metadata"):
+            DatasetConfig.from_dict(self._base({"licence": "CC0-1.0"}))
+
+    def test_metadata_must_be_mapping(self) -> None:
+        with pytest.raises(ConfigError, match="metadata"):
+            DatasetConfig.from_dict(self._base(["not", "a", "mapping"]))
+
+    def test_metadata_in_provenance(self) -> None:
+        config = DatasetConfig.from_dict(self._base({"title": "T", "license": "CC0-1.0"}))
+
+        assert config.provenance_dict()["config"]["metadata"]["license"] == "CC0-1.0"
