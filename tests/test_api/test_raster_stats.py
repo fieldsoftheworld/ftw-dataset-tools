@@ -118,3 +118,27 @@ class TestEmbedAndRead:
             dst.write(np.zeros((1, 1), dtype=np.uint8), 1)
 
         assert read_band_stats(path, 1) is None
+
+
+class TestBandStatsFromTags:
+    def test_parses_tags(self) -> None:
+        from ftw_dataset_tools.api.raster_stats import band_stats_from_tags
+
+        stats = band_stats_from_tags(
+            {
+                "STATISTICS_MINIMUM": "0",
+                "STATISTICS_MAXIMUM": "2",
+                "STATISTICS_MEAN": "0.75",
+                "STATISTICS_STDDEV": "0.829",
+                "STATISTICS_VALID_PERCENT": "50",
+            }
+        )
+
+        assert stats is not None
+        assert stats.maximum == 2.0
+        assert stats.valid_percent == 50.0
+
+    def test_missing_required_tag_returns_none(self) -> None:
+        from ftw_dataset_tools.api.raster_stats import band_stats_from_tags
+
+        assert band_stats_from_tags({"STATISTICS_MINIMUM": "0"}) is None
