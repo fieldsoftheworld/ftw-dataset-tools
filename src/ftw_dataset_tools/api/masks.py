@@ -277,12 +277,6 @@ def _derive_decode_layer(
     """
     Derive a DECODE layer from a rasterized 2-class mask.
 
-    Both layers are written with plain deflate. The floating-point predictor is
-    tempting for the float32 distance map but measures about twice as large on
-    real chips: a distance transform is mostly exact zeros and holds only a few
-    dozen distinct values, so deflate is already compressing long byte runs that
-    the predictor would shuffle apart.
-
     Returns:
         Tuple of (array to write, extra raster tags)
     """
@@ -302,7 +296,14 @@ def _write_mask_raster(
     transform: Affine,
     tags: dict[str, str] | None = None,
 ) -> None:
-    """Write a label array to disk as a Cloud Optimized GeoTIFF."""
+    """Write a label array to disk as a Cloud Optimized GeoTIFF.
+
+    All layers use plain deflate. The floating-point predictor is tempting for
+    the float32 DECODE distance map but measures about twice as large on real
+    chips: a distance transform is mostly exact zeros and holds only a few
+    dozen distinct values, so deflate is already compressing long byte runs
+    that the predictor would shuffle apart.
+    """
     height, width = mask.shape
 
     profile = {

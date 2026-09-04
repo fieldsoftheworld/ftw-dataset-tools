@@ -57,6 +57,15 @@ class TestMaskTypeRegistries:
 
         assert set(DEFAULT_MASK_TYPES) <= set(VALID_MASK_TYPES)
 
+    def test_every_mask_type_is_in_the_stac_asset_registry(self) -> None:
+        from ftw_dataset_tools.api.pipeline import _MASK_TYPE_MAPPING
+        from ftw_dataset_tools.api.stac import _MASK_TYPE_BY_ASSET_NAME
+
+        # A mask type missing here gets written to disk but silently dropped
+        # from the STAC items.
+        expected = {subdir_name: mask_type for mask_type, subdir_name, _ in _MASK_TYPE_MAPPING}
+        assert expected == _MASK_TYPE_BY_ASSET_NAME
+
 
 class TestResolveStages:
     """Tests for stage selection logic."""

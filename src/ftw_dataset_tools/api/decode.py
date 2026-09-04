@@ -21,8 +21,10 @@ a one-pixel background line and each ends up with its own closed boundary ring.
 from __future__ import annotations
 
 import numpy as np
-from scipy import ndimage
-from scipy.ndimage import maximum_filter, minimum_filter
+
+# scipy is imported inside the functions that need it: this module is reachable
+# from every `ftwd` invocation via masks.py -> commands, and an eager import
+# adds ~0.5s to CLI startup for commands that never touch masks.
 
 # Presence-only labels use 3 for "background, but unlabelled" rather than 0.
 # Both derivations treat it as plain background.
@@ -53,9 +55,11 @@ def boundary_from_mask(mask: np.ndarray) -> np.ndarray:
     Returns:
         2D uint8 array, 1 on field boundaries and 0 elsewhere
     """
+    from scipy import ndimage
+
     values = _without_presence_only(mask)
-    local_max = maximum_filter(values, size=3)
-    local_min = minimum_filter(values, size=3)
+    local_max = ndimage.maximum_filter(values, size=3)
+    local_min = ndimage.minimum_filter(values, size=3)
     return ((local_max != local_min) & (values > 0)).astype(np.uint8)
 
 
@@ -79,6 +83,8 @@ def distance_from_mask(mask: np.ndarray) -> tuple[np.ndarray, float]:
         Tuple of (2D float32 array in [0, 1], maximum distance in pixels before
         normalization; 0.0 when the chip contains no field pixels)
     """
+    from scipy import ndimage
+
     values = _without_presence_only(mask)
     binary = (values > 0).astype(np.uint8)
     distance = ndimage.distance_transform_edt(binary)
