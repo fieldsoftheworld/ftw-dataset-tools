@@ -20,6 +20,7 @@ from rasterio.transform import from_bounds
 
 from ftw_dataset_tools.api import decode
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded
+from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -296,7 +297,7 @@ def _write_mask_raster(
     transform: Affine,
     tags: dict[str, str] | None = None,
 ) -> None:
-    """Write a label array to disk as a Cloud Optimized GeoTIFF.
+    """Write a label array to disk as a Cloud Optimized GeoTIFF with embedded band statistics.
 
     All layers use plain deflate. The floating-point predictor is tempting for
     the float32 DECODE distance map but measures about twice as large on real
@@ -305,31 +306,25 @@ def _write_mask_raster(
     that the predictor would shuffle apart.
     """
     height, width = mask.shape
+    stats = compute_band_stats(mask)
 
-    profile = {
-        "driver": "GTiff",
-        "height": height,
-        "width": width,
-        "count": 1,
-        "dtype": mask.dtype,
-        "crs": crs,
-        "transform": transform,
-        "tiled": True,
-        "blockxsize": 256,
-        "blockysize": 256,
-        "compress": "deflate",
-    }
-
-    # Write as GeoTIFF first
-    temp_path = output_path.with_suffix(".tmp.tif")
-    with rasterio.open(temp_path, "w", **profile) as dst:
+    with rasterio.open(
+        output_path,
+        "w",
+        driver="COG",
+        height=height,
+        width=width,
+        count=1,
+        dtype=mask.dtype,
+        crs=crs,
+        transform=transform,
+        compress="deflate",
+        blocksize=512,
+    ) as dst:
         dst.write(mask, 1)
         if tags:
             dst.update_tags(**tags)
-
-    # Convert to COG
-    _convert_to_cog(temp_path, output_path)
-    temp_path.unlink()
+        embed_band_stats(dst, 1, stats)
 
 
 def _create_single_mask(
@@ -382,25 +377,6 @@ def _create_single_mask(
         width=width,
         height=height,
     )
-
-
-def _convert_to_cog(input_path: Path, output_path: Path) -> None:
-    """Convert a GeoTIFF to Cloud Optimized GeoTIFF (COG)."""
-    with rasterio.open(input_path) as src:
-        profile = src.profile.copy()
-        profile.update(
-            driver="COG",
-            compress="deflate",
-        )
-        # Read data
-        data = src.read()
-        tags = src.tags()
-
-        # Write as COG
-        with rasterio.open(output_path, "w", **profile) as dst:
-            dst.write(data)
-            if tags:
-                dst.update_tags(**tags)
 
 
 def _process_single_grid_cell(args: tuple) -> tuple[MaskResult | None, tuple[str, str] | None]:
