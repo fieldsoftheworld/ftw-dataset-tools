@@ -167,3 +167,33 @@ class TestCreateDatasetSignature:
         assert sig.parameters["min_coverage"].default == 0.01
         assert sig.parameters["resolution"].default == 10.0
         assert sig.parameters["skip_reproject"].default is False
+
+
+class TestCreateDatasetChecksumsFlag:
+    def test_checksums_kwarg_reaches_config(self, monkeypatch, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api import dataset as dataset_module
+
+        captured: dict = {}
+
+        def fake_run_pipeline(ctx, _stages):
+            captured["checksums"] = ctx.config.stages.stac.checksums
+            return ctx
+
+        monkeypatch.setattr(dataset_module.pipeline, "run_pipeline", fake_run_pipeline)
+
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        fields = gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326")
+        fields_path = tmp_path / "f.parquet"
+        fields.to_parquet(fields_path)
+
+        dataset_module.create_dataset(
+            fields_file=fields_path,
+            output_dir=tmp_path / "out",
+            split_type="random-uniform",
+            year=2024,
+            checksums=True,
+        )
+
+        assert captured["checksums"] is True
