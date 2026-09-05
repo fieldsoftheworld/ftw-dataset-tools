@@ -78,7 +78,7 @@ class PipelineContext:
     """Mutable state threaded through pipeline stages."""
 
     config: DatasetConfig
-    fields_input: Path | str  # str form appears only for unresolved URL inputs (dry run)
+    fields_input: Path
     output_dir: Path
     field_dataset: str
     effective_year: int | None
@@ -131,6 +131,36 @@ class PipelineContext:
             self.on_progress(msg)
 
 
+def _resolve_input(
+    config: DatasetConfig, *, log: Callable[[str], None]
+) -> tuple[Path, str, SourceRecord]:
+    """Resolve ``config.fields_file`` to a local path, fetching URLs into the cache.
+
+    Returns the local fields path, the default dataset name stem (derived from
+    the URL or local filename), and the source record describing where the
+    bytes came from.
+
+    Raises:
+        FileNotFoundError: If a local input fields file does not exist.
+    """
+    if is_url(config.fields_file):
+        name_stem = Path(urlsplit(config.fields_file).path).stem or "source"
+        fetch_cfg = config.stages.fetch
+        log(f"Fetching source {config.fields_file}...")
+        record = fetch_source(
+            config.fields_file,
+            Path(fetch_cfg.cache_dir).expanduser(),
+            refresh=fetch_cfg.refresh,
+        )
+        log("Using cached copy" if record.fetched_at is None else f"Fetched {record.size:,} bytes")
+        return record.local_path, name_stem, record
+
+    fields_path = Path(config.fields_file).resolve()
+    if not fields_path.exists():
+        raise FileNotFoundError(f"Fields file not found: {fields_path}")
+    return fields_path, fields_path.stem, describe_local_source(fields_path)
+
+
 def build_context(
     config: DatasetConfig,
     *,
@@ -138,15 +168,11 @@ def build_context(
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int], None] | None = None,
     provenance: dict[str, Any] | None = None,
-    resolve_source: bool = True,
 ) -> PipelineContext:
     """Resolve paths, detect temporal extent, and prepare the output directory.
 
     A URL ``fields_file`` is fetched into ``config.stages.fetch.cache_dir`` (or
-    reused from a prior fetch) when ``resolve_source`` is True; a local path is
-    hashed for provenance instead. ``resolve_source=False`` (used by
-    ``--dry-run``) skips both the fetch and the existence check, leaving
-    ``fields_input`` as the unresolved URL/path.
+    reused from a prior fetch); a local path is hashed for provenance instead.
 
     Raises:
         FileNotFoundError: If a local input fields file does not exist.
@@ -156,36 +182,7 @@ def build_context(
         if on_progress:
             on_progress(msg)
 
-    source: SourceRecord | None = None
-    url_input = is_url(config.fields_file)
-
-    if url_input:
-        name_stem = Path(urlsplit(config.fields_file).path).stem
-        if resolve_source:
-            fetch_cfg = config.stages.fetch
-            log(f"Fetching source {config.fields_file}...")
-            source = fetch_source(
-                config.fields_file,
-                Path(fetch_cfg.cache_dir).expanduser(),
-                refresh=fetch_cfg.refresh,
-            )
-            fields_path = source.local_path
-            log(
-                "Using cached copy"
-                if source.fetched_at is None
-                else f"Fetched {source.size:,} bytes"
-            )
-        else:
-            # Path() collapses "https://" to "https:/", so keep the raw URL
-            # string rather than round-tripping it through pathlib.
-            fields_path = config.fields_file
-    else:
-        fields_path = Path(config.fields_file).resolve()
-        if not fields_path.exists():
-            raise FileNotFoundError(f"Fields file not found: {fields_path}")
-        name_stem = fields_path.stem
-        if resolve_source:
-            source = describe_local_source(fields_path)
+    fields_path, name_stem, source = _resolve_input(config, log=log)
 
     field_dataset = config.name or name_stem
     out_dir = (
@@ -194,29 +191,24 @@ def build_context(
         else Path(f"{name_stem}-dataset").resolve()
     )
 
-    if provenance is not None and source is not None:
+    if provenance is not None:
         provenance["source"] = source.to_dict(config.source_via)
         if provenance.get("ftwd_git_commit") is None:
             provenance["ftwd_git_commit"] = installed_git_commit()
 
     # Resolve the calendar year (year arg wins; else derive from datetime column).
-    # Skipped for an unresolved URL (dry run) so we never open a remote file.
-    if resolve_source or not url_input:
-        log("Checking temporal extent availability...")
-        datetime_col = stac.detect_datetime_column(fields_path)
-        effective_year = config.year
-        if datetime_col:
-            log(f"Found '{datetime_col}' column for temporal extent")
-            if effective_year is None:
-                effective_year = stac.get_year_from_datetime_column(fields_path, datetime_col)
-                if effective_year:
-                    log(f"Using year {effective_year} from {datetime_col} for chip naming")
-        elif config.year is not None:
-            log(f"Using year {config.year} for temporal extent")
-        has_temporal = datetime_col is not None or config.year is not None
-    else:
-        effective_year = config.year
-        has_temporal = config.year is not None
+    log("Checking temporal extent availability...")
+    datetime_col = stac.detect_datetime_column(fields_path)
+    effective_year = config.year
+    if datetime_col:
+        log(f"Found '{datetime_col}' column for temporal extent")
+        if effective_year is None:
+            effective_year = stac.get_year_from_datetime_column(fields_path, datetime_col)
+            if effective_year:
+                log(f"Using year {effective_year} from {datetime_col} for chip naming")
+    elif config.year is not None:
+        log(f"Using year {config.year} for temporal extent")
+    has_temporal = datetime_col is not None or config.year is not None
 
     ctx = PipelineContext(
         config=config,

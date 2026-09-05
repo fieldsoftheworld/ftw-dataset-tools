@@ -90,7 +90,7 @@ provenance keys describing where the input fields file came from:
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `source` | object | `href` (URL or absolute local path), `via` (the `source_via` value, or null), `sha256` and `size` of the fetched/local file, `fetched_at` (ISO 8601 UTC timestamp, or null if served from cache or a local file), `local_path` (where the file lives on disk) |
+| `source` | object | `href` (URL or absolute local path), `via` (the `source_via` value, or null), `sha256` and `size` of the fetched/local file, `fetched_at` (ISO 8601 UTC timestamp, or null if served from cache or a local file) |
 | `ftwd_git_commit` | string \| null | Git commit `ftwd` was installed from, or null if it wasn't installed from a git checkout |
 
 ## Item Structure

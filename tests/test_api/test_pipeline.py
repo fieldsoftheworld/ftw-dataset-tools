@@ -586,23 +586,3 @@ class TestSourceResolution:
         assert provenance["source"]["href"] == str(sample_geoparquet_4326.resolve())
         assert provenance["source"]["fetched_at"] is None
         assert len(provenance["source"]["sha256"]) == 64
-
-    def test_dry_run_does_not_fetch(self, tmp_path: Path, monkeypatch) -> None:
-        from ftw_dataset_tools.api import pipeline
-        from ftw_dataset_tools.api.config import DatasetConfig
-
-        def boom(*_args, **_kwargs):
-            raise AssertionError("fetch_source must not be called")
-
-        monkeypatch.setattr(pipeline, "fetch_source", boom)
-        config = DatasetConfig.from_dict(
-            {
-                "fields_file": "https://x/lu.parquet",
-                "output_dir": str(tmp_path / "out"),
-                "year": 2024,
-            }
-        )
-
-        ctx = pipeline.build_context(config, resolve_source=False)
-
-        assert str(ctx.fields_input) == "https://x/lu.parquet"

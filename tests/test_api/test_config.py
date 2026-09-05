@@ -414,13 +414,6 @@ class TestSourceKeys:
         with pytest.raises(ConfigError, match="source_via"):
             DatasetConfig.from_dict({"fields_file": "f.parquet", "source_via": "not a url"})
 
-    def test_provenance_carries_source_and_commit(self) -> None:
-        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
-        prov = config.provenance_dict(source={"href": "x"}, git_commit="a" * 40)
-
-        assert prov["source"] == {"href": "x"}
-        assert prov["ftwd_git_commit"] == "a" * 40
-
     def test_provenance_defaults_null(self) -> None:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
         prov = config.provenance_dict()

@@ -563,21 +563,19 @@ class DatasetConfig:
         data["stages"]["splits"]["split_percents"] = list(self.stages.splits.split_percents)
         return data
 
-    def provenance_dict(
-        self,
-        generated_at: datetime | None = None,
-        *,
-        source: dict[str, Any] | None = None,
-        git_commit: str | None = None,
-    ) -> dict[str, Any]:
-        """Return a resolved provenance record for output and STAC embedding."""
+    def provenance_dict(self, generated_at: datetime | None = None) -> dict[str, Any]:
+        """Return a resolved provenance record for output and STAC embedding.
+
+        ``source`` and ``ftwd_git_commit`` start out ``None`` here; the pipeline's
+        ``build_context`` fills them in once the input is resolved.
+        """
         stamp = generated_at or datetime.now(UTC)
         return {
             "ftwd_version": __version__,
-            "ftwd_git_commit": git_commit,
+            "ftwd_git_commit": None,
             "config_schema_version": CONFIG_SCHEMA_VERSION,
             "generated_at": stamp.isoformat(),
-            "source": source,
+            "source": None,
             "config": self.config_dict(),
         }
 
