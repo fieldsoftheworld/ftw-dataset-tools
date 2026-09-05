@@ -528,3 +528,61 @@ class TestChipDirLayout:
         assert dirs["ftw-33UXQ0001_2024"] == ctx.chips_base_dir / "33UXQ" / "ftw-33UXQ0001_2024"
         assert dirs["grid_001_2024"] == ctx.chips_base_dir / "other" / "grid_001_2024"
         assert all(p.is_dir() for p in dirs.values())
+
+
+class TestSourceResolution:
+    def test_url_input_is_fetched_and_recorded(self, tmp_path: Path, monkeypatch) -> None:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api import pipeline
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        local = tmp_path / "cached.parquet"
+        gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(local)
+
+        def fake_fetch(url, cache_dir, *, refresh=False, **_kwargs):  # noqa: ARG001
+            from ftw_dataset_tools.api.source import SourceRecord
+
+            assert url == "https://x/lu.parquet"
+            assert str(cache_dir).endswith("cache")
+            return SourceRecord(url, local, "ab" * 32, 3, "2026-09-04T00:00:00Z")
+
+        monkeypatch.setattr(pipeline, "fetch_source", fake_fetch)
+        monkeypatch.setattr(pipeline, "installed_git_commit", lambda: "c" * 40)
+
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "https://x/lu.parquet",
+                "source_via": "https://x/collection.json",
+                "output_dir": str(tmp_path / "out"),
+                "year": 2024,
+                "stages": {"fetch": {"cache_dir": str(tmp_path / "cache")}},
+            }
+        )
+        provenance = config.provenance_dict()
+        ctx = pipeline.build_context(config, provenance=provenance)
+
+        assert ctx.fields_input == local
+        assert provenance["source"]["href"] == "https://x/lu.parquet"
+        assert provenance["source"]["via"] == "https://x/collection.json"
+        assert provenance["source"]["sha256"] == "ab" * 32
+        assert provenance["ftwd_git_commit"] == "c" * 40
+
+    def test_local_input_is_described(self, sample_geoparquet_4326: Path, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api import pipeline
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(sample_geoparquet_4326),
+                "output_dir": str(tmp_path / "out"),
+                "year": 2024,
+            }
+        )
+        provenance = config.provenance_dict()
+        pipeline.build_context(config, provenance=provenance)
+
+        assert provenance["source"]["href"] == str(sample_geoparquet_4326.resolve())
+        assert provenance["source"]["fetched_at"] is None
+        assert len(provenance["source"]["sha256"]) == 64

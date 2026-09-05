@@ -739,6 +739,15 @@ def generate_stac_catalog(
         title=base_title,
         description=metadata.description if metadata else None,
     )
+    if config is not None and config.source_via:
+        collection.add_link(
+            Link(
+                rel="via",
+                target=config.source_via,
+                media_type="application/json",
+                title="Source field boundary collection",
+            )
+        )
     if config is not None:
         collection.extra_fields.update(_collection_ftw_properties(config))
     if provenance is not None:

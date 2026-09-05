@@ -51,6 +51,7 @@ _ALLOWED_TOP_KEYS = (
     "name",
     "year",
     "skip_reproject",
+    "source_via",
     "stages",
     "metadata",
 )
@@ -251,6 +252,14 @@ class StacConfig:
     checksums: bool = False
 
 
+@dataclass
+class FetchConfig:
+    """Settings for the fetch stage."""
+
+    cache_dir: str = "~/.cache/ftwd/sources"
+    refresh: bool = False
+
+
 # Provider roles ftwd may write. "host" is reserved for whoever publishes the
 # catalog (the catalog repository adds it), so a config must not claim it.
 PROVIDER_ROLES = ("licensor", "producer", "processor")
@@ -391,6 +400,7 @@ class StagesConfig:
     select_images: SelectImagesConfig = field(default_factory=SelectImagesConfig)
     download_images: DownloadImagesConfig = field(default_factory=DownloadImagesConfig)
     stac: StacConfig = field(default_factory=StacConfig)
+    fetch: FetchConfig = field(default_factory=FetchConfig)
 
 
 @dataclass
@@ -416,6 +426,7 @@ class DatasetConfig:
     name: str | None = None
     year: int | None = None
     skip_reproject: bool = False
+    source_via: str | None = None
     stages: StagesConfig = field(default_factory=StagesConfig)
     metadata: MetadataConfig | None = None
     class_filter: ClassFilter | None = None
@@ -453,6 +464,7 @@ class DatasetConfig:
             name=_opt_str(data.get("name")),
             year=data.get("year"),
             skip_reproject=bool(data.get("skip_reproject", False)),
+            source_via=_opt_str(data.get("source_via")),
             stages=stages,
             metadata=metadata,
         )
@@ -514,6 +526,9 @@ class DatasetConfig:
 
     def validate(self) -> None:
         """Validate values, raising ConfigError on the first problem found."""
+        if self.source_via is not None and not self.source_via.startswith(("http://", "https://")):
+            raise ConfigError("source_via must be an http(s) URL.")
+
         split_type = self.stages.splits.split_type
         if split_type is not None and split_type not in splits.SPLIT_TYPE_CHOICES:
             raise ConfigError(
@@ -549,12 +564,18 @@ class DatasetConfig:
         return data
 
     def provenance_dict(self, generated_at: datetime | None = None) -> dict[str, Any]:
-        """Return a resolved provenance record for output and STAC embedding."""
+        """Return a resolved provenance record for output and STAC embedding.
+
+        ``source`` and ``ftwd_git_commit`` start out ``None`` here; the pipeline's
+        ``build_context`` fills them in once the input is resolved.
+        """
         stamp = generated_at or datetime.now(UTC)
         return {
             "ftwd_version": __version__,
+            "ftwd_git_commit": None,
             "config_schema_version": CONFIG_SCHEMA_VERSION,
             "generated_at": stamp.isoformat(),
+            "source": None,
             "config": self.config_dict(),
         }
 
@@ -647,6 +668,7 @@ _STAGE_TYPES: dict[str, type] = {
     "select_images": SelectImagesConfig,
     "download_images": DownloadImagesConfig,
     "stac": StacConfig,
+    "fetch": FetchConfig,
 }
 
 

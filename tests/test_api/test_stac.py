@@ -636,3 +636,28 @@ class TestCollectionMetadata:
         TestCollectionAssetMetadata()._build_catalog(tmp_path, on_progress=messages.append)
 
         assert any("not Portolan-publishable" in m for m in messages)
+
+    def test_via_link_from_source_via(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "unused.parquet",
+                "source_via": "https://x/collection.json",
+                "metadata": {"license": "CC0-1.0"},
+            }
+        )
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, config=config)
+
+        coll = json.loads(result.collection_path.read_text())
+        via = [link for link in coll["links"] if link["rel"] == "via"]
+        assert via == [
+            {
+                "rel": "via",
+                "href": "https://x/collection.json",
+                "type": "application/json",
+                "title": "Source field boundary collection",
+            }
+        ]

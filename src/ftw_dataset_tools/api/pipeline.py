@@ -21,6 +21,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import duckdb
 
@@ -37,11 +38,18 @@ from ftw_dataset_tools.api.imagery import (
     select_imagery_for_catalog,
 )
 from ftw_dataset_tools.api.masks import MaskType, get_item_id, get_mgrs_square
+from ftw_dataset_tools.api.source import (
+    describe_local_source,
+    fetch_source,
+    installed_git_commit,
+    is_url,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ftw_dataset_tools.api.config import DatasetConfig
+    from ftw_dataset_tools.api.source import SourceRecord
 
 # Ordered list of all pipeline stages.
 STAGE_ORDER = [
@@ -76,6 +84,7 @@ class PipelineContext:
     effective_year: int | None
     has_temporal: bool
     provenance: dict[str, Any] | None = None
+    source: SourceRecord | None = None
     on_progress: Callable[[str], None] | None = None
     on_mask_progress: Callable[[int, int], None] | None = None
     on_mask_start: Callable[[int, int], None] | None = None
@@ -122,6 +131,36 @@ class PipelineContext:
             self.on_progress(msg)
 
 
+def _resolve_input(
+    config: DatasetConfig, *, log: Callable[[str], None]
+) -> tuple[Path, str, SourceRecord]:
+    """Resolve ``config.fields_file`` to a local path, fetching URLs into the cache.
+
+    Returns the local fields path, the default dataset name stem (derived from
+    the URL or local filename), and the source record describing where the
+    bytes came from.
+
+    Raises:
+        FileNotFoundError: If a local input fields file does not exist.
+    """
+    if is_url(config.fields_file):
+        name_stem = Path(urlsplit(config.fields_file).path).stem or "source"
+        fetch_cfg = config.stages.fetch
+        log(f"Fetching source {config.fields_file}...")
+        record = fetch_source(
+            config.fields_file,
+            Path(fetch_cfg.cache_dir).expanduser(),
+            refresh=fetch_cfg.refresh,
+        )
+        log("Using cached copy" if record.fetched_at is None else f"Fetched {record.size:,} bytes")
+        return record.local_path, name_stem, record
+
+    fields_path = Path(config.fields_file).resolve()
+    if not fields_path.exists():
+        raise FileNotFoundError(f"Fields file not found: {fields_path}")
+    return fields_path, fields_path.stem, describe_local_source(fields_path)
+
+
 def build_context(
     config: DatasetConfig,
     *,
@@ -132,23 +171,30 @@ def build_context(
 ) -> PipelineContext:
     """Resolve paths, detect temporal extent, and prepare the output directory.
 
-    Raises:
-        FileNotFoundError: If the input fields file does not exist.
-    """
-    fields_path = Path(config.fields_file).resolve()
-    if not fields_path.exists():
-        raise FileNotFoundError(f"Fields file not found: {fields_path}")
+    A URL ``fields_file`` is fetched into ``config.stages.fetch.cache_dir`` (or
+    reused from a prior fetch); a local path is hashed for provenance instead.
 
-    field_dataset = config.name or fields_path.stem
-    out_dir = (
-        Path(config.output_dir).resolve()
-        if config.output_dir is not None
-        else Path(f"{fields_path.stem}-dataset").resolve()
-    )
+    Raises:
+        FileNotFoundError: If a local input fields file does not exist.
+    """
 
     def log(msg: str) -> None:
         if on_progress:
             on_progress(msg)
+
+    fields_path, name_stem, source = _resolve_input(config, log=log)
+
+    field_dataset = config.name or name_stem
+    out_dir = (
+        Path(config.output_dir).resolve()
+        if config.output_dir is not None
+        else Path(f"{name_stem}-dataset").resolve()
+    )
+
+    if provenance is not None:
+        provenance["source"] = source.to_dict(config.source_via)
+        if provenance.get("ftwd_git_commit") is None:
+            provenance["ftwd_git_commit"] = installed_git_commit()
 
     # Resolve the calendar year (year arg wins; else derive from datetime column).
     log("Checking temporal extent availability...")
@@ -162,7 +208,6 @@ def build_context(
                 log(f"Using year {effective_year} from {datetime_col} for chip naming")
     elif config.year is not None:
         log(f"Using year {config.year} for temporal extent")
-
     has_temporal = datetime_col is not None or config.year is not None
 
     ctx = PipelineContext(
@@ -173,6 +218,7 @@ def build_context(
         effective_year=effective_year,
         has_temporal=has_temporal,
         provenance=provenance,
+        source=source,
         on_progress=on_progress,
         on_mask_progress=on_mask_progress,
         on_mask_start=on_mask_start,
