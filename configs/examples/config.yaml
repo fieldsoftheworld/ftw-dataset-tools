@@ -109,3 +109,15 @@ stages:
     enabled: false
     bands: [red, green, blue, nir]
     resolution: 10.0
+
+  docs:
+    # PMTiles and the MapLibre styles that read them. "auto" builds them when the
+    # tippecanoe binary is installed and warns when it is not; true fails if it is
+    # missing; false skips both tiles and styles. Styles are only written for tiles
+    # that exist, since a style with no source renders nothing.
+    pmtiles: auto
+    # Write README.md (what the collection contains, measured from the outputs).
+    readme: true
+    # Write AGENTS.md (schema, quality notes and example queries, each executed
+    # against the collection before it is written).
+    agents: true

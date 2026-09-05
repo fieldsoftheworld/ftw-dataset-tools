@@ -216,6 +216,20 @@ Parquet assets (fields, boundary lines, chips, items) also carry `table:columns`
 type) and `table:row_count` from the
 [table extension](https://github.com/stac-extensions/table).
 
+The docs stage adds two more asset shapes to the collection when it runs (see
+[Output Layout](#output-layout) above):
+
+| Asset key | Media type | Roles | Description |
+|-----------|------------|-------|--------------|
+| `chips_tiles` | `application/vnd.pmtiles` | `visual` | Vector tiles of the chips (`chips.pmtiles`) |
+| `fields_tiles` | `application/vnd.pmtiles` | `visual` | Vector tiles of the fields (`fields.pmtiles`) |
+| `style-<id>` | `application/vnd.mapbox.style+json` | `style`, plus `default` on the first style written | A MapLibre GL style JSON under `styles/`, e.g. `style-split` for `styles/split.json` |
+
+`chips_tiles` and `fields_tiles` also carry `file:size`. Re-running the docs stage
+replaces these assets and the `describedby`/`agents` links in place (matched by key, or
+by `rel` + `href`) rather than duplicating them, and drops any tile, style or document
+entry a previous run wrote that this run did not produce.
+
 ## Output Layout
 
 The output directory is a self-contained STAC collection. `collection.json` sits at the root, and chip items are organized into sub-catalogs by MGRS 100 km square to keep directory sizes manageable:
@@ -227,6 +241,12 @@ The output directory is a self-contained STAC collection. `collection.json` sits
 ├── {name}_fields_filtered.parquet    # Filtered fields (if class filter applied)
 ├── {name}_boundary_lines.parquet     # Boundary lines from vector data
 ├── items.parquet                     # Collection mirror (STAC items as Parquet; only if any chip has masks)
+├── README.md                         # What the collection contains (docs stage)
+├── AGENTS.md                         # Schema, quality notes, executed example queries (docs stage)
+├── chips.pmtiles                     # Chip vector tiles (docs stage; only when tippecanoe ran)
+├── fields.pmtiles                    # Field vector tiles (docs stage; only when tippecanoe ran)
+├── styles/                           # MapLibre GL styles for the PMTiles (docs stage)
+│   └── {style_id}.json               # e.g. split.json, field-coverage.json, dominant-crop.json, crops.json, outline.json
 └── chips/
     ├── {mgrs100k}/
     │   ├── catalog.json              # Sub-catalog for MGRS 100 km square
@@ -239,6 +259,17 @@ The output directory is a self-contained STAC collection. `collection.json` sits
         ├── catalog.json
         └── {item_id}/...
 ```
+
+**Docs stage outputs** (the final `docs` stage, run by both `ftwd run` and
+`ftwd create-dataset`): `README.md` and `AGENTS.md`
+are generated from the collection's measured contents and linked from `collection.json`
+via `describedby` and `agents` links, respectively. `chips.pmtiles` / `fields.pmtiles` and
+the styles under `styles/` are only written when the `tippecanoe` binary is available (or
+`stages.docs.pmtiles` is not set to `false`); each style is registered as a `style-<id>`
+asset on the collection. Every STAC object this tool writes — the collection, every
+sub-catalog and every item — declares the
+[Portolan schema](https://schemas.portolan-sdi.org/portolan/v0.1.2/schema.json) URI in
+`stac_extensions`.
 
 **MGRS square rule:** The sub-catalog id is the MGRS 100 km square extracted from FTW grid ids (e.g., `33UXP` from `ftw-33UXP0410`). Grid ids that don't match the FTW naming convention are placed under `other`.
 

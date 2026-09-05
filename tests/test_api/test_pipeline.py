@@ -11,6 +11,7 @@ import pytest
 from shapely.geometry import box
 
 from ftw_dataset_tools.api import crop_stats, field_stats, pipeline
+from ftw_dataset_tools.api import tiles as tiles_module
 from ftw_dataset_tools.api.config import ClassFilter, ClassFilterError, DatasetConfig
 from ftw_dataset_tools.api.pipeline import StageInputError
 
@@ -81,6 +82,7 @@ class TestResolveStages:
             "masks",
             "stac",
             "select_images",
+            "docs",
         ]
 
     def test_download_enabled_included(self) -> None:
@@ -102,6 +104,7 @@ class TestResolveStages:
             "masks",
             "stac",
             "select_images",
+            "docs",
         ]
         assert pipeline.resolve_stages(through_stage="chips", config=config) == [
             "reproject",
@@ -736,3 +739,223 @@ class TestChipsStageCropStats:
         assert codes == [(1,), (None,)]  # the NULL is what makes pandas widen the column
         assert types["hcat_dominant_code"] == "BIGINT"
         assert types["split"] == "VARCHAR"
+
+
+class TestDocsStage:
+    """Tests for the final docs stage: tiles, styles, README/AGENTS, registration."""
+
+    def test_docs_is_last_stage_and_enabled_by_default(self) -> None:
+        assert pipeline.STAGE_ORDER[-1] == "docs"
+        assert "docs" in pipeline.resolve_stages()
+
+    def test_stage_docs_without_tippecanoe_writes_docs_and_warns(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        import json
+
+        from ftw_dataset_tools.api import tiles
+        from tests.test_api.test_stac import TestCollectionAssetMetadata
+
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        fields = tmp_path / "ds_fields.parquet"
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(fields),
+                "output_dir": str(tmp_path),
+                "name": "ds",
+                "year": 2024,
+            }
+        )
+        messages: list[str] = []
+        ctx = pipeline.build_context(config, on_progress=messages.append)
+        monkeypatch.setattr(tiles, "tippecanoe_available", lambda: False)
+
+        pipeline.stage_docs(ctx)
+
+        assert (tmp_path / "README.md").exists() and (tmp_path / "AGENTS.md").exists()
+        assert not (tmp_path / "chips.pmtiles").exists()
+        assert not (tmp_path / "styles").exists()
+        assert any("tippecanoe not found" in m for m in messages)
+        coll = json.loads(result.collection_path.read_text())
+        rels = {link["rel"] for link in coll["links"]}
+        assert {"describedby", "agents"} <= rels
+        assert "chips_tiles" not in coll["assets"]
+        assert ctx.docs_result is not None and ctx.docs_result.tippecanoe_used is False
+
+    def test_stage_docs_pmtiles_true_without_tippecanoe_errors(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from ftw_dataset_tools.api import tiles
+        from tests.test_api.test_stac import TestCollectionAssetMetadata
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(tmp_path / "ds_fields.parquet"),
+                "output_dir": str(tmp_path),
+                "name": "ds",
+                "year": 2024,
+                "stages": {"docs": {"pmtiles": True}},
+            }
+        )
+        ctx = pipeline.build_context(config)
+        monkeypatch.setattr(tiles, "tippecanoe_available", lambda: False)
+
+        with pytest.raises(RuntimeError, match="tippecanoe"):
+            pipeline.stage_docs(ctx)
+
+    def test_stage_docs_pmtiles_false_skips_tiles_and_styles_silently(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        import json
+
+        from ftw_dataset_tools.api import tiles
+        from tests.test_api.test_stac import TestCollectionAssetMetadata
+
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(tmp_path / "ds_fields.parquet"),
+                "output_dir": str(tmp_path),
+                "name": "ds",
+                "year": 2024,
+                "stages": {"docs": {"pmtiles": False}},
+            }
+        )
+        messages: list[str] = []
+        ctx = pipeline.build_context(config, on_progress=messages.append)
+        monkeypatch.setattr(tiles, "tippecanoe_available", lambda: False)
+
+        pipeline.stage_docs(ctx)
+
+        assert not any("tippecanoe not found" in m for m in messages)
+        assert not (tmp_path / "styles").exists()
+        assert ctx.docs_result is not None and ctx.docs_result.tippecanoe_used is False
+        coll = json.loads(result.collection_path.read_text())
+        assert "chips_tiles" not in coll["assets"] and "fields_tiles" not in coll["assets"]
+        assert [k for k in coll["assets"] if k.startswith("style-")] == []
+        assert {link["rel"] for link in coll["links"]} >= {"describedby", "agents"}
+
+    def test_stage_docs_requires_the_collection(self, tmp_path: Path) -> None:
+        fields = tmp_path / "ds_fields.parquet"
+        gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(
+            fields
+        )
+        config = DatasetConfig.from_dict(
+            {"fields_file": str(fields), "output_dir": str(tmp_path), "name": "ds", "year": 2024}
+        )
+        ctx = pipeline.build_context(config)
+
+        with pytest.raises(StageInputError, match=r"collection\.json"):
+            pipeline.stage_docs(ctx)
+
+    def test_stage_docs_with_docs_disabled_logs_and_returns(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from ftw_dataset_tools.api import tiles
+        from tests.test_api.test_stac import TestCollectionAssetMetadata
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(tmp_path / "ds_fields.parquet"),
+                "output_dir": str(tmp_path),
+                "name": "ds",
+                "year": 2024,
+                "stages": {"docs": {"pmtiles": False, "readme": False, "agents": False}},
+            }
+        )
+        ctx = pipeline.build_context(config)
+        monkeypatch.setattr(tiles, "tippecanoe_available", lambda: False)
+
+        pipeline.stage_docs(ctx)
+
+        assert not (tmp_path / "README.md").exists()
+        assert not (tmp_path / "AGENTS.md").exists()
+        assert ctx.docs_result is not None
+        assert ctx.docs_result.docs == [] and ctx.docs_result.tiles == {}
+
+    def test_stage_docs_prunes_a_previous_run_when_everything_is_disabled(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Turning the docs stage's outputs off must retract them from the collection."""
+        import json
+
+        from ftw_dataset_tools.api import tiles
+        from tests.test_api.test_stac import TestCollectionAssetMetadata
+
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        monkeypatch.setattr(tiles, "tippecanoe_available", lambda: False)
+
+        def run(**docs_stage: object) -> None:
+            config = DatasetConfig.from_dict(
+                {
+                    "fields_file": str(tmp_path / "ds_fields.parquet"),
+                    "output_dir": str(tmp_path),
+                    "name": "ds",
+                    "year": 2024,
+                    "stages": {"docs": docs_stage},
+                }
+            )
+            pipeline.stage_docs(pipeline.build_context(config))
+
+        run(pmtiles=False)
+        # Stand in for an earlier run that had tippecanoe: assets the rerun must retract.
+        seeded = json.loads(result.collection_path.read_text())
+        seeded["assets"]["chips_tiles"] = {"href": "./chips.pmtiles"}
+        seeded["assets"]["fields_tiles"] = {"href": "./fields.pmtiles"}
+        seeded["assets"]["style-outline"] = {"href": "./styles/outline.json"}
+        result.collection_path.write_text(json.dumps(seeded, indent=2))
+
+        run(pmtiles=False, readme=False, agents=False)
+
+        coll = json.loads(result.collection_path.read_text())
+        assert "chips_tiles" not in coll["assets"] and "fields_tiles" not in coll["assets"]
+        assert [k for k in coll["assets"] if k.startswith("style-")] == []
+        assert {link["rel"] for link in coll["links"]}.isdisjoint({"describedby", "agents"})
+        # Everything the stac stage wrote is left alone.
+        for key in ("fields", "boundary_lines", "chips", "items"):
+            assert coll["assets"][key] == seeded["assets"][key]
+        assert [(link["rel"], link["href"]) for link in coll["links"]] == [
+            ("root", "./collection.json"),
+            ("child", "./chips/33UXP/catalog.json"),
+        ]
+
+    @pytest.mark.skipif(
+        not tiles_module.tippecanoe_available(), reason="tippecanoe is not installed"
+    )
+    def test_stage_docs_with_tippecanoe_registers_tiles_and_styles(self, tmp_path: Path) -> None:
+        import json
+
+        from tests.test_api.test_stac import TestCollectionAssetMetadata
+
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(tmp_path / "ds_fields.parquet"),
+                "output_dir": str(tmp_path),
+                "name": "ds",
+                "year": 2024,
+                "stages": {"docs": {"pmtiles": True}},
+            }
+        )
+        ctx = pipeline.build_context(config)
+
+        pipeline.stage_docs(ctx)
+
+        assert (tmp_path / "chips.pmtiles").exists() and (tmp_path / "fields.pmtiles").exists()
+        assert not list(tmp_path.glob("*.geojsonseq"))  # the intermediate is cleaned up
+        coll = json.loads(result.collection_path.read_text())
+        assert coll["assets"]["chips_tiles"]["href"] == "./chips.pmtiles"
+        assert coll["assets"]["fields_tiles"]["file:size"] > 0
+        style_keys = [k for k in coll["assets"] if k.startswith("style-")]
+        assert style_keys and all(
+            (tmp_path / "styles" / f"{k.removeprefix('style-')}.json").exists() for k in style_keys
+        )
+        assert ctx.docs_result is not None and ctx.docs_result.tippecanoe_used is True
+        # Styles live in styles/, one directory below the PMTiles they reference, so
+        # the embedded source URL must climb back up out of styles/ to find them.
+        chip_style = json.loads((tmp_path / "styles" / "field-coverage.json").read_text())
+        assert chip_style["sources"]["data"]["url"] == "pmtiles://../chips.pmtiles"
+        field_style = json.loads((tmp_path / "styles" / "outline.json").read_text())
+        assert field_style["sources"]["data"]["url"] == "pmtiles://../fields.pmtiles"

@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Literal
 
 import pystac
 
+from ftw_dataset_tools.api.stac import _add_portolan_schema
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -217,6 +219,8 @@ def _create_season_child_item(
 
     # Always include eo:cloud_cover, rounded to 2 decimal places
     child_item.properties["eo:cloud_cover"] = round(scene.cloud_cover, 2)
+
+    _add_portolan_schema(child_item)
 
     # Save child item
     child_item.save_object(dest_href=str(child_path))

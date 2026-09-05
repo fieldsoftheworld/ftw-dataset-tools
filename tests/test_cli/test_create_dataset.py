@@ -387,3 +387,74 @@ class TestChecksumsFlag:
         )
 
         assert captured["checksums"] is True
+
+
+class TestCreateDatasetDocsSummary:
+    """create-dataset also runs the docs stage, so its summary reports it too."""
+
+    def test_docs_summary_line_included(
+        self, sample_fields_geoparquet: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api.pipeline import DocsStageResult
+
+        def fake_create_dataset(**_kwargs: Any) -> CreateDatasetResult:
+            return CreateDatasetResult(
+                output_dir=tmp_path,
+                field_dataset="fields",
+                fields_file=tmp_path / "fields_fields.parquet",
+                chips_file=tmp_path / "fields_chips.parquet",
+                boundary_lines_file=tmp_path / "fields_boundary_lines.parquet",
+                docs_result=DocsStageResult(
+                    tiles={"chips_tiles": tmp_path / "chips.pmtiles"},
+                    styles=[],
+                    docs=[tmp_path / "README.md", tmp_path / "AGENTS.md"],
+                    tippecanoe_used=True,
+                ),
+            )
+
+        monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
+
+        result = _invoke(sample_fields_geoparquet, "--skip-images")
+
+        assert result.exit_code == 0, result.output
+        assert "Docs: README.md, AGENTS.md; 1 PMTiles, 0 styles" in result.output
+
+    def test_no_docs_line_when_docs_stage_did_not_run(
+        self, sample_fields_geoparquet: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_create_dataset(**_kwargs: Any) -> CreateDatasetResult:
+            return CreateDatasetResult(
+                output_dir=tmp_path,
+                field_dataset="fields",
+                fields_file=tmp_path / "fields_fields.parquet",
+                chips_file=tmp_path / "fields_chips.parquet",
+                boundary_lines_file=tmp_path / "fields_boundary_lines.parquet",
+            )
+
+        monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
+
+        result = _invoke(sample_fields_geoparquet, "--skip-images")
+
+        assert result.exit_code == 0, result.output
+        assert "Docs:" not in result.output
+
+
+class TestCreateDatasetRuntimeError:
+    def test_runtime_error_prints_clean_message(
+        self, sample_fields_geoparquet: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A RuntimeError (e.g. pmtiles: true without tippecanoe) aborts cleanly."""
+
+        def fake_create_dataset(**_kwargs: Any) -> CreateDatasetResult:
+            raise RuntimeError(
+                "stages.docs.pmtiles is true but tippecanoe is not installed. "
+                "Install tippecanoe, or set stages.docs.pmtiles to auto or false."
+            )
+
+        monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
+
+        result = _invoke(sample_fields_geoparquet, "--skip-images")
+
+        assert result.exit_code != 0
+        assert "tippecanoe is not installed" in result.output
+        assert "Traceback" not in result.output

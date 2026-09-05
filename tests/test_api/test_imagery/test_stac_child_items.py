@@ -11,6 +11,7 @@ from ftw_dataset_tools.api.imagery.stac_child_items import (
     _create_season_child_item,
     create_child_items_from_selection,
 )
+from ftw_dataset_tools.api.stac import PORTOLAN_SCHEMA_URI
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -803,6 +804,37 @@ class TestCreateSeasonChildItem:
 
         child_path = chip_dir / "chip_001_planting_s2.json"
         assert child_path.exists()
+
+    def test_child_item_carries_portolan_schema_uri_exactly_once(
+        self,
+        tmp_path: Path,
+        mock_selected_scene: MagicMock,
+    ) -> None:
+        """Test that the child item declares the Portolan schema URI exactly once."""
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+
+        parent_item = pystac.Item(
+            id="chip_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime.now(UTC),
+            properties={},
+        )
+        parent_item.set_self_href(str(chip_dir / "chip_001.json"))
+
+        _create_season_child_item(
+            chip_dir=chip_dir,
+            parent_item=parent_item,
+            scene=mock_selected_scene,
+            season="planting",
+            year=2024,
+        )
+
+        child_path = chip_dir / "chip_001_planting_s2.json"
+        child_item = pystac.Item.from_file(str(child_path))
+
+        assert child_item.stac_extensions.count(PORTOLAN_SCHEMA_URI) == 1
 
     def test_creates_harvest_season(
         self,

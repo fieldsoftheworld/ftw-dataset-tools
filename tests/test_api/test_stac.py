@@ -528,6 +528,23 @@ class TestSingleCollectionLayout:
         assert list(result.subcatalog_paths) == ["other"]
         assert (tmp_path / "chips" / "other" / "grid_001_2024" / "grid_001_2024.json").exists()
 
+    def test_portolan_schema_on_every_object(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api.stac import PORTOLAN_SCHEMA_URI
+
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+
+        docs = [
+            result.collection_path,
+            *result.subcatalog_paths.values(),
+            *(tmp_path / "chips").glob("*/*/*.json"),
+        ]
+        assert len(docs) >= 3
+        for path in docs:
+            exts = json.loads(path.read_text()).get("stac_extensions", [])
+            assert exts.count(PORTOLAN_SCHEMA_URI) == 1, path
+
 
 class TestCollectionMetadata:
     def _config(self, **metadata):

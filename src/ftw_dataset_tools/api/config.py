@@ -40,6 +40,10 @@ VALID_MASK_TYPES = (
 # increases dataset size.
 DEFAULT_MASK_TYPES = ("instance", "semantic_2_class", "semantic_3_class")
 
+# The only non-boolean value stages.docs.pmtiles accepts. Booleans are checked
+# with isinstance so the YAML string "true" is rejected rather than coerced.
+PMTILES_AUTO = "auto"
+
 # Current config schema version. Bump when the schema changes incompatibly.
 CONFIG_SCHEMA_VERSION = 1
 
@@ -393,6 +397,17 @@ class DownloadImagesConfig:
 
 
 @dataclass
+class DocsConfig:
+    """Settings for the docs stage (PMTiles, styles, README.md and AGENTS.md)."""
+
+    # "auto" builds PMTiles only when tippecanoe is installed (warning otherwise),
+    # true requires it, false skips tiles and the styles that depend on them.
+    pmtiles: str | bool = "auto"
+    readme: bool = True
+    agents: bool = True
+
+
+@dataclass
 class StagesConfig:
     """Per-stage settings. Stages with no options (boundaries) still run."""
 
@@ -403,6 +418,7 @@ class StagesConfig:
     download_images: DownloadImagesConfig = field(default_factory=DownloadImagesConfig)
     stac: StacConfig = field(default_factory=StacConfig)
     fetch: FetchConfig = field(default_factory=FetchConfig)
+    docs: DocsConfig = field(default_factory=DocsConfig)
 
 
 @dataclass
@@ -556,6 +572,13 @@ class DatasetConfig:
         if not isinstance(self.stages.chips.crop_stats, bool):
             raise ConfigError("stages.chips.crop_stats must be true or false")
 
+        pmtiles = self.stages.docs.pmtiles
+        if not isinstance(pmtiles, bool) and pmtiles != PMTILES_AUTO:
+            raise ConfigError(
+                'stages.docs.pmtiles must be "auto", true or false '
+                f'(got {pmtiles!r}). Note that a quoted "true" is a string, not a boolean.'
+            )
+
         if self.metadata is not None:
             self.metadata.validate()
 
@@ -674,6 +697,7 @@ _STAGE_TYPES: dict[str, type] = {
     "download_images": DownloadImagesConfig,
     "stac": StacConfig,
     "fetch": FetchConfig,
+    "docs": DocsConfig,
 }
 
 

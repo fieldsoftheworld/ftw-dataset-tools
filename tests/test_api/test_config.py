@@ -147,6 +147,27 @@ class TestFromDict:
                 {"fields_file": "f.parquet", "stages": {"chips": {"crop_stats": "yes"}}}
             )
 
+    def test_docs_defaults(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+
+        assert config.stages.docs.pmtiles == "auto"
+        assert config.stages.docs.readme is True and config.stages.docs.agents is True
+
+    def test_docs_pmtiles_validation(self) -> None:
+        DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"docs": {"pmtiles": False}}}
+        )
+        with pytest.raises(ConfigError, match="pmtiles"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"docs": {"pmtiles": "yes"}}}
+            )
+
+    def test_docs_pmtiles_string_true_is_invalid(self) -> None:
+        with pytest.raises(ConfigError, match="pmtiles"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"docs": {"pmtiles": "true"}}}
+            )
+
 
 class TestFromKwargs:
     """Tests for building a config from create_dataset kwargs."""
