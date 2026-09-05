@@ -24,7 +24,7 @@ from ftw_dataset_tools.api.imagery.thumbnails import (
     has_rgb_bands,
 )
 from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
-from ftw_dataset_tools.api.stac_items import update_parent_item
+from ftw_dataset_tools.api.stac_items import update_parent_item, write_item
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -544,7 +544,7 @@ def process_downloaded_scene(
             pass
 
     # Save the child item
-    item.save_object(str(item_path))
+    write_item(item, item_path)
 
     # Update parent chip item with asset reference
     parent_item_path = item_path.parent / f"{base_id}.json"

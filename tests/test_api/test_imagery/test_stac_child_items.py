@@ -977,3 +977,117 @@ class TestCreateSeasonChildItem:
 
         assert child_item.geometry == parent_geometry
         assert child_item.bbox == list(parent_bbox)
+
+
+HIERARCHICAL_HREFS = {
+    "root": "../../../../catalog.json",
+    "parent": "../catalog.json",
+    "collection": "../../../collection.json",
+}
+
+
+def _staged_parent(tmp_path: Path) -> tuple[pystac.Item, Path]:
+    """A chip item on disk whose hierarchical links all point at missing files.
+
+    This is the shape a staging tree has once its items carry the *published*
+    root href: nothing the links name exists next to the item.
+    """
+    import json
+
+    chip_dir = tmp_path / "chips" / "31UFR" / "chip_001"
+    chip_dir.mkdir(parents=True)
+    path = chip_dir / "chip_001.json"
+
+    parent = pystac.Item(
+        id="chip_001",
+        geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+        bbox=(0.0, 0.0, 1.0, 1.0),
+        datetime=datetime.now(UTC),
+        properties={},
+        collection="lu",
+    )
+    for rel, href in HIERARCHICAL_HREFS.items():
+        parent.add_link(pystac.Link(rel=rel, target=href, media_type="application/json"))
+    path.write_text(
+        json.dumps(parent.to_dict(include_self_link=False, transform_hrefs=False), indent=2)
+    )
+
+    return pystac.Item.from_file(str(path)), path
+
+
+def _hrefs(path: Path) -> dict[str, str]:
+    import json
+
+    return {link["rel"]: link["href"] for link in json.loads(path.read_text())["links"]}
+
+
+class TestWritesWithoutResolvingTheRoot:
+    """Regression: an unresolvable `rel: root` link must not fail every chip."""
+
+    def test_succeeds_when_the_root_link_target_is_missing(
+        self,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        parent_item, parent_path = _staged_parent(tmp_path)
+
+        create_child_items_from_selection(
+            chip_dir=parent_path.parent,
+            parent_item=parent_item,
+            result=mock_selection_result,
+            year=2024,
+            cloud_cover_chip=2.0,
+            buffer_days=14,
+            num_buffer_expansions=3,
+            buffer_expansion_size=14,
+        )
+
+        assert (parent_path.parent / "chip_001_planting_s2.json").exists()
+        assert (parent_path.parent / "chip_001_harvest_s2.json").exists()
+
+    def test_parent_keeps_its_relative_hierarchical_links(
+        self,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        parent_item, parent_path = _staged_parent(tmp_path)
+
+        create_child_items_from_selection(
+            chip_dir=parent_path.parent,
+            parent_item=parent_item,
+            result=mock_selection_result,
+            year=2024,
+            cloud_cover_chip=2.0,
+            buffer_days=14,
+            num_buffer_expansions=3,
+            buffer_expansion_size=14,
+        )
+
+        written = _hrefs(parent_path)
+        for rel, href in HIERARCHICAL_HREFS.items():
+            assert written[rel] == href
+        assert written["ftw:planting"] == "./chip_001_planting_s2.json"
+
+    def test_children_inherit_the_parents_hierarchical_links(
+        self,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        parent_item, parent_path = _staged_parent(tmp_path)
+
+        create_child_items_from_selection(
+            chip_dir=parent_path.parent,
+            parent_item=parent_item,
+            result=mock_selection_result,
+            year=2024,
+            cloud_cover_chip=2.0,
+            buffer_days=14,
+            num_buffer_expansions=3,
+            buffer_expansion_size=14,
+        )
+
+        for season in ("planting", "harvest"):
+            child = _hrefs(parent_path.parent / f"chip_001_{season}_s2.json")
+            for rel, href in HIERARCHICAL_HREFS.items():
+                assert child[rel] == href, f"{season} child link {rel}"
+            assert child["ftw:parent_chip"] == "./chip_001.json"

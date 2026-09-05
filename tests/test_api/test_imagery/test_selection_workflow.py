@@ -505,3 +505,45 @@ class TestSelectionWorkflowResult:
 
         assert len(result1.skipped_details) == 1
         assert len(result2.skipped_details) == 0
+
+
+class TestFailuresAreReported:
+    """A swallowed per-chip exception still has to reach the operator."""
+
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip")
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar")
+    def test_errors_go_to_the_progress_bar(
+        self,
+        mock_progress_class: MagicMock,
+        mock_select: MagicMock,
+        mock_catalog_with_chips: Path,
+    ) -> None:
+        mock_select.side_effect = RuntimeError("does not resolve to a STAC object")
+        mock_progress = MagicMock()
+        mock_progress_class.return_value.__enter__.return_value = mock_progress
+        mock_progress_class.return_value.__exit__.return_value = None
+
+        result = select_imagery_for_catalog(catalog_dir=mock_catalog_with_chips, year=2024)
+
+        mock_progress.report_failures.assert_called_once_with(result.failed_details)
+        assert "does not resolve" in result.failed_details[0]["error"]
+
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip")
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.create_child_items_from_selection")
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar")
+    def test_nothing_reported_when_every_chip_succeeds(
+        self,
+        mock_progress_class: MagicMock,
+        _mock_create_child: MagicMock,
+        mock_select: MagicMock,
+        mock_catalog_with_chips: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        mock_select.return_value = mock_selection_result
+        mock_progress = MagicMock()
+        mock_progress_class.return_value.__enter__.return_value = mock_progress
+        mock_progress_class.return_value.__exit__.return_value = None
+
+        select_imagery_for_catalog(catalog_dir=mock_catalog_with_chips, year=2024)
+
+        mock_progress.report_failures.assert_called_once_with([])

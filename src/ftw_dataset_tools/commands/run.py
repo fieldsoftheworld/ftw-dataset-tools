@@ -203,9 +203,9 @@ def _print_summary(ctx: pipeline.PipelineContext) -> None:
     if ctx.stac_result:
         click.echo(f"  STAC items: {ctx.stac_result.total_items:,}")
     if ctx.selection_result is not None:
-        click.echo(f"  Imagery selected: {ctx.selection_result.successful}")
+        click.echo(pipeline.imagery_summary_line("Imagery selection", ctx.selection_result))
     if ctx.download_result is not None:
-        click.echo(f"  Imagery downloaded: {ctx.download_result.successful}")
+        click.echo(pipeline.imagery_summary_line("Imagery download", ctx.download_result))
     if ctx.docs_result is not None:
         click.echo(pipeline.docs_summary_line(ctx.docs_result, ctx.config.stages.docs.pmtiles))
 

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Literal
 import pystac
 
 from ftw_dataset_tools.api.stac import _add_portolan_schema
+from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -21,6 +22,10 @@ if TYPE_CHECKING:
 __all__ = [
     "create_child_items_from_selection",
 ]
+
+# Links that place an item in the catalog tree; children live next to their parent
+# chip item, so the parent's relative hrefs are valid for them verbatim.
+_HIERARCHICAL_RELS = ("root", "parent", "collection")
 
 
 def create_child_items_from_selection(
@@ -131,7 +136,7 @@ def create_child_items_from_selection(
         )
 
     # Save updated parent
-    parent_item.save_object(dest_href=str(parent_path))
+    write_item(parent_item, parent_path)
 
     # Create planting child item
     if result.planting_scene:
@@ -220,7 +225,34 @@ def _create_season_child_item(
     # Always include eo:cloud_cover, rounded to 2 decimal places
     child_item.properties["eo:cloud_cover"] = round(scene.cloud_cover, 2)
 
+    _copy_hierarchical_links(parent_item, child_item)
+
     _add_portolan_schema(child_item)
 
     # Save child item
-    child_item.save_object(dest_href=str(child_path))
+    write_item(child_item, child_path)
+
+
+def _copy_hierarchical_links(parent_item: pystac.Item, child_item: pystac.Item) -> None:
+    """Give the child the root/parent/collection links its parent chip carries.
+
+    The child item is written into the parent's directory, so the parent's
+    relative hrefs address the same catalog and collection from the child. Copies
+    the raw hrefs (``transform_href=False``) so an unresolvable root -- normal in
+    a staging tree -- is never dereferenced.
+
+    Args:
+        parent_item: Parent chip STAC item
+        child_item: Child season item to link into the catalog tree
+    """
+    for rel in _HIERARCHICAL_RELS:
+        link = parent_item.get_single_link(rel)
+        if link is None:
+            continue
+        href = link.get_href(transform_href=False)
+        if not href:
+            continue
+        child_item.add_link(pystac.Link(rel=rel, target=href, media_type=link.media_type))
+
+    if parent_item.collection_id:
+        child_item.collection_id = parent_item.collection_id

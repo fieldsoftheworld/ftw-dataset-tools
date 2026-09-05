@@ -412,3 +412,69 @@ class TestImageryNodata:
         assert stats is not None
         assert stats.minimum == 5
         assert stats.valid_percent == 50.0
+
+
+class TestProcessDownloadedSceneWithoutAResolvableRoot:
+    """A staged child item whose `rel: root` target is missing must still save."""
+
+    def test_writes_the_child_item(self, tmp_path: Path) -> None:
+        import json
+
+        import numpy as np
+        import pystac
+        from rasterio.transform import from_bounds
+
+        from ftw_dataset_tools.api.imagery.image_download import (
+            process_downloaded_scene,
+            write_cog,
+        )
+
+        chip_dir = tmp_path / "chips" / "33UXP" / "chip"
+        chip_dir.mkdir(parents=True)
+        child_path = chip_dir / "chip_planting_s2.json"
+        child = pystac.Item(
+            id="chip_planting_s2",
+            geometry={"type": "Point", "coordinates": [0.5, 0.5]},
+            bbox=[0, 0, 1, 1],
+            datetime=datetime(2024, 3, 1, tzinfo=UTC),
+            properties={},
+        )
+        child.add_link(pystac.Link(rel="root", target="../../../../catalog.json"))
+        child_path.write_text(
+            json.dumps(child.to_dict(include_self_link=False, transform_hrefs=False), indent=2)
+        )
+
+        profile = {
+            "driver": "COG",
+            "dtype": "uint16",
+            "width": 2,
+            "height": 2,
+            "count": 4,
+            "crs": "EPSG:4326",
+            "transform": from_bounds(0, 0, 1, 1, 2, 2),
+            "compress": "deflate",
+        }
+        image_path = chip_dir / "chip_planting_image_s2.tif"
+        write_cog(
+            image_path,
+            np.zeros((4, 2, 2), dtype=np.uint16),
+            ["red", "green", "blue", "nir"],
+            profile,
+        )
+
+        staged = pystac.Item.from_file(str(child_path))
+        process_downloaded_scene(
+            item=staged,
+            item_path=child_path,
+            output_path=image_path,
+            output_filename=image_path.name,
+            band_list=["red", "green", "blue", "nir"],
+            season="planting",
+            base_id="chip",
+            generate_thumbnails=False,
+        )
+
+        written = json.loads(child_path.read_text())
+        rels = {link["rel"]: link["href"] for link in written["links"]}
+        assert rels["root"] == "../../../../catalog.json"
+        assert written["assets"]["image"]["href"] == "./chip_planting_image_s2.tif"

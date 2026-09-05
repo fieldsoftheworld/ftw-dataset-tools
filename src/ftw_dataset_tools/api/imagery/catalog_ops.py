@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ftw_dataset_tools.api.stac_items import write_item
+
 if TYPE_CHECKING:
     import pystac
 
@@ -225,6 +227,6 @@ def clear_chip_selections(catalog_dir: Path, item: pystac.Item) -> ClearResult:
     parent_path = chip_dir / f"{item.id}.json"
     if item.get_self_href() is None:
         item.set_self_href(str(parent_path))
-    item.save_object(dest_href=str(parent_path))
+    write_item(item, parent_path)
 
     return result
