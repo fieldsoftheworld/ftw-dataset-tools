@@ -800,3 +800,94 @@ def write_docs(
         if on_progress:
             on_progress("docs: AGENTS.md")
     return written
+
+
+# --------------------------------------------------------------------------- #
+# Registration on the saved collection
+# --------------------------------------------------------------------------- #
+
+TILE_TITLES = {
+    "chips_tiles": "Chips (PMTiles)",
+    "fields_tiles": "Field boundaries (PMTiles)",
+}
+
+DOC_LINKS = {
+    "README.md": ("describedby", "Collection README"),
+    "AGENTS.md": ("agents", "Collection agent guide"),
+}
+
+PMTILES_MEDIA_TYPE = "application/vnd.pmtiles"
+STYLE_MEDIA_TYPE = "application/vnd.mapbox.style+json"
+
+
+def _tile_asset(key: str, path: Path) -> dict:
+    return {
+        "href": f"./{path.name}",
+        "type": PMTILES_MEDIA_TYPE,
+        "title": TILE_TITLES.get(key, key),
+        "roles": ["visual"],
+        "file:size": path.stat().st_size,
+    }
+
+
+def _style_asset(style: StyleResult) -> dict:
+    return {
+        "href": f"./styles/{style.style_id}.json",
+        "type": STYLE_MEDIA_TYPE,
+        "title": style.title,
+        "roles": ["style", "default"] if style.default else ["style"],
+    }
+
+
+def _doc_links(docs: list[Path]) -> list[dict]:
+    links = []
+    for doc in docs:
+        entry = DOC_LINKS.get(Path(doc).name)
+        if entry is None:
+            continue
+        rel, title = entry
+        links.append(
+            {"rel": rel, "href": f"./{Path(doc).name}", "type": "text/markdown", "title": title}
+        )
+    return links
+
+
+def _merge_links(existing: list[dict], new: list[dict]) -> list[dict]:
+    """Append links, replacing in place any that share a rel and href."""
+    merged = list(existing)
+    for link in new:
+        key = (link["rel"], link["href"])
+        for index, current in enumerate(merged):
+            if (current.get("rel"), current.get("href")) == key:
+                merged[index] = link
+                break
+        else:
+            merged.append(link)
+    return merged
+
+
+def register_docs_assets(
+    collection_json_path: Path | str,
+    *,
+    tiles: dict[str, Path],
+    styles: list[StyleResult],
+    docs: list[Path],
+) -> None:
+    """Add the tiles, styles and documents to an already-written ``collection.json``.
+
+    The collection is edited as JSON rather than re-serialised through pystac, so
+    everything the stac stage wrote (key order, extension fields) survives
+    untouched. Re-running replaces assets with the same key and links with the
+    same rel and href instead of duplicating them.
+    """
+    path = Path(collection_json_path)
+    collection = json.loads(path.read_text(encoding="utf-8"))
+
+    assets = collection.setdefault("assets", {})
+    for key, tile_path in tiles.items():
+        assets[key] = _tile_asset(key, Path(tile_path))
+    for style in styles:
+        assets[f"style-{style.style_id}"] = _style_asset(style)
+
+    collection["links"] = _merge_links(collection.get("links", []), _doc_links(docs))
+    path.write_text(json.dumps(collection, indent=2) + "\n", encoding="utf-8")
