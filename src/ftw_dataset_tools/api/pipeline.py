@@ -78,7 +78,7 @@ class PipelineContext:
     """Mutable state threaded through pipeline stages."""
 
     config: DatasetConfig
-    fields_input: Path
+    fields_input: Path | str  # str form appears only for unresolved URL inputs (dry run)
     output_dir: Path
     field_dataset: str
     effective_year: int | None
