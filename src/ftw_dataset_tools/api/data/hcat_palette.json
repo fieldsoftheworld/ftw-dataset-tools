@@ -1,0 +1,1922 @@
+[
+ {
+  "name": "characteristics",
+  "code": "3000000000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "crop_type",
+  "code": "3300000000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "arable_crops",
+  "code": "3301000000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "cereal",
+  "code": "3301010000",
+  "color": "#cc9932"
+ },
+ {
+  "name": "common_soft_wheat",
+  "code": "3301010100",
+  "color": "#cca532"
+ },
+ {
+  "name": "winter_common_soft_wheat",
+  "code": "3301010101",
+  "color": "#cda737"
+ },
+ {
+  "name": "spring_common_soft_wheat",
+  "code": "3301010102",
+  "color": "#cea93b"
+ },
+ {
+  "name": "unspecified_season_common_soft_wheat",
+  "code": "3301010199",
+  "color": "#dfc780"
+ },
+ {
+  "name": "durum_hard_wheat",
+  "code": "3301010200",
+  "color": "#cca532"
+ },
+ {
+  "name": "winter_durum_hard_wheat",
+  "code": "3301010201",
+  "color": "#cda737"
+ },
+ {
+  "name": "spring_durum_hard_wheat",
+  "code": "3301010202",
+  "color": "#cea93b"
+ },
+ {
+  "name": "unspecified_season_durum_hard_wheat",
+  "code": "3301010299",
+  "color": "#dfc780"
+ },
+ {
+  "name": "rye",
+  "code": "3301010300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "winter_rye",
+  "code": "3301010301",
+  "color": "#cd8e37"
+ },
+ {
+  "name": "spring_rye",
+  "code": "3301010302",
+  "color": "#ce903b"
+ },
+ {
+  "name": "unspecified_season_rye",
+  "code": "3301010399",
+  "color": "#dfb780"
+ },
+ {
+  "name": "barley",
+  "code": "3301010400",
+  "color": "#cc9e32"
+ },
+ {
+  "name": "winter_barley",
+  "code": "3301010401",
+  "color": "#cda037"
+ },
+ {
+  "name": "spring_barley",
+  "code": "3301010402",
+  "color": "#cea13b"
+ },
+ {
+  "name": "unspecified_season_barley",
+  "code": "3301010499",
+  "color": "#dfc280"
+ },
+ {
+  "name": "oats",
+  "code": "3301010500",
+  "color": "#cc9332"
+ },
+ {
+  "name": "winter_oats",
+  "code": "3301010501",
+  "color": "#cd9637"
+ },
+ {
+  "name": "spring_oats",
+  "code": "3301010502",
+  "color": "#ce983b"
+ },
+ {
+  "name": "unspecified_season_oats",
+  "code": "3301010599",
+  "color": "#dfbc80"
+ },
+ {
+  "name": "grain_maize_corn_popcorn",
+  "code": "3301010600",
+  "color": "#ccb732"
+ },
+ {
+  "name": "unspecified_season_grain_maize_corn_popcorn",
+  "code": "3301010699",
+  "color": "#dfd280"
+ },
+ {
+  "name": "rice",
+  "code": "3301010700",
+  "color": "#ccad32"
+ },
+ {
+  "name": "unspecified_season_rice",
+  "code": "3301010799",
+  "color": "#dfcc80"
+ },
+ {
+  "name": "triticale",
+  "code": "3301010800",
+  "color": "#cca332"
+ },
+ {
+  "name": "winter_triticale",
+  "code": "3301010801",
+  "color": "#cda537"
+ },
+ {
+  "name": "spring_triticale",
+  "code": "3301010802",
+  "color": "#cea63b"
+ },
+ {
+  "name": "unspecified_season_triticale",
+  "code": "3301010899",
+  "color": "#dfc680"
+ },
+ {
+  "name": "millet_sorghum",
+  "code": "3301010900",
+  "color": "#cca832"
+ },
+ {
+  "name": "winter_millet_sorghum",
+  "code": "3301010901",
+  "color": "#cdaa37"
+ },
+ {
+  "name": "spring_millet_sorghum",
+  "code": "3301010902",
+  "color": "#ceab3b"
+ },
+ {
+  "name": "teff",
+  "code": "3301010904",
+  "color": "#d09543"
+ },
+ {
+  "name": "unspecified_season_millet_sorghum",
+  "code": "3301010999",
+  "color": "#dfc980"
+ },
+ {
+  "name": "spelt",
+  "code": "3301011000",
+  "color": "#cca032"
+ },
+ {
+  "name": "winter_spelt",
+  "code": "3301011001",
+  "color": "#cda237"
+ },
+ {
+  "name": "spring_spelt",
+  "code": "3301011002",
+  "color": "#cea43b"
+ },
+ {
+  "name": "unspecified_season_spelt",
+  "code": "3301011099",
+  "color": "#dfc480"
+ },
+ {
+  "name": "meslin",
+  "code": "3301011100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "winter_meslin",
+  "code": "3301011101",
+  "color": "#cd8e37"
+ },
+ {
+  "name": "spring_meslin",
+  "code": "3301011102",
+  "color": "#ce903b"
+ },
+ {
+  "name": "unspecified_season_meslin",
+  "code": "3301011199",
+  "color": "#dfb780"
+ },
+ {
+  "name": "emmer",
+  "code": "3301011200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "winter_emmer",
+  "code": "3301011201",
+  "color": "#cd8e37"
+ },
+ {
+  "name": "spring_emmer",
+  "code": "3301011202",
+  "color": "#ce903b"
+ },
+ {
+  "name": "unspecified_season_emmer",
+  "code": "3301011299",
+  "color": "#dfb780"
+ },
+ {
+  "name": "einkorn",
+  "code": "3301011300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "winter_einkorn",
+  "code": "3301011301",
+  "color": "#cd8e37"
+ },
+ {
+  "name": "spring_einkorn",
+  "code": "3301011302",
+  "color": "#ce903b"
+ },
+ {
+  "name": "unspecified_season_einkorn",
+  "code": "3301011399",
+  "color": "#dfb780"
+ },
+ {
+  "name": "canary_seed_canaryseed",
+  "code": "3301011400",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "unspecified_season_canary_seed_canaryseed",
+  "code": "3301011499",
+  "color": "#dfb780"
+ },
+ {
+  "name": "unspecified_cereals",
+  "code": "3301011500",
+  "color": "#cc9932"
+ },
+ {
+  "name": "winter_unspecified_cereals",
+  "code": "3301011501",
+  "color": "#cd9b37"
+ },
+ {
+  "name": "spring_unspecified_cereals",
+  "code": "3301011502",
+  "color": "#ce9d3b"
+ },
+ {
+  "name": "summer_unspecified_cereals",
+  "code": "3301011503",
+  "color": "#cf9f3f"
+ },
+ {
+  "name": "unspecified_season_unspecified_cereals",
+  "code": "3301011599",
+  "color": "#dfbf80"
+ },
+ {
+  "name": "other_cereals",
+  "code": "3301019900",
+  "color": "#cc9932"
+ },
+ {
+  "name": "unspecified_season_other_cereals",
+  "code": "3301019999",
+  "color": "#dfbf80"
+ },
+ {
+  "name": "legumes_dried_pulses_protein_crops",
+  "code": "3301020000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "beans",
+  "code": "3301020100",
+  "color": "#4ccc32"
+ },
+ {
+  "name": "chickpeas",
+  "code": "3301020200",
+  "color": "#3fcc32"
+ },
+ {
+  "name": "esparsette_onobrychis",
+  "code": "3301020300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "fenugreek",
+  "code": "3301020400",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "lentils",
+  "code": "3301020500",
+  "color": "#38cc32"
+ },
+ {
+  "name": "peas",
+  "code": "3301020600",
+  "color": "#3fcc32"
+ },
+ {
+  "name": "sweet_lupins",
+  "code": "3301020700",
+  "color": "#51cc32"
+ },
+ {
+  "name": "unspecified_legumes_dried_pulses_protein_crops",
+  "code": "3301029800",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "other_dry_pulses",
+  "code": "3301029900",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "potatoes",
+  "code": "3301030000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "sweet_potatoes",
+  "code": "3301040000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "fodder_roots",
+  "code": "3301050000",
+  "color": "#cc7232"
+ },
+ {
+  "name": "industrial_nonfood_crops",
+  "code": "3301060000",
+  "color": "#3265cc"
+ },
+ {
+  "name": "tobacco",
+  "code": "3301060100",
+  "color": "#cc7232"
+ },
+ {
+  "name": "hops",
+  "code": "3301060200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "cotton",
+  "code": "3301060300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "rapeseed_rape",
+  "code": "3301060400",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "winter_rapeseed_rape",
+  "code": "3301060401",
+  "color": "#cd8e37"
+ },
+ {
+  "name": "spring_rapeseed_rape",
+  "code": "3301060402",
+  "color": "#ce903b"
+ },
+ {
+  "name": "summer_rapeseed_rape",
+  "code": "3301060403",
+  "color": "#cf933f"
+ },
+ {
+  "name": "unspecified_season_rapeseed_rape",
+  "code": "3301060499",
+  "color": "#dfb780"
+ },
+ {
+  "name": "sunflower",
+  "code": "3301060500",
+  "color": "#cc32cb"
+ },
+ {
+  "name": "poppy",
+  "code": "3301060600",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "winter_poppy",
+  "code": "3301060601",
+  "color": "#cd8e37"
+ },
+ {
+  "name": "summer_poppy",
+  "code": "3301060602",
+  "color": "#ce903b"
+ },
+ {
+  "name": "flax_linseed",
+  "code": "3301060700",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "flax_linen",
+  "code": "3301060701",
+  "color": "#cd8e37"
+ },
+ {
+  "name": "flax_linseed_oil",
+  "code": "3301060702",
+  "color": "#ce903b"
+ },
+ {
+  "name": "oilseed_crops",
+  "code": "3301060800",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "guizotia_abyssinica_nyger",
+  "code": "3301060900",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "hemp_cannabis",
+  "code": "3301061000",
+  "color": "#3298cc"
+ },
+ {
+  "name": "finola",
+  "code": "3301061001",
+  "color": "#cd8e37"
+ },
+ {
+  "name": "fibre_crops",
+  "code": "3301061100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "aromatic_medicinal_culinary_plants_spices_herbs",
+  "code": "3301061200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "actaea_baneberry_christopher_herbs",
+  "code": "3301061201",
+  "color": "#cd375c"
+ },
+ {
+  "name": "alchemilla_ladys_mantle",
+  "code": "3301061202",
+  "color": "#ce903b"
+ },
+ {
+  "name": "anethum_dill",
+  "code": "3301061203",
+  "color": "#cf933f"
+ },
+ {
+  "name": "angelica",
+  "code": "3301061204",
+  "color": "#d09543"
+ },
+ {
+  "name": "anise_aniseed",
+  "code": "3301061205",
+  "color": "#d19747"
+ },
+ {
+  "name": "artemisia",
+  "code": "3301061206",
+  "color": "#d29a4b"
+ },
+ {
+  "name": "basil",
+  "code": "3301061207",
+  "color": "#d39c4f"
+ },
+ {
+  "name": "black_cumin",
+  "code": "3301061208",
+  "color": "#d49e53"
+ },
+ {
+  "name": "borage",
+  "code": "3301061209",
+  "color": "#d5a057"
+ },
+ {
+  "name": "calendula_marigold",
+  "code": "3301061210",
+  "color": "#d6a35b"
+ },
+ {
+  "name": "caraway",
+  "code": "3301061211",
+  "color": "#d7a55f"
+ },
+ {
+  "name": "catnip",
+  "code": "3301061212",
+  "color": "#d8a763"
+ },
+ {
+  "name": "chamomile",
+  "code": "3301061213",
+  "color": "#d9aa68"
+ },
+ {
+  "name": "chervil",
+  "code": "3301061214",
+  "color": "#daac6c"
+ },
+ {
+  "name": "coriander",
+  "code": "3301061215",
+  "color": "#dbae70"
+ },
+ {
+  "name": "ericaceae_heather",
+  "code": "3301061216",
+  "color": "#dcb074"
+ },
+ {
+  "name": "galium_bedstraw",
+  "code": "3301061217",
+  "color": "#ddb378"
+ },
+ {
+  "name": "hibiscus",
+  "code": "3301061218",
+  "color": "#deb57c"
+ },
+ {
+  "name": "lavender_lavandula",
+  "code": "3301061219",
+  "color": "#dfb780"
+ },
+ {
+  "name": "lemon_balm_melissa",
+  "code": "3301061220",
+  "color": "#ccbf32"
+ },
+ {
+  "name": "lovage_maggiplant",
+  "code": "3301061221",
+  "color": "#cd8e37"
+ },
+ {
+  "name": "mints_peppermint",
+  "code": "3301061222",
+  "color": "#ce903b"
+ },
+ {
+  "name": "moldavian_dragonhead",
+  "code": "3301061223",
+  "color": "#cf933f"
+ },
+ {
+  "name": "nasturtiums",
+  "code": "3301061224",
+  "color": "#d09543"
+ },
+ {
+  "name": "nettles",
+  "code": "3301061225",
+  "color": "#d19747"
+ },
+ {
+  "name": "oregano",
+  "code": "3301061226",
+  "color": "#d29a4b"
+ },
+ {
+  "name": "parsly",
+  "code": "3301061227",
+  "color": "#d39c4f"
+ },
+ {
+  "name": "piper_pepper",
+  "code": "3301061228",
+  "color": "#d49e53"
+ },
+ {
+  "name": "polygonum",
+  "code": "3301061229",
+  "color": "#d5a057"
+ },
+ {
+  "name": "rosemary",
+  "code": "3301061230",
+  "color": "#d6a35b"
+ },
+ {
+  "name": "rubia_tinctorum_common_madder",
+  "code": "3301061231",
+  "color": "#d7a55f"
+ },
+ {
+  "name": "saffron_crocus_sativus",
+  "code": "3301061232",
+  "color": "#d8a763"
+ },
+ {
+  "name": "silver_comb",
+  "code": "3301061233",
+  "color": "#d9aa68"
+ },
+ {
+  "name": "st_johns_wort",
+  "code": "3301061234",
+  "color": "#daac6c"
+ },
+ {
+  "name": "stachys_hedgenettle_chinese_artichoke",
+  "code": "3301061235",
+  "color": "#dbae70"
+ },
+ {
+  "name": "tarragon",
+  "code": "3301061236",
+  "color": "#dcb074"
+ },
+ {
+  "name": "thyme",
+  "code": "3301061237",
+  "color": "#ddb378"
+ },
+ {
+  "name": "valerian",
+  "code": "3301061238",
+  "color": "#deb57c"
+ },
+ {
+  "name": "yarrow",
+  "code": "3301061239",
+  "color": "#dfb780"
+ },
+ {
+  "name": "unspecified_aromatic_medicinal_culinary_plants_spices_herbs",
+  "code": "3301061298",
+  "color": "#deb57c"
+ },
+ {
+  "name": "other_aromatic_medicinal_culinary_plants_spices_herbs",
+  "code": "3301061299",
+  "color": "#dfb780"
+ },
+ {
+  "name": "marian_thistles",
+  "code": "3301061300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "phacelia",
+  "code": "3301061400",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "camelina",
+  "code": "3301061500",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "onobrychis_sainfoins",
+  "code": "3301061600",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "other_industrial_crops",
+  "code": "3301069900",
+  "color": "#3265cc"
+ },
+ {
+  "name": "fresh_vegetables",
+  "code": "3301070000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "flowers_ornamental_plants",
+  "code": "3301080000",
+  "color": "#cc32cb"
+ },
+ {
+  "name": "adonis",
+  "code": "3301080100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "anemones_windflowers",
+  "code": "3301080200",
+  "color": "#cc32cb"
+ },
+ {
+  "name": "asters",
+  "code": "3301080300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "begonias",
+  "code": "3301080400",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "bluebells",
+  "code": "3301080500",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "bulrush",
+  "code": "3301080600",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "burnet",
+  "code": "3301080700",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "carnation",
+  "code": "3301080800",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "chrysanthemum",
+  "code": "3301080900",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "cornflowers",
+  "code": "3301081000",
+  "color": "#cc32cb"
+ },
+ {
+  "name": "corsican_hellebore",
+  "code": "3301081100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "dahlia",
+  "code": "3301081200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "daisy_daisies",
+  "code": "3301081300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "dandelions",
+  "code": "3301081400",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "echinacea_sun_hat",
+  "code": "3301081500",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "edelweiss",
+  "code": "3301081600",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "fiddleneck_amsinckia",
+  "code": "3301081700",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "fuchsias",
+  "code": "3301081800",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "galega",
+  "code": "3301081900",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "gentians",
+  "code": "3301082000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "gladiolus_gladioli",
+  "code": "3301082100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "goldenrod",
+  "code": "3301082200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "iris",
+  "code": "3301082300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "isatis_tinctoria_woad",
+  "code": "3301082400",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "lilies",
+  "code": "3301082500",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "lotus",
+  "code": "3301082600",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "lunaria_honesty_silver",
+  "code": "3301082700",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "malva",
+  "code": "3301082800",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "milk_star",
+  "code": "3301082900",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "miscanthus_silvergrass",
+  "code": "3301083000",
+  "color": "#32cc32"
+ },
+ {
+  "name": "monstera_adansonii_eyelet",
+  "code": "3301083100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "moonseed",
+  "code": "3301083200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "narcissus_daffodil",
+  "code": "3301083300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "peony_peonies",
+  "code": "3301083400",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "primrose",
+  "code": "3301083500",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "rhododendron",
+  "code": "3301083600",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "roses",
+  "code": "3301083700",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "rudbeckia_coneflowers",
+  "code": "3301083800",
+  "color": "#cc32cb"
+ },
+ {
+  "name": "safflower",
+  "code": "3301083900",
+  "color": "#cc32cb"
+ },
+ {
+  "name": "salsify",
+  "code": "3301084000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "sanvitalia_procumbens",
+  "code": "3301084100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "serradella",
+  "code": "3301084200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "silene_catchfly",
+  "code": "3301084300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "silphium_rosinweeds",
+  "code": "3301084400",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "snapdragons",
+  "code": "3301084500",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "stonecrop",
+  "code": "3301084600",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "tagetes",
+  "code": "3301084700",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "thimbles",
+  "code": "3301084800",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "tulips",
+  "code": "3301084900",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "viola",
+  "code": "3301085000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "violets_pansies",
+  "code": "3301085100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "zinnias",
+  "code": "3301085200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "unspecified_flowers_ornamental_plants",
+  "code": "3301089800",
+  "color": "#cc32cb"
+ },
+ {
+  "name": "other_flowers_ornamental_plants",
+  "code": "3301089900",
+  "color": "#cc32cb"
+ },
+ {
+  "name": "plants_harvested_green",
+  "code": "3301090000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "temporary_grass",
+  "code": "3301090100",
+  "color": "#32cc32"
+ },
+ {
+  "name": "poaceae_grasses",
+  "code": "3301090200",
+  "color": "#32cc32"
+ },
+ {
+  "name": "elymus",
+  "code": "3301090201",
+  "color": "#cd8e37"
+ },
+ {
+  "name": "festuca_fescue",
+  "code": "3301090202",
+  "color": "#3bce47"
+ },
+ {
+  "name": "cocksfoot_catgrass",
+  "code": "3301090203",
+  "color": "#3fcf3f"
+ },
+ {
+  "name": "festulolium",
+  "code": "3301090204",
+  "color": "#43d048"
+ },
+ {
+  "name": "lolium_ryegrass",
+  "code": "3301090205",
+  "color": "#d19747"
+ },
+ {
+  "name": "setaria",
+  "code": "3301090206",
+  "color": "#d29a4b"
+ },
+ {
+  "name": "sod_turf",
+  "code": "3301090207",
+  "color": "#d39c4f"
+ },
+ {
+  "name": "switchgrass",
+  "code": "3301090208",
+  "color": "#53d453"
+ },
+ {
+  "name": "timothy",
+  "code": "3301090209",
+  "color": "#d5a057"
+ },
+ {
+  "name": "legumes_harvested_green",
+  "code": "3301090300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "alfalfa_lucerne",
+  "code": "3301090301",
+  "color": "#cd8e37"
+ },
+ {
+  "name": "arachis",
+  "code": "3301090302",
+  "color": "#ce903b"
+ },
+ {
+  "name": "clover",
+  "code": "3301090303",
+  "color": "#cf933f"
+ },
+ {
+  "name": "melilot",
+  "code": "3301090304",
+  "color": "#d09543"
+ },
+ {
+  "name": "vetches",
+  "code": "3301090305",
+  "color": "#d19747"
+ },
+ {
+  "name": "unspecified_legumes_harvested_green",
+  "code": "3301090398",
+  "color": "#deb57c"
+ },
+ {
+  "name": "green_silo_maize",
+  "code": "3301090400",
+  "color": "#ccb732"
+ },
+ {
+  "name": "other_plants_harvested_green",
+  "code": "3301099900",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "arable_land_seed_seedlings",
+  "code": "3301100000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "fallow_land_not_crop",
+  "code": "3301110000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "kitchen_gardens",
+  "code": "3301120000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "strawberries",
+  "code": "3301130000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "cucurbits",
+  "code": "3301140000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "cucumber_pickle",
+  "code": "3301140100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "honeydew",
+  "code": "3301140200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "melon",
+  "code": "3301140300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "pumpkin_squash_gourd",
+  "code": "3301140400",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "watermelon",
+  "code": "3301140500",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "zucchini_courgette",
+  "code": "3301140600",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "pseudocereal",
+  "code": "3301150000",
+  "color": "#cc9932"
+ },
+ {
+  "name": "amaranth",
+  "code": "3301150100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "buckwheat",
+  "code": "3301150200",
+  "color": "#cca532"
+ },
+ {
+  "name": "quinoa",
+  "code": "3301150300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "soy_soybeans",
+  "code": "3301160000",
+  "color": "#4ccc32"
+ },
+ {
+  "name": "fennel",
+  "code": "3301170000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "topinambur_jerusalem_artichoke",
+  "code": "3301180000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "sage_chia",
+  "code": "3301190000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "asparagus",
+  "code": "3301200000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "brassicaceae_cruciferae",
+  "code": "3301210000",
+  "color": "#4ccc32"
+ },
+ {
+  "name": "mustard",
+  "code": "3301210100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "brassica_oleracea_cabbage",
+  "code": "3301210200",
+  "color": "#59cc32"
+ },
+ {
+  "name": "bok_choy_pak_choi",
+  "code": "3301210201",
+  "color": "#cd8e37"
+ },
+ {
+  "name": "broccoli",
+  "code": "3301210202",
+  "color": "#53ce3b"
+ },
+ {
+  "name": "brussels_sprouts",
+  "code": "3301210203",
+  "color": "#cf933f"
+ },
+ {
+  "name": "cauliflower",
+  "code": "3301210204",
+  "color": "#7dd043"
+ },
+ {
+  "name": "chinese_cabbage",
+  "code": "3301210205",
+  "color": "#69d147"
+ },
+ {
+  "name": "collard_greens",
+  "code": "3301210206",
+  "color": "#d29a4b"
+ },
+ {
+  "name": "gai_lan",
+  "code": "3301210207",
+  "color": "#d39c4f"
+ },
+ {
+  "name": "kale",
+  "code": "3301210208",
+  "color": "#5ed453"
+ },
+ {
+  "name": "kohlrabi",
+  "code": "3301210209",
+  "color": "#d5a057"
+ },
+ {
+  "name": "red_cabbage",
+  "code": "3301210210",
+  "color": "#7ad65b"
+ },
+ {
+  "name": "savoy_cabbage",
+  "code": "3301210211",
+  "color": "#7dd75f"
+ },
+ {
+  "name": "white_cabbage",
+  "code": "3301210212",
+  "color": "#81d863"
+ },
+ {
+  "name": "other_brassica_oleracea_cabbage",
+  "code": "3301210299",
+  "color": "#98df80"
+ },
+ {
+  "name": "cress",
+  "code": "3301210300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "horseradish",
+  "code": "3301210400",
+  "color": "#cc3f32"
+ },
+ {
+  "name": "swede_rutabaga",
+  "code": "3301210500",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "alliums",
+  "code": "3301220000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "chives",
+  "code": "3301220100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "garlic",
+  "code": "3301220200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "leek",
+  "code": "3301220300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "onions",
+  "code": "3301220400",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "scallion",
+  "code": "3301220500",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "shallot",
+  "code": "3301220600",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "rhubarb",
+  "code": "3301230000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "purslane",
+  "code": "3301240000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "celery",
+  "code": "3301250000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "celeriac",
+  "code": "3301250100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "leaf_celery",
+  "code": "3301250200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "aubergine_eggplant",
+  "code": "3301260000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "artichoke",
+  "code": "3301270000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "tomato",
+  "code": "3301280000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "root_vegetables",
+  "code": "3301290000",
+  "color": "#cc7232"
+ },
+ {
+  "name": "arctium_burdock",
+  "code": "3301290100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "beetroot_beets",
+  "code": "3301290200",
+  "color": "#cc7232"
+ },
+ {
+  "name": "carrots_daucus",
+  "code": "3301290300",
+  "color": "#cc7a32"
+ },
+ {
+  "name": "mangelwurzel_fodder_beet",
+  "code": "3301290400",
+  "color": "#cc324c"
+ },
+ {
+  "name": "parsnips",
+  "code": "3301290500",
+  "color": "#cc9932"
+ },
+ {
+  "name": "radish",
+  "code": "3301290600",
+  "color": "#cc3f32"
+ },
+ {
+  "name": "sugar_beet",
+  "code": "3301290700",
+  "color": "#cc324c"
+ },
+ {
+  "name": "turnips",
+  "code": "3301290800",
+  "color": "#cc6b32"
+ },
+ {
+  "name": "unspecified_root_vegetables",
+  "code": "3301299800",
+  "color": "#cc7232"
+ },
+ {
+  "name": "capsicum",
+  "code": "3301300000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "bell_pepper_paprika",
+  "code": "3301300100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "chili_pepper",
+  "code": "3301300200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "salads_lettuce_leaf_vegetables",
+  "code": "3301310000",
+  "color": "#32cc3f"
+ },
+ {
+  "name": "chard",
+  "code": "3301310100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "chicory_chicories",
+  "code": "3301310200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "endive",
+  "code": "3301310300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "iceberg",
+  "code": "3301310400",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "lambs_lettuce_rapunzel",
+  "code": "3301310500",
+  "color": "#32cc3f"
+ },
+ {
+  "name": "rocket_arugula",
+  "code": "3301310600",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "sorrel",
+  "code": "3301310700",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "spinach",
+  "code": "3301310800",
+  "color": "#32cc59"
+ },
+ {
+  "name": "other_salads_lettuce_leaf_vegetables",
+  "code": "3301319900",
+  "color": "#32cc3f"
+ },
+ {
+  "name": "other_arable_land_crops",
+  "code": "3301990000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "pasture_meadow_grassland_grass",
+  "code": "3302000000",
+  "color": "#32cc32"
+ },
+ {
+  "name": "permanent_crops_perennial",
+  "code": "3303000000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "orchards_fruits",
+  "code": "3303010000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "amelanchier_serviceberry",
+  "code": "3303010100",
+  "color": "#cc3259"
+ },
+ {
+  "name": "apples",
+  "code": "3303010200",
+  "color": "#cc4c32"
+ },
+ {
+  "name": "apricots",
+  "code": "3303010300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "cherry_cherries",
+  "code": "3303010400",
+  "color": "#cc324c"
+ },
+ {
+  "name": "feijoa",
+  "code": "3303010500",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "fig",
+  "code": "3303010600",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "kiwi",
+  "code": "3303010700",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "medlar_loquat",
+  "code": "3303010800",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "nectarine",
+  "code": "3303010900",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "pawpaw",
+  "code": "3303011000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "peach",
+  "code": "3303011100",
+  "color": "#3fcc32"
+ },
+ {
+  "name": "pears",
+  "code": "3303011200",
+  "color": "#3fcc32"
+ },
+ {
+  "name": "plums",
+  "code": "3303011300",
+  "color": "#cc32cb"
+ },
+ {
+  "name": "pomegranate",
+  "code": "3303011400",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "quinces",
+  "code": "3303011500",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "unspecified_orchards_fruits",
+  "code": "3303019800",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "berries_berry_species",
+  "code": "3303020000",
+  "color": "#cc3259"
+ },
+ {
+  "name": "aronia_chokeberries",
+  "code": "3303020100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "blackberry",
+  "code": "3303020200",
+  "color": "#cc3259"
+ },
+ {
+  "name": "blackcurrant_cassis",
+  "code": "3303020300",
+  "color": "#cc324c"
+ },
+ {
+  "name": "blueberry",
+  "code": "3303020400",
+  "color": "#cc3259"
+ },
+ {
+  "name": "cranberry",
+  "code": "3303020500",
+  "color": "#cc3259"
+ },
+ {
+  "name": "currants",
+  "code": "3303020600",
+  "color": "#cc324c"
+ },
+ {
+  "name": "gooseberry_gooseberries_cranberries",
+  "code": "3303020700",
+  "color": "#cc3259"
+ },
+ {
+  "name": "hippophae_sea_buckthorns_seaberry",
+  "code": "3303020800",
+  "color": "#cc3259"
+ },
+ {
+  "name": "jostaberry",
+  "code": "3303020900",
+  "color": "#cc3259"
+ },
+ {
+  "name": "raspberry_raspberries",
+  "code": "3303021000",
+  "color": "#cc3259"
+ },
+ {
+  "name": "redcurrant",
+  "code": "3303021100",
+  "color": "#cc324c"
+ },
+ {
+  "name": "rose_hip_rosehip",
+  "code": "3303021200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "rowan_rowanberries",
+  "code": "3303021300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "tayberry",
+  "code": "3303021400",
+  "color": "#cc3259"
+ },
+ {
+  "name": "unspecified_berries_berry_species",
+  "code": "3303029800",
+  "color": "#cc3259"
+ },
+ {
+  "name": "nuts",
+  "code": "3303030000",
+  "color": "#cc9932"
+ },
+ {
+  "name": "almond",
+  "code": "3303030100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "hazelnuts_hazel",
+  "code": "3303030200",
+  "color": "#cc9932"
+ },
+ {
+  "name": "pecan",
+  "code": "3303030300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "pistachio",
+  "code": "3303030400",
+  "color": "#98cc32"
+ },
+ {
+  "name": "sweet_chestnuts",
+  "code": "3303030500",
+  "color": "#cc9932"
+ },
+ {
+  "name": "walnuts",
+  "code": "3303030600",
+  "color": "#cc7f32"
+ },
+ {
+  "name": "citrus_plantations",
+  "code": "3303040000",
+  "color": "#cca532"
+ },
+ {
+  "name": "olive_plantations",
+  "code": "3303050000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "olives_for_oil_production",
+  "code": "3303050100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "table_olives",
+  "code": "3303050200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "vineyards_wine_vine_rebland_grapes",
+  "code": "3303060000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "nurseries_nursery",
+  "code": "3303070000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "shrubberries_shrubs",
+  "code": "3303080000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "azaleas",
+  "code": "3303080100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "chaenomeles_cathayensis",
+  "code": "3303080200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "crataegus_hawthorn",
+  "code": "3303080300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "elder_elderberry",
+  "code": "3303080400",
+  "color": "#cc3259"
+ },
+ {
+  "name": "honeysuckle",
+  "code": "3303080500",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "ricinus_castor",
+  "code": "3303080600",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "wire_bush",
+  "code": "3303080700",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "ginko",
+  "code": "3303090000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "avocado",
+  "code": "3303100000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "legumes_from_trees",
+  "code": "3303110000",
+  "color": "#32cc3f"
+ },
+ {
+  "name": "carob",
+  "code": "3303110100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "mesquite",
+  "code": "3303110200",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "tamarind",
+  "code": "3303110300",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "unspecified_permanent_crops",
+  "code": "3303120000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "other_permanent_crops_plantations",
+  "code": "3303990000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "mushrooms_energy_genetically_modified_crops",
+  "code": "3304000000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "energy_crops",
+  "code": "3304010000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "genetically_modified_crops",
+  "code": "3304020000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "igniscum_candy",
+  "code": "3304020100",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "sida_virginia_mallow",
+  "code": "3304030000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "truffle",
+  "code": "3304040000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "other_mushrooms_energy_crops_genetically_modified_crops",
+  "code": "3304990000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "greenhouse_foil_film",
+  "code": "3305000000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "tree_wood_forest",
+  "code": "3306000000",
+  "color": "#32cc4c"
+ },
+ {
+  "name": "afforestation_reforestation",
+  "code": "3306010000",
+  "color": "#32cc4c"
+ },
+ {
+  "name": "aspen",
+  "code": "3306020000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "birch",
+  "code": "3306030000",
+  "color": "#38cc32"
+ },
+ {
+  "name": "dogwood_cornus",
+  "code": "3306040000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "eucalyptus",
+  "code": "3306050000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "oak",
+  "code": "3306060000",
+  "color": "#32cc47"
+ },
+ {
+  "name": "populus",
+  "code": "3306070000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "willows_osiers",
+  "code": "3306080000",
+  "color": "#32cc32"
+ },
+ {
+  "name": "unspecified_tree_wood_forest",
+  "code": "3306980000",
+  "color": "#32cc4c"
+ },
+ {
+  "name": "other_tree_wood_forest",
+  "code": "3306990000",
+  "color": "#32cc4c"
+ },
+ {
+  "name": "peat_turf",
+  "code": "3307000000",
+  "color": "#3fcc32"
+ },
+ {
+  "name": "unmaintained",
+  "code": "3308000000",
+  "color": "#cc8c32"
+ },
+ {
+  "name": "not_known_and_other",
+  "code": "3399000000",
+  "color": "#cc8c32"
+ }
+]
