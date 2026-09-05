@@ -64,12 +64,43 @@ ftwd run config.yaml --through stac
 ```
 
 Stages run in this order: `reproject`, `chips`, `splits`, `boundaries`, `masks`,
-`stac`, `select_images`, `download_images`. Intermediate outputs follow a fixed
+`stac`, `select_images`, `download_images`, `docs`. Intermediate outputs follow a fixed
 naming convention in the output directory, so individual stages can be re-run on
 their own as long as their inputs already exist.
 
 Set `stages.stac.checksums: true` to add a `file:checksum` to every STAC asset. This is
 off by default because hashing tens of thousands of COGs is slow.
+
+**docs stage.** The final stage turns what was measured about the collection into
+ready-to-browse outputs. With [tippecanoe](https://github.com/felt/tippecanoe) on
+`PATH` it tiles the chips and fields into `chips.pmtiles` / `fields.pmtiles`, then
+writes up to five MapLibre GL styles under `styles/` — split, field coverage,
+dominant crop, crops, and outline — each written only when the data and matching
+tiles it needs are actually present, and each checked against the data so a style
+never shows a legend entry that does not occur in the collection. Without
+tippecanoe, tiling and styles are skipped with a warning and the rest of the stage
+still runs. It also writes `README.md` and `AGENTS.md` at the collection root from
+the same measured numbers; every example query in `AGENTS.md` is executed against
+the collection before its first rows are inlined. Both documents and the tiles/styles
+are registered on `collection.json` (`describedby` and `agents` links; `chips_tiles`,
+`fields_tiles` and `style-<id>` assets). Control this with `stages.docs.pmtiles`
+(`auto`, the default, builds tiles when tippecanoe is installed and warns otherwise;
+`true` fails the run if tippecanoe is missing; `false` skips tiles and their styles
+entirely) and `stages.docs.readme` / `stages.docs.agents` (each `true` by default).
+The output directory gains:
+
+```
+├── README.md              # what the collection contains, from measured numbers
+├── AGENTS.md              # schema, quality notes, and executed example queries
+├── chips.pmtiles          # chip vector tiles (only if tippecanoe ran)
+├── fields.pmtiles         # field vector tiles (only if tippecanoe ran)
+└── styles/
+    ├── split.json           # e.g. chips by train/val/test split
+    ├── field-coverage.json
+    ├── dominant-crop.json
+    ├── crops.json
+    └── outline.json
+```
 
 Add a `metadata:` block (title, description, license, providers, keywords, version) to
 make the output publishable; see `configs/examples/config.yaml`. The stac stage warns
