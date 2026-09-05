@@ -435,6 +435,9 @@ def stage_chips(ctx: PipelineContext) -> None:
         ctx.crop_stats_result = crop_stats.add_crop_stats(
             ctx.chips_path, ctx.field_polygons_path, on_progress=ctx.log
         )
+    else:
+        # Never publish a previous run's composition when the step is turned off.
+        crop_stats.drop_crop_stats(ctx.chips_path)
 
 
 def stage_splits(ctx: PipelineContext) -> None:

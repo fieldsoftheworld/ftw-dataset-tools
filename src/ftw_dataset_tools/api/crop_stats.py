@@ -78,6 +78,26 @@ def _select_without_crop_stats(chips_path: Path) -> str:
     return f"SELECT * {drop} FROM read_parquet('{_sql_path(chips_path)}')"
 
 
+def drop_crop_stats(chips_file: Path | str) -> bool:
+    """Remove the crop composition columns from a chips GeoParquet, in place.
+
+    Returns True when columns were dropped. Used when the step is configured off, so
+    a rerun never republishes the previous run's composition.
+    """
+    chips_path = Path(chips_file).resolve()
+    if not any(col in OUTPUT_COLUMNS for col in _columns(chips_path)):
+        return False
+
+    con = duckdb.connect(":memory:")
+    ensure_spatial_loaded(con)
+    try:
+        con.execute(f"CREATE TABLE chips_table AS {_select_without_crop_stats(chips_path)}")
+        write_geoparquet(chips_path, conn=con, query="SELECT * FROM chips_table")
+    finally:
+        con.close()
+    return True
+
+
 def _join_condition(
     chip_geom: str,
     field_geom: str,
@@ -177,6 +197,22 @@ def build_composition_query(
     FROM {chips_table} g
     LEFT JOIN composition c ON g."{chips_id_col}" = c.chip_id
     """
+
+
+def crop_stats_summary(result: CropStatsResult | None) -> str:
+    """The one-line run summary for the crop composition step.
+
+    ``None`` means the step was configured off. Callers ask for a summary only when
+    the chips stage actually ran, so a resume past chips reports nothing at all.
+    """
+    if result is None:
+        return "Crop composition: disabled"
+    if result.skipped:
+        return f"Crop composition: skipped ({result.reason})"
+    return (
+        f"Crop composition: {result.chips_with_crops}/{result.chips_total} chips, "
+        f"{result.distinct_codes} HCAT codes"
+    )
 
 
 def _code_value_counts(

@@ -94,6 +94,9 @@ five codes by area, written to the chips GeoParquet as `hcat_dominant_code`,
 `hcat_dominant_name_en`, `hcat_dominant_pct` and `hcat_top`. These carry through to the
 STAC chip items as `ftw:hcat_dominant_code`, `ftw:hcat_dominant_name_en`,
 `ftw:hcat_dominant_pct` and `ftw:hcat_top` (see [docs/stac-extension.md](docs/stac-extension.md)).
+The name falls back to the `hcat:name` column when `hcat:name_en` is absent. The
+percentages are shares of the chip's total field-covered area, so they sum below 100 when
+some of the fields in the chip carry no HCAT code.
 Datasets whose fields lack `hcat:code` skip this step with a note in the run output; set
 `stages.chips.crop_stats: false` to disable it even when the column is present.
 

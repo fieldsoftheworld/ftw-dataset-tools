@@ -10,7 +10,7 @@ import click
 import pystac
 from tqdm import tqdm
 
-from ftw_dataset_tools.api import dataset, splits
+from ftw_dataset_tools.api import crop_stats, dataset, splits
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
     download_and_clip_scene,
@@ -358,6 +358,7 @@ def create_dataset_cmd(
         if result.chips_result:
             click.echo(f"  Grid cells: {result.chips_result.total_cells:,}")
             click.echo(f"  Cells with coverage: {result.chips_result.cells_with_coverage:,}")
+            click.echo(f"  {crop_stats.crop_stats_summary(result.crop_stats_result)}")
 
         if result.splits_result:
             click.echo(

@@ -10,7 +10,7 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import box
 
-from ftw_dataset_tools.api import field_stats, pipeline
+from ftw_dataset_tools.api import crop_stats, field_stats, pipeline
 from ftw_dataset_tools.api.config import ClassFilter, ClassFilterError, DatasetConfig
 from ftw_dataset_tools.api.pipeline import StageInputError
 
@@ -586,6 +586,32 @@ class TestSourceResolution:
         assert len(provenance["source"]["sha256"]) == 64
 
 
+def _fake_field_stats_writing_crop_columns(field_stats_module):
+    """A chips stage that writes a chips file still carrying a previous composition."""
+
+    def fake(**kwargs):
+        gpd.GeoDataFrame(
+            {
+                "id": ["ftw-33UXP0001"],
+                "field_coverage_pct": [50.0],
+                "hcat_dominant_code": [1],
+                "hcat_dominant_name_en": ["Wheat"],
+                "hcat_dominant_pct": [100.0],
+            },
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(kwargs["output_file"])
+        return field_stats_module.FieldStatsResult(
+            output_path=Path(kwargs["output_file"]),
+            total_cells=1,
+            cells_with_coverage=1,
+            average_coverage=50.0,
+            max_coverage=50.0,
+        )
+
+    return fake
+
+
 class TestChipsStageCropStats:
     def _ctx(self, tmp_path: Path, monkeypatch, *, crop_stats: bool) -> pipeline.PipelineContext:
         """A context whose chips stage produces one chip over two HCAT-coded fields."""
@@ -655,6 +681,29 @@ class TestChipsStageCropStats:
         pipeline.stage_chips(ctx)
 
         assert ctx.crop_stats_result is None
+
+    def test_disabled_drops_stale_columns(self, tmp_path: Path, monkeypatch) -> None:
+        """A rerun with the flag off must not leave a previous run's columns behind."""
+        ctx = self._ctx(tmp_path, monkeypatch, crop_stats=False)
+        dropped: list[Path] = []
+        real_drop = crop_stats.drop_crop_stats
+
+        def spy(chips_file):
+            dropped.append(Path(chips_file))
+            return real_drop(chips_file)
+
+        monkeypatch.setattr(crop_stats, "drop_crop_stats", spy)
+        monkeypatch.setattr(
+            field_stats,
+            "add_field_stats",
+            _fake_field_stats_writing_crop_columns(field_stats),
+        )
+
+        pipeline.stage_chips(ctx)
+
+        assert dropped == [ctx.chips_path]
+        assert ctx.crop_stats_result is None
+        assert "hcat_dominant_code" not in gpd.read_parquet(ctx.chips_path).columns
 
     def test_splits_keep_the_dominant_code_an_integer(self, tmp_path: Path, monkeypatch) -> None:
         """The chips GeoParquet is published as-is, so the split rewrite must not

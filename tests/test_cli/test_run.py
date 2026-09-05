@@ -9,6 +9,7 @@ import yaml
 from click.testing import CliRunner
 
 from ftw_dataset_tools.api.crop_stats import CropStatsResult
+from ftw_dataset_tools.api.field_stats import FieldStatsResult
 from ftw_dataset_tools.api.pipeline import PipelineContext
 from ftw_dataset_tools.commands.run import _print_summary, run
 
@@ -121,7 +122,13 @@ class TestPrintSummaryCropComposition:
     def _base_ctx(self, tmp_path: Path) -> Mock:
         ctx = Mock(spec=PipelineContext)
         ctx.output_dir = tmp_path
-        ctx.chips_result = None
+        ctx.chips_result = FieldStatsResult(
+            output_path=tmp_path / "chips.parquet",
+            total_cells=10,
+            cells_with_coverage=7,
+            average_coverage=50.0,
+            max_coverage=90.0,
+        )
         ctx.splits_result = None
         ctx.masks_results = {}
         ctx.stac_result = None
@@ -161,6 +168,16 @@ class TestPrintSummaryCropComposition:
         _print_summary(ctx)
 
         assert "Crop composition: disabled" in capsys.readouterr().out
+
+    def test_no_crop_line_when_chips_stage_did_not_run(self, tmp_path: Path, capsys) -> None:
+        """Resuming past chips says nothing about a composition it never touched."""
+        ctx = self._base_ctx(tmp_path)
+        ctx.chips_result = None
+        ctx.crop_stats_result = None
+
+        _print_summary(ctx)
+
+        assert "Crop composition" not in capsys.readouterr().out
 
 
 class TestRunSourceFetchError:
