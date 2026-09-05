@@ -29,10 +29,13 @@ from ftw_dataset_tools.api import (
     boundaries,
     class_filter,
     crop_stats,
+    docs,
     field_stats,
     masks,
     splits,
     stac,
+    styles,
+    tiles,
 )
 from ftw_dataset_tools.api import config as config_module
 from ftw_dataset_tools.api.geo import (
@@ -70,6 +73,7 @@ STAGE_ORDER = [
     "stac",
     "select_images",
     "download_images",
+    "docs",
 ]
 
 # Stages that require a resolvable calendar year (for chip naming, temporal
@@ -79,6 +83,16 @@ _YEAR_STAGES = {"masks", "stac", "select_images", "download_images"}
 
 class StageInputError(ValueError):
     """Raised when a stage is run without its required input files present."""
+
+
+@dataclass
+class DocsStageResult:
+    """What the docs stage produced: tile archives, styles and documents."""
+
+    tiles: dict[str, Path] = field(default_factory=dict)
+    styles: list[styles.StyleResult] = field(default_factory=list)
+    docs: list[Path] = field(default_factory=list)
+    tippecanoe_used: bool = False
 
 
 @dataclass
@@ -108,6 +122,7 @@ class PipelineContext:
     stac_result: stac.STACGenerationResult | None = None
     selection_result: Any = None
     download_result: Any = None
+    docs_result: DocsStageResult | None = None
 
     # Derived output paths (fixed naming convention).
     output_fields_path: Path = field(init=False)
@@ -606,6 +621,97 @@ def stage_download_images(ctx: PipelineContext) -> None:
     )
 
 
+TIPPECANOE_MISSING_WARNING = (
+    "Warning: tippecanoe not found; no PMTiles or styles were written "
+    "(install tippecanoe or set stages.docs.pmtiles: false to silence)"
+)
+
+# (asset key, context attribute holding the source parquet, output name, tile spec)
+_TILE_TARGETS = (
+    ("chips_tiles", "chips_path", "chips.pmtiles", tiles.CHIPS_TILES),
+    ("fields_tiles", "field_polygons_path", "fields.pmtiles", tiles.FIELDS_TILES),
+)
+
+
+def _build_tiles(ctx: PipelineContext) -> dict[str, Path]:
+    """Build the collection's PMTiles, honouring the ``pmtiles`` auto/true/false setting."""
+    setting = ctx.config.stages.docs.pmtiles
+    if setting is False:
+        return {}
+    if not tiles.tippecanoe_available():
+        if setting is True:
+            raise RuntimeError(
+                "stages.docs.pmtiles is true but tippecanoe is not installed. "
+                "Install tippecanoe, or set stages.docs.pmtiles to auto or false."
+            )
+        ctx.log(TIPPECANOE_MISSING_WARNING)
+        return {}
+
+    built: dict[str, Path] = {}
+    for key, attribute, out_name, spec in _TILE_TARGETS:
+        source = getattr(ctx, attribute)
+        built[key] = tiles.build_pmtiles(
+            source, ctx.output_dir / out_name, spec, on_progress=ctx.log
+        )
+    return built
+
+
+def _write_styles(ctx: PipelineContext, built: dict[str, Path]) -> list[styles.StyleResult]:
+    """Write the MapLibre styles for whichever tile archives were built."""
+    if not built:
+        return []
+    return styles.write_styles(
+        ctx.output_dir,
+        ctx.field_dataset,
+        ctx.chips_path,
+        ctx.field_polygons_path,
+        chips_tiles=f"./{built['chips_tiles'].name}" if "chips_tiles" in built else None,
+        fields_tiles=f"./{built['fields_tiles'].name}" if "fields_tiles" in built else None,
+        on_progress=ctx.log,
+    )
+
+
+def _write_docs(ctx: PipelineContext, style_results: list[styles.StyleResult]) -> list[Path]:
+    """Write README.md and AGENTS.md, as far as the config asks for them."""
+    docs_cfg = ctx.config.stages.docs
+    if not (docs_cfg.readme or docs_cfg.agents):
+        return []
+    return docs.write_docs(
+        ctx.output_dir,
+        ctx.output_dir / "collection.json",
+        ctx.chips_path,
+        ctx.field_polygons_path,
+        style_results,
+        ctx.config.config_dict(),
+        readme=docs_cfg.readme,
+        agents=docs_cfg.agents,
+        on_progress=ctx.log,
+    )
+
+
+def stage_docs(ctx: PipelineContext) -> None:
+    """Build tiles and styles, write the documents, and register them on the collection."""
+    collection_json = ctx.output_dir / "collection.json"
+    _require(collection_json, stage="docs", produced_by="stac")
+    _require(ctx.chips_path, stage="docs", produced_by="chips")
+    _require(ctx.field_polygons_path, stage="docs", produced_by=ctx.field_polygons_producer)
+
+    built = _build_tiles(ctx)
+    style_results = _write_styles(ctx, built)
+    written = _write_docs(ctx, style_results)
+    ctx.docs_result = DocsStageResult(built, style_results, written, bool(built))
+
+    if not (built or written):
+        ctx.log("Nothing to document: PMTiles are off and README/AGENTS are disabled")
+        return
+
+    docs.register_docs_assets(collection_json, tiles=built, styles=style_results, docs=written)
+    ctx.log(
+        f"Documented the collection: {len(built)} tile archive(s), "
+        f"{len(style_results)} style(s), {len(written)} document(s)"
+    )
+
+
 _STAGE_FUNCS: dict[str, Callable[[PipelineContext], None]] = {
     "reproject": stage_reproject,
     "filter": stage_filter,
@@ -616,4 +722,5 @@ _STAGE_FUNCS: dict[str, Callable[[PipelineContext], None]] = {
     "stac": stage_stac,
     "select_images": stage_select_images,
     "download_images": stage_download_images,
+    "docs": stage_docs,
 }

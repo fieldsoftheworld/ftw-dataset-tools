@@ -233,3 +233,110 @@ class TestVia:
         agents = render_agents(collection, stats, [])
         assert "[Source X](https://src.example)" in agents
         assert "https://" not in agents.replace("](https://", "")
+
+
+class TestRegisterDocsAssets:
+    """Tests for JSON-editing the saved collection with tiles, styles and docs."""
+
+    def _styles(self, tmp_path: Path):
+        from ftw_dataset_tools.api.styles import StyleResult
+
+        styles_dir = tmp_path / "styles"
+        styles_dir.mkdir(exist_ok=True)
+        for style_id in ("split", "outline"):
+            (styles_dir / f"{style_id}.json").write_text("{}")
+        return [
+            StyleResult("split", styles_dir / "split.json", "Chips by split", [], True),
+            StyleResult("outline", styles_dir / "outline.json", "Field outlines", [], False),
+        ]
+
+    def _tiles(self, tmp_path: Path) -> dict[str, Path]:
+        for name in ("chips.pmtiles", "fields.pmtiles"):
+            (tmp_path / name).write_bytes(b"PMTiles" * 10)
+        return {
+            "chips_tiles": tmp_path / "chips.pmtiles",
+            "fields_tiles": tmp_path / "fields.pmtiles",
+        }
+
+    def test_registers_tiles_styles_and_docs(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import register_docs_assets
+
+        coll_path, _, _ = _collection_dir(tmp_path)
+        docs = [tmp_path / "README.md", tmp_path / "AGENTS.md"]
+        for doc in docs:
+            doc.write_text("# doc")
+
+        register_docs_assets(
+            coll_path,
+            tiles=self._tiles(tmp_path),
+            styles=self._styles(tmp_path),
+            docs=docs,
+        )
+
+        coll = json.loads(coll_path.read_text())
+        chips_tiles = coll["assets"]["chips_tiles"]
+        assert chips_tiles["type"] == "application/vnd.pmtiles"
+        assert chips_tiles["roles"] == ["visual"]
+        assert chips_tiles["title"] == "Chips (PMTiles)"
+        assert chips_tiles["href"] == "./chips.pmtiles"
+        assert chips_tiles["file:size"] == (tmp_path / "chips.pmtiles").stat().st_size
+        assert coll["assets"]["fields_tiles"]["title"] == "Field boundaries (PMTiles)"
+        assert coll["assets"]["fields_tiles"]["href"] == "./fields.pmtiles"
+
+        default_style = coll["assets"]["style-split"]
+        assert default_style["type"] == "application/vnd.mapbox.style+json"
+        assert default_style["roles"] == ["style", "default"]
+        assert default_style["title"] == "Chips by split"
+        assert default_style["href"] == "./styles/split.json"
+        assert coll["assets"]["style-outline"]["roles"] == ["style"]
+
+        links = {(link["rel"], link["href"]): link for link in coll["links"]}
+        assert links[("describedby", "./README.md")]["type"] == "text/markdown"
+        assert links[("describedby", "./README.md")]["title"] == "Collection README"
+        assert links[("agents", "./AGENTS.md")]["title"] == "Collection agent guide"
+
+    def test_preserves_existing_keys_and_appends(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import register_docs_assets
+
+        coll_path, _, _ = _collection_dir(tmp_path)
+        before = json.loads(coll_path.read_text())
+
+        register_docs_assets(coll_path, tiles={}, styles=[], docs=[tmp_path / "README.md"])
+
+        coll = json.loads(coll_path.read_text())
+        assert list(coll)[: len(before)] == list(before)  # top-level key order preserved
+        assert list(coll["assets"])[:3] == list(before["assets"])[:3]
+        assert coll["assets"]["fields"] == before["assets"]["fields"]
+        assert coll_path.read_text().startswith('{\n  "type"')  # indent 2
+
+    def test_is_idempotent(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import register_docs_assets
+
+        coll_path, _, _ = _collection_dir(tmp_path)
+        docs = [tmp_path / "README.md", tmp_path / "AGENTS.md"]
+        for doc in docs:
+            doc.write_text("# doc")
+        kwargs = {"tiles": self._tiles(tmp_path), "styles": self._styles(tmp_path), "docs": docs}
+
+        register_docs_assets(coll_path, **kwargs)
+        first = coll_path.read_text()
+        register_docs_assets(coll_path, **kwargs)
+        second = coll_path.read_text()
+
+        assert first == second
+        coll = json.loads(second)
+        rels = [link["rel"] for link in coll["links"]]
+        assert rels.count("describedby") == 1 and rels.count("agents") == 1
+        assert len([k for k in coll["assets"] if k.startswith("style-")]) == 2
+
+    def test_only_written_docs_are_linked(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import register_docs_assets
+
+        coll_path, _, _ = _collection_dir(tmp_path)
+        (tmp_path / "AGENTS.md").write_text("# doc")
+
+        register_docs_assets(coll_path, tiles={}, styles=[], docs=[tmp_path / "AGENTS.md"])
+
+        coll = json.loads(coll_path.read_text())
+        rels = {link["rel"] for link in coll["links"]}
+        assert rels == {"agents"}
