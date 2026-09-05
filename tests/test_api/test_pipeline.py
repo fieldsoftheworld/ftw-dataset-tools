@@ -807,10 +807,12 @@ class TestDocsStage:
     def test_stage_docs_pmtiles_false_skips_tiles_and_styles_silently(
         self, tmp_path: Path, monkeypatch
     ) -> None:
+        import json
+
         from ftw_dataset_tools.api import tiles
         from tests.test_api.test_stac import TestCollectionAssetMetadata
 
-        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
         config = DatasetConfig.from_dict(
             {
                 "fields_file": str(tmp_path / "ds_fields.parquet"),
@@ -829,6 +831,10 @@ class TestDocsStage:
         assert not any("tippecanoe not found" in m for m in messages)
         assert not (tmp_path / "styles").exists()
         assert ctx.docs_result is not None and ctx.docs_result.tippecanoe_used is False
+        coll = json.loads(result.collection_path.read_text())
+        assert "chips_tiles" not in coll["assets"] and "fields_tiles" not in coll["assets"]
+        assert [k for k in coll["assets"] if k.startswith("style-")] == []
+        assert {link["rel"] for link in coll["links"]} >= {"describedby", "agents"}
 
     def test_stage_docs_requires_the_collection(self, tmp_path: Path) -> None:
         fields = tmp_path / "ds_fields.parquet"

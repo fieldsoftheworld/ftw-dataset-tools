@@ -479,3 +479,82 @@ class TestImageryStats:
         from ftw_dataset_tools.api.docs import imagery_stats
 
         assert imagery_stats(tmp_path) is None
+
+
+class TestRegisterDocsAssetsPruning:
+    """A rerun that produces less must leave the collection describing only what exists."""
+
+    def _register(self, coll_path: Path, tmp_path: Path, **kwargs):
+        from ftw_dataset_tools.api.docs import register_docs_assets
+
+        helper = TestRegisterDocsAssets()
+        defaults = {
+            "tiles": helper._tiles(tmp_path),
+            "styles": helper._styles(tmp_path),
+            "docs": [tmp_path / "README.md", tmp_path / "AGENTS.md"],
+        }
+        for doc in defaults["docs"]:
+            doc.write_text("# doc")
+        defaults.update(kwargs)
+        register_docs_assets(coll_path, **defaults)
+
+    def _with_links(self, tmp_path: Path) -> Path:
+        """The shared collection, plus the links the stac stage really writes."""
+        coll_path, _, _ = _collection_dir(tmp_path)
+        collection = json.loads(coll_path.read_text())
+        collection["links"] = [
+            {"rel": "root", "href": "./collection.json", "type": "application/json"},
+            {"rel": "child", "href": "./chips/33UXP/collection.json"},
+            {"rel": "via", "href": "https://x.example/collection.json"},
+        ]
+        coll_path.write_text(json.dumps(collection, indent=2))
+        return coll_path
+
+    def test_dropped_tiles_and_styles_are_removed(self, tmp_path: Path) -> None:
+        coll_path = self._with_links(tmp_path)
+
+        self._register(coll_path, tmp_path)
+        self._register(coll_path, tmp_path, tiles={}, styles=[])
+
+        coll = json.loads(coll_path.read_text())
+        assert "chips_tiles" not in coll["assets"] and "fields_tiles" not in coll["assets"]
+        assert [k for k in coll["assets"] if k.startswith("style-")] == []
+        # The documents this run still produced stay linked.
+        rels = {link["rel"] for link in coll["links"]}
+        assert {"describedby", "agents"} <= rels
+
+    def test_dropped_docs_lose_their_links(self, tmp_path: Path) -> None:
+        coll_path = self._with_links(tmp_path)
+
+        self._register(coll_path, tmp_path)
+        self._register(coll_path, tmp_path, docs=[tmp_path / "AGENTS.md"])
+
+        coll = json.loads(coll_path.read_text())
+        rels = [link["rel"] for link in coll["links"]]
+        assert "describedby" not in rels
+        assert rels.count("agents") == 1
+        # Tiles and styles were still produced, so they stay.
+        assert "chips_tiles" in coll["assets"]
+
+    def test_unrelated_assets_and_links_survive_pruning(self, tmp_path: Path) -> None:
+        coll_path = self._with_links(tmp_path)
+        before = json.loads(coll_path.read_text())
+
+        self._register(coll_path, tmp_path)
+        self._register(coll_path, tmp_path, tiles={}, styles=[], docs=[])
+
+        coll = json.loads(coll_path.read_text())
+        assert list(coll["assets"]) == list(before["assets"])
+        for key in ("fields", "chips", "items"):
+            assert coll["assets"][key] == before["assets"][key]
+        assert coll["links"] == before["links"]
+
+    def test_pruning_leaves_a_steady_state_idempotent(self, tmp_path: Path) -> None:
+        coll_path = self._with_links(tmp_path)
+
+        self._register(coll_path, tmp_path)
+        self._register(coll_path, tmp_path, tiles={}, styles=[])
+        first = coll_path.read_text()
+        self._register(coll_path, tmp_path, tiles={}, styles=[])
+
+        assert coll_path.read_text() == first

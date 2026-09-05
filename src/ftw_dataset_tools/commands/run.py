@@ -171,6 +171,19 @@ def run_cmd(
     _print_summary(ctx)
 
 
+def _docs_line(result: pipeline.DocsStageResult, pmtiles: str | bool) -> str:
+    """One line naming the documents written and counting the tiles and styles."""
+    parts = []
+    if result.docs:
+        parts.append(", ".join(path.name for path in result.docs))
+    parts.append(f"{len(result.tiles)} PMTiles, {len(result.styles)} styles")
+    line = f"  Docs: {'; '.join(parts)}"
+    # Only "auto" silently does without tiles; "false" asked for none.
+    if not result.tippecanoe_used and pmtiles == config_module.PMTILES_AUTO:
+        line += " (tippecanoe not found)"
+    return line
+
+
 def _print_summary(ctx: pipeline.PipelineContext) -> None:
     """Print a short summary of what the run produced."""
     click.echo("")
@@ -196,6 +209,8 @@ def _print_summary(ctx: pipeline.PipelineContext) -> None:
         click.echo(f"  Imagery selected: {ctx.selection_result.successful}")
     if ctx.download_result is not None:
         click.echo(f"  Imagery downloaded: {ctx.download_result.successful}")
+    if ctx.docs_result is not None:
+        click.echo(_docs_line(ctx.docs_result, ctx.config.stages.docs.pmtiles))
 
 
 # Alias for registration

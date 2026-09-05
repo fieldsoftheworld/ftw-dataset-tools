@@ -894,6 +894,29 @@ def _doc_links(docs: list[Path]) -> list[dict]:
     return links
 
 
+def _prune_managed_assets(assets: dict, tiles: dict[str, Path], styles: list[StyleResult]) -> None:
+    """Drop tile and style assets this run did not produce, leaving all others alone."""
+    keep = set(tiles) | {f"style-{style.style_id}" for style in styles}
+    stale = [
+        key
+        for key in assets
+        if key not in keep and (key in TILE_TITLES or key.startswith("style-"))
+    ]
+    for key in stale:
+        del assets[key]
+
+
+def _prune_doc_links(links: list[dict], docs: list[Path]) -> list[dict]:
+    """Drop the README/AGENTS links whose document this run did not write."""
+    kept = {f"./{Path(doc).name}" for doc in docs}
+    managed = {(rel, f"./{name}") for name, (rel, _) in DOC_LINKS.items()}
+    return [
+        link
+        for link in links
+        if (link.get("rel"), link.get("href")) not in managed or link.get("href") in kept
+    ]
+
+
 def _merge_links(existing: list[dict], new: list[dict]) -> list[dict]:
     """Append links, replacing in place any that share a rel and href."""
     merged = list(existing)
@@ -915,21 +938,26 @@ def register_docs_assets(
     styles: list[StyleResult],
     docs: list[Path],
 ) -> None:
-    """Add the tiles, styles and documents to an already-written ``collection.json``.
+    """Make an already-written ``collection.json`` describe exactly these tiles, styles and docs.
 
     The collection is edited as JSON rather than re-serialised through pystac, so
     everything the stac stage wrote (key order, extension fields) survives
     untouched. Re-running replaces assets with the same key and links with the
-    same rel and href instead of duplicating them.
+    same rel and href instead of duplicating them, and drops the tile, style and
+    document entries a previous run wrote that this one did not produce — so a
+    collection never advertises a PMTiles archive or style that is no longer on
+    disk. Assets and links outside those the docs stage owns are left alone.
     """
     path = Path(collection_json_path)
     collection = json.loads(path.read_text(encoding="utf-8"))
 
     assets = collection.setdefault("assets", {})
+    _prune_managed_assets(assets, tiles, styles)
     for key, tile_path in tiles.items():
         assets[key] = _tile_asset(key, Path(tile_path))
     for style in styles:
         assets[f"style-{style.style_id}"] = _style_asset(style)
 
-    collection["links"] = _merge_links(collection.get("links", []), _doc_links(docs))
+    links = _prune_doc_links(collection.get("links", []), docs)
+    collection["links"] = _merge_links(links, _doc_links(docs))
     path.write_text(json.dumps(collection, indent=2) + "\n", encoding="utf-8")

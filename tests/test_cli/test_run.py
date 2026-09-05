@@ -134,6 +134,7 @@ class TestPrintSummaryCropComposition:
         ctx.stac_result = None
         ctx.selection_result = None
         ctx.download_result = None
+        ctx.docs_result = None
         return ctx
 
     def test_populated_crop_composition(self, tmp_path: Path, capsys) -> None:
@@ -204,3 +205,70 @@ class TestRunSourceFetchError:
         assert result.exit_code != 0
         assert "could not fetch" in result.output
         assert "Traceback" not in result.output
+
+
+class TestPrintSummaryDocs:
+    """The docs stage gets a summary line like every other stage."""
+
+    def _ctx(self, tmp_path: Path, docs_result, pmtiles: str | bool = "auto") -> Mock:
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        ctx = Mock(spec=PipelineContext)
+        ctx.output_dir = tmp_path
+        ctx.chips_result = None
+        ctx.crop_stats_result = None
+        ctx.splits_result = None
+        ctx.masks_results = {}
+        ctx.stac_result = None
+        ctx.selection_result = None
+        ctx.download_result = None
+        ctx.docs_result = docs_result
+        ctx.config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"docs": {"pmtiles": pmtiles}}}
+        )
+        return ctx
+
+    def _result(self, tmp_path: Path, **kwargs):
+        from ftw_dataset_tools.api.pipeline import DocsStageResult
+        from ftw_dataset_tools.api.styles import StyleResult
+
+        defaults = {
+            "tiles": {
+                "chips_tiles": tmp_path / "chips.pmtiles",
+                "fields_tiles": tmp_path / "fields.pmtiles",
+            },
+            "styles": [
+                StyleResult(f"s{i}", tmp_path / f"s{i}.json", f"S{i}", [], i == 0) for i in range(5)
+            ],
+            "docs": [tmp_path / "README.md", tmp_path / "AGENTS.md"],
+            "tippecanoe_used": True,
+        }
+        defaults.update(kwargs)
+        return DocsStageResult(**defaults)
+
+    def test_full_docs_line(self, tmp_path: Path, capsys) -> None:
+        _print_summary(self._ctx(tmp_path, self._result(tmp_path)))
+
+        assert "Docs: README.md, AGENTS.md; 2 PMTiles, 5 styles" in capsys.readouterr().out
+
+    def test_missing_tippecanoe_under_auto_is_called_out(self, tmp_path: Path, capsys) -> None:
+        result = self._result(tmp_path, tiles={}, styles=[], tippecanoe_used=False)
+
+        _print_summary(self._ctx(tmp_path, result))
+
+        out = capsys.readouterr().out
+        assert "Docs: README.md, AGENTS.md; 0 PMTiles, 0 styles (tippecanoe not found)" in out
+
+    def test_pmtiles_disabled_is_not_reported_as_missing(self, tmp_path: Path, capsys) -> None:
+        result = self._result(tmp_path, tiles={}, styles=[], tippecanoe_used=False)
+
+        _print_summary(self._ctx(tmp_path, result, pmtiles=False))
+
+        out = capsys.readouterr().out
+        assert "Docs: README.md, AGENTS.md; 0 PMTiles, 0 styles" in out
+        assert "tippecanoe not found" not in out
+
+    def test_no_docs_line_when_the_stage_did_not_run(self, tmp_path: Path, capsys) -> None:
+        _print_summary(self._ctx(tmp_path, None))
+
+        assert "Docs:" not in capsys.readouterr().out
