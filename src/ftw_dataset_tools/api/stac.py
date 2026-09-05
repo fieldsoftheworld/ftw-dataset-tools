@@ -54,6 +54,9 @@ CHIP_LAYOUT = TemplateLayoutStrategy(
     catalog_template="chips/${id}/catalog.json", item_template="${id}/${id}.json"
 )
 
+# Portolan schema declared on every STAC object this tool writes.
+PORTOLAN_SCHEMA_URI = "https://schemas.portolan-sdi.org/portolan/v0.1.2/schema.json"
+
 
 def chips_base_dir_for(output_dir: Path | str) -> Path:
     """Return the chips base directory :data:`CHIP_LAYOUT` writes items into.
@@ -66,6 +69,7 @@ def chips_base_dir_for(output_dir: Path | str) -> Path:
 
 
 __all__ = [
+    "PORTOLAN_SCHEMA_URI",
     "STACGenerationResult",
     "chips_base_dir_for",
     "generate_stac_catalog",
@@ -367,6 +371,12 @@ def _extract_chips_info(
         return chips
     finally:
         conn.close()
+
+
+def _add_portolan_schema(obj: pystac.STACObject) -> None:
+    """Declare the Portolan schema on a STAC object exactly once."""
+    if PORTOLAN_SCHEMA_URI not in obj.stac_extensions:
+        obj.stac_extensions.append(PORTOLAN_SCHEMA_URI)
 
 
 def _updated_stamp(provenance: dict | None) -> str:
@@ -851,10 +861,14 @@ def generate_stac_catalog(
             description=f"Chips in MGRS 100 km square {square}",
             title=square,
         )
+        _add_portolan_schema(sub)
         for item in square_items:
             sub.add_item(item)
             item.set_collection(collection)
+            _add_portolan_schema(item)
         collection.add_child(sub)
+
+    _add_portolan_schema(collection)
 
     # normalize_hrefs assigns each item's self href in-memory (needed for rustac to
     # serialize them below) without writing any files yet.
