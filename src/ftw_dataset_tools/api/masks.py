@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import multiprocessing
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -149,6 +149,8 @@ class CreateMasksResult:
     masks_created: list[MaskResult]
     masks_skipped: list[tuple[str, str]]  # (grid_id, reason)
     field_dataset: str
+    masks_existing: int = 0  # Cells skipped because an output file already existed.
+    pool_restarts: int = 0  # Times the ProcessPoolExecutor had to be recreated.
 
     @property
     def total_created(self) -> int:
@@ -196,6 +198,45 @@ def _wkt_to_geometry(wkt: str):
     return shapely_wkt.loads(wkt)
 
 
+# Instance masks are stored as uint32; a raw id outside this range can't be
+# burned in directly.
+_UINT32_MAX = 0xFFFFFFFF
+
+
+def _instance_value(raw: object) -> int | None:
+    """Coerce a raw field id into a usable instance mask value.
+
+    Harmonized field datasets sometimes store ids as VARCHAR that look like
+    floats (e.g. Austria's ``'111205887.0'``), so a plain ``int(raw)`` raises.
+    Returns None when the value can't be interpreted as a number at all.
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str | float):
+        try:
+            return int(float(raw))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _instance_ids_for_shapes(boundaries: list[tuple]) -> list[int]:
+    """Return uint32-safe instance ids, one per boundary row.
+
+    Falls back to stable sequential ids (1..n, in the order rows come back)
+    for the *entire* cell when any raw id is missing, non-numeric,
+    non-positive, or too large for uint32 - a partial fallback could collide
+    with valid ids already present in the same cell.
+    """
+    values = [_instance_value(id_val) for id_val, _wkt in boundaries]
+    needs_fallback = any(v is None or v <= 0 or v > _UINT32_MAX for v in values)
+    if needs_fallback:
+        return list(range(1, len(boundaries) + 1))
+    return values
+
+
 # Mask types derived from an already-rasterized semantic mask rather than burned
 # in from vectors. See api/decode.py.
 _DERIVED_MASK_TYPES = frozenset({MaskType.DECODE_BOUNDARY, MaskType.DECODE_DISTANCE})
@@ -236,11 +277,13 @@ class _PartialCellFailure(Exception):
         self.results = list(results)
 
 
-@dataclass
+@dataclass(frozen=True)
 class _MaskTask:
     """One grid cell's worth of work: burn ``source_type`` once, write ``outputs``.
 
-    Module-level and plain-data so ``ProcessPoolExecutor`` can pickle it.
+    Module-level and plain-data so ``ProcessPoolExecutor`` can pickle it. Frozen,
+    with ``outputs`` a tuple, so it stays hashable: the pool-restart path in
+    ``_run_work_items`` tracks finished tasks in a set.
     """
 
     grid_id: str
@@ -251,10 +294,11 @@ class _MaskTask:
     boundaries_geom_col: str
     boundary_lines_geom_col: str
     source_type: MaskType
-    outputs: list[tuple[MaskType, str]]
+    outputs: tuple[tuple[MaskType, str], ...]
     resolution: float
     id_col: str | None
     background_class_value: int
+    memory_limit_mb: int
 
 
 def _grid_raster_geometry(
@@ -313,7 +357,11 @@ def _rasterize_mask(
         )
         # Rasterize with ID values
         if boundaries:
-            shapes = [(_wkt_to_geometry(wkt), int(id_val)) for id_val, wkt in boundaries]
+            ids = _instance_ids_for_shapes(boundaries)
+            shapes = [
+                (_wkt_to_geometry(wkt), value)
+                for (_id_val, wkt), value in zip(boundaries, ids, strict=True)
+            ]
             features.rasterize(shapes, out=mask, transform=transform, all_touched=False)
     else:
         boundaries = _get_geometries_in_bounds(conn, boundaries_path, boundaries_geom_col, bounds)
@@ -468,6 +516,65 @@ def _create_masks_for_cell(
     return results
 
 
+# Number of times to attempt a cell's group before giving up on it.
+_MASK_CREATE_ATTEMPTS = 2
+
+
+def _create_masks_with_retry(
+    task: _MaskTask,
+    crs: CRS,
+) -> tuple[list[tuple[MaskType, MaskResult]], tuple[str, str] | None]:
+    """Run one cell's group, retrying once with a fresh DuckDB connection on failure.
+
+    A worker's DuckDB connection can be left unusable after a query error, so a
+    bare retry with a brand-new connection clears transient failures without
+    resubmitting the whole grid cell to the pool. A retry redoes the burn *and*
+    every write, which is safe because the outputs are rewritten in place, so
+    only the final attempt's results are reported.
+    """
+    outputs = [(mask_type, Path(path)) for mask_type, path in task.outputs]
+    last_exc: Exception | None = None
+    written: list[tuple[MaskType, MaskResult]] = []
+
+    for _attempt in range(_MASK_CREATE_ATTEMPTS):
+        conn = duckdb.connect(":memory:")
+        # Each worker process defaults to its own 80%-of-RAM DuckDB budget and as
+        # many threads as there are CPUs; with several worker processes running
+        # at once that oversubscribes the machine and can OOM-kill a worker,
+        # which breaks the whole ProcessPoolExecutor (see _run_work_items).
+        conn.execute("SET threads = 1")
+        conn.execute(f"SET memory_limit = '{task.memory_limit_mb}MB'")
+        ensure_spatial_loaded(conn)
+        try:
+            results = _create_masks_for_cell(
+                conn=conn,
+                grid_id=task.grid_id,
+                bounds=task.bounds,
+                crs=crs,
+                boundaries_path=Path(task.boundaries_path),
+                boundary_lines_path=Path(task.boundary_lines_path),
+                boundaries_geom_col=task.boundaries_geom_col,
+                boundary_lines_geom_col=task.boundary_lines_geom_col,
+                source_type=task.source_type,
+                outputs=outputs,
+                resolution=task.resolution,
+                id_col=task.id_col,
+                background_class_value=task.background_class_value,
+            )
+            return (results, None)
+        except _PartialCellFailure as exc:
+            last_exc = exc
+            written = exc.results
+        except Exception as exc:
+            last_exc = exc
+            written = []
+        finally:
+            conn.close()
+
+    reason = f"{type(last_exc).__name__}: {last_exc}"
+    return (written, (task.grid_id, reason))
+
+
 def _process_single_grid_cell(
     task: _MaskTask,
 ) -> tuple[list[tuple[MaskType, MaskResult]], tuple[str, str] | None]:
@@ -498,40 +605,146 @@ def _process_single_grid_cell(
 
         crs = CRS.from_wkt(task.crs_wkt)
 
-        # Create DuckDB connection for this process
-        conn = duckdb.connect(":memory:")
-        ensure_spatial_loaded(conn)
-
-        try:
-            results = _create_masks_for_cell(
-                conn=conn,
-                grid_id=task.grid_id,
-                bounds=task.bounds,
-                crs=crs,
-                boundaries_path=Path(task.boundaries_path),
-                boundary_lines_path=Path(task.boundary_lines_path),
-                boundaries_geom_col=task.boundaries_geom_col,
-                boundary_lines_geom_col=task.boundary_lines_geom_col,
-                source_type=task.source_type,
-                outputs=[(mask_type, Path(path)) for mask_type, path in task.outputs],
-                resolution=task.resolution,
-                id_col=task.id_col,
-                background_class_value=task.background_class_value,
-            )
-            conn.close()
-            return (results, None)
-        except _PartialCellFailure as e:
-            conn.close()
-            return (e.results, (task.grid_id, str(e)))
-        except Exception as e:
-            conn.close()
-            return ([], (task.grid_id, str(e)))
+        return _create_masks_with_retry(task, crs)
     finally:
         os.dup2(old_stdout_fd, 1)
         os.dup2(old_stderr_fd, 2)
         os.close(old_stdout_fd)
         os.close(old_stderr_fd)
         os.close(devnull_fd)
+
+
+# Cap so a many-core box doesn't spin up so many DuckDB workers that they
+# oversubscribe memory (each defaults to 80% of RAM before we constrain it).
+_DEFAULT_WORKER_CAP = 8
+
+# Fallback per-worker DuckDB memory budget when total RAM can't be determined.
+_FALLBACK_MEMORY_LIMIT_MB = 2048
+
+# Only this fraction of total RAM is budgeted across all workers, leaving
+# headroom for the main process, GDAL, and OS caches.
+_WORKER_MEMORY_FRACTION = 0.6
+
+# Never hand a worker less than this, even on a very constrained or
+# heavily-parallel machine.
+_MIN_WORKER_MEMORY_MB = 512
+
+# How many times to recreate a broken ProcessPoolExecutor before giving up on
+# the cells that were still pending.
+_MAX_POOL_RESTARTS = 3
+
+
+def _default_num_workers() -> int:
+    """Default worker count when the caller doesn't pick one.
+
+    Bounded well below the full CPU count: DuckDB's default settings make
+    each worker greedy for both memory and threads, so using every core
+    oversubscribes the machine on a real (non-toy) run and can OOM-kill a
+    worker, breaking the whole pool.
+    """
+    return max(1, min(os.cpu_count() or 1, _DEFAULT_WORKER_CAP))
+
+
+def _total_ram_bytes() -> int | None:
+    """Total physical RAM in bytes, or None if it can't be determined."""
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
+def _worker_memory_limit_mb(total_ram_bytes: int, workers: int) -> int:
+    """DuckDB per-worker memory cap, in MB, so N processes don't oversubscribe RAM."""
+    return max(
+        _MIN_WORKER_MEMORY_MB,
+        int(_WORKER_MEMORY_FRACTION * total_ram_bytes / workers / 2**20),
+    )
+
+
+def _run_work_items(
+    work_items: list[_MaskTask],
+    num_workers: int | None,
+    total_tasks: int,
+    on_progress: Callable[[int, int], None] | None,
+) -> tuple[
+    list[tuple[MaskType, MaskResult]],
+    list[tuple[_MaskTask, tuple[str, str], set[MaskType]]],
+    int,
+]:
+    """Submit work items to a process pool, restarting it if a worker dies.
+
+    A worker OOM (or any other abrupt crash) breaks the whole
+    ProcessPoolExecutor; every future still pending at that point raises
+    BrokenProcessPool. Without a restart, each of those futures would be
+    caught by a broad exception handler and silently recorded as skipped -
+    which is exactly how a full mask type went missing for thousands of
+    chips in a real build. Instead, resubmit whatever didn't finish to a
+    fresh pool, up to a few times, before giving up on the remainder.
+
+    Returns:
+        Tuple of (created (mask type, result) pairs, failures, pool restarts).
+        A failure carries the task, the (grid id, reason) pair, and the mask
+        types of that task that did reach disk before it failed, so the caller
+        can attribute the failure to the rest of the group.
+    """
+    created: list[tuple[MaskType, MaskResult]] = []
+    failures: list[tuple[_MaskTask, tuple[str, str], set[MaskType]]] = []
+    completed = 0
+    pool_restarts = 0
+    pending = list(work_items)
+
+    while pending:
+        broke = False
+        finished: set[_MaskTask] = set()
+        executor = ProcessPoolExecutor(max_workers=num_workers)
+
+        try:
+            futures = {executor.submit(_process_single_grid_cell, item): item for item in pending}
+            for future in as_completed(futures):
+                item = futures[future]
+                try:
+                    results, error = future.result()
+                except BrokenProcessPool:
+                    # Keep draining this round instead of bailing out on the first
+                    # broken future: as_completed's order isn't the submission
+                    # order, and other futures here may have already finished
+                    # fine and shouldn't be resubmitted.
+                    broke = True
+                    continue
+                except Exception as exc:
+                    completed += 1
+                    if on_progress:
+                        on_progress(completed, total_tasks)
+                    failures.append((item, (item.grid_id, str(exc)), set()))
+                    finished.add(item)
+                    continue
+
+                completed += 1
+                if on_progress:
+                    on_progress(completed, total_tasks)
+                created.extend(results)
+                if error:
+                    failures.append((item, error, {mask_type for mask_type, _ in results}))
+                finished.add(item)
+        except KeyboardInterrupt:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        finally:
+            executor.shutdown(wait=not broke, cancel_futures=broke)
+
+        pending = [item for item in pending if item not in finished]
+        if not broke:
+            break
+
+        if pool_restarts >= _MAX_POOL_RESTARTS:
+            for item in pending:
+                reason = (item.grid_id, "BrokenProcessPool: worker died repeatedly")
+                failures.append((item, reason, set()))
+            pending = []
+            break
+        pool_restarts += 1
+
+    return created, failures, pool_restarts
 
 
 def create_masks(
@@ -549,6 +762,7 @@ def create_masks(
     chip_dirs: dict[str, Path] | None = None,
     year: int | None = None,
     background_class_value: int = 0,
+    skip_existing: bool = False,
     on_progress: Callable[[int, int], None] | None = None,
     on_start: Callable[[int, int, int], None] | None = None,
 ) -> dict[MaskType, CreateMasksResult]:
@@ -567,13 +781,15 @@ def create_masks(
         coverage_col: Column name for field coverage percentage (to filter grids)
         min_coverage: Minimum coverage percentage to process (default: 0.01)
         resolution: Pixel resolution in CRS units (default: 10.0 meters)
-        num_workers: Number of parallel workers (default: number of CPUs)
+        num_workers: Number of parallel workers (default: CPU count, capped at 8)
         chip_dirs: Optional dict mapping item_id (grid_id or grid_id_year) to output directory.
                    If provided, masks are written to chip-specific directories.
                    If None, all masks go to output_dir with dataset prefix in filename.
         year: Optional year for year-based naming convention (e.g., 2024).
               When provided, item IDs and filenames include the year.
         background_class_value: Value to use for background pixels (default: 0). Use 3 for presence-only labels.
+        skip_existing: When True, cells whose output file already exists with a non-zero
+                       size are not recreated (counted in the result's masks_existing).
         on_progress: Optional callback (current, total) for progress updates
         on_start: Optional callback (total_grids, filtered_grids, total_tasks) called before
                   processing. total_tasks is filtered_grids x rasterization groups, which is
@@ -697,15 +913,23 @@ def create_masks(
     # Close the main connection - workers will create their own
     conn.close()
 
-    # Determine number of workers (default: half of CPUs, minimum 1)
+    # Determine number of workers, and each one's DuckDB memory budget so a
+    # many-worker run can't oversubscribe the machine's RAM (see
+    # _run_work_items for why that matters).
     if num_workers is None:
-        cpu_count = multiprocessing.cpu_count()
-        num_workers = max(1, cpu_count // 2)
+        num_workers = _default_num_workers()
+
+    total_ram = _total_ram_bytes()
+    memory_limit_mb = (
+        _worker_memory_limit_mb(total_ram, num_workers) if total_ram else _FALLBACK_MEMORY_LIMIT_MB
+    )
 
     # Convert CRS to WKT for serialization
     crs_wkt = crs.to_wkt()
 
     work_items: list[_MaskTask] = []
+    # Per-type tally of outputs left in place because skip_existing found them.
+    existing: dict[MaskType, int] = dict.fromkeys(mask_types, 0)
     for grid_id, minx, miny, maxx, maxy in grid_cells:
         grid_id_str = str(grid_id)
         for source_type, group in groups.items():
@@ -724,7 +948,17 @@ def create_masks(
                 if chip_dirs is not None:
                     mask_path.parent.mkdir(parents=True, exist_ok=True)
 
+                # Filter per output rather than per group: a group whose 2-class
+                # mask is already on disk still has to burn when one of the
+                # DECODE layers derived from it is missing.
+                if skip_existing and mask_path.exists() and mask_path.stat().st_size > 0:
+                    existing[mask_type] += 1
+                    continue
+
                 outputs.append((mask_type, str(mask_path)))
+
+            if not outputs:
+                continue
 
             work_items.append(
                 _MaskTask(
@@ -736,62 +970,37 @@ def create_masks(
                     boundaries_geom_col=boundaries_geom_col,
                     boundary_lines_geom_col=boundary_lines_geom_col,
                     source_type=source_type,
-                    outputs=outputs,
+                    outputs=tuple(outputs),
                     resolution=resolution,
                     id_col=id_col_for_instance,
                     background_class_value=background_class_value,
+                    memory_limit_mb=memory_limit_mb,
                 )
             )
 
-    # Process in parallel
+    results, failures, pool_restarts = _run_work_items(
+        work_items, num_workers, total_tasks, on_progress
+    )
+
     created: dict[MaskType, list[MaskResult]] = {mask_type: [] for mask_type in mask_types}
     skipped: dict[MaskType, list[tuple[str, str]]] = {mask_type: [] for mask_type in mask_types}
-    completed = 0
-    executor = None
 
-    def record_failure(
-        task: _MaskTask, error: tuple[str, str], written: set[MaskType] | None = None
-    ) -> None:
-        """Fail every output of the group that did not reach disk."""
-        created_types = written or set()
+    for mask_type, result in results:
+        created[mask_type].append(result)
+    for task, error, written in failures:
+        # Fail every output of the group that did not reach disk.
         for mask_type, _ in task.outputs:
-            if mask_type not in created_types:
+            if mask_type not in written:
                 skipped[mask_type].append(error)
 
-    try:
-        executor = ProcessPoolExecutor(max_workers=num_workers)
-        # Submit all tasks
-        futures = {executor.submit(_process_single_grid_cell, item): item for item in work_items}
-
-        # Process results as they complete
-        for future in as_completed(futures):
-            completed += 1
-            if on_progress:
-                on_progress(completed, total_tasks)
-
-            task = futures[future]
-            try:
-                results, error = future.result()
-                for mask_type, result in results:
-                    created[mask_type].append(result)
-                if error:
-                    record_failure(task, error, {mask_type for mask_type, _ in results})
-            except Exception as e:
-                record_failure(task, (task.grid_id, str(e)))
-
-    except KeyboardInterrupt:
-        if executor:
-            executor.shutdown(wait=False, cancel_futures=True)
-        raise
-    finally:
-        if executor:
-            executor.shutdown(wait=True)
-
+    # pool_restarts is a run-level number; every type shares the same pool.
     return {
         mask_type: CreateMasksResult(
             masks_created=created[mask_type],
             masks_skipped=skipped[mask_type],
             field_dataset=field_dataset,
+            masks_existing=existing[mask_type],
+            pool_restarts=pool_restarts,
         )
         for mask_type in mask_types
     }
