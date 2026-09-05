@@ -20,6 +20,10 @@ version: 1
 
 # Path to the input GeoParquet field boundaries.
 fields_file: austria_fields.parquet
+# fields_file may also be an http(s) URL, e.g. a harmonized fiboa collection file; it is
+# downloaded once into the fetch cache and reused on later runs:
+# fields_file: https://data.source.coop/ftw/harmonized-field-data/lu/latest/lu.parquet
+# source_via: https://data.source.coop/ftw/harmonized-field-data/lu/collection.json  # written as a rel:via link
 
 # Output directory. If omitted, defaults to "{input_stem}-dataset".
 output_dir: ./austria-dataset
@@ -49,6 +53,12 @@ skip_reproject: false
 #     - {name: Fields of the World, roles: [processor], url: https://fieldsofthe.world}
 
 stages:
+  fetch:
+    # Where URL inputs are cached (expanded; one file per URL, named by a hash of the URL).
+    cache_dir: ~/.cache/ftwd/sources
+    # Re-download even if a cached copy exists.
+    refresh: false
+
   chips:
     # Minimum field-coverage percentage for a grid cell to be kept.
     min_coverage: 0.01

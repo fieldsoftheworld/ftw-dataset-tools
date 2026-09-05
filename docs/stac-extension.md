@@ -78,6 +78,21 @@ describing how the whole dataset was built:
 `ftw:` properties; they come from the config's `metadata` block (see
 `configs/examples/config.yaml`).
 
+When the config sets `source_via`, the collection also gets a `via` link pointing at the
+upstream collection:
+
+```json
+{"rel": "via", "href": "https://.../collection.json", "type": "application/json", "title": "Source field boundary collection"}
+```
+
+`ftw:config` (the resolved config, embedded verbatim) additionally carries two
+provenance keys describing where the input fields file came from:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `source` | object | `href` (URL or absolute local path), `via` (the `source_via` value, or null), `sha256` and `size` of the fetched/local file, `fetched_at` (ISO 8601 UTC timestamp, or null if served from cache or a local file), `local_path` (where the file lives on disk) |
+| `ftwd_git_commit` | string \| null | Git commit `ftwd` was installed from, or null if it wasn't installed from a git checkout |
+
 ## Item Structure
 
 ### Parent Chip Item
