@@ -875,6 +875,52 @@ class TestDocsStage:
         assert ctx.docs_result is not None
         assert ctx.docs_result.docs == [] and ctx.docs_result.tiles == {}
 
+    def test_stage_docs_prunes_a_previous_run_when_everything_is_disabled(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Turning the docs stage's outputs off must retract them from the collection."""
+        import json
+
+        from ftw_dataset_tools.api import tiles
+        from tests.test_api.test_stac import TestCollectionAssetMetadata
+
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        monkeypatch.setattr(tiles, "tippecanoe_available", lambda: False)
+
+        def run(**docs_stage: object) -> None:
+            config = DatasetConfig.from_dict(
+                {
+                    "fields_file": str(tmp_path / "ds_fields.parquet"),
+                    "output_dir": str(tmp_path),
+                    "name": "ds",
+                    "year": 2024,
+                    "stages": {"docs": docs_stage},
+                }
+            )
+            pipeline.stage_docs(pipeline.build_context(config))
+
+        run(pmtiles=False)
+        # Stand in for an earlier run that had tippecanoe: assets the rerun must retract.
+        seeded = json.loads(result.collection_path.read_text())
+        seeded["assets"]["chips_tiles"] = {"href": "./chips.pmtiles"}
+        seeded["assets"]["fields_tiles"] = {"href": "./fields.pmtiles"}
+        seeded["assets"]["style-outline"] = {"href": "./styles/outline.json"}
+        result.collection_path.write_text(json.dumps(seeded, indent=2))
+
+        run(pmtiles=False, readme=False, agents=False)
+
+        coll = json.loads(result.collection_path.read_text())
+        assert "chips_tiles" not in coll["assets"] and "fields_tiles" not in coll["assets"]
+        assert [k for k in coll["assets"] if k.startswith("style-")] == []
+        assert {link["rel"] for link in coll["links"]}.isdisjoint({"describedby", "agents"})
+        # Everything the stac stage wrote is left alone.
+        for key in ("fields", "boundary_lines", "chips", "items"):
+            assert coll["assets"][key] == seeded["assets"][key]
+        assert [(link["rel"], link["href"]) for link in coll["links"]] == [
+            ("root", "./collection.json"),
+            ("child", "./chips/33UXP/catalog.json"),
+        ]
+
     @pytest.mark.skipif(
         not tiles_module.tippecanoe_available(), reason="tippecanoe is not installed"
     )

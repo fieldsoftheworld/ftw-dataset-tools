@@ -268,6 +268,16 @@ class TestPrintSummaryDocs:
         assert "Docs: README.md, AGENTS.md; 0 PMTiles, 0 styles" in out
         assert "tippecanoe not found" not in out
 
+    def test_docs_disabled_line_lists_only_the_counts(self, tmp_path: Path, capsys) -> None:
+        """readme and agents both off: no document names, and no stray separator."""
+        result = self._result(tmp_path, docs=[])
+
+        _print_summary(self._ctx(tmp_path, result))
+
+        out = capsys.readouterr().out
+        assert "  Docs: 2 PMTiles, 5 styles" in out
+        assert "Docs: ; " not in out
+
     def test_no_docs_line_when_the_stage_did_not_run(self, tmp_path: Path, capsys) -> None:
         _print_summary(self._ctx(tmp_path, None))
 

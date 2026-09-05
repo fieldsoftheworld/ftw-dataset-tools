@@ -701,11 +701,14 @@ def stage_docs(ctx: PipelineContext) -> None:
     written = _write_docs(ctx, style_results)
     ctx.docs_result = DocsStageResult(built, style_results, written, bool(built))
 
+    # Registered even when everything is empty: that call is also what retracts the
+    # tiles, styles and document links an earlier run left in the collection.
+    docs.register_docs_assets(collection_json, tiles=built, styles=style_results, docs=written)
+
     if not (built or written):
         ctx.log("Nothing to document: PMTiles are off and README/AGENTS are disabled")
         return
 
-    docs.register_docs_assets(collection_json, tiles=built, styles=style_results, docs=written)
     ctx.log(
         f"Documented the collection: {len(built)} tile archive(s), "
         f"{len(style_results)} style(s), {len(written)} document(s)"
