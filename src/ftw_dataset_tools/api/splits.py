@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import duckdb
 import geopandas as gpd
 import geoparquet_io as gpio
 import numpy as np
@@ -23,6 +24,44 @@ SPLIT_TYPE_CHOICES: tuple[str, ...] = (
     "random-uniform",
 )
 SPLIT_TYPE_CHOICES_STR = ", ".join(SPLIT_TYPE_CHOICES)
+
+#: DuckDB type names that must survive the pandas round-trip as integers.
+_INTEGER_TYPES = frozenset(
+    {
+        "TINYINT",
+        "SMALLINT",
+        "INTEGER",
+        "BIGINT",
+        "HUGEINT",
+        "UTINYINT",
+        "USMALLINT",
+        "UINTEGER",
+        "UBIGINT",
+    }
+)
+
+
+def _integer_columns(chips_path: Path) -> set[str]:
+    """Columns the chips file stores as integers."""
+    con = duckdb.connect(":memory:")
+    try:
+        escaped = str(chips_path).replace("'", "''")
+        rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{escaped}')").fetchall()
+    finally:
+        con.close()
+    return {name for name, dtype, *_ in rows if dtype.upper() in _INTEGER_TYPES}
+
+
+def _restore_integer_dtypes(gdf: gpd.GeoDataFrame, columns: set[str]) -> None:
+    """Undo the widening pandas applies to nullable integer columns.
+
+    ``gpd.read_parquet`` reads an integer column that contains nulls as float64, so
+    writing the frame straight back would republish e.g. ``hcat_dominant_code`` as a
+    DOUBLE and change the published chips schema.
+    """
+    for col in columns & set(gdf.columns):
+        if not pd.api.types.is_integer_dtype(gdf[col]):
+            gdf[col] = gdf[col].astype("Int64")
 
 
 def validate_split_percents(
@@ -108,6 +147,7 @@ def assign_splits(
     log(f"Assigning {split_type} splits to {chips_path.name}")
 
     # Read chips geoparquet
+    integer_columns = _integer_columns(chips_path)
     gdf = gpd.read_parquet(chips_path)
     n_chips = len(gdf)
 
@@ -134,6 +174,7 @@ def assign_splits(
 
     # Assign to geodataframe
     gdf["split"] = splits
+    _restore_integer_dtypes(gdf, integer_columns)
 
     # Write back to geoparquet (preserves metadata)
     write_geoparquet(chips_path, gdf=gdf)
