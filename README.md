@@ -75,6 +75,17 @@ Add a `metadata:` block (title, description, license, providers, keywords, versi
 make the output publishable; see `configs/examples/config.yaml`. The stac stage warns
 when `license` is missing.
 
+**Remote input.** `fields_file` may be an `http://`/`https://` URL instead of a local
+path, e.g. a harmonized fiboa collection file. It is downloaded once into
+`stages.fetch.cache_dir` (default `~/.cache/ftwd/sources`) as a file named by a hash of
+the URL, and the cached copy is reused on later runs; set `stages.fetch.refresh: true`
+to force a re-download. `ftwd run config.yaml --dry-run` prints the source and never
+downloads it. Set `source_via` to the URL of the upstream collection to record it as a
+`via` link on the output STAC collection. The resolved provenance
+(`ftwd-config.resolved.yaml` and `ftw:config`) records a `source` block (`href`, `via`,
+`sha256`, `size`, `fetched_at`, `local_path`) for both remote and local inputs, plus
+`ftwd_git_commit` when `ftwd` itself was installed from a git checkout.
+
 #### Class filter (optional)
 
 If your fields file has a crop-type / class column, you can restrict which
