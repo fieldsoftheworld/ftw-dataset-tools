@@ -10,18 +10,54 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+import pystac
+
 if TYPE_CHECKING:
     from pathlib import Path
 
-    import pystac
-
 __all__ = [
+    "IMAGERY_ASSET_KEYS",
+    "IMAGERY_LINK_RELS",
+    "IMAGERY_PROPERTIES",
+    "IMAGERY_TEMPORAL_PROPERTIES",
     "ClearResult",
     "ImageryStats",
     "clear_chip_selections",
     "get_imagery_stats",
     "has_existing_scenes",
+    "preserve_imagery_selection",
 ]
+
+# The bookkeeping that image selection and download write onto a *parent* chip
+# item (see api/imagery/stac_child_items.py and api/stac_items.py). Shared so
+# that clearing a selection and preserving one across catalog regeneration stay
+# in sync: a key missing from these lists is silently dropped on a re-run.
+IMAGERY_LINK_RELS = ("ftw:planting", "ftw:harvest")
+
+IMAGERY_PROPERTIES = (
+    "ftw:calendar_year",
+    "ftw:planting_day",
+    "ftw:harvest_day",
+    "ftw:stac_host",
+    "ftw:cloud_cover_scene_threshold",
+    "ftw:cloud_cover_chip_threshold",
+    "ftw:buffer_days",
+    "ftw:pixel_check",
+    "ftw:num_buffer_expansions",
+    "ftw:buffer_expansion_size",
+    "ftw:planting_buffer_used",
+    "ftw:harvest_buffer_used",
+    "ftw:expansions_performed",
+    "ftw:planting_cloud_cover",
+    "ftw:harvest_cloud_cover",
+)
+
+# Selection narrows these to the actual scene acquisition dates; a freshly
+# generated item carries the dataset-wide extent instead.
+IMAGERY_TEMPORAL_PROPERTIES = ("start_datetime", "end_datetime")
+
+# Added to the parent once imagery has been downloaded.
+IMAGERY_ASSET_KEYS = ("planting_image", "harvest_image", "thumbnail")
 
 
 def has_existing_scenes(item: pystac.Item) -> bool:
@@ -36,6 +72,57 @@ def has_existing_scenes(item: pystac.Item) -> bool:
     has_planting = any(link.rel == "ftw:planting" for link in item.links)
     has_harvest = any(link.rel == "ftw:harvest" for link in item.links)
     return has_planting and has_harvest
+
+
+def preserve_imagery_selection(item: pystac.Item, existing_item_path: Path) -> bool:
+    """Carry a previous run's imagery selection onto a freshly generated item.
+
+    ``generate_stac_catalog`` rebuilds every parent chip item from the chips
+    parquet and the mask files on disk, then overwrites the item JSON. Without
+    this, a re-run wipes the ftw:planting/ftw:harvest links that
+    :func:`has_existing_scenes` reads moments before selection runs, so every
+    chip re-selects and ``--force-image-selection`` has nothing left to force.
+
+    The child ``_planting_s2``/``_harvest_s2`` items are not regenerated, so only
+    the parent bookkeeping needs preserving.
+
+    Args:
+        item: Freshly generated parent chip item, modified in place
+        existing_item_path: Path to this chip's item JSON from a previous run
+
+    Returns:
+        True if a previous selection was found and carried over
+    """
+    if not existing_item_path.exists():
+        return False
+
+    try:
+        existing = pystac.Item.from_file(str(existing_item_path))
+    except Exception:
+        # A corrupt or half-written item just re-selects; not worth failing
+        # catalog generation over.
+        return False
+
+    if not has_existing_scenes(existing):
+        return False
+
+    for link in existing.links:
+        if link.rel in IMAGERY_LINK_RELS:
+            item.add_link(link.clone())
+
+    for key in (*IMAGERY_PROPERTIES, *IMAGERY_TEMPORAL_PROPERTIES):
+        if key in existing.properties:
+            item.properties[key] = existing.properties[key]
+
+    # Downloaded imagery outlives the catalog, but only advertise assets whose
+    # files are still on disk.
+    chip_dir = existing_item_path.parent
+    for key in IMAGERY_ASSET_KEYS:
+        asset = existing.assets.get(key)
+        if asset is not None and (chip_dir / asset.href.lstrip("./")).exists():
+            item.add_asset(key, asset.clone())
+
+    return True
 
 
 @dataclass
@@ -146,41 +233,23 @@ def clear_chip_selections(catalog_dir: Path, item: pystac.Item) -> ClearResult:
         overlay_jpg.unlink()
 
     # Remove ftw:planting and ftw:harvest links from parent item
-    item.links = [link for link in item.links if link.rel not in ("ftw:planting", "ftw:harvest")]
+    item.links = [link for link in item.links if link.rel not in IMAGERY_LINK_RELS]
 
     # Extract calendar year before removing properties (needed to restore datetime)
     calendar_year = item.properties.get("ftw:calendar_year")
 
     # Remove ftw: properties related to imagery selection
-    props_to_remove = [
-        "ftw:calendar_year",
-        "ftw:planting_day",
-        "ftw:harvest_day",
-        "ftw:stac_host",
-        "ftw:cloud_cover_scene_threshold",
-        "ftw:cloud_cover_chip_threshold",
-        "ftw:buffer_days",
-        "ftw:pixel_check",
-        "ftw:num_buffer_expansions",
-        "ftw:buffer_expansion_size",
-        "ftw:planting_buffer_used",
-        "ftw:harvest_buffer_used",
-        "ftw:expansions_performed",
-        "ftw:planting_cloud_cover",
-        "ftw:harvest_cloud_cover",
-    ]
-    for prop in props_to_remove:
+    for prop in IMAGERY_PROPERTIES:
         item.properties.pop(prop, None)
 
     # Remove planting_image, harvest_image, and thumbnail assets if they exist
-    item.assets.pop("planting_image", None)
-    item.assets.pop("harvest_image", None)
-    item.assets.pop("thumbnail", None)
+    for asset_key in IMAGERY_ASSET_KEYS:
+        item.assets.pop(asset_key, None)
 
     # Restore datetime - STAC requires either datetime or both start/end_datetime
     # Remove the selection-set temporal range and restore a single datetime
-    item.properties.pop("start_datetime", None)
-    item.properties.pop("end_datetime", None)
+    for prop in IMAGERY_TEMPORAL_PROPERTIES:
+        item.properties.pop(prop, None)
 
     # Set datetime to Jan 1 of the calendar year if known, otherwise current date
     if calendar_year:
