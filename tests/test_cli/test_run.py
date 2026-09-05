@@ -112,3 +112,29 @@ class TestRunDryRunRemote:
 
         assert result.exit_code == 0, result.output
         assert "https://x/lu.parquet" in result.output
+
+
+class TestRunSourceFetchError:
+    def test_fetch_failure_prints_clean_error(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import pipeline
+        from ftw_dataset_tools.api.source import SourceFetchError
+
+        def boom(*_args, **_kwargs):
+            raise SourceFetchError("could not fetch https://x/y.parquet: HTTP Error 403")
+
+        monkeypatch.setattr(pipeline, "fetch_source", boom)
+        cfg = tmp_path / "c.yaml"
+        cfg.write_text(
+            "fields_file: https://x/y.parquet\n"
+            f"output_dir: {tmp_path / 'out'}\n"
+            "year: 2024\n"
+            "stages:\n"
+            "  splits:\n"
+            "    split_type: random-uniform\n"
+        )
+
+        result = CliRunner().invoke(run, [str(cfg)])
+
+        assert result.exit_code != 0
+        assert "could not fetch" in result.output
+        assert "Traceback" not in result.output

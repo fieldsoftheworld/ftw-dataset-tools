@@ -27,13 +27,23 @@ class TestCacheFilename:
         assert cache_filename("https://example.org/").endswith("-source.parquet")
 
 
-def _fake_opener(payload: bytes):
+class _FakeStream(io.BytesIO):
+    """A fake urlopen response: a byte stream plus a headers mapping."""
+
+    def __init__(self, payload: bytes, *, content_length: int | None = None) -> None:
+        super().__init__(payload)
+        length = len(payload) if content_length is None else content_length
+        self.headers = {"Content-Length": str(length)}
+
+
+def _fake_opener(payload: bytes, *, content_length: int | None = None):
     calls = {"n": 0}
 
-    def opener(url, timeout=None):  # noqa: ARG001
-        _ = timeout  # unused; kept to match urlopen's keyword signature
+    def opener(request, timeout=None):
+        assert timeout == 60
+        assert request.get_header("User-agent", "").startswith("ftw-dataset-tools/")
         calls["n"] += 1
-        return io.BytesIO(payload)
+        return _FakeStream(payload, content_length=content_length)
 
     return opener, calls
 
@@ -83,14 +93,45 @@ class TestFetchSource:
     def test_failed_download_leaves_no_file(self, tmp_path: Path) -> None:
         import pytest
 
-        from ftw_dataset_tools.api.source import fetch_source
+        from ftw_dataset_tools.api.source import SourceFetchError, fetch_source
 
-        def broken(url, timeout=None):  # noqa: ARG001
-            _ = timeout  # unused; kept to match urlopen's keyword signature
+        def broken(request, timeout=None):  # noqa: ARG001
             raise OSError("connection reset")
 
-        with pytest.raises(OSError):
+        with pytest.raises(SourceFetchError):
             fetch_source("https://example.org/data/lu.parquet", tmp_path, opener=broken)
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_truncated_body_raises_and_leaves_no_part(self, tmp_path: Path) -> None:
+        import pytest
+
+        from ftw_dataset_tools.api.source import SourceFetchError, fetch_source
+
+        payload = b"PAR1fake"
+        opener, _calls = _fake_opener(payload, content_length=len(payload) + 100)
+        url = "https://example.org/data/lu.parquet"
+
+        with pytest.raises(SourceFetchError, match="expected"):
+            fetch_source(url, tmp_path, opener=opener)
+
+        assert list(tmp_path.iterdir()) == []
+        assert not list(tmp_path.glob("*.part"))
+
+    def test_http_error_surfaces_as_source_fetch_error(self, tmp_path: Path) -> None:
+        import urllib.error
+
+        import pytest
+
+        from ftw_dataset_tools.api.source import SourceFetchError, fetch_source
+
+        def forbidden(request, timeout=None):  # noqa: ARG001
+            raise urllib.error.HTTPError(
+                "https://example.org/data/lu.parquet", 403, "Forbidden", {}, None
+            )
+
+        with pytest.raises(SourceFetchError, match="403"):
+            fetch_source("https://example.org/data/lu.parquet", tmp_path, opener=forbidden)
 
         assert list(tmp_path.iterdir()) == []
 
@@ -125,7 +166,6 @@ class TestSourceRecordToDict:
             "sha256": "ab" * 32,
             "size": 10,
             "fetched_at": "2026-09-04T00:00:00Z",
-            "local_path": str(tmp_path / "y.parquet"),
         }
         assert json.dumps(d)
 

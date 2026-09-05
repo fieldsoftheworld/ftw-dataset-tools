@@ -7,7 +7,7 @@ import sys
 import click
 
 from ftw_dataset_tools.api import config as config_module
-from ftw_dataset_tools.api import pipeline
+from ftw_dataset_tools.api import pipeline, source
 
 
 def _on_progress(msg: str) -> None:
@@ -159,7 +159,12 @@ def run_cmd(
         sys.stdout.write("\n")
         click.echo(click.style("Interrupted by user.", fg="yellow"))
         raise SystemExit(130) from None
-    except (FileNotFoundError, ValueError, pipeline.StageInputError) as err:
+    except (
+        FileNotFoundError,
+        ValueError,
+        pipeline.StageInputError,
+        source.SourceFetchError,
+    ) as err:
         click.echo(click.style(f"\nError: {err}", fg="red"))
         raise SystemExit(1) from err
 
