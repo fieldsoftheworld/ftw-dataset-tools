@@ -39,6 +39,7 @@ class CreateDatasetResult:
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
     stac_result: stac.STACGenerationResult | None = None
+    docs_result: pipeline.DocsStageResult | None = None
 
     @property
     def total_masks_created(self) -> int:
@@ -161,4 +162,5 @@ def create_dataset(
         boundaries_result=ctx.boundaries_result,
         masks_results=ctx.masks_results,
         stac_result=ctx.stac_result,
+        docs_result=ctx.docs_result,
     )

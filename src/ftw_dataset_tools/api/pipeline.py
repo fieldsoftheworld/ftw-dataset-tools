@@ -95,6 +95,23 @@ class DocsStageResult:
     tippecanoe_used: bool = False
 
 
+def docs_summary_line(result: DocsStageResult, pmtiles: str | bool) -> str:
+    """One line naming the documents written and counting the tiles and styles.
+
+    Shared by ``ftwd run`` and ``ftwd create-dataset``, which both run the docs
+    stage and should report it identically.
+    """
+    parts = []
+    if result.docs:
+        parts.append(", ".join(path.name for path in result.docs))
+    parts.append(f"{len(result.tiles)} PMTiles, {len(result.styles)} styles")
+    line = f"  Docs: {'; '.join(parts)}"
+    # Only "auto" silently does without tiles; "false" asked for none.
+    if not result.tippecanoe_used and pmtiles == config_module.PMTILES_AUTO:
+        line += " (tippecanoe not found)"
+    return line
+
+
 @dataclass
 class PipelineContext:
     """Mutable state threaded through pipeline stages."""
@@ -665,8 +682,10 @@ def _write_styles(ctx: PipelineContext, built: dict[str, Path]) -> list[styles.S
         ctx.field_dataset,
         ctx.chips_path,
         ctx.field_polygons_path,
-        chips_tiles=f"./{built['chips_tiles'].name}" if "chips_tiles" in built else None,
-        fields_tiles=f"./{built['fields_tiles'].name}" if "fields_tiles" in built else None,
+        # Styles are written under styles/, one directory below the PMTiles they
+        # reference, so the embedded source URL must climb back out of styles/.
+        chips_tiles=f"../{built['chips_tiles'].name}" if "chips_tiles" in built else None,
+        fields_tiles=f"../{built['fields_tiles'].name}" if "fields_tiles" in built else None,
         on_progress=ctx.log,
     )
 

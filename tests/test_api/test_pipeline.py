@@ -953,3 +953,9 @@ class TestDocsStage:
             (tmp_path / "styles" / f"{k.removeprefix('style-')}.json").exists() for k in style_keys
         )
         assert ctx.docs_result is not None and ctx.docs_result.tippecanoe_used is True
+        # Styles live in styles/, one directory below the PMTiles they reference, so
+        # the embedded source URL must climb back up out of styles/ to find them.
+        chip_style = json.loads((tmp_path / "styles" / "field-coverage.json").read_text())
+        assert chip_style["sources"]["data"]["url"] == "pmtiles://../chips.pmtiles"
+        field_style = json.loads((tmp_path / "styles" / "outline.json").read_text())
+        assert field_style["sources"]["data"]["url"] == "pmtiles://../fields.pmtiles"

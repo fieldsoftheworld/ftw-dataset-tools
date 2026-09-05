@@ -207,6 +207,36 @@ class TestRunSourceFetchError:
         assert "Traceback" not in result.output
 
 
+class TestRunPmtilesTrueWithoutTippecanoe:
+    def test_missing_tippecanoe_prints_clean_error(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import tiles
+        from tests.test_api.test_stac import TestCollectionAssetMetadata
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        monkeypatch.setattr(tiles, "tippecanoe_available", lambda: False)
+
+        cfg = tmp_path / "c.yaml"
+        cfg.write_text(
+            yaml.safe_dump(
+                {
+                    "fields_file": str(tmp_path / "ds_fields.parquet"),
+                    "output_dir": str(tmp_path),
+                    "name": "ds",
+                    "year": 2024,
+                    "stages": {"docs": {"pmtiles": True}},
+                }
+            )
+        )
+
+        result = CliRunner().invoke(run, [str(cfg), "--only", "docs"])
+
+        assert result.exit_code != 0
+        # Distinctive phrase from the RuntimeError message, not just "tippecanoe"
+        # (which would also match the tmp_path directory pytest names after this test).
+        assert "tippecanoe is not installed" in result.output
+        assert "Traceback" not in result.output
+
+
 class TestPrintSummaryDocs:
     """The docs stage gets a summary line like every other stage."""
 
