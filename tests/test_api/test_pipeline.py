@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import duckdb
 import geopandas as gpd
 import pytest
 from shapely.geometry import box
 
-from ftw_dataset_tools.api import pipeline
+from ftw_dataset_tools.api import field_stats, pipeline
 from ftw_dataset_tools.api.config import ClassFilter, ClassFilterError, DatasetConfig
 from ftw_dataset_tools.api.pipeline import StageInputError
 
@@ -586,29 +587,26 @@ class TestSourceResolution:
 
 
 class TestChipsStageCropStats:
-    def _ctx(self, tmp_path: Path, monkeypatch, *, crop_stats: bool):
-        from ftw_dataset_tools.api import field_stats, pipeline
-        from ftw_dataset_tools.api.config import DatasetConfig
-
+    def _ctx(self, tmp_path: Path, monkeypatch, *, crop_stats: bool) -> pipeline.PipelineContext:
+        """A context whose chips stage produces one chip over two HCAT-coded fields."""
         fields = tmp_path / "fields.parquet"
-        import geopandas as gpd
-        from shapely.geometry import box
-
-        gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(
-            fields
-        )
-        config = DatasetConfig.from_dict(
-            {
-                "fields_file": str(fields),
-                "output_dir": str(tmp_path / "out"),
-                "year": 2024,
-                "stages": {"chips": {"crop_stats": crop_stats}},
-            }
+        gpd.GeoDataFrame(
+            {"id": [1, 2], "hcat:code": [1, 2], "hcat:name_en": ["Wheat", "Pasture"]},
+            geometry=[box(0, 0, 0.5, 1), box(0.5, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(fields)
+        config = _config(
+            fields,
+            tmp_path / "out",
+            year=2024,
+            stages={
+                "chips": {"crop_stats": crop_stats},
+                "splits": {"split_type": "random-uniform"},
+            },
         )
         ctx = pipeline.build_context(config)
         ctx.output_dir.mkdir()
-        fields_copy = ctx.field_polygons_path
-        gpd.read_parquet(fields).to_parquet(fields_copy)
+        gpd.read_parquet(fields).to_parquet(ctx.field_polygons_path)
 
         def fake_field_stats(**kwargs):
             gpd.GeoDataFrame(
@@ -625,12 +623,12 @@ class TestChipsStageCropStats:
             )
 
         monkeypatch.setattr(field_stats, "add_field_stats", fake_field_stats)
-        return pipeline, ctx
+        return ctx
 
     def test_crop_stats_called_after_coverage(self, tmp_path: Path, monkeypatch) -> None:
         from ftw_dataset_tools.api import crop_stats
 
-        pipeline, ctx = self._ctx(tmp_path, monkeypatch, crop_stats=True)
+        ctx = self._ctx(tmp_path, monkeypatch, crop_stats=True)
         calls: list[tuple] = []
 
         def fake_add_crop_stats(chips, fields, **_kwargs):
@@ -647,7 +645,7 @@ class TestChipsStageCropStats:
     def test_crop_stats_disabled(self, tmp_path: Path, monkeypatch) -> None:
         from ftw_dataset_tools.api import crop_stats
 
-        pipeline, ctx = self._ctx(tmp_path, monkeypatch, crop_stats=False)
+        ctx = self._ctx(tmp_path, monkeypatch, crop_stats=False)
 
         def fail_if_called(*_args, **_kwargs):
             raise AssertionError("called")
@@ -657,3 +655,22 @@ class TestChipsStageCropStats:
         pipeline.stage_chips(ctx)
 
         assert ctx.crop_stats_result is None
+
+    def test_splits_keep_the_dominant_code_an_integer(self, tmp_path: Path, monkeypatch) -> None:
+        """The chips GeoParquet is published as-is, so the split rewrite must not
+        widen the nullable BIGINT to DOUBLE."""
+        ctx = self._ctx(tmp_path, monkeypatch, crop_stats=True)
+
+        pipeline.stage_chips(ctx)
+        pipeline.stage_splits(ctx)
+
+        con = duckdb.connect()
+        types = {
+            row[0]: row[1]
+            for row in con.execute(
+                f"DESCRIBE SELECT * FROM read_parquet('{ctx.chips_path}')"
+            ).fetchall()
+        }
+        con.close()
+        assert types["hcat_dominant_code"] == "BIGINT"
+        assert types["split"] == "VARCHAR"

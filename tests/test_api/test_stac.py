@@ -714,9 +714,45 @@ class TestChipProperties:
 
         con = duckdb.connect()
         row = con.execute(
-            f'SELECT "ftw:split", "ftw:hcat_dominant_code" FROM read_parquet(\'{result.items_parquet_path}\')'
+            'SELECT "ftw:split", "ftw:hcat_dominant_code", "ftw:hcat_top" '
+            f"FROM read_parquet('{result.items_parquet_path}')"
         ).fetchone()
-        assert row == ("test", 3301010101)
+        assert row[:2] == ("test", 3301010101)
+        assert [entry["code"] for entry in row[2]] == [3301010101, 3302000000]
+        assert row[2][0]["name_en"] == "Winter wheat"
+        con.close()
+
+    def test_nan_values_are_not_published(self, tmp_path: Path) -> None:
+        """JSON has no NaN; a NaN column value must be omitted like a NULL."""
+        import json
+
+        import duckdb
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.geo import ensure_spatial_loaded, write_geoparquet
+
+        chips_path = tmp_path / "ds_chips.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["ftw-33UXP0410"], "field_coverage_pct": [50.0]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(chips_path)
+        con = duckdb.connect()
+        ensure_spatial_loaded(con)
+        con.execute(
+            "CREATE TABLE chips AS SELECT * EXCLUDE (field_coverage_pct), "
+            "CAST('NaN' AS DOUBLE) AS field_coverage_pct "
+            f"FROM read_parquet('{chips_path}')"
+        )
+        write_geoparquet(chips_path, conn=con, query="SELECT * FROM chips")
+        con.close()
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path, chips_path=chips_path)
+
+        item_path = tmp_path / "chips" / "33UXP" / "ftw-33UXP0410_2024" / "ftw-33UXP0410_2024.json"
+        props = json.loads(item_path.read_text())["properties"]
+        assert "ftw:field_coverage_pct" not in props
 
     def test_absent_columns_produce_no_properties(self, tmp_path: Path) -> None:
         import json

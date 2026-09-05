@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -272,6 +273,17 @@ _OPTIONAL_COLUMN_CASTS = {
 }
 
 
+def _is_publishable(value: object) -> bool:
+    """Whether an optional chip column value belongs on the item.
+
+    NULLs are omitted, and so are NaN floats: JSON has no NaN, so publishing one
+    would produce an item that no strict JSON parser can read back.
+    """
+    if value is None:
+        return False
+    return not (isinstance(value, float) and math.isnan(value))
+
+
 def _optional_column_select(col: str) -> str:
     """SQL select expression for one optional chip column, casting where needed."""
     cast = _OPTIONAL_COLUMN_CASTS.get(col)
@@ -327,7 +339,7 @@ def _extract_chips_info(
             properties = {
                 OPTIONAL_CHIP_COLUMNS[col]: value
                 for col, value in zip(optional_cols, optional_values, strict=True)
-                if value is not None
+                if _is_publishable(value)
             }
             chips.append(
                 ChipInfo(
