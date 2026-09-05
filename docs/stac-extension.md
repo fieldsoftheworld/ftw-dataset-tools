@@ -206,6 +206,7 @@ Semantic mask assets add `classification:classes`
 | `semantic_2class_mask` | 0 background, 1 field (background is 3 when `presence_only` is set) |
 | `semantic_3class_mask` | 0 background, 1 field, 2 boundary |
 | `instance_mask` | no class list; background (0, or 3 for presence-only) marks non-field pixels, other values are instance ids |
+| | Field ids that are float-like (e.g. `'111205887.0'`) or otherwise non-numeric are coerced to integers, or replaced with sequential ids (1..n) for that chip when any id in it can't be coerced. |
 | `decode_boundary_mask` | 0 background, 1 boundary |
 | `decode_distance_mask` | no class list; float32 normalized distance in [0, 1], with a `decode_distance_max_px` dataset tag |
 

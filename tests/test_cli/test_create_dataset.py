@@ -439,6 +439,98 @@ class TestCreateDatasetDocsSummary:
         assert "Docs:" not in result.output
 
 
+class TestCreateDatasetMasksSummary:
+    """create-dataset reports masks skipped/reused alongside masks created."""
+
+    @staticmethod
+    def _result_with_masks(tmp_path: Path, mask_result) -> CreateDatasetResult:
+        return CreateDatasetResult(
+            output_dir=tmp_path,
+            field_dataset="fields",
+            fields_file=tmp_path / "fields_fields.parquet",
+            chips_file=tmp_path / "fields_chips.parquet",
+            boundary_lines_file=tmp_path / "fields_boundary_lines.parquet",
+            masks_results={"semantic_2class": mask_result},
+        )
+
+    def test_skipped_and_reused_lines_printed(
+        self, sample_fields_geoparquet: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api.masks import CreateMasksResult
+
+        mask_result = CreateMasksResult(
+            masks_created=[],
+            masks_skipped=[("g1", "ValueError: boom")],
+            field_dataset="fields",
+            masks_existing=5,
+        )
+
+        def fake_create_dataset(**_kwargs: Any) -> CreateDatasetResult:
+            return self._result_with_masks(tmp_path, mask_result)
+
+        monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
+
+        result = _invoke(sample_fields_geoparquet, "--skip-images")
+
+        assert result.exit_code == 0, result.output
+        assert "Masks skipped: 1 (see log for reasons)" in result.output
+        assert "Masks reused: 5" in result.output
+
+    def test_no_skipped_or_reused_lines_when_none(
+        self, sample_fields_geoparquet: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api.masks import CreateMasksResult
+
+        mask_result = CreateMasksResult(masks_created=[], masks_skipped=[], field_dataset="fields")
+
+        def fake_create_dataset(**_kwargs: Any) -> CreateDatasetResult:
+            return self._result_with_masks(tmp_path, mask_result)
+
+        monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
+
+        result = _invoke(sample_fields_geoparquet, "--skip-images")
+
+        assert result.exit_code == 0, result.output
+        assert "Masks skipped" not in result.output
+        assert "Masks reused" not in result.output
+
+    def test_restarts_line_printed_when_present(
+        self, sample_fields_geoparquet: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api.masks import CreateMasksResult
+
+        mask_result = CreateMasksResult(
+            masks_created=[], masks_skipped=[], field_dataset="fields", pool_restarts=1
+        )
+
+        def fake_create_dataset(**_kwargs: Any) -> CreateDatasetResult:
+            return self._result_with_masks(tmp_path, mask_result)
+
+        monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
+
+        result = _invoke(sample_fields_geoparquet, "--skip-images")
+
+        assert result.exit_code == 0, result.output
+        assert "Worker pool restarts: 1" in result.output
+
+    def test_no_restarts_line_when_zero(
+        self, sample_fields_geoparquet: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api.masks import CreateMasksResult
+
+        mask_result = CreateMasksResult(masks_created=[], masks_skipped=[], field_dataset="fields")
+
+        def fake_create_dataset(**_kwargs: Any) -> CreateDatasetResult:
+            return self._result_with_masks(tmp_path, mask_result)
+
+        monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
+
+        result = _invoke(sample_fields_geoparquet, "--skip-images")
+
+        assert result.exit_code == 0, result.output
+        assert "Worker pool restarts" not in result.output
+
+
 class TestCreateDatasetRuntimeError:
     def test_runtime_error_prints_clean_message(
         self, sample_fields_geoparquet: Path, monkeypatch: pytest.MonkeyPatch

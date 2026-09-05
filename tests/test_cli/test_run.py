@@ -181,6 +181,78 @@ class TestPrintSummaryCropComposition:
         assert "Crop composition" not in capsys.readouterr().out
 
 
+class TestPrintSummaryMasksSkippedAndReused:
+    def _ctx(self, tmp_path: Path, mask_result) -> Mock:
+        ctx = Mock(spec=PipelineContext)
+        ctx.output_dir = tmp_path
+        ctx.chips_result = None
+        ctx.splits_result = None
+        ctx.masks_results = {"semantic_2class": mask_result}
+        ctx.crop_stats_result = None
+        ctx.stac_result = None
+        ctx.selection_result = None
+        ctx.download_result = None
+        ctx.docs_result = None
+        return ctx
+
+    def test_skipped_line_printed_when_present(self, tmp_path: Path, capsys) -> None:
+        from ftw_dataset_tools.api.masks import CreateMasksResult
+
+        mask_result = CreateMasksResult(
+            masks_created=[],
+            masks_skipped=[("g1", "ValueError: boom")],
+            field_dataset="ds",
+        )
+        _print_summary(self._ctx(tmp_path, mask_result))
+
+        out = capsys.readouterr().out
+        assert "Masks skipped: 1 (see log for reasons)" in out
+
+    def test_no_skipped_line_when_none_skipped(self, tmp_path: Path, capsys) -> None:
+        from ftw_dataset_tools.api.masks import CreateMasksResult
+
+        mask_result = CreateMasksResult(masks_created=[], masks_skipped=[], field_dataset="ds")
+        _print_summary(self._ctx(tmp_path, mask_result))
+
+        assert "Masks skipped" not in capsys.readouterr().out
+
+    def test_reused_line_printed_when_present(self, tmp_path: Path, capsys) -> None:
+        from ftw_dataset_tools.api.masks import CreateMasksResult
+
+        mask_result = CreateMasksResult(
+            masks_created=[], masks_skipped=[], field_dataset="ds", masks_existing=5
+        )
+        _print_summary(self._ctx(tmp_path, mask_result))
+
+        assert "Masks reused: 5" in capsys.readouterr().out
+
+    def test_no_reused_line_when_nothing_existing(self, tmp_path: Path, capsys) -> None:
+        from ftw_dataset_tools.api.masks import CreateMasksResult
+
+        mask_result = CreateMasksResult(masks_created=[], masks_skipped=[], field_dataset="ds")
+        _print_summary(self._ctx(tmp_path, mask_result))
+
+        assert "Masks reused" not in capsys.readouterr().out
+
+    def test_restarts_line_printed_when_present(self, tmp_path: Path, capsys) -> None:
+        from ftw_dataset_tools.api.masks import CreateMasksResult
+
+        mask_result = CreateMasksResult(
+            masks_created=[], masks_skipped=[], field_dataset="ds", pool_restarts=2
+        )
+        _print_summary(self._ctx(tmp_path, mask_result))
+
+        assert "Worker pool restarts: 2" in capsys.readouterr().out
+
+    def test_no_restarts_line_when_zero(self, tmp_path: Path, capsys) -> None:
+        from ftw_dataset_tools.api.masks import CreateMasksResult
+
+        mask_result = CreateMasksResult(masks_created=[], masks_skipped=[], field_dataset="ds")
+        _print_summary(self._ctx(tmp_path, mask_result))
+
+        assert "Worker pool restarts" not in capsys.readouterr().out
+
+
 class TestRunSourceFetchError:
     def test_fetch_failure_prints_clean_error(self, tmp_path: Path, monkeypatch) -> None:
         from ftw_dataset_tools.api import pipeline

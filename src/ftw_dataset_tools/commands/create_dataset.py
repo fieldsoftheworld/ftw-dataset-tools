@@ -367,6 +367,15 @@ def create_dataset_cmd(
             )
 
         click.echo(f"  Total masks created: {result.total_masks_created:,}")
+        skipped_total = sum(r.total_skipped for r in result.masks_results.values())
+        if skipped_total > 0:
+            click.echo(f"  Masks skipped: {skipped_total:,} (see log for reasons)")
+        existing_total = sum(r.masks_existing for r in result.masks_results.values())
+        if existing_total > 0:
+            click.echo(f"  Masks reused: {existing_total:,}")
+        restarts_total = sum(r.pool_restarts for r in result.masks_results.values())
+        if restarts_total > 0:
+            click.echo(f"  Worker pool restarts: {restarts_total}")
 
         click.echo("")
         click.echo("Output files:")
