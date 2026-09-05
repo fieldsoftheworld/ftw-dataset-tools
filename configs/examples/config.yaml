@@ -79,10 +79,17 @@ stages:
     mask_types: [instance, semantic_2_class, semantic_3_class]
     # Pixel resolution in meters.
     resolution: 10.0
-    # Parallel workers (null = half of CPUs).
+    # Parallel workers (null = CPU count, capped at 8). Each worker's DuckDB
+    # connection is memory-limited so N workers don't oversubscribe RAM; if a
+    # worker still dies (OOM), the pool restarts automatically (see the run
+    # summary for "Worker pool restarts"). Lower this if restarts recur.
     workers: null
     # Presence-only labels: background class value becomes 3 instead of 0.
     presence_only: false
+    # When true, a mask file that already exists (and is non-empty) is left
+    # alone instead of being recreated - useful for filling gaps from a prior
+    # run without a full rebuild.
+    skip_existing: false
     # Optional class filter: path (relative to THIS config file) to a YAML with
     # `column`, `include`, and `exclude`. Include classes count as field; all
     # others become background. Applied up front, so coverage, boundaries, and

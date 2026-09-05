@@ -147,6 +147,26 @@ class TestFromDict:
                 {"fields_file": "f.parquet", "stages": {"chips": {"crop_stats": "yes"}}}
             )
 
+    def test_skip_existing_defaults_false(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+
+        assert config.stages.masks.skip_existing is False
+
+    def test_skip_existing_can_be_enabled(self) -> None:
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"masks": {"skip_existing": True}}}
+        )
+
+        assert config.stages.masks.skip_existing is True
+
+    def test_skip_existing_non_bool_raises(self) -> None:
+        with pytest.raises(
+            ConfigError, match=r"stages\.masks\.skip_existing must be true or false"
+        ):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"masks": {"skip_existing": "yes"}}}
+            )
+
     def test_docs_defaults(self) -> None:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
 

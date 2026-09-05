@@ -1,6 +1,8 @@
 """Tests for the masks API."""
 
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -190,6 +192,389 @@ class TestBackgroundClassValue:
         assert "background_class_value" in sig.parameters
         # Should have default value of 0
         assert sig.parameters["background_class_value"].default == 0
+
+
+class TestProcessSingleGridCellRetry:
+    """_process_single_grid_cell should retry once with a fresh connection."""
+
+    @staticmethod
+    def _args(tmp_path):
+        from rasterio.crs import CRS
+
+        from ftw_dataset_tools.api.masks import MaskType
+
+        return (
+            "grid_1",
+            (0.0, 0.0, 1.0, 1.0),
+            CRS.from_epsg(4326).to_wkt(),
+            str(tmp_path / "boundaries.parquet"),
+            str(tmp_path / "lines.parquet"),
+            "geometry",
+            "geometry",
+            str(tmp_path / "out.tif"),
+            MaskType.SEMANTIC_2_CLASS.value,
+            10.0,
+            None,
+            0,
+            2048,
+        )
+
+    def test_retries_once_then_succeeds(self, tmp_path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import masks
+
+        calls = {"n": 0}
+
+        def fake_create_single_mask(**kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise ValueError("boom")
+            return masks.MaskResult(
+                grid_id=kwargs["grid_id"], output_path=kwargs["output_path"], width=1, height=1
+            )
+
+        monkeypatch.setattr(masks, "_create_single_mask", fake_create_single_mask)
+
+        result, error = masks._process_single_grid_cell(self._args(tmp_path))
+
+        assert error is None
+        assert result is not None
+        assert calls["n"] == 2
+
+    def test_fails_twice_returns_error_with_exception_class_prefix(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from ftw_dataset_tools.api import masks
+
+        calls = {"n": 0}
+
+        def fake_create_single_mask(**_kwargs):
+            calls["n"] += 1
+            raise ValueError("boom")
+
+        monkeypatch.setattr(masks, "_create_single_mask", fake_create_single_mask)
+
+        result, error = masks._process_single_grid_cell(self._args(tmp_path))
+
+        assert result is None
+        assert calls["n"] == 2  # retried once, still failed
+        grid_id, reason = error
+        assert grid_id == "grid_1"
+        assert reason == "ValueError: boom"
+
+
+class _FakeFuture:
+    """A real concurrent.futures.Future, already completed at construction time.
+
+    as_completed() relies on Future internals (condition variable, state), so
+    a lightweight duck-typed stand-in doesn't work; wrapping the stdlib class
+    and completing it synchronously does.
+    """
+
+    def __new__(cls, *, result=None, exception=None):
+        import concurrent.futures as cf
+
+        future = cf.Future()
+        if exception is not None:
+            future.set_exception(exception)
+        else:
+            future.set_result(result)
+        return future
+
+
+class _FakeExecutor:
+    """Runs submitted callables synchronously in-process; records submissions."""
+
+    instances: ClassVar[list["_FakeExecutor"]] = []
+
+    def __init__(self, max_workers=None) -> None:
+        self.max_workers = max_workers
+        self.submitted: list[tuple] = []
+        _FakeExecutor.instances.append(self)
+
+    def submit(self, fn, item):
+        self.submitted.append(item)
+        try:
+            result = fn(item)
+        except Exception as exc:
+            return _FakeFuture(exception=exc)
+        return _FakeFuture(result=result)
+
+    def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+        # Mirrors ProcessPoolExecutor.shutdown's signature; nothing to clean up
+        # since submit() already ran everything synchronously.
+        self.shutdown_calls = [*getattr(self, "shutdown_calls", []), (wait, cancel_futures)]
+
+
+class TestDefaultWorkerCount:
+    """Tests for the default (unspecified) worker count."""
+
+    def test_capped_at_eight_on_a_large_machine(self, monkeypatch) -> None:
+        from ftw_dataset_tools.api import masks
+
+        monkeypatch.setattr(masks.os, "cpu_count", lambda: 32)
+        assert masks._default_num_workers() == 8
+
+    def test_uses_cpu_count_when_below_the_cap(self, monkeypatch) -> None:
+        from ftw_dataset_tools.api import masks
+
+        monkeypatch.setattr(masks.os, "cpu_count", lambda: 4)
+        assert masks._default_num_workers() == 4
+
+    def test_floors_at_one_when_cpu_count_is_unknown(self, monkeypatch) -> None:
+        from ftw_dataset_tools.api import masks
+
+        monkeypatch.setattr(masks.os, "cpu_count", lambda: None)
+        assert masks._default_num_workers() == 1
+
+
+class TestWorkerMemoryLimit:
+    """Tests for the per-worker DuckDB memory budget."""
+
+    def test_formula(self) -> None:
+        from ftw_dataset_tools.api.masks import _worker_memory_limit_mb
+
+        # 0.6 * 16 GiB / 4 workers / 1 MiB = 2457.6, truncated.
+        assert _worker_memory_limit_mb(16 * 2**30, 4) == 2457
+
+    def test_has_a_floor(self) -> None:
+        from ftw_dataset_tools.api.masks import _worker_memory_limit_mb
+
+        # A tiny machine with many workers must not get an unusably small budget.
+        assert _worker_memory_limit_mb(1 * 2**30, 100) == 512
+
+    def test_work_item_carries_a_positive_memory_limit(self, tmp_path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import masks
+
+        chips_path, fields_path, lines_path = TestCreateMasksSkipExisting._build_inputs(tmp_path)
+
+        def fake_worker(item):
+            grid_id, output_path = item[0], item[7]
+            return (
+                masks.MaskResult(grid_id=grid_id, output_path=output_path, width=1, height=1),
+                None,
+            )
+
+        monkeypatch.setattr(masks, "_process_single_grid_cell", fake_worker)
+        monkeypatch.setattr(masks, "ProcessPoolExecutor", _FakeExecutor)
+        _FakeExecutor.instances.clear()
+
+        result = masks.create_masks(
+            chips_file=chips_path,
+            boundaries_file=fields_path,
+            boundary_lines_file=lines_path,
+            output_dir=tmp_path / "masks",
+            field_dataset="test",
+            mask_type=masks.MaskType.SEMANTIC_2_CLASS,
+            num_workers=2,
+        )
+
+        assert result.total_created == 2
+        submitted = _FakeExecutor.instances[0].submitted
+        assert len(submitted) == 2
+        for item in submitted:
+            memory_limit_mb = item[-1]
+            assert isinstance(memory_limit_mb, int)
+            assert memory_limit_mb > 0
+
+
+class TestRunWorkItemsBrokenPool:
+    """Coverage for restarting a ProcessPoolExecutor that a crashed worker broke."""
+
+    @staticmethod
+    def _item(grid_id: str) -> tuple:
+        return (
+            grid_id,
+            (0, 0, 1, 1),
+            "wkt",
+            "boundaries.parquet",
+            "lines.parquet",
+            "geometry",
+            "geometry",
+            f"{grid_id}.tif",
+            "semantic_2_class",
+            10.0,
+            None,
+            0,
+            2048,
+        )
+
+    def test_recovers_after_one_broken_pool(self, monkeypatch) -> None:
+        from ftw_dataset_tools.api import masks
+
+        attempts: dict[str, int] = {}
+
+        def fake_worker(item):
+            grid_id = item[0]
+            attempts[grid_id] = attempts.get(grid_id, 0) + 1
+            if grid_id == "g2" and attempts[grid_id] == 1:
+                raise BrokenProcessPool("boom")
+            return (
+                masks.MaskResult(
+                    grid_id=grid_id, output_path=Path(f"{grid_id}.tif"), width=1, height=1
+                ),
+                None,
+            )
+
+        monkeypatch.setattr(masks, "_process_single_grid_cell", fake_worker)
+        monkeypatch.setattr(masks, "ProcessPoolExecutor", _FakeExecutor)
+
+        work_items = [self._item("g1"), self._item("g2"), self._item("g3")]
+        created, skipped, pool_restarts = masks._run_work_items(
+            work_items, num_workers=1, total_cells=3, on_progress=None
+        )
+
+        assert {r.grid_id for r in created} == {"g1", "g2", "g3"}
+        assert skipped == []
+        assert pool_restarts == 1
+
+    def test_gives_up_after_max_restarts(self, monkeypatch) -> None:
+        from ftw_dataset_tools.api import masks
+
+        def fake_worker(item):
+            grid_id = item[0]
+            if grid_id == "bad":
+                raise BrokenProcessPool("boom")
+            return (
+                masks.MaskResult(
+                    grid_id=grid_id, output_path=Path(f"{grid_id}.tif"), width=1, height=1
+                ),
+                None,
+            )
+
+        monkeypatch.setattr(masks, "_process_single_grid_cell", fake_worker)
+        monkeypatch.setattr(masks, "ProcessPoolExecutor", _FakeExecutor)
+
+        work_items = [self._item("good"), self._item("bad")]
+        created, skipped, pool_restarts = masks._run_work_items(
+            work_items, num_workers=1, total_cells=2, on_progress=None
+        )
+
+        assert {r.grid_id for r in created} == {"good"}
+        assert skipped == [("bad", "BrokenProcessPool: worker died repeatedly")]
+        assert pool_restarts == masks._MAX_POOL_RESTARTS
+
+    def test_pool_restarts_reflected_in_create_masks_result(self, tmp_path, monkeypatch) -> None:
+        """create_masks surfaces pool_restarts from _run_work_items on its result."""
+        from ftw_dataset_tools.api import masks
+
+        chips_path, fields_path, lines_path = TestCreateMasksSkipExisting._build_inputs(tmp_path)
+
+        def fake_run_work_items(_work_items, _num_workers, _total_cells, _on_progress):
+            return ([], [], 2)
+
+        monkeypatch.setattr(masks, "_run_work_items", fake_run_work_items)
+
+        result = masks.create_masks(
+            chips_file=chips_path,
+            boundaries_file=fields_path,
+            boundary_lines_file=lines_path,
+            output_dir=tmp_path / "masks",
+            field_dataset="test",
+            mask_type=masks.MaskType.SEMANTIC_2_CLASS,
+            num_workers=1,
+        )
+
+        assert result.pool_restarts == 2
+
+
+class TestCreateMasksSkipExisting:
+    """Tests for the skip_existing parameter of create_masks."""
+
+    @staticmethod
+    def _build_inputs(tmp_path):
+        import geopandas as gpd
+        from shapely.geometry import LineString, box
+
+        crs = "EPSG:4326"
+        chips = gpd.GeoDataFrame(
+            {"id": ["c1", "c2"], "field_coverage_pct": [50.0, 50.0]},
+            geometry=[box(10.0, 50.0, 10.01, 50.01), box(11.0, 50.0, 11.01, 50.01)],
+            crs=crs,
+        )
+        chips_path = tmp_path / "chips.parquet"
+        chips.to_parquet(chips_path)
+
+        fields = gpd.GeoDataFrame(
+            {"id": [1]}, geometry=[box(10.002, 50.002, 10.006, 50.006)], crs=crs
+        )
+        fields_path = tmp_path / "fields.parquet"
+        fields.to_parquet(fields_path)
+
+        lines = gpd.GeoDataFrame(
+            {"id": [1]},
+            geometry=[LineString([(10.002, 50.002), (10.006, 50.002)])],
+            crs=crs,
+        )
+        lines_path = tmp_path / "lines.parquet"
+        lines.to_parquet(lines_path)
+        return chips_path, fields_path, lines_path
+
+    def test_skip_existing_default_recreates_everything(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        chips_path, fields_path, lines_path = self._build_inputs(tmp_path)
+        output_dir = tmp_path / "masks"
+
+        result = create_masks(
+            chips_file=chips_path,
+            boundaries_file=fields_path,
+            boundary_lines_file=lines_path,
+            output_dir=output_dir,
+            field_dataset="test",
+            mask_type=MaskType.SEMANTIC_2_CLASS,
+            num_workers=1,
+        )
+
+        assert result.total_created == 2
+        assert result.masks_existing == 0
+
+    def test_skip_existing_skips_non_empty_file_and_recreates_empty_one(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import (
+            MaskType,
+            create_masks,
+            get_mask_output_path,
+        )
+
+        chips_path, fields_path, lines_path = self._build_inputs(tmp_path)
+        output_dir = tmp_path / "masks"
+        output_dir.mkdir()
+
+        existing_path = get_mask_output_path(
+            grid_id="c1",
+            mask_type=MaskType.SEMANTIC_2_CLASS,
+            chip_dirs=None,
+            output_dir=output_dir,
+            field_dataset="test",
+        )
+        existing_path.write_bytes(b"not-really-a-tif-but-non-empty")
+
+        empty_path = get_mask_output_path(
+            grid_id="c2",
+            mask_type=MaskType.SEMANTIC_2_CLASS,
+            chip_dirs=None,
+            output_dir=output_dir,
+            field_dataset="test",
+        )
+        empty_path.write_bytes(b"")
+
+        result = create_masks(
+            chips_file=chips_path,
+            boundaries_file=fields_path,
+            boundary_lines_file=lines_path,
+            output_dir=output_dir,
+            field_dataset="test",
+            mask_type=MaskType.SEMANTIC_2_CLASS,
+            num_workers=1,
+            skip_existing=True,
+        )
+
+        assert result.masks_existing == 1
+        assert result.total_created == 1
+        assert result.masks_created[0].grid_id == "c2"
+        # The non-empty file was left untouched (still not a valid raster).
+        assert existing_path.read_bytes() == b"not-really-a-tif-but-non-empty"
+        # The empty file was recreated into a real raster.
+        assert empty_path.stat().st_size > 0
 
 
 class TestDecodeMaskTypes:
@@ -634,6 +1019,114 @@ class TestMaskCogStatistics:
         stats = read_band_stats(out, 1)
         assert stats is not None
         assert 0.0 <= stats.minimum <= stats.maximum <= 1.0
+
+
+class TestInstanceValue:
+    """Tests for coercing raw field ids into usable instance mask values."""
+
+    def test_float_like_string_parses(self) -> None:
+        from ftw_dataset_tools.api.masks import _instance_value
+
+        assert _instance_value("111205887.0") == 111205887
+
+    def test_plain_int_passthrough(self) -> None:
+        from ftw_dataset_tools.api.masks import _instance_value
+
+        assert _instance_value(42) == 42
+
+    def test_float_is_truncated(self) -> None:
+        from ftw_dataset_tools.api.masks import _instance_value
+
+        assert _instance_value(42.9) == 42
+
+    def test_non_numeric_string_is_none(self) -> None:
+        from ftw_dataset_tools.api.masks import _instance_value
+
+        assert _instance_value("abc") is None
+
+    def test_none_is_none(self) -> None:
+        from ftw_dataset_tools.api.masks import _instance_value
+
+        assert _instance_value(None) is None
+
+    def test_bool_is_none(self) -> None:
+        """bool is an int subclass in Python; treat it as not-an-id anyway."""
+        from ftw_dataset_tools.api.masks import _instance_value
+
+        assert _instance_value(True) is None
+
+
+class TestRasterizeMaskInstanceIds:
+    """End-to-end coverage for the instance id coercion/fallback in _rasterize_mask."""
+
+    @staticmethod
+    def _build_inputs(tmp_path, ids):
+        import geopandas as gpd
+        from shapely.geometry import LineString, box
+
+        crs = "EPSG:3035"
+        fields = gpd.GeoDataFrame(
+            {"id": ids},
+            geometry=[
+                box(4000000, 3000000, 4000100, 3000100),
+                box(4000200, 3000000, 4000300, 3000100),
+                box(4000400, 3000000, 4000500, 3000100),
+            ],
+            crs=crs,
+        )
+        fields_path = tmp_path / "fields.parquet"
+        fields.to_parquet(fields_path)
+
+        # Far away, so it never intersects the raster bounds used below.
+        lines_path = tmp_path / "lines.parquet"
+        gpd.GeoDataFrame({"id": [1]}, geometry=[LineString([(0, 0), (1, 1)])], crs=crs).to_parquet(
+            lines_path
+        )
+        return fields_path, lines_path
+
+    def _rasterize(self, tmp_path, ids):
+        import duckdb
+        from rasterio.crs import CRS
+
+        from ftw_dataset_tools.api.geo import ensure_spatial_loaded
+        from ftw_dataset_tools.api.masks import MaskType, _grid_raster_geometry, _rasterize_mask
+
+        fields_path, lines_path = self._build_inputs(tmp_path, ids)
+        bounds = (4000000, 3000000, 4000600, 3000200)
+        conn = duckdb.connect(":memory:")
+        ensure_spatial_loaded(conn)
+        transform, width, height = _grid_raster_geometry(
+            bounds=bounds, crs=CRS.from_epsg(3035), resolution=10.0
+        )
+        return _rasterize_mask(
+            conn=conn,
+            boundaries_path=fields_path,
+            boundary_lines_path=lines_path,
+            boundaries_geom_col="geometry",
+            boundary_lines_geom_col="geometry",
+            bounds=bounds,
+            transform=transform,
+            width=width,
+            height=height,
+            mask_type=MaskType.INSTANCE,
+            id_col="id",
+            background_class_value=0,
+        )
+
+    def test_valid_ids_are_preserved(self, tmp_path) -> None:
+        mask = self._rasterize(tmp_path, ["5", "10", "15"])
+        unique_nonzero = set(np.unique(mask).tolist()) - {0}
+        assert unique_nonzero == {5, 10, 15}
+
+    def test_mixed_valid_and_invalid_ids_fall_back_to_sequential(self, tmp_path) -> None:
+        """A non-numeric or float-like id (e.g. Austria's '111205887.0') must not
+
+        crash the whole cell; every id in the cell falls back to sequential
+        numbering so ids stay unique.
+        """
+        mask = self._rasterize(tmp_path, ["111205887.0", "abc", "3"])
+        unique_nonzero = set(np.unique(mask).tolist()) - {0}
+        assert unique_nonzero == {1, 2, 3}
 
 
 class TestMgrsSquare:

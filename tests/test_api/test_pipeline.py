@@ -207,6 +207,186 @@ class TestStageInputErrors:
             pipeline.stage_masks(ctx)
 
 
+class TestMasksSkippedReporting:
+    """Per-cell mask failures must be logged and accumulated on the context."""
+
+    def test_skipped_masks_are_logged_and_accumulated(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        from ftw_dataset_tools.api import masks
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        recurring_reason = "ValueError: invalid literal for int() with base 10: '1.0'"
+
+        def fake_create_masks(**_kwargs):
+            return masks.CreateMasksResult(
+                masks_created=[],
+                masks_skipped=[
+                    ("g1", recurring_reason),
+                    ("g2", recurring_reason),
+                    ("g3", recurring_reason),
+                    ("g4", "TimeoutError: boom"),
+                ],
+                field_dataset="ds",
+            )
+
+        monkeypatch.setattr(masks, "create_masks", fake_create_masks)
+
+        logs: list[str] = []
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(sample_geoparquet_4326),
+                "output_dir": str(tmp_path / "out"),
+                "name": "ds",
+                "year": 2024,
+                "stages": {"masks": {"mask_types": ["instance"]}},
+            }
+        )
+        ctx = pipeline.build_context(config, on_progress=logs.append)
+        ctx.output_dir.mkdir()
+
+        gpd.GeoDataFrame(
+            {"id": ["g1"], "field_coverage_pct": [50.0]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(ctx.chips_path)
+        ctx.output_fields_path.write_bytes(b"")
+        ctx.boundary_lines_path.write_bytes(b"")
+
+        pipeline.stage_masks(ctx)
+
+        assert ctx.masks_skipped == [
+            ("instance", "g1", recurring_reason),
+            ("instance", "g2", recurring_reason),
+            ("instance", "g3", recurring_reason),
+            ("instance", "g4", "TimeoutError: boom"),
+        ]
+
+        skip_logs = [msg for msg in logs if msg.startswith("Skipped")]
+        # Two distinct reasons -> two log lines (well under the top-3 cap).
+        assert len(skip_logs) == 2
+        assert any(
+            f"Skipped 4 instance mask(s): {recurring_reason} (x3)" in msg for msg in skip_logs
+        )
+        assert any(
+            "Skipped 4 instance mask(s): TimeoutError: boom (x1)" in msg for msg in skip_logs
+        )
+
+    def test_no_skipped_log_when_nothing_was_skipped(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        from ftw_dataset_tools.api import masks
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        def fake_create_masks(**_kwargs):
+            return masks.CreateMasksResult(masks_created=[], masks_skipped=[], field_dataset="ds")
+
+        monkeypatch.setattr(masks, "create_masks", fake_create_masks)
+
+        logs: list[str] = []
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(sample_geoparquet_4326),
+                "output_dir": str(tmp_path / "out"),
+                "name": "ds",
+                "year": 2024,
+                "stages": {"masks": {"mask_types": ["instance"]}},
+            }
+        )
+        ctx = pipeline.build_context(config, on_progress=logs.append)
+        ctx.output_dir.mkdir()
+
+        gpd.GeoDataFrame(
+            {"id": ["g1"], "field_coverage_pct": [50.0]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(ctx.chips_path)
+        ctx.output_fields_path.write_bytes(b"")
+        ctx.boundary_lines_path.write_bytes(b"")
+
+        pipeline.stage_masks(ctx)
+
+        assert ctx.masks_skipped == []
+        assert not any(msg.startswith("Skipped") for msg in logs)
+
+    def test_pool_restarts_are_logged(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        from ftw_dataset_tools.api import masks
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        def fake_create_masks(**_kwargs):
+            return masks.CreateMasksResult(
+                masks_created=[], masks_skipped=[], field_dataset="ds", pool_restarts=2
+            )
+
+        monkeypatch.setattr(masks, "create_masks", fake_create_masks)
+
+        logs: list[str] = []
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(sample_geoparquet_4326),
+                "output_dir": str(tmp_path / "out"),
+                "name": "ds",
+                "year": 2024,
+                "stages": {"masks": {"mask_types": ["instance"]}},
+            }
+        )
+        ctx = pipeline.build_context(config, on_progress=logs.append)
+        ctx.output_dir.mkdir()
+
+        gpd.GeoDataFrame(
+            {"id": ["g1"], "field_coverage_pct": [50.0]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(ctx.chips_path)
+        ctx.output_fields_path.write_bytes(b"")
+        ctx.boundary_lines_path.write_bytes(b"")
+
+        pipeline.stage_masks(ctx)
+
+        assert any(
+            "Worker pool restarted 2 time(s)" in msg and "stages.masks.workers" in msg
+            for msg in logs
+        )
+
+    def test_no_restart_log_when_zero(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        from ftw_dataset_tools.api import masks
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        def fake_create_masks(**_kwargs):
+            return masks.CreateMasksResult(masks_created=[], masks_skipped=[], field_dataset="ds")
+
+        monkeypatch.setattr(masks, "create_masks", fake_create_masks)
+
+        logs: list[str] = []
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(sample_geoparquet_4326),
+                "output_dir": str(tmp_path / "out"),
+                "name": "ds",
+                "year": 2024,
+                "stages": {"masks": {"mask_types": ["instance"]}},
+            }
+        )
+        ctx = pipeline.build_context(config, on_progress=logs.append)
+        ctx.output_dir.mkdir()
+
+        gpd.GeoDataFrame(
+            {"id": ["g1"], "field_coverage_pct": [50.0]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(ctx.chips_path)
+        ctx.output_fields_path.write_bytes(b"")
+        ctx.boundary_lines_path.write_bytes(b"")
+
+        pipeline.stage_masks(ctx)
+
+        assert not any("Worker pool restarted" in msg for msg in logs)
+
+
 class TestReprojectStage:
     """Tests for the reproject stage (no network required)."""
 

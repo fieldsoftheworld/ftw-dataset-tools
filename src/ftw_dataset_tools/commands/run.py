@@ -189,6 +189,15 @@ def _print_summary(ctx: pipeline.PipelineContext) -> None:
     if ctx.masks_results:
         total = sum(r.total_created for r in ctx.masks_results.values())
         click.echo(f"  Masks created: {total:,}")
+        skipped_total = sum(r.total_skipped for r in ctx.masks_results.values())
+        if skipped_total > 0:
+            click.echo(f"  Masks skipped: {skipped_total:,} (see log for reasons)")
+        existing_total = sum(r.masks_existing for r in ctx.masks_results.values())
+        if existing_total > 0:
+            click.echo(f"  Masks reused: {existing_total:,}")
+        restarts_total = sum(r.pool_restarts for r in ctx.masks_results.values())
+        if restarts_total > 0:
+            click.echo(f"  Worker pool restarts: {restarts_total}")
     if ctx.chips_result:
         click.echo(f"  {crop_stats.crop_stats_summary(ctx.crop_stats_result)}")
     if ctx.stac_result:

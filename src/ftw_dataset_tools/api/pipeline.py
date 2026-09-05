@@ -136,6 +136,9 @@ class PipelineContext:
     splits_result: splits.CreateSplitsResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
+    # (mask type, grid id, reason) for every mask a create_masks call could not
+    # produce, accumulated across all mask types run in this pipeline invocation.
+    masks_skipped: list[tuple[str, str, str]] = field(default_factory=list)
     stac_result: stac.STACGenerationResult | None = None
     selection_result: Any = None
     download_result: Any = None
@@ -535,6 +538,37 @@ def _build_chip_dirs(ctx: PipelineContext) -> dict[str, Path]:
     return chip_dirs
 
 
+# Reasons are truncated before grouping/logging so one exceptionally long
+# message (e.g. a full stack-trace-like string) doesn't dominate the summary.
+_SKIPPED_REASON_MAX_LEN = 160
+_SKIPPED_REASONS_TO_LOG = 3
+
+
+def _log_skipped_masks(
+    ctx: PipelineContext, mask_type: MaskType, mask_result: masks.CreateMasksResult
+) -> None:
+    """Log the top skipped-mask reasons and accumulate them on the context.
+
+    Per-cell failures are otherwise silent: create_masks only returns counts,
+    so without this a build can lose masks (e.g. Austria's non-numeric field
+    ids) with nothing in the log explaining why.
+    """
+    if mask_result.total_skipped == 0:
+        return
+
+    reason_counts: dict[str, int] = {}
+    for grid_id, reason in mask_result.masks_skipped:
+        ctx.masks_skipped.append((mask_type.value, grid_id, reason))
+        truncated = reason[:_SKIPPED_REASON_MAX_LEN]
+        reason_counts[truncated] = reason_counts.get(truncated, 0) + 1
+
+    top_reasons = sorted(reason_counts.items(), key=lambda item: item[1], reverse=True)
+    for reason, count in top_reasons[:_SKIPPED_REASONS_TO_LOG]:
+        ctx.log(
+            f"Skipped {mask_result.total_skipped} {mask_type.value} mask(s): {reason} (x{count})"
+        )
+
+
 def stage_masks(ctx: PipelineContext) -> None:
     """Create the requested raster mask types for each chip."""
     _require(ctx.chips_path, stage="masks", produced_by="chips")
@@ -567,11 +601,18 @@ def stage_masks(ctx: PipelineContext) -> None:
             chip_dirs=chip_dirs,
             year=ctx.effective_year,
             background_class_value=background_class_value,
+            skip_existing=masks_cfg.skip_existing,
             on_progress=ctx.on_mask_progress,
             on_start=ctx.on_mask_start,
         )
         ctx.masks_results[subdir_name] = mask_result
         ctx.log(f"Created {mask_result.total_created} {mask_type.value} masks")
+        _log_skipped_masks(ctx, mask_type, mask_result)
+        if mask_result.pool_restarts > 0:
+            ctx.log(
+                f"Worker pool restarted {mask_result.pool_restarts} time(s) "
+                "(a worker died; lower stages.masks.workers if this repeats)"
+            )
 
 
 def stage_stac(ctx: PipelineContext) -> None:

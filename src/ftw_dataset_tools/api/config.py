@@ -247,6 +247,8 @@ class MasksConfig:
     presence_only: bool = False
     # Path to a class filter YAML (resolved relative to the config file). Optional.
     class_filter: str | None = None
+    # When true, cells whose mask file already exists (non-empty) are not recreated.
+    skip_existing: bool = False
 
 
 @dataclass
@@ -571,6 +573,9 @@ class DatasetConfig:
 
         if not isinstance(self.stages.chips.crop_stats, bool):
             raise ConfigError("stages.chips.crop_stats must be true or false")
+
+        if not isinstance(self.stages.masks.skip_existing, bool):
+            raise ConfigError("stages.masks.skip_existing must be true or false")
 
         pmtiles = self.stages.docs.pmtiles
         if not isinstance(pmtiles, bool) and pmtiles != PMTILES_AUTO:
