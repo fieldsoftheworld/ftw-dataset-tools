@@ -34,6 +34,16 @@ These properties are added to parent chip items after image selection:
 | `ftw:expansions_performed` | integer | Number of buffer expansions performed before a scene was found |
 | `ftw:planting_cloud_cover` | number | Cloud cover percentage of the selected planting scene |
 | `ftw:harvest_cloud_cover` | number | Cloud cover percentage of the selected harvest scene |
+| `ftw:split` | string | Train/val/test split assignment: "train", "val", or "test" |
+| `ftw:field_coverage_pct` | number | Percentage of the chip covered by field polygons |
+| `ftw:hcat_dominant_code` | integer | HCAT code with the largest area share in the chip |
+| `ftw:hcat_dominant_name_en` | string | English name of the dominant HCAT code |
+| `ftw:hcat_dominant_pct` | number | Area share (0-100) of the dominant HCAT code |
+| `ftw:hcat_top` | array | Top HCAT codes by area, each `{code, name_en, pct}` |
+
+The `ftw:hcat_*` properties are only present when the field polygons carry the fiboa
+HCAT extension (an `hcat:code` column); otherwise crop composition is skipped and these
+properties are omitted from the item.
 
 ### Child S2 Item Properties
 
