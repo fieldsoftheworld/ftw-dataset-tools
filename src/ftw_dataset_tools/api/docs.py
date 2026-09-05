@@ -205,15 +205,11 @@ def _mask_types(collection: dict, output_dir: Path) -> list[str]:
     return [key for key in declared if key in observed]
 
 
-def _item_properties(output_dir: Path) -> list[str]:
+def _item_properties(con: duckdb.DuckDBPyConnection, output_dir: Path) -> list[str]:
     """The ``ftw:*`` item properties present, from items.parquet or a sample item."""
     items = output_dir / "items.parquet"
     if items.exists():
-        con = _connect()
-        try:
-            return sorted(c for c in _columns(con, items) if c.startswith("ftw:"))
-        finally:
-            con.close()
+        return sorted(c for c in _columns(con, items) if c.startswith("ftw:"))
     for chip_dir in iter_chip_dirs(output_dir):
         for item_path in sorted(chip_dir.glob("*.json")):
             props = _read_json(item_path).get("properties") or {}
@@ -230,24 +226,20 @@ def _record(parent: Any, season: Any, when: Any, cloud: Any) -> dict:
     }
 
 
-def _child_records_from_parquet(items_parquet: Path) -> list[dict]:
+def _child_records_from_parquet(con: duckdb.DuckDBPyConnection, items_parquet: Path) -> list[dict]:
     """Season child items mirrored into items.parquet, when the mirror carries them."""
     if not items_parquet.exists():
         return []
-    con = _connect()
-    try:
-        columns = _columns(con, items_parquet)
-        parent = next((c for c in PARENT_COLUMNS if c in columns), None)
-        if parent is None or "ftw:season" not in columns:
-            return []
-        when = "datetime" if "datetime" in columns else "CAST(NULL AS VARCHAR)"
-        cloud = '"eo:cloud_cover"' if "eo:cloud_cover" in columns else "CAST(NULL AS DOUBLE)"
-        rows = con.execute(
-            f'SELECT "{parent}", "ftw:season", CAST({when} AS VARCHAR), {cloud} '
-            f"FROM read_parquet('{_sql_path(items_parquet)}') WHERE \"ftw:season\" IS NOT NULL"
-        ).fetchall()
-    finally:
-        con.close()
+    columns = _columns(con, items_parquet)
+    parent = next((c for c in PARENT_COLUMNS if c in columns), None)
+    if parent is None or "ftw:season" not in columns:
+        return []
+    when = "datetime" if "datetime" in columns else "CAST(NULL AS VARCHAR)"
+    cloud = '"eo:cloud_cover"' if "eo:cloud_cover" in columns else "CAST(NULL AS DOUBLE)"
+    rows = con.execute(
+        f'SELECT "{parent}", "ftw:season", CAST({when} AS VARCHAR), {cloud} '
+        f"FROM read_parquet('{_sql_path(items_parquet)}') WHERE \"ftw:season\" IS NOT NULL"
+    ).fetchall()
     return [_record(*row) for row in rows]
 
 
@@ -277,10 +269,21 @@ def _season_summary(records: list[dict], season: str) -> dict | None:
     return summary
 
 
-def imagery_stats(output_dir: Path | str) -> dict | None:
-    """Imagery coverage and acquisition windows, or ``None`` when no scenes were selected."""
+def imagery_stats(
+    output_dir: Path | str, con: duckdb.DuckDBPyConnection | None = None
+) -> dict | None:
+    """Imagery coverage and acquisition windows, or ``None`` when no scenes were selected.
+
+    Pass ``con`` to reuse an open connection; one is opened and closed otherwise.
+    """
     output_dir = Path(output_dir)
-    records = _child_records_from_parquet(output_dir / "items.parquet")
+    owned = con is None
+    con = con or _connect()
+    try:
+        records = _child_records_from_parquet(con, output_dir / "items.parquet")
+    finally:
+        if owned:
+            con.close()
     records = records or _child_records_from_json(output_dir)
     if not records:
         return None
@@ -306,6 +309,8 @@ def collect_stats(
         fields_total = _count(con, fields) if fields.exists() else 0
         quantiles = _coverage_quantiles(con, chips) if chips.exists() else {}
         chip_columns = _columns(con, chips) if chips.exists() else []
+        imagery = imagery_stats(output_dir, con)
+        item_properties = _item_properties(con, output_dir)
     finally:
         con.close()
 
@@ -315,10 +320,10 @@ def collect_stats(
         "coverage_quantiles": quantiles,
         "fields_total": fields_total,
         "top_crops": _top_crops(chips, fields),
-        "imagery": imagery_stats(output_dir),
+        "imagery": imagery,
         "mask_types": _mask_types(collection, output_dir),
         "chip_columns": chip_columns,
-        "item_properties": _item_properties(output_dir),
+        "item_properties": item_properties,
     }
 
 
@@ -339,15 +344,19 @@ def run_agents_queries(
     chips = _asset_href(collection, "chips", "chips.parquet")
     fields = _asset_href(collection, "fields", "fields.parquet")
     executed: list[tuple[str, str, list[tuple]]] = []
-    for title, template in AGENTS_QUERIES:
-        sql = template.format(chips=chips, fields=fields)
-        try:
-            rows = run_query(sql, output_dir)
-        except duckdb.BinderException as exc:
-            if _MISSING_COLUMN in str(exc):
-                continue
-            raise
-        executed.append((title, sql, rows))
+    con = _connect(Path(output_dir))
+    try:
+        for title, template in AGENTS_QUERIES:
+            sql = template.format(chips=chips, fields=fields)
+            try:
+                rows = con.execute(sql).fetchall()
+            except duckdb.BinderException as exc:
+                if _MISSING_COLUMN in str(exc):
+                    continue
+                raise
+            executed.append((title, sql, rows))
+    finally:
+        con.close()
     return executed
 
 
@@ -540,26 +549,59 @@ def _readme_provenance(collection: dict, config_dict: dict) -> str:
     return "## Provenance\n\n" + "\n".join(lines)
 
 
-def _readme_uses() -> str:
-    return (
-        "## Suggested uses\n\n"
-        "- Training and evaluating field boundary delineation models on a fixed, "
-        "reproducible split.\n"
-        "- Comparing model performance across regions by filtering chips on their grid id.\n"
-        "- Sampling field polygons for crop-type work, using the harmonized HCAT codes."
-    )
+def _use_lines(stats: dict) -> list[str]:
+    """Suggestions the collection can actually support, given what was measured."""
+    columns = stats.get("chip_columns") or []
+    if stats.get("split_counts"):
+        lines = [
+            "- Training and evaluating field boundary delineation models on the pre-assigned, "
+            "reproducible split."
+        ]
+    else:
+        lines = [
+            "- Training and evaluating field boundary delineation models against the chip "
+            "label masks."
+        ]
+    if "grid_id" in columns:
+        lines.append(
+            "- Comparing model performance across regions by filtering chips on `grid_id`."
+        )
+    elif "id" in columns:
+        lines.append(
+            "- Comparing model performance across regions by filtering chips on `id`, which "
+            "carries the grid cell each chip was cut from."
+        )
+    if stats.get("top_crops"):
+        lines.append(
+            "- Sampling field polygons for crop-type work, using the harmonized HCAT codes."
+        )
+    return lines
 
 
-def _readme_limitations() -> str:
-    return (
-        "## Limitations\n\n"
+def _readme_uses(stats: dict) -> str:
+    return "## Suggested uses\n\n" + "\n".join(_use_lines(stats))
+
+
+def _limitation_lines(stats: dict) -> list[str]:
+    """Caveats true of every FTW chip collection, plus the ones this collection earns."""
+    lines = [
         "- Masks are derived from field boundaries declared for a given year; parcels that "
-        "changed shape, split or merged after that declaration are not reflected.\n"
-        "- Imagery windows follow a crop calendar rather than a fixed date, so acquisition "
-        "dates differ between chips and cloud-free scenes are not guaranteed.\n"
+        "changed shape, were subdivided or merged after that declaration are not reflected."
+    ]
+    if stats.get("imagery"):
+        lines.append(
+            "- Imagery windows follow a crop calendar rather than a fixed date, so acquisition "
+            "dates differ between chips and cloud-free scenes are not guaranteed."
+        )
+    lines.append(
         "- Chips on the border of the source dataset may be only partly covered by field "
         "boundaries, and empty area there means unmapped, not fieldless."
     )
+    return lines
+
+
+def _readme_limitations(stats: dict) -> str:
+    return "## Limitations\n\n" + "\n".join(_limitation_lines(stats))
 
 
 def _readme_access(collection: dict) -> str:
@@ -587,8 +629,8 @@ def render_readme(
             _readme_crops(stats),
             _readme_styles(styles),
             _readme_provenance(collection, config_dict),
-            _readme_uses(),
-            _readme_limitations(),
+            _readme_uses(stats),
+            _readme_limitations(stats),
             _readme_access(collection),
         ]
     )
