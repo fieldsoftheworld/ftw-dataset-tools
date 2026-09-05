@@ -376,13 +376,13 @@ def _crop_style(
 def dominant_crop_style(
     rows: list[tuple[int, str | None, float]], *, tiles_href: str, layer: str = CHIPS_TILES.layer
 ) -> tuple[str, dict, list[dict]]:
-    """Chips coloured by the crop covering the most of their field area."""
+    """Chips coloured by the crop covering most of their field area."""
     return _crop_style(
         rows,
         style_id="dominant-crop",
         name="Dominant crop per chip",
         description=(
-            "Chips coloured by hcat_dominant_code, the harmonized crop covering the most of "
+            "Chips coloured by hcat_dominant_code, the harmonized crop covering most of "
             "the chip's field area. The most common crops are named, everything else is grey. "
             "Colours follow the fiboa.org crop map palette."
         ),

@@ -248,7 +248,7 @@ The output directory is a self-contained STAC collection. `collection.json` sits
 ├── {name}_chips.parquet              # Chip definitions with field coverage stats
 ├── {name}_boundary_lines.parquet     # Boundary lines from vector data
 ├── items.parquet                     # Collection mirror (STAC items as Parquet; only if any chip has masks)
-├── README.md                         # What the collection contains (docs stage; ftwd run only)
+├── README.md                         # What the collection contains (docs stage)
 ├── AGENTS.md                         # Schema, quality notes, executed example queries (docs stage)
 ├── chips.pmtiles                     # Chip vector tiles (docs stage; only when tippecanoe ran)
 ├── fields.pmtiles                    # Field vector tiles (docs stage; only when tippecanoe ran)
@@ -268,7 +268,8 @@ The output directory is a self-contained STAC collection. `collection.json` sits
         └── {item_id}/...
 ```
 
-**Docs stage outputs** (`ftwd run`, final `docs` stage only): `README.md` and `AGENTS.md`
+**Docs stage outputs** (the final `docs` stage, run by both `ftwd run` and
+`ftwd create-dataset`): `README.md` and `AGENTS.md`
 are generated from the collection's measured contents and linked from `collection.json`
 via `describedby` and `agents` links, respectively. `chips.pmtiles` / `fields.pmtiles` and
 the styles under `styles/` are only written when the `tippecanoe` binary is available (or

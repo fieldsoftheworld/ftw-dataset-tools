@@ -61,6 +61,19 @@ AGENTS_QUERIES: list[tuple[str, str]] = [
     ),
 ]
 
+# HCAT crop-composition notes, shared verbatim between the chips columns
+# (hcat_dominant_code etc.) and the matching ftw:hcat_* item properties, since
+# both describe the same measurement.
+_HCAT_NOTES = {
+    "hcat_dominant_code": "EuroCrops HCAT code of the crop covering most of the chip's fields",
+    "hcat_dominant_name_en": "English name for hcat_dominant_code",
+    "hcat_dominant_pct": "share of the chip's field area under the dominant crop",
+    "hcat_top": (
+        "the crops covering the chip's field area, as {code, name_en, pct} entries "
+        "ordered by share (top 5)"
+    ),
+}
+
 # Plain-language meanings for the columns and item properties FTW writes. Anything
 # not listed is carried through from the source dataset and described as such.
 CHIP_COLUMN_NOTES = {
@@ -70,9 +83,9 @@ CHIP_COLUMN_NOTES = {
     "split": "which benchmark split the chip belongs to (train / val / test)",
     "field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
     "field_count": "number of field polygons intersecting the chip",
-    "hcat_dominant_code": "EuroCrops HCAT code of the crop covering the most of the chip's fields",
-    "hcat_dominant_name_en": "English name for hcat_dominant_code",
-    "hcat_dominant_pct": "share of the chip's field area under the dominant crop",
+    **_HCAT_NOTES,
+    "gzd": "MGRS grid zone designator of the chip's grid cell",
+    "mgrs_10km": "MGRS 100 km square plus 10 km cell identifier the chip belongs to",
     "grid_id": "identifier of the FTW grid cell the chip was cut from",
     "year": "calendar year the field boundaries were declared for",
 }
@@ -89,6 +102,7 @@ ITEM_PROPERTY_NOTES = {
     "ftw:source": "satellite mission the imagery came from",
     "ftw:buffer_days": "half-width of the search window around the target day, in days",
     "ftw:field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
+    **{f"ftw:{name}": note for name, note in _HCAT_NOTES.items()},
 }
 
 ASSET_NOTES = {
@@ -103,7 +117,7 @@ ASSET_NOTES = {
 STYLE_BLURBS = {
     "split": "chips coloured by their train / val / test assignment",
     "field-coverage": "chips shaded light to dark by the share of their area covered by fields",
-    "dominant-crop": "chips coloured by the crop covering the most of their field area",
+    "dominant-crop": "chips coloured by the crop covering most of their field area",
     "crops": "fields coloured by their harmonized crop (EuroCrops HCAT)",
     "outline": "every field in one colour, for reading the boundaries themselves",
 }
@@ -295,8 +309,19 @@ def imagery_stats(
     return stats
 
 
+def _split_type(collection: dict, config_dict: dict) -> str | None:
+    """The configured split strategy, from the config or the saved collection."""
+    stages = config_dict.get("stages") or {}
+    splits_cfg = stages.get("splits") or {}
+    split_type = splits_cfg.get("split_type") or collection.get("ftw:split_type")
+    return str(split_type) if split_type else None
+
+
 def collect_stats(
-    output_dir: Path | str, chips_parquet: Path | str, fields_parquet: Path | str
+    output_dir: Path | str,
+    chips_parquet: Path | str,
+    fields_parquet: Path | str,
+    config_dict: dict | None = None,
 ) -> dict:
     """Every number the documents quote, measured against the written collection."""
     output_dir = Path(output_dir)
@@ -324,6 +349,7 @@ def collect_stats(
         "mask_types": _mask_types(collection, output_dir),
         "chip_columns": chip_columns,
         "item_properties": item_properties,
+        "split_type": _split_type(collection, config_dict or {}),
     }
 
 
@@ -398,6 +424,37 @@ def _via_link(collection: dict) -> tuple[str, str] | None:
         if link.get("rel") == "via" and link.get("href"):
             return str(link.get("title") or "the source dataset"), str(link["href"])
     return None
+
+
+# Licenses that are not a resolvable SPDX identifier; only these fall back to a
+# ``rel: "license"`` link (or the bare code, when no such link exists).
+_NON_SPDX_LICENSES = {"other", "proprietary"}
+
+
+def _license_rel_link(collection: dict) -> tuple[str, str] | None:
+    """``(title, href)`` of the collection's ``license`` link, when it has one."""
+    for link in collection.get("links") or []:
+        if link.get("rel") == "license" and link.get("href"):
+            return str(link.get("title") or "License terms"), str(link["href"])
+    return None
+
+
+def _license_link(collection: dict) -> str:
+    """The collection's license, linked to SPDX or to its own ``license`` link.
+
+    An SPDX id (anything other than ``other``/``proprietary``) links to
+    spdx.org; ``other``/``proprietary`` links to the collection's own
+    ``rel: "license"`` link when it has one, and falls back to the bare code.
+    """
+    license_id = str(collection.get("license") or "")
+    if not license_id:
+        return ""
+    if license_id not in _NON_SPDX_LICENSES:
+        return _link(license_id, f"https://spdx.org/licenses/{license_id}.html")
+    rel_link = _license_rel_link(collection)
+    if rel_link:
+        return _link(*rel_link)
+    return license_id
 
 
 # --------------------------------------------------------------------------- #
@@ -494,7 +551,7 @@ def _readme_crops(stats: dict) -> str:
     rows = [[name or f"HCAT {code}", str(code), f"{share:.1%}"] for code, name, share in crops]
     return (
         "## Crops\n\n"
-        "Crops are harmonized to the EuroCrops HCAT taxonomy. The classes covering the most "
+        "Crops are harmonized to the EuroCrops HCAT taxonomy. The classes covering most "
         "of this collection:\n\n" + _table(["crop", "HCAT code", "share"], rows)
     )
 
@@ -539,7 +596,7 @@ def _config_lines(collection: dict, config_dict: dict) -> list[str]:
 def _readme_provenance(collection: dict, config_dict: dict) -> str:
     lines = _provider_lines(collection)
     if collection.get("license"):
-        lines.append(f"- License: `{collection['license']}`")
+        lines.append(f"- License: {_license_link(collection)}")
     via = _via_link(collection)
     if via:
         lines.append(f"- Derived from {_link(*via)}")
@@ -653,7 +710,7 @@ def _agents_overview(collection: dict, stats: dict) -> str:
         detail += f" Chips are pre-assigned to benchmark splits ({splits})."
     lines += ["", detail]
     if collection.get("license"):
-        lines.append(f"\nLicensed `{collection['license']}`.")
+        lines.append(f"\nLicensed {_license_link(collection)}.")
     return "\n".join(lines)
 
 
@@ -712,6 +769,28 @@ def _agents_schema(stats: dict) -> str:
     return "\n".join(lines).strip()
 
 
+def _split_quality_note(split_type: str | None) -> str | None:
+    """Caveat about split leakage risk, worded to match how splits were assigned.
+
+    ``None`` when the split strategy is unknown, so no unsupported claim is made.
+    """
+    if not split_type:
+        return None
+    if split_type.startswith("block"):
+        return (
+            "- Respect the pre-assigned splits: they are spatially blocked, so resampling "
+            "chips at random leaks information between train and test."
+        )
+    if split_type == "random-uniform":
+        return (
+            "- Chips were assigned to splits uniformly at random; nearby chips can fall in "
+            "different splits, so spatial leakage between train and test is possible."
+        )
+    if split_type == "predefined":
+        return "- The splits came from the source dataset rather than being assigned here."
+    return None
+
+
 def _agents_quality(stats: dict) -> str:
     lines = ["## Data quality & usage notes", ""]
     quantiles = stats.get("coverage_quantiles") or {}
@@ -735,10 +814,9 @@ def _agents_quality(stats: dict) -> str:
             "vary between chips; check `eo:cloud_cover` on the season child items."
         )
     if stats.get("split_counts"):
-        lines.append(
-            "- Respect the pre-assigned splits: they are spatially blocked, so resampling "
-            "chips at random leaks information between train and test."
-        )
+        note = _split_quality_note(stats.get("split_type"))
+        if note:
+            lines.append(note)
     return "\n".join(lines)
 
 
@@ -825,7 +903,7 @@ def write_docs(
     """Measure the collection, run the documented queries and write the documents."""
     output_dir = Path(output_dir)
     collection = _read_json(Path(collection_json_path))
-    stats = collect_stats(output_dir, chips_parquet, fields_parquet)
+    stats = collect_stats(output_dir, chips_parquet, fields_parquet, config_dict)
 
     written: list[Path] = []
     if readme:
