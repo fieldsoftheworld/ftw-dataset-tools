@@ -95,6 +95,23 @@ class TestCollectStats:
         assert [c for c, _, _ in stats["top_crops"]] == [3301010101, 3302000000]
         assert stats["imagery"] is None
 
+    def test_split_type_from_collection_or_config(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import collect_stats
+
+        _, chips, fields = _collection_dir(tmp_path)
+
+        # Falls back to the collection's ftw:split_type when no config is given.
+        assert collect_stats(tmp_path, chips, fields)["split_type"] == "block3x3"
+
+        # An explicit config_dict split_type takes precedence.
+        stats = collect_stats(
+            tmp_path,
+            chips,
+            fields,
+            {"stages": {"splits": {"split_type": "random-uniform"}}},
+        )
+        assert stats["split_type"] == "random-uniform"
+
 
 class TestWriteDocs:
     def test_readme_and_agents_are_computed_and_linked(self, tmp_path: Path) -> None:
@@ -558,3 +575,175 @@ class TestRegisterDocsAssetsPruning:
         self._register(coll_path, tmp_path, tiles={}, styles=[])
 
         assert coll_path.read_text() == first
+
+
+class TestSplitQualityNote:
+    """AGENTS.md's split caveat matches how splits were actually assigned."""
+
+    def test_block_split_says_spatially_blocked(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        collection = {"title": "T", "links": []}
+        stats = _stats(split_counts={"train": 2}, split_type="block3x3")
+
+        agents = render_agents(collection, stats, [])
+
+        assert "spatially blocked" in agents
+
+    def test_random_uniform_split_warns_about_possible_leakage(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        collection = {"title": "T", "links": []}
+        stats = _stats(split_counts={"train": 2}, split_type="random-uniform")
+
+        agents = render_agents(collection, stats, [])
+
+        assert "uniformly at random" in agents
+        assert "spatially blocked" not in agents
+
+    def test_predefined_split_credits_the_source_dataset(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        collection = {"title": "T", "links": []}
+        stats = _stats(split_counts={"train": 2}, split_type="predefined")
+
+        agents = render_agents(collection, stats, [])
+
+        assert "source dataset" in agents
+        assert "spatially blocked" not in agents
+        assert "uniformly at random" not in agents
+
+    def test_unknown_split_type_omits_the_note(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        collection = {"title": "T", "links": []}
+        stats = _stats(split_counts={"train": 2}, split_type=None)
+
+        agents = render_agents(collection, stats, [])
+
+        assert "spatially blocked" not in agents
+        assert "uniformly at random" not in agents
+        assert "source dataset" not in agents
+
+    def test_no_split_column_omits_the_note_even_with_a_split_type(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        collection = {"title": "T", "links": []}
+        stats = _stats(split_type="block3x3")
+
+        agents = render_agents(collection, stats, [])
+
+        assert "spatially blocked" not in agents
+
+
+class TestSchemaNotes:
+    """gzd/mgrs_10km/hcat_top and the ftw:hcat_* properties get real descriptions."""
+
+    def test_grid_columns_have_specific_notes(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        collection = {"title": "T", "links": []}
+        stats = _stats(chip_columns=["gzd", "mgrs_10km", "hcat_top"])
+
+        agents = render_agents(collection, stats, [])
+
+        assert "carried through from the source dataset" not in agents
+        assert "MGRS grid zone designator" in agents
+        assert "MGRS 100 km square plus 10 km cell identifier" in agents
+        assert "ordered by share (top 5)" in agents
+
+    def test_ftw_hcat_properties_reuse_the_chip_column_notes(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        collection = {"title": "T", "links": []}
+        stats = _stats(
+            item_properties=[
+                "ftw:hcat_dominant_code",
+                "ftw:hcat_dominant_name_en",
+                "ftw:hcat_dominant_pct",
+                "ftw:hcat_top",
+            ]
+        )
+
+        agents = render_agents(collection, stats, [])
+
+        assert "see the item JSON" not in agents
+        assert "ordered by share (top 5)" in agents
+
+
+class TestLicenseLink:
+    """README/AGENTS license mentions link out when there is somewhere to link to."""
+
+    def test_spdx_license_links_to_spdx_org(self) -> None:
+        from ftw_dataset_tools.api.docs import _readme_provenance
+
+        collection = {"license": "CC-BY-4.0", "links": []}
+
+        text = _readme_provenance(collection, {})
+
+        assert "[CC-BY-4.0](https://spdx.org/licenses/CC-BY-4.0.html)" in text
+
+    def test_other_license_with_titled_rel_link_uses_the_title(self) -> None:
+        from ftw_dataset_tools.api.docs import _readme_provenance
+
+        collection = {
+            "license": "other",
+            "links": [
+                {"rel": "license", "href": "https://x.example/terms", "title": "Custom Terms"}
+            ],
+        }
+
+        text = _readme_provenance(collection, {})
+
+        assert "[Custom Terms](https://x.example/terms)" in text
+
+    def test_other_license_with_untitled_rel_link_uses_a_generic_title(self) -> None:
+        from ftw_dataset_tools.api.docs import _readme_provenance
+
+        collection = {
+            "license": "proprietary",
+            "links": [{"rel": "license", "href": "https://x.example/terms"}],
+        }
+
+        text = _readme_provenance(collection, {})
+
+        assert "[License terms](https://x.example/terms)" in text
+
+    def test_other_license_without_a_rel_link_is_bare(self) -> None:
+        from ftw_dataset_tools.api.docs import _readme_provenance
+
+        collection = {"license": "other", "links": []}
+
+        text = _readme_provenance(collection, {})
+
+        assert "License: other" in text
+        assert "[other]" not in text
+
+    def test_agents_overview_links_the_license_too(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        collection = {"title": "T", "links": [], "license": "CC0-1.0"}
+
+        agents = render_agents(collection, _stats(), [])
+
+        assert "[CC0-1.0](https://spdx.org/licenses/CC0-1.0.html)" in agents
+
+
+class TestGrammar:
+    """ "covering the most of" is grammatically broken; the fix drops "the"."""
+
+    def test_docs_notes_avoid_the_double_article(self) -> None:
+        from ftw_dataset_tools.api.docs import CHIP_COLUMN_NOTES, STYLE_BLURBS, _readme_crops
+
+        assert "covering the most of" not in CHIP_COLUMN_NOTES["hcat_dominant_code"]
+        assert "covering the most of" not in STYLE_BLURBS["dominant-crop"]
+        text = _readme_crops(_stats(top_crops=[(3301010101, "Winter wheat", 1.0)]))
+        assert "covering the most of" not in text
+
+    def test_style_descriptions_avoid_the_double_article(self) -> None:
+        from ftw_dataset_tools.api.styles import dominant_crop_style
+
+        rows = [(3301010101, "Winter wheat", 1.0)]
+        _, style, _ = dominant_crop_style(rows, tiles_href="../chips.pmtiles", layer="chips")
+
+        assert "covering the most of" not in style["metadata"]["description"]
