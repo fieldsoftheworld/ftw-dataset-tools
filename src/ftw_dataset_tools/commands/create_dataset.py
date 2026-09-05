@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from ftw_dataset_tools.api import crop_stats, dataset, splits
 from ftw_dataset_tools.api.assets import MaskReadError
-from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, VALID_MASK_TYPES
+from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
     download_and_clip_scene,
     iter_chip_dirs,
@@ -21,6 +21,7 @@ from ftw_dataset_tools.api.imagery import (
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 from ftw_dataset_tools.api.imagery.thumbnails import has_rgb_bands
+from ftw_dataset_tools.api.pipeline import docs_summary_line
 from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_datetime_column
 
 
@@ -391,6 +392,13 @@ def create_dataset_cmd(
             click.echo(f"  Items: {result.stac_result.total_items:,}")
             click.echo(f"  Items parquet: {result.stac_result.items_parquet_path}")
 
+        if result.docs_result is not None:
+            click.echo("")
+            # create-dataset has no flag to change stages.docs.pmtiles, so it always
+            # runs in "auto" mode: tiles/styles when tippecanoe is available, skipped
+            # (not an error) otherwise.
+            click.echo(docs_summary_line(result.docs_result, PMTILES_AUTO))
+
         # Image selection (by default enabled, unless --skip-images is set)
         should_select_images = not skip_images or download_images
         if should_select_images:
@@ -458,10 +466,7 @@ def create_dataset_cmd(
         sys.stdout.write("\n")
         click.echo(click.style("Interrupted by user.", fg="yellow"))
         raise SystemExit(130) from None
-    except FileNotFoundError as e:
-        click.echo(click.style(f"\nError: {e}", fg="red"))
-        raise SystemExit(1) from e
-    except (ValueError, MaskReadError) as e:
+    except (FileNotFoundError, ValueError, RuntimeError, MaskReadError) as e:
         click.echo(click.style(f"\nError: {e}", fg="red"))
         raise SystemExit(1) from e
 

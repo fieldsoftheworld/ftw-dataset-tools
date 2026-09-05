@@ -112,7 +112,7 @@ class TestBuilders:
         from ftw_dataset_tools.api.styles import split_style
 
         style_id, style, legend = split_style(
-            {"train": 3, "test": 2}, tiles_href="./chips.pmtiles", layer="chips"
+            {"train": 3, "test": 2}, tiles_href="../chips.pmtiles", layer="chips"
         )
 
         assert style_id == "split"
@@ -120,13 +120,13 @@ class TestBuilders:
         assert expr[0] == "match" and expr[1] == ["get", "split"]
         assert "train" in expr and "test" in expr and "val" not in expr
         assert [row["label"] for row in legend] == ["train", "test"]
-        assert style["sources"]["data"]["url"] == "pmtiles://./chips.pmtiles"
+        assert style["sources"]["data"]["url"] == "pmtiles://../chips.pmtiles"
 
     def test_coverage_style_is_step(self) -> None:
         from ftw_dataset_tools.api.styles import coverage_style
 
         _, style, legend = coverage_style(
-            [10.0, 40.0, 80.0], tiles_href="./chips.pmtiles", layer="chips"
+            [10.0, 40.0, 80.0], tiles_href="../chips.pmtiles", layer="chips"
         )
 
         expr = _fill_match_values(style)
@@ -138,19 +138,21 @@ class TestBuilders:
         from ftw_dataset_tools.api.styles import crops_style, dominant_crop_style
 
         rows = [(3301010101, "Winter wheat", 2.0), (3302000000, "Pasture", 1.0)]
-        _, dom, legend = dominant_crop_style(rows, tiles_href="./chips.pmtiles", layer="chips")
+        _, dom, legend = dominant_crop_style(rows, tiles_href="../chips.pmtiles", layer="chips")
         expr = _fill_match_values(dom)
         assert expr[1][1] == ["get", "hcat_dominant_code"]  # inner match on the code
         assert 3301010101 in expr[1] and "#cda737" in expr
         assert legend[-1]["label"] == "Other"
 
-        _, crops, _ = crops_style(rows, tiles_href="./fields.pmtiles", layer="fields")
+        _, crops, _ = crops_style(rows, tiles_href="../fields.pmtiles", layer="fields")
         assert _fill_match_values(crops)[1][1] == ["get", "hcat:code"]
 
     def test_outline_style_has_no_fill_legend(self) -> None:
         from ftw_dataset_tools.api.styles import outline_style
 
-        style_id, style, legend = outline_style("lu", tiles_href="./fields.pmtiles", layer="fields")
+        style_id, style, legend = outline_style(
+            "lu", tiles_href="../fields.pmtiles", layer="fields"
+        )
 
         assert style_id == "outline" and legend == []
         assert all(
@@ -167,8 +169,8 @@ class TestWriteStyles:
             "lu",
             _chips(tmp_path),
             _fields(tmp_path),
-            chips_tiles="./chips.pmtiles",
-            fields_tiles="./fields.pmtiles",
+            chips_tiles="../chips.pmtiles",
+            fields_tiles="../fields.pmtiles",
         )
 
         ids = [r.style_id for r in results]
@@ -188,7 +190,7 @@ class TestWriteStyles:
             "lu",
             _chips(tmp_path, hcat=False),
             _fields(tmp_path),
-            chips_tiles="./chips.pmtiles",
+            chips_tiles="../chips.pmtiles",
             fields_tiles=None,
         )
 
