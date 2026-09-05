@@ -12,6 +12,7 @@ import duckdb
 
 from ftw_dataset_tools.api.geo import (
     CRSMismatchError,
+    configure_source_coop_s3,
     detect_crs,
     detect_geometry_column,
     ensure_spatial_loaded,
@@ -350,8 +351,7 @@ def add_field_stats(
                 )
 
             # Load httpfs for S3 access
-            conn.execute("INSTALL httpfs; LOAD httpfs;")
-            conn.execute("SET s3_region = 'us-west-2';")
+            configure_source_coop_s3(conn)
 
             # Fetch grid cells that intersect the bounding box
             log("Fetching grid cells by bounding box...")

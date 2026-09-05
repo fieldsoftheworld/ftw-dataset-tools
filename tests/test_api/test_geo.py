@@ -464,3 +464,22 @@ class TestGetBboxColumnName:
 
         result = get_bbox_column_name(path)
         assert result == "bbox"
+
+
+class TestConfigureSourceCoopS3:
+    def test_sets_region_and_path_style(self) -> None:
+        import duckdb
+
+        from ftw_dataset_tools.api.geo import configure_source_coop_s3
+
+        conn = duckdb.connect(":memory:")
+        configure_source_coop_s3(conn)
+        settings = dict(
+            conn.execute(
+                "SELECT name, value FROM duckdb_settings() "
+                "WHERE name IN ('s3_region', 's3_url_style')"
+            ).fetchall()
+        )
+        conn.close()
+
+        assert settings == {"s3_region": "us-west-2", "s3_url_style": "path"}
