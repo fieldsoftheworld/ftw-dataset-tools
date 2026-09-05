@@ -5,7 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from ftw_dataset_tools.api import boundaries, field_stats, masks, pipeline, splits, stac
+from ftw_dataset_tools.api import (
+    boundaries,
+    crop_stats,
+    field_stats,
+    masks,
+    pipeline,
+    splits,
+    stac,
+)
 from ftw_dataset_tools.api.config import ClassFilter, DatasetConfig
 
 if TYPE_CHECKING:
@@ -27,6 +35,7 @@ class CreateDatasetResult:
     source_crs: str | None = None
     chips_result: field_stats.FieldStatsResult | None = None
     splits_result: splits.CreateSplitsResult | None = None
+    crop_stats_result: crop_stats.CropStatsResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
     stac_result: stac.STACGenerationResult | None = None
@@ -142,6 +151,7 @@ def create_dataset(
         source_crs=ctx.source_crs,
         chips_result=ctx.chips_result,
         splits_result=ctx.splits_result,
+        crop_stats_result=ctx.crop_stats_result,
         boundaries_result=ctx.boundaries_result,
         masks_results=ctx.masks_results,
         stac_result=ctx.stac_result,

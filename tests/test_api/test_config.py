@@ -129,6 +129,24 @@ class TestFromDict:
         with pytest.raises(ConfigError, match="mapping"):
             DatasetConfig.from_dict([1, 2, 3])  # type: ignore[arg-type]
 
+    def test_crop_stats_defaults_true(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+
+        assert config.stages.chips.crop_stats is True
+
+    def test_crop_stats_can_be_disabled(self) -> None:
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"chips": {"crop_stats": False}}}
+        )
+
+        assert config.stages.chips.crop_stats is False
+
+    def test_crop_stats_non_bool_raises(self) -> None:
+        with pytest.raises(ConfigError, match=r"stages\.chips\.crop_stats must be true or false"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"chips": {"crop_stats": "yes"}}}
+            )
+
 
 class TestFromKwargs:
     """Tests for building a config from create_dataset kwargs."""

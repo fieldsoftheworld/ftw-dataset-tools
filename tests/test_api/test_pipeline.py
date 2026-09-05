@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from pathlib import Path
 
+import duckdb
 import geopandas as gpd
 import pytest
 from shapely.geometry import box
 
-from ftw_dataset_tools.api import pipeline
+from ftw_dataset_tools.api import crop_stats, field_stats, pipeline
 from ftw_dataset_tools.api.config import ClassFilter, ClassFilterError, DatasetConfig
 from ftw_dataset_tools.api.pipeline import StageInputError
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _config(fields_file: Path, output_dir: Path, **kwargs: object) -> DatasetConfig:
@@ -586,3 +584,155 @@ class TestSourceResolution:
         assert provenance["source"]["href"] == str(sample_geoparquet_4326.resolve())
         assert provenance["source"]["fetched_at"] is None
         assert len(provenance["source"]["sha256"]) == 64
+
+
+def _fake_field_stats_writing_crop_columns(field_stats_module):
+    """A chips stage that writes a chips file still carrying a previous composition."""
+
+    def fake(**kwargs):
+        gpd.GeoDataFrame(
+            {
+                "id": ["ftw-33UXP0001"],
+                "field_coverage_pct": [50.0],
+                "hcat_dominant_code": [1],
+                "hcat_dominant_name_en": ["Wheat"],
+                "hcat_dominant_pct": [100.0],
+            },
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(kwargs["output_file"])
+        return field_stats_module.FieldStatsResult(
+            output_path=Path(kwargs["output_file"]),
+            total_cells=1,
+            cells_with_coverage=1,
+            average_coverage=50.0,
+            max_coverage=50.0,
+        )
+
+    return fake
+
+
+class TestChipsStageCropStats:
+    def _ctx(
+        self, tmp_path: Path, monkeypatch, *, crop_stats: bool, empty_chip: bool = False
+    ) -> pipeline.PipelineContext:
+        """A context whose chips stage produces one chip over two HCAT-coded fields.
+
+        With ``empty_chip`` a second chip with no fields is added, so the crop
+        columns contain a NULL.
+        """
+        fields = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1, 2], "hcat:code": [1, 2], "hcat:name_en": ["Wheat", "Pasture"]},
+            geometry=[box(0, 0, 0.5, 1), box(0.5, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(fields)
+        config = _config(
+            fields,
+            tmp_path / "out",
+            year=2024,
+            stages={
+                "chips": {"crop_stats": crop_stats},
+                "splits": {"split_type": "random-uniform"},
+            },
+        )
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir()
+        gpd.read_parquet(fields).to_parquet(ctx.field_polygons_path)
+
+        ids = ["ftw-33UXP0001", "ftw-33UXP0002"] if empty_chip else ["ftw-33UXP0001"]
+        cells = [box(0, 0, 1, 1), box(1, 0, 2, 1)][: len(ids)]
+
+        def fake_field_stats(**kwargs):
+            gpd.GeoDataFrame(
+                {"id": ids, "field_coverage_pct": [50.0] * len(ids)},
+                geometry=cells,
+                crs="EPSG:4326",
+            ).to_parquet(kwargs["output_file"])
+            return field_stats.FieldStatsResult(
+                output_path=Path(kwargs["output_file"]),
+                total_cells=len(ids),
+                cells_with_coverage=len(ids),
+                average_coverage=50.0,
+                max_coverage=50.0,
+            )
+
+        monkeypatch.setattr(field_stats, "add_field_stats", fake_field_stats)
+        return ctx
+
+    def test_crop_stats_called_after_coverage(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import crop_stats
+
+        ctx = self._ctx(tmp_path, monkeypatch, crop_stats=True)
+        calls: list[tuple] = []
+
+        def fake_add_crop_stats(chips, fields, **_kwargs):
+            calls.append((Path(chips), Path(fields)))
+            return crop_stats.CropStatsResult(1, 0, 0, True, "x")
+
+        monkeypatch.setattr(crop_stats, "add_crop_stats", fake_add_crop_stats)
+
+        pipeline.stage_chips(ctx)
+
+        assert calls == [(ctx.chips_path, ctx.field_polygons_path)]
+        assert ctx.crop_stats_result is not None and ctx.crop_stats_result.skipped is True
+
+    def test_crop_stats_disabled(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import crop_stats
+
+        ctx = self._ctx(tmp_path, monkeypatch, crop_stats=False)
+
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError("called")
+
+        monkeypatch.setattr(crop_stats, "add_crop_stats", fail_if_called)
+
+        pipeline.stage_chips(ctx)
+
+        assert ctx.crop_stats_result is None
+
+    def test_disabled_drops_stale_columns(self, tmp_path: Path, monkeypatch) -> None:
+        """A rerun with the flag off must not leave a previous run's columns behind."""
+        ctx = self._ctx(tmp_path, monkeypatch, crop_stats=False)
+        dropped: list[Path] = []
+        real_drop = crop_stats.drop_crop_stats
+
+        def spy(chips_file):
+            dropped.append(Path(chips_file))
+            return real_drop(chips_file)
+
+        monkeypatch.setattr(crop_stats, "drop_crop_stats", spy)
+        monkeypatch.setattr(
+            field_stats,
+            "add_field_stats",
+            _fake_field_stats_writing_crop_columns(field_stats),
+        )
+
+        pipeline.stage_chips(ctx)
+
+        assert dropped == [ctx.chips_path]
+        assert ctx.crop_stats_result is None
+        assert "hcat_dominant_code" not in gpd.read_parquet(ctx.chips_path).columns
+
+    def test_splits_keep_the_dominant_code_an_integer(self, tmp_path: Path, monkeypatch) -> None:
+        """The chips GeoParquet is published as-is, so the split rewrite must not
+        widen the nullable BIGINT to DOUBLE."""
+        ctx = self._ctx(tmp_path, monkeypatch, crop_stats=True, empty_chip=True)
+
+        pipeline.stage_chips(ctx)
+        pipeline.stage_splits(ctx)
+
+        con = duckdb.connect()
+        types = {
+            row[0]: row[1]
+            for row in con.execute(
+                f"DESCRIBE SELECT * FROM read_parquet('{ctx.chips_path}')"
+            ).fetchall()
+        }
+        codes = con.execute(
+            f"SELECT hcat_dominant_code FROM read_parquet('{ctx.chips_path}') ORDER BY id"
+        ).fetchall()
+        con.close()
+        assert codes == [(1,), (None,)]  # the NULL is what makes pandas widen the column
+        assert types["hcat_dominant_code"] == "BIGINT"
+        assert types["split"] == "VARCHAR"

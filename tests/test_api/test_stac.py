@@ -3,6 +3,8 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 
 def _write_mask(path: Path, values: list[list[int]], dtype: str = "uint8") -> None:
     import numpy as np
@@ -345,6 +347,8 @@ class TestCollectionAssetMetadata:
         filtered: bool = False,
         with_masks: bool = True,
         grid_id: str = "ftw-33UXP0410",
+        chips_path: Path | None = None,
+        fields_path: Path | None = None,
     ):
         import geopandas as gpd
         from shapely.geometry import box
@@ -357,17 +361,19 @@ class TestCollectionAssetMetadata:
             geometry=[box(0, 0, 1, 1)],
             crs="EPSG:4326",
         )
-        fields_path = tmp_path / "ds_fields.parquet"
-        fields.to_parquet(fields_path)
+        if fields_path is None:
+            fields_path = tmp_path / "ds_fields.parquet"
+            fields.to_parquet(fields_path)
         lines_path = tmp_path / "ds_boundary_lines.parquet"
         fields.to_parquet(lines_path)
-        chips = gpd.GeoDataFrame(
-            {"id": [grid_id], "field_coverage_pct": [50.0]},
-            geometry=[box(0, 0, 1, 1)],
-            crs="EPSG:4326",
-        )
-        chips_path = tmp_path / "ds_chips.parquet"
-        chips.to_parquet(chips_path)
+        if chips_path is None:
+            chips = gpd.GeoDataFrame(
+                {"id": [grid_id], "field_coverage_pct": [50.0]},
+                geometry=[box(0, 0, 1, 1)],
+                crs="EPSG:4326",
+            )
+            chips_path = tmp_path / "ds_chips.parquet"
+            chips.to_parquet(chips_path)
 
         filtered_fields_path = None
         if filtered:
@@ -661,3 +667,99 @@ class TestCollectionMetadata:
                 "title": "Source field boundary collection",
             }
         ]
+
+
+class TestChipProperties:
+    def test_split_coverage_and_hcat_on_items(self, tmp_path: Path) -> None:
+        import json
+
+        import duckdb
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.crop_stats import add_crop_stats
+
+        chips = gpd.GeoDataFrame(
+            {"id": ["ftw-33UXP0410"], "field_coverage_pct": [66.67], "split": ["test"]},
+            geometry=[box(0, 0, 2, 2)],
+            crs="EPSG:4326",
+        )
+        chips_path = tmp_path / "ds_chips.parquet"
+        chips.to_parquet(chips_path)
+        fields = gpd.GeoDataFrame(
+            {
+                "id": [1, 2],
+                "hcat:code": [3301010101, 3302000000],
+                "hcat:name_en": ["Winter wheat", "Pasture"],
+            },
+            geometry=[box(0, 0, 2, 1), box(0, 1, 1, 2)],
+            crs="EPSG:4326",
+        )
+        fields_path = tmp_path / "ds_fields.parquet"
+        fields.to_parquet(fields_path)
+        add_crop_stats(chips_path, fields_path)
+
+        result = TestCollectionAssetMetadata()._build_catalog(
+            tmp_path, chips_path=chips_path, fields_path=fields_path
+        )
+
+        item_path = tmp_path / "chips" / "33UXP" / "ftw-33UXP0410_2024" / "ftw-33UXP0410_2024.json"
+        props = json.loads(item_path.read_text())["properties"]
+        assert props["ftw:split"] == "test"
+        assert props["ftw:field_coverage_pct"] == 66.67
+        assert props["ftw:hcat_dominant_code"] == 3301010101
+        assert props["ftw:hcat_dominant_name_en"] == "Winter wheat"
+        assert props["ftw:hcat_dominant_pct"] == pytest.approx(66.67, abs=0.01)
+        assert [e["code"] for e in props["ftw:hcat_top"]] == [3301010101, 3302000000]
+
+        con = duckdb.connect()
+        row = con.execute(
+            'SELECT "ftw:split", "ftw:hcat_dominant_code", "ftw:hcat_top" '
+            f"FROM read_parquet('{result.items_parquet_path}')"
+        ).fetchone()
+        assert row[:2] == ("test", 3301010101)
+        assert [entry["code"] for entry in row[2]] == [3301010101, 3302000000]
+        assert row[2][0]["name_en"] == "Winter wheat"
+        con.close()
+
+    def test_nan_values_are_not_published(self, tmp_path: Path) -> None:
+        """JSON has no NaN; a NaN column value must be omitted like a NULL."""
+        import json
+
+        import duckdb
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.geo import ensure_spatial_loaded, write_geoparquet
+
+        chips_path = tmp_path / "ds_chips.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["ftw-33UXP0410"], "field_coverage_pct": [50.0]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(chips_path)
+        con = duckdb.connect()
+        ensure_spatial_loaded(con)
+        con.execute(
+            "CREATE TABLE chips AS SELECT * EXCLUDE (field_coverage_pct), "
+            "CAST('NaN' AS DOUBLE) AS field_coverage_pct "
+            f"FROM read_parquet('{chips_path}')"
+        )
+        write_geoparquet(chips_path, conn=con, query="SELECT * FROM chips")
+        con.close()
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path, chips_path=chips_path)
+
+        item_path = tmp_path / "chips" / "33UXP" / "ftw-33UXP0410_2024" / "ftw-33UXP0410_2024.json"
+        props = json.loads(item_path.read_text())["properties"]
+        assert "ftw:field_coverage_pct" not in props
+
+    def test_absent_columns_produce_no_properties(self, tmp_path: Path) -> None:
+        import json
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+
+        item_path = next((tmp_path / "chips").glob("*/*/*.json"))
+        props = json.loads(item_path.read_text())["properties"]
+        assert "ftw:hcat_dominant_code" not in props
+        assert "ftw:split" not in props  # the default fixture has no split column

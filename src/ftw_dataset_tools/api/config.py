@@ -220,6 +220,8 @@ class ChipsConfig:
     # Alternate remote grid source (URL / S3 glob) overriding the Source Coop
     # default. Ignored when grid_file is set. Optional.
     grid_source: str | None = None
+    # Per-chip HCAT crop composition (skipped automatically when the fields lack hcat:code).
+    crop_stats: bool = True
 
 
 @dataclass
@@ -550,6 +552,9 @@ class DatasetConfig:
                 )
         if not self.stages.masks.mask_types:
             raise ConfigError("masks.mask_types must list at least one mask type.")
+
+        if not isinstance(self.stages.chips.crop_stats, bool):
+            raise ConfigError("stages.chips.crop_stats must be true or false")
 
         if self.metadata is not None:
             self.metadata.validate()

@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 import yaml
 from click.testing import CliRunner
 
-from ftw_dataset_tools.commands.run import run
+from ftw_dataset_tools.api.crop_stats import CropStatsResult
+from ftw_dataset_tools.api.field_stats import FieldStatsResult
+from ftw_dataset_tools.api.pipeline import PipelineContext
+from ftw_dataset_tools.commands.run import _print_summary, run
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -112,6 +116,68 @@ class TestRunDryRunRemote:
 
         assert result.exit_code == 0, result.output
         assert "https://x/lu.parquet" in result.output
+
+
+class TestPrintSummaryCropComposition:
+    def _base_ctx(self, tmp_path: Path) -> Mock:
+        ctx = Mock(spec=PipelineContext)
+        ctx.output_dir = tmp_path
+        ctx.chips_result = FieldStatsResult(
+            output_path=tmp_path / "chips.parquet",
+            total_cells=10,
+            cells_with_coverage=7,
+            average_coverage=50.0,
+            max_coverage=90.0,
+        )
+        ctx.splits_result = None
+        ctx.masks_results = {}
+        ctx.stac_result = None
+        ctx.selection_result = None
+        ctx.download_result = None
+        return ctx
+
+    def test_populated_crop_composition(self, tmp_path: Path, capsys) -> None:
+        ctx = self._base_ctx(tmp_path)
+        ctx.crop_stats_result = CropStatsResult(
+            chips_total=10, chips_with_crops=7, distinct_codes=3, skipped=False
+        )
+
+        _print_summary(ctx)
+
+        assert "Crop composition: 7/10 chips, 3 HCAT codes" in capsys.readouterr().out
+
+    def test_skipped_crop_composition(self, tmp_path: Path, capsys) -> None:
+        ctx = self._base_ctx(tmp_path)
+        ctx.crop_stats_result = CropStatsResult(
+            chips_total=10,
+            chips_with_crops=0,
+            distinct_codes=0,
+            skipped=True,
+            reason="fields carry no hcat:code column",
+        )
+
+        _print_summary(ctx)
+
+        out = capsys.readouterr().out
+        assert "Crop composition: skipped (fields carry no hcat:code column)" in out
+
+    def test_disabled_crop_composition(self, tmp_path: Path, capsys) -> None:
+        ctx = self._base_ctx(tmp_path)
+        ctx.crop_stats_result = None
+
+        _print_summary(ctx)
+
+        assert "Crop composition: disabled" in capsys.readouterr().out
+
+    def test_no_crop_line_when_chips_stage_did_not_run(self, tmp_path: Path, capsys) -> None:
+        """Resuming past chips says nothing about a composition it never touched."""
+        ctx = self._base_ctx(tmp_path)
+        ctx.chips_result = None
+        ctx.crop_stats_result = None
+
+        _print_summary(ctx)
+
+        assert "Crop composition" not in capsys.readouterr().out
 
 
 class TestRunSourceFetchError:

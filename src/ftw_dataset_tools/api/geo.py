@@ -66,7 +66,8 @@ def write_geoparquet(
         gdf.to_parquet(out_path)
     else:
         # Write from DuckDB query - COPY exports geometry as WKB
-        conn.execute(f"COPY ({query}) TO '{out_path}' (FORMAT PARQUET)")
+        escaped = str(out_path).replace("'", "''")
+        conn.execute(f"COPY ({query}) TO '{escaped}' (FORMAT PARQUET)")
 
     # Add bbox column using gpio fluent API if not already present
     # Use temp-file + atomic-rename pattern to prevent corruption on partial writes
