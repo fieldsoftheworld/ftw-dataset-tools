@@ -36,14 +36,15 @@ def _chips(tmp_path: Path, *, hcat: bool = True) -> Path:
     return path
 
 
-def _fields(tmp_path: Path) -> Path:
+def _fields(tmp_path: Path, *, geom_col: str = "geometry") -> Path:
     gdf = gpd.GeoDataFrame(
         {
             "id": [1, 2, 3],
             "hcat:code": [3301010101, 3302000000, 3301010101],
             "hcat:name_en": ["Winter wheat", "Pasture", "Winter wheat"],
+            geom_col: [box(0, 0, 2, 1), box(0, 1, 1, 2), box(1, 1, 2, 2)],
         },
-        geometry=[box(0, 0, 2, 1), box(0, 1, 1, 2), box(1, 1, 2, 2)],
+        geometry=geom_col,
         crs="EPSG:4326",
     )
     path = tmp_path / "fields.parquet"
@@ -94,6 +95,14 @@ class TestMeasurements:
         )
         assert [c for c, _, _ in by_count] == [3301010101, 3302000000, 3301160000]
         by_area = top_codes(_fields(tmp_path), "hcat:code", "hcat:name_en", weight="area")
+        assert [c for c, _, _ in by_area] == [3301010101, 3302000000]
+        assert by_area[0][1] == "Winter wheat"
+
+    def test_top_codes_by_area_detects_non_default_geometry_column(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.styles import top_codes
+
+        fields = _fields(tmp_path, geom_col="geom")
+        by_area = top_codes(fields, "hcat:code", "hcat:name_en", weight="area")
         assert [c for c, _, _ in by_area] == [3301010101, 3302000000]
         assert by_area[0][1] == "Winter wheat"
 

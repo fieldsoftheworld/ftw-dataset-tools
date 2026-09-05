@@ -25,13 +25,11 @@ from typing import TYPE_CHECKING
 
 import duckdb
 
-from ftw_dataset_tools.api.geo import ensure_spatial_loaded
+from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded
+from ftw_dataset_tools.api.tiles import CHIPS_TILES, FIELDS_TILES
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-CHIPS_LAYER = "chips"
-FIELDS_LAYER = "fields"
 
 SPLIT_ORDER = ("train", "val", "test")
 SPLIT_COLORS = {"train": "#1b9e77", "val": "#d95f02", "test": "#7570b3"}
@@ -208,7 +206,9 @@ def top_codes(
     """The most prominent HCAT codes in a file as ``(code, name, weight)``, largest first.
 
     ``weight`` is ``"count"`` (rows carrying the code) or ``"area"`` (summed
-    geometry area). Empty when the code column is absent.
+    geometry area, in the file's native units — degrees² for an EPSG:4326 file;
+    only meaningful for ranking codes within this one file, not for comparing
+    across files with different CRSs). Empty when the code column is absent.
     """
     parquet = Path(parquet)
     con = _connect()
@@ -217,7 +217,8 @@ def top_codes(
         if code_col not in columns:
             return []
         name_expr = f'MIN("{name_col}")' if name_col in columns else "CAST(NULL AS VARCHAR)"
-        weight_expr = "COUNT(*)" if weight == "count" else 'SUM(ST_Area("geometry"))'
+        geom_col = detect_geometry_column(parquet, con) or "geometry"
+        weight_expr = "COUNT(*)" if weight == "count" else f'SUM(ST_Area("{geom_col}"))'
         rows = con.execute(
             f'SELECT TRY_CAST("{code_col}" AS BIGINT) AS code, {name_expr} AS name_en, '
             f"{weight_expr} AS weight "
@@ -252,7 +253,7 @@ def _outline_layer(layer: str, layer_id: str, *, color: str = "rgba(60,60,60,0.5
 
 
 def split_style(
-    counts: dict[str, int], *, tiles_href: str, layer: str = CHIPS_LAYER
+    counts: dict[str, int], *, tiles_href: str, layer: str = CHIPS_TILES.layer
 ) -> tuple[str, dict, list[dict]]:
     """Chips coloured by their train / val / test assignment."""
     expr: list = ["match", ["get", "split"]]
@@ -288,7 +289,7 @@ def _coverage_labels(stops: list[float]) -> list[str]:
 
 
 def coverage_style(
-    stops: list[float], *, tiles_href: str, layer: str = CHIPS_LAYER
+    stops: list[float], *, tiles_href: str, layer: str = CHIPS_TILES.layer
 ) -> tuple[str, dict, list[dict]]:
     """Chips shaded light to dark by the share of their area covered by fields."""
     ramp = COVERAGE_RAMP[: len(stops) + 1]
@@ -373,7 +374,7 @@ def _crop_style(
 
 
 def dominant_crop_style(
-    rows: list[tuple[int, str | None, float]], *, tiles_href: str, layer: str = CHIPS_LAYER
+    rows: list[tuple[int, str | None, float]], *, tiles_href: str, layer: str = CHIPS_TILES.layer
 ) -> tuple[str, dict, list[dict]]:
     """Chips coloured by the crop covering the most of their field area."""
     return _crop_style(
@@ -393,7 +394,7 @@ def dominant_crop_style(
 
 
 def crops_style(
-    rows: list[tuple[int, str | None, float]], *, tiles_href: str, layer: str = FIELDS_LAYER
+    rows: list[tuple[int, str | None, float]], *, tiles_href: str, layer: str = FIELDS_TILES.layer
 ) -> tuple[str, dict, list[dict]]:
     """Fields coloured by their harmonized crop (EuroCrops HCAT code)."""
     return _crop_style(
@@ -413,7 +414,7 @@ def crops_style(
 
 
 def outline_style(
-    collection_id: str, *, tiles_href: str, layer: str = FIELDS_LAYER
+    collection_id: str, *, tiles_href: str, layer: str = FIELDS_TILES.layer
 ) -> tuple[str, dict, list[dict]]:
     """Every field in one per-collection colour, for reading the boundaries themselves."""
     idx = int(hashlib.md5(collection_id.encode()).hexdigest(), 16) % len(OUTLINE_PALETTE)
