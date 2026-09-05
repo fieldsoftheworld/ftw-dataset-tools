@@ -57,6 +57,25 @@ class TestMaskTypeRegistries:
 
         assert set(DEFAULT_MASK_TYPES) <= set(VALID_MASK_TYPES)
 
+    def test_derived_mask_types_agree_between_config_and_masks(self) -> None:
+        # config.py holds the string copy so validation need not import api.masks;
+        # a mismatch means config would enforce a dependency masks does not honour.
+        from ftw_dataset_tools.api.config import DERIVED_MASK_SOURCE, DERIVED_MASK_TYPES
+        from ftw_dataset_tools.api.masks import _DERIVED_MASK_TYPES, MaskType
+
+        assert {m.value for m in _DERIVED_MASK_TYPES} == set(DERIVED_MASK_TYPES)
+        assert MaskType.SEMANTIC_2_CLASS.value == DERIVED_MASK_SOURCE
+
+    def test_derived_mask_types_are_valid_types(self) -> None:
+        from ftw_dataset_tools.api.config import (
+            DERIVED_MASK_SOURCE,
+            DERIVED_MASK_TYPES,
+            VALID_MASK_TYPES,
+        )
+
+        assert set(DERIVED_MASK_TYPES) <= set(VALID_MASK_TYPES)
+        assert DERIVED_MASK_SOURCE in VALID_MASK_TYPES
+
     def test_every_mask_type_is_in_the_stac_asset_registry(self) -> None:
         from ftw_dataset_tools.api.pipeline import _MASK_TYPE_MAPPING
         from ftw_dataset_tools.api.stac import _MASK_TYPE_BY_ASSET_NAME

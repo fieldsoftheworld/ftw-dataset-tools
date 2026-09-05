@@ -100,14 +100,41 @@ class TestFromDict:
                 {"fields_file": "f.parquet", "stages": {"masks": {"mask_types": ["nope"]}}}
             )
 
-    def test_decode_mask_types_accepted(self) -> None:
+    def test_decode_mask_types_accepted_with_source(self) -> None:
+        mask_types = ["semantic_2_class", "decode_boundary", "decode_distance"]
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"masks": {"mask_types": mask_types}}}
+        )
+        assert config.stages.masks.mask_types == mask_types
+
+    @pytest.mark.parametrize(
+        "mask_types",
+        [
+            ["decode_boundary"],
+            ["decode_distance"],
+            ["decode_boundary", "decode_distance"],
+            # semantic_3_class is a different burn; it does not satisfy the dependency.
+            ["semantic_3_class", "decode_boundary"],
+        ],
+    )
+    def test_decode_without_source_raises(self, mask_types: list[str]) -> None:
+        with pytest.raises(ConfigError, match="derived from 'semantic_2_class'"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"masks": {"mask_types": mask_types}}}
+            )
+
+    def test_non_decode_mask_types_do_not_require_source(self) -> None:
         config = DatasetConfig.from_dict(
             {
                 "fields_file": "f.parquet",
-                "stages": {"masks": {"mask_types": ["decode_boundary", "decode_distance"]}},
+                "stages": {"masks": {"mask_types": ["instance", "semantic_3_class"]}},
             }
         )
-        assert config.stages.masks.mask_types == ["decode_boundary", "decode_distance"]
+        assert config.stages.masks.mask_types == ["instance", "semantic_3_class"]
+
+    def test_default_mask_types_satisfy_the_dependency(self) -> None:
+        """The default set must stay self-consistent, or every default run errors."""
+        DatasetConfig.from_dict({"fields_file": "f.parquet"}).validate()
 
     def test_root_must_be_mapping(self) -> None:
         with pytest.raises(ConfigError, match="mapping"):
@@ -163,6 +190,25 @@ class TestFromKwargs:
         # The DECODE layers are valid but opt-in, so they are not in the default set.
         assert "decode_boundary" not in config.stages.masks.mask_types
         assert "decode_distance" not in config.stages.masks.mask_types
+
+    def test_decode_without_source_raises(self) -> None:
+        """``create-dataset --mask-types decode_boundary`` must fail up front."""
+        with pytest.raises(ConfigError, match="derived from 'semantic_2_class'"):
+            DatasetConfig.from_kwargs(
+                fields_file="f.parquet",
+                output_dir=None,
+                field_dataset=None,
+                split_type="random-uniform",
+                split_percents=(80, 10, 10),
+                min_coverage=0.01,
+                resolution=10.0,
+                num_workers=None,
+                skip_reproject=False,
+                year=None,
+                mask_types=["decode_boundary"],
+                presence_only=False,
+                drop_border_chips=False,
+            )
 
 
 class TestProvenance:
