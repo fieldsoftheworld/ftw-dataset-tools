@@ -6,7 +6,7 @@ import sys
 
 import click
 
-from ftw_dataset_tools.api import assets, pipeline
+from ftw_dataset_tools.api import assets, pipeline, source
 from ftw_dataset_tools.api import config as config_module
 
 
@@ -169,6 +169,7 @@ def run_cmd(
         ValueError,
         pipeline.StageInputError,
         assets.MaskReadError,
+        source.SourceFetchError,
     ) as err:
         click.echo(click.style(f"\nError: {err}", fg="red"))
         raise SystemExit(1) from err

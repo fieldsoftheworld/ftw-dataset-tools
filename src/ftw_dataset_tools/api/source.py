@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -12,8 +14,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from ftw_dataset_tools import __version__
+
 _CHUNK = 1 << 20
 _TIMEOUT_SECONDS = 60
+
+
+class SourceFetchError(OSError):
+    """Raised when a remote source could not be downloaded."""
 
 
 def is_url(value: str) -> bool:
@@ -44,7 +52,6 @@ class SourceRecord:
             "sha256": self.sha256,
             "size": self.size,
             "fetched_at": self.fetched_at,
-            "local_path": str(self.local_path),
         }
 
 
@@ -89,16 +96,33 @@ def fetch_source(
         sha256, size = _hash_file(target)
         return SourceRecord(href=url, local_path=target, sha256=sha256, size=size, fetched_at=None)
 
-    partial = target.with_suffix(target.suffix + ".part")
+    partial = target.with_name(f"{target.name}.{os.getpid()}.part")
     digest = hashlib.sha256()
     size = 0
+    headers = {"User-Agent": f"ftw-dataset-tools/{__version__}"}
+    request = urllib.request.Request(url, headers=headers)
     try:
-        with opener(url, timeout=_TIMEOUT_SECONDS) as response, partial.open("wb") as out:
+        with opener(request, timeout=_TIMEOUT_SECONDS) as response, partial.open("wb") as out:
             for chunk in iter(lambda: response.read(_CHUNK), b""):
                 digest.update(chunk)
                 size += len(chunk)
                 out.write(chunk)
+            response_headers = getattr(response, "headers", None)
+            expected = (
+                response_headers.get("Content-Length") if response_headers is not None else None
+            )
+        if expected is not None and int(expected) != size:
+            raise SourceFetchError(f"{url}: expected {expected} bytes, got {size}")
         partial.replace(target)
+    except SourceFetchError:
+        partial.unlink(missing_ok=True)
+        raise
+    except urllib.error.HTTPError as err:
+        partial.unlink(missing_ok=True)
+        raise SourceFetchError(f"could not fetch {url}: HTTP {err.code}: {err.reason}") from err
+    except OSError as err:
+        partial.unlink(missing_ok=True)
+        raise SourceFetchError(f"could not fetch {url}: {err}") from err
     except BaseException:
         partial.unlink(missing_ok=True)
         raise
