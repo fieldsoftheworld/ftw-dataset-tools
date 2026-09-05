@@ -340,3 +340,142 @@ class TestRegisterDocsAssets:
         coll = json.loads(coll_path.read_text())
         rels = {link["rel"] for link in coll["links"]}
         assert rels == {"agents"}
+
+
+def _stats(**overrides) -> dict:
+    """A stats dict with every optional measurement empty, for renderer-level tests."""
+    stats = {
+        "chips_total": 2,
+        "fields_total": 0,
+        "split_counts": {},
+        "coverage_quantiles": {},
+        "top_crops": [],
+        "imagery": None,
+        "mask_types": [],
+        "chip_columns": [],
+        "item_properties": [],
+    }
+    stats.update(overrides)
+    return stats
+
+
+class TestConditionalProse:
+    """ "Suggested uses" and "Limitations" only claim what the data supports."""
+
+    def test_imagery_limitation_only_when_imagery_present(self) -> None:
+        from ftw_dataset_tools.api.docs import render_readme
+
+        collection = {"title": "T", "description": "d", "links": []}
+        without = render_readme(collection, _stats(), [], {})
+        assert "crop calendar" not in without
+        assert "imagery" not in without.lower()
+
+        imagery = {
+            "chips_with_imagery": 2,
+            "planting": {
+                "min": "2024-04-01T10:00:00Z",
+                "max": "2024-04-20T10:00:00Z",
+                "cloud_cover_avg": 3.5,
+                "cloud_cover_max": 7.0,
+            },
+            "harvest": {"min": "2024-08-01T10:00:00Z", "max": "2024-08-20T10:00:00Z"},
+        }
+        with_imagery = render_readme(collection, _stats(imagery=imagery), [], {})
+        assert "2 chips have Sentinel-2 scenes selected" in with_imagery
+        assert "2024-04-01T10:00:00Z and 2024-04-20T10:00:00Z" in with_imagery
+        assert "3.5% cloud cover" in with_imagery
+        assert "Harvest imagery was acquired between 2024-08-01T10:00:00Z" in with_imagery
+        assert "crop calendar" in with_imagery
+
+    def test_crop_suggestion_only_when_crops_measured(self) -> None:
+        from ftw_dataset_tools.api.docs import render_readme
+
+        collection = {"title": "T", "description": "d", "links": []}
+        assert "HCAT" not in render_readme(collection, _stats(), [], {})
+        with_crops = render_readme(
+            collection, _stats(top_crops=[(3301010101, "Winter wheat", 1.0)]), [], {}
+        )
+        assert "harmonized HCAT codes" in with_crops
+
+    def test_grid_suggestion_only_when_chips_carry_an_id(self) -> None:
+        from ftw_dataset_tools.api.docs import render_readme
+
+        collection = {"title": "T", "description": "d", "links": []}
+        assert "grid" not in render_readme(collection, _stats(), [], {})
+        with_id = render_readme(collection, _stats(chip_columns=["id", "geometry"]), [], {})
+        assert "grid" in with_id
+
+    def test_split_claim_only_when_splits_measured(self) -> None:
+        from ftw_dataset_tools.api.docs import render_readme
+
+        collection = {"title": "T", "description": "d", "links": []}
+        assert "split" not in render_readme(collection, _stats(), [], {})
+        with_splits = render_readme(collection, _stats(split_counts={"train": 2}), [], {})
+        assert "pre-assigned" in with_splits
+
+    def test_minimal_collection_readme_never_mentions_imagery(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import write_docs
+
+        coll_path, chips, fields = _minimal_collection_dir(tmp_path)
+        write_docs(tmp_path, coll_path, chips, fields, [], {})
+
+        readme = (tmp_path / "README.md").read_text()
+        assert "imagery" not in readme.lower()
+        assert "Sentinel" not in readme
+        assert "HCAT" not in readme
+
+
+class TestStylesSection:
+    def test_lists_style_titles_and_marks_the_default(self) -> None:
+        from ftw_dataset_tools.api.docs import render_readme
+        from ftw_dataset_tools.api.styles import StyleResult
+
+        styles = [
+            StyleResult("split", Path("styles/split.json"), "Chips by split", [], True),
+            StyleResult("outline", Path("styles/outline.json"), "Field outlines", [], False),
+        ]
+        readme = render_readme({"title": "T", "links": []}, _stats(), styles, {})
+
+        assert "## Styles" in readme
+        assert "- **Chips by split** (the default view):" in readme
+        assert "- **Field outlines**:" in readme
+        assert "train / val / test" in readme
+        assert "for reading the boundaries themselves" in readme
+
+
+class TestImageryStats:
+    def test_reads_season_child_items_from_disk(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import imagery_stats
+
+        chip_dir = tmp_path / "chips" / "33UXP" / "ftw-33UXP0001"
+        chip_dir.mkdir(parents=True)
+        (chip_dir / "ftw-33UXP0001.json").write_text(json.dumps({"id": "ftw-33UXP0001"}))
+        for season, when, cloud in (
+            ("planting", "2024-04-05T10:00:00Z", 2.0),
+            ("harvest", "2024-08-11T10:00:00Z", 8.0),
+        ):
+            (chip_dir / f"ftw-33UXP0001_{season}_s2.json").write_text(
+                json.dumps(
+                    {
+                        "id": f"ftw-33UXP0001_{season}_s2",
+                        "properties": {
+                            "ftw:season": season,
+                            "datetime": when,
+                            "eo:cloud_cover": cloud,
+                        },
+                    }
+                )
+            )
+
+        stats = imagery_stats(tmp_path)
+
+        assert stats is not None
+        assert stats["chips_with_imagery"] == 1
+        assert stats["planting"]["min"] == "2024-04-05T10:00:00Z"
+        assert stats["planting"]["cloud_cover_max"] == 2.0
+        assert stats["harvest"]["max"] == "2024-08-11T10:00:00Z"
+
+    def test_returns_none_without_child_items(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import imagery_stats
+
+        assert imagery_stats(tmp_path) is None
