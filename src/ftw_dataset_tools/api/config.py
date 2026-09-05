@@ -581,6 +581,9 @@ class DatasetConfig:
                 f"mask_types: [{', '.join(fixed)}]"
             )
 
+        if not isinstance(self.stages.chips.crop_stats, bool):
+            raise ConfigError("stages.chips.crop_stats must be true or false")
+
         if self.metadata is not None:
             self.metadata.validate()
 
