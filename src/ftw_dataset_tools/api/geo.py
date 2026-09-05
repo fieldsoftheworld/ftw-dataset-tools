@@ -19,6 +19,23 @@ if TYPE_CHECKING:
     import pyproj
 
 
+SOURCE_COOP_S3_REGION = "us-west-2"
+
+
+def configure_source_coop_s3(conn: duckdb.DuckDBPyConnection) -> None:
+    """Prepare a connection to read the Source Cooperative buckets over S3.
+
+    Loads httpfs, sets the region, and forces path-style URLs: the bucket
+    ``us-west-2.opendata.source.coop`` has dots in its name, so the
+    virtual-hosted URL DuckDB 1.5+ builds by default does not match the
+    wildcard TLS certificate and every request fails with a peer-certificate
+    error.
+    """
+    conn.execute("INSTALL httpfs; LOAD httpfs;")
+    conn.execute(f"SET s3_region = '{SOURCE_COOP_S3_REGION}';")
+    conn.execute("SET s3_url_style = 'path';")
+
+
 def ensure_spatial_loaded(conn: duckdb.DuckDBPyConnection) -> None:
     """
     Ensure the DuckDB spatial extension is installed and loaded.
