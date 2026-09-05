@@ -117,24 +117,23 @@ def detect_bbox_column(
     return None
 
 
-def _build_coverage_query(
+def _build_coverage_batch_query(
     grid_geom_col: str,
     fields_geom_col: str,
     grid_bbox_col: str | None,
     fields_bbox_col: str | None,
-    coverage_col: str,
+    rowid_lo: int,
+    rowid_hi: int,
 ) -> str:
-    """Build the coverage calculation SQL query.
+    """Per-cell union of field intersections for grid rows in [rowid_lo, rowid_hi].
 
-    Uses ST_MakeValid to repair any invalid geometries before spatial operations,
-    preventing TopologyException errors from self-intersecting or otherwise
-    invalid input geometries.
+    The intersections and their union are materialised for one window of grid
+    cells at a time. On a country-sized input the single-statement form of this
+    query holds every intersection geometry for every cell at once and runs the
+    machine out of memory (Slovenia: 38k cells x 809k fields on 18 GB).
     """
-    # Use ST_MakeValid to handle invalid geometries
     valid_grid_geom = f'ST_MakeValid(g."{grid_geom_col}")'
     valid_fields_geom = f'ST_MakeValid(f."{fields_geom_col}")'
-
-    # Build JOIN condition
     if grid_bbox_col and fields_bbox_col:
         join_condition = f"""
             g."{grid_bbox_col}".xmin <= f."{fields_bbox_col}".xmax
@@ -145,31 +144,64 @@ def _build_coverage_query(
         """
     else:
         join_condition = f"ST_Intersects({valid_grid_geom}, {valid_fields_geom})"
-
     return f"""
-    WITH intersections AS (
+    SELECT grid_rowid, ST_Union_Agg(intersect_geom) AS total_coverage
+    FROM (
         SELECT
-            g.rowid as grid_rowid,
-            ST_Intersection({valid_grid_geom}, {valid_fields_geom}) as intersect_geom
+            g.rowid AS grid_rowid,
+            ST_Intersection({valid_grid_geom}, {valid_fields_geom}) AS intersect_geom
         FROM grid_table g
         JOIN fields_table f ON {join_condition}
-    ),
-    coverage AS (
-        SELECT
-            grid_rowid,
-            ST_Union_Agg(intersect_geom) as total_coverage
-        FROM intersections
-        GROUP BY grid_rowid
+        WHERE g.rowid BETWEEN {rowid_lo} AND {rowid_hi}
     )
+    GROUP BY grid_rowid
+    """
+
+
+def _build_result_query(grid_geom_col: str, coverage_col: str) -> str:
+    """Join the per-cell coverage table back onto every grid cell."""
+    valid_grid_geom = f'ST_MakeValid(g."{grid_geom_col}")'
+    return f"""
     SELECT
         g.*,
         COALESCE(
             ROUND(100.0 * ST_Area(c.total_coverage) / ST_Area({valid_grid_geom}), 2),
             0.0
-        ) as "{coverage_col}"
+        ) AS "{coverage_col}"
     FROM grid_table g
     LEFT JOIN coverage c ON g.rowid = c.grid_rowid
     """
+
+
+def _compute_coverage_in_batches(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    grid_geom_col: str,
+    fields_geom_col: str,
+    grid_bbox_col: str | None,
+    fields_bbox_col: str | None,
+    coverage_col: str,
+    batch_size: int,
+    log: Callable[[str], None],
+) -> None:
+    """Fill ``result`` with every grid cell and its coverage, ``batch_size`` cells at a time."""
+    lo, hi = conn.execute("SELECT min(rowid), max(rowid) FROM grid_table").fetchone()
+    conn.execute("CREATE TABLE coverage (grid_rowid BIGINT, total_coverage GEOMETRY)")
+    if lo is not None:
+        total = hi - lo + 1
+        done = 0
+        for start in range(lo, hi + 1, batch_size):
+            end = min(start + batch_size - 1, hi)
+            conn.execute(
+                "INSERT INTO coverage "
+                + _build_coverage_batch_query(
+                    grid_geom_col, fields_geom_col, grid_bbox_col, fields_bbox_col, start, end
+                )
+            )
+            done = min(done + batch_size, total)
+            log(f"  Coverage: {done:,}/{total:,} grid cells")
+    conn.execute(f"CREATE TABLE result AS {_build_result_query(grid_geom_col, coverage_col)}")
+    conn.execute("DROP TABLE coverage")
 
 
 def add_field_stats(
@@ -186,6 +218,7 @@ def add_field_stats(
     drop_border_chips: bool = False,
     grid_source: str = DEFAULT_FTW_GRID_SOURCE,
     on_progress: Callable[[str], None] | None = None,
+    batch_size: int = 2000,
 ) -> FieldStatsResult:
     """
     Calculate field coverage percentage for each grid cell.
@@ -216,6 +249,8 @@ def add_field_stats(
         grid_source: URL/path to fetch grid from when grid_file is None
             (default: FTW grid on Source Coop)
         on_progress: Optional callback for progress messages
+        batch_size: Grid cells per coverage batch; the per-cell intersection
+            union is materialised one batch at a time to bound memory.
 
     Returns:
         FieldStatsResult with statistics about the calculation
@@ -450,15 +485,19 @@ def add_field_stats(
 
         # Build and execute coverage query
         log("Calculating coverage...")
-        query = _build_coverage_query(
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+        conn.execute("SET preserve_insertion_order = false")
+        _compute_coverage_in_batches(
+            conn,
             grid_geom_col=grid_geom_col,
             fields_geom_col=fields_geom_col,
             grid_bbox_col=detected_grid_bbox,
             fields_bbox_col=detected_fields_bbox,
             coverage_col=coverage_col,
+            batch_size=batch_size,
+            log=log,
         )
-
-        conn.execute(f"CREATE TABLE result AS {query}")
 
         # Filter by min_coverage if specified
         if min_coverage is not None:
