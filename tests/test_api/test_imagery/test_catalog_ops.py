@@ -118,3 +118,42 @@ class TestClearChipSelections:
         # Sibling chip's files are untouched.
         assert (other_chip_dir / "chip2_planting_s2.json").exists()
         assert (other_chip_dir / "chip2_planting_image_s2.tif").exists()
+
+
+class TestClearChipSelectionsWithoutAResolvableRoot:
+    """Clearing must work in a staging tree whose `rel: root` target is missing."""
+
+    def test_clears_and_rewrites_the_item(self, tmp_path: Path) -> None:
+        import json
+        from datetime import UTC, datetime
+
+        import pystac
+
+        from ftw_dataset_tools.api.imagery.catalog_ops import clear_chip_selections
+
+        chip_dir = tmp_path / "chips" / "33UXP" / "chip1"
+        chip_dir.mkdir(parents=True)
+        parent_path = chip_dir / "chip1.json"
+
+        parent = pystac.Item(
+            id="chip1",
+            geometry={"type": "Point", "coordinates": [0.5, 0.5]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime(2024, 1, 1, tzinfo=UTC),
+            properties={"ftw:calendar_year": 2024},
+        )
+        parent.add_link(pystac.Link(rel="root", target="../../../../catalog.json"))
+        parent.add_link(pystac.Link(rel="ftw:planting", target="./chip1_planting_s2.json"))
+        parent_path.write_text(
+            json.dumps(parent.to_dict(include_self_link=False, transform_hrefs=False), indent=2)
+        )
+        (chip_dir / "chip1_planting_s2.json").write_text("{}")
+
+        staged = pystac.Item.from_file(str(parent_path))
+        result = clear_chip_selections(tmp_path, staged)
+
+        assert result.stac_items_deleted == 1
+        written = json.loads(parent_path.read_text())
+        rels = {link["rel"]: link["href"] for link in written["links"]}
+        assert rels["root"] == "../../../../catalog.json"
+        assert "ftw:planting" not in rels

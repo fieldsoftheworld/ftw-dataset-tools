@@ -384,3 +384,68 @@ class TestPrintSummaryDocs:
         _print_summary(self._ctx(tmp_path, None))
 
         assert "Docs:" not in capsys.readouterr().out
+
+
+class TestPrintSummaryImagery:
+    """The imagery stages report their failures, not just their successes."""
+
+    def _ctx(self, tmp_path: Path, selection=None, download=None) -> Mock:
+        ctx = Mock(spec=PipelineContext)
+        ctx.output_dir = tmp_path
+        ctx.chips_result = None
+        ctx.crop_stats_result = None
+        ctx.splits_result = None
+        ctx.masks_results = {}
+        ctx.stac_result = None
+        ctx.selection_result = selection
+        ctx.download_result = download
+        ctx.docs_result = None
+        return ctx
+
+    def _selection(self, **kwargs):
+        from ftw_dataset_tools.api.imagery.selection_workflow import SelectionWorkflowResult
+
+        return SelectionWorkflowResult(**kwargs)
+
+    def _download(self, **kwargs):
+        from ftw_dataset_tools.api.imagery.download_workflow import DownloadWorkflowResult
+
+        return DownloadWorkflowResult(**kwargs)
+
+    def test_counts_every_outcome(self, tmp_path: Path, capsys) -> None:
+        result = self._selection(successful=770, skipped=4, failed=1)
+
+        _print_summary(self._ctx(tmp_path, selection=result))
+
+        assert "Imagery selection: 770 ok, 4 skipped, 1 failed" in capsys.readouterr().out
+
+    def test_names_the_first_error(self, tmp_path: Path, capsys) -> None:
+        result = self._selection(
+            failed=775,
+            failed_details=[
+                {"chip": "ftw-31UFR9620_2025", "error": "does not resolve to a STAC object"},
+                {"chip": "other", "error": "something else"},
+            ],
+        )
+
+        _print_summary(self._ctx(tmp_path, selection=result))
+
+        out = capsys.readouterr().out
+        assert "Imagery selection: 0 ok, 0 skipped, 775 failed" in out
+        assert "(first error: does not resolve to a STAC object)" in out
+        assert "something else" not in out
+
+    def test_download_gets_the_same_line(self, tmp_path: Path, capsys) -> None:
+        result = self._download(
+            successful=2, failed=1, failed_details=[{"item": "chip_planting_s2", "error": "404"}]
+        )
+
+        _print_summary(self._ctx(tmp_path, download=result))
+
+        out = capsys.readouterr().out
+        assert "Imagery download: 2 ok, 0 skipped, 1 failed (first error: 404)" in out
+
+    def test_no_lines_when_the_stages_did_not_run(self, tmp_path: Path, capsys) -> None:
+        _print_summary(self._ctx(tmp_path))
+
+        assert "Imagery" not in capsys.readouterr().out

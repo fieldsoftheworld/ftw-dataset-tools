@@ -112,6 +112,19 @@ def docs_summary_line(result: DocsStageResult, pmtiles: str | bool) -> str:
     return line
 
 
+def imagery_summary_line(label: str, result: Any) -> str:
+    """One line counting an imagery stage's successes, skips and failures.
+
+    Failures used to be invisible: selection swallows per-chip exceptions, so a
+    run in which every chip failed still printed only "Imagery selected: 0".
+    """
+    line = f"  {label}: {result.successful} ok, {result.skipped} skipped, {result.failed} failed"
+    if result.failed_details:
+        first = result.failed_details[0].get("error", "unknown error")
+        line += f" (first error: {first})"
+    return line
+
+
 @dataclass
 class PipelineContext:
     """Mutable state threaded through pipeline stages."""

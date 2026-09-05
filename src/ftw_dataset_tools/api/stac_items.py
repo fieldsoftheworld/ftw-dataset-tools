@@ -5,10 +5,13 @@ Provides safe saving and manipulation of STAC items with proper error handling.
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path  # noqa: TC003 - used at runtime for path operations
 from typing import Literal
+from urllib.parse import unquote, urlparse
 
 import pystac
 
@@ -17,6 +20,63 @@ from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
 
 class STACSaveError(Exception):
     """Error saving STAC item."""
+
+
+def _relativize(href: str, base: Path) -> str:
+    """Rewrite an absolute local `href` as a path relative to `base`.
+
+    Remote hrefs (``http(s)://``, ``s3://``, ...) and already-relative hrefs are
+    returned unchanged.
+    """
+    if href.startswith("file://"):
+        local = unquote(urlparse(href).path)
+    elif href.startswith("/"):
+        local = href
+    else:
+        return href
+
+    relative = os.path.relpath(local, base)
+    return relative if relative.startswith("../") else f"./{relative}"
+
+
+def write_item(item: pystac.Item, path: Path) -> Path:
+    """Write `item` to `path` without resolving its root link.
+
+    ``Item.save_object`` asks for ``get_root()`` (to pick up the root's ``StacIO``),
+    so it raises ``pystac.STACError`` whenever the ``rel: root`` link points at a
+    file that is not there -- which is exactly the case in a staging tree whose
+    items already carry the *published* root href. Every chip write then fails.
+
+    Checked against pystac 1.14.1: ``to_dict(transform_hrefs=True)`` does *not*
+    always fail, because ``Link.get_href`` only consults ``owner.get_root()`` for
+    hrefs that are already absolute -- but it does raise the same ``STACError`` as
+    soon as one link carries an absolute href (a link built from an in-memory
+    target object, for instance). So this serializes with ``transform_hrefs=False``
+    and relativizes absolute local link and asset hrefs itself.
+
+    Args:
+        item: The item to serialize
+        path: Destination JSON path; hrefs are made relative to its parent
+
+    Returns:
+        The path written.
+    """
+    document = item.to_dict(include_self_link=False, transform_hrefs=False)
+    base = path.parent
+
+    for link in document.get("links", []):
+        href = link.get("href")
+        if isinstance(href, str):
+            link["href"] = _relativize(href, base)
+
+    for asset in document.get("assets", {}).values():
+        href = asset.get("href")
+        if isinstance(href, str):
+            asset["href"] = _relativize(href, base)
+
+    base.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document, indent=2) + "\n")
+    return path
 
 
 @dataclass
@@ -45,7 +105,7 @@ def save_child_item(ctx: STACSaveContext) -> None:
     json_path = ctx.item_dir / f"{ctx.item.id}.json"
 
     try:
-        ctx.item.save_object(str(json_path))
+        write_item(ctx.item, json_path)
     except Exception as e:
         # Cleanup: delete the downloaded TIF
         if tif_path.exists():
@@ -119,7 +179,7 @@ def update_parent_item(
             if thumbnail_path.exists():
                 add_file_info(parent_item.assets["thumbnail"], thumbnail_path)
 
-        parent_item.save_object(str(parent_path))
+        write_item(parent_item, parent_path)
     except Exception as e:
         parent_item.assets.pop(asset_key, None)
         if added_thumbnail:
