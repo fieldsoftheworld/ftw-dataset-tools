@@ -159,7 +159,8 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     help=(
         "Comma-separated list of mask types to generate. One or more of: "
         f"{', '.join(VALID_MASK_TYPES)}. The decode_* layers are derived from "
-        "the 2-class mask and are off by default."
+        "the 2-class mask and are off by default; requesting them also requires "
+        "semantic_2_class, which is the DECODE field-extent target."
     ),
 )
 @click.option(

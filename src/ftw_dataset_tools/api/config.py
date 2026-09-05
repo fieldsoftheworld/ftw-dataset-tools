@@ -40,6 +40,13 @@ VALID_MASK_TYPES = (
 # increases dataset size.
 DEFAULT_MASK_TYPES = ("instance", "semantic_2_class", "semantic_3_class")
 
+# Mask types derived from another mask rather than burned in from vectors, and
+# the type they derive from. Kept as strings here so config validation stays
+# independent of api.masks; the enum-level copy lives there as
+# ``masks._DERIVED_MASK_TYPES`` and a drift test asserts the two agree.
+DERIVED_MASK_TYPES = ("decode_boundary", "decode_distance")
+DERIVED_MASK_SOURCE = "semantic_2_class"
+
 # Current config schema version. Bump when the schema changes incompatibly.
 CONFIG_SCHEMA_VERSION = 1
 
@@ -400,6 +407,19 @@ class DatasetConfig:
                 )
         if not self.stages.masks.mask_types:
             raise ConfigError("masks.mask_types must list at least one mask type.")
+
+        # The DECODE layers are derived from the 2-class mask, which is also the
+        # field-extent target of the DECODE multi-task set (see api/decode.py).
+        # Requesting them without it yields an incomplete label set, so require it
+        # rather than silently writing a mask the caller did not ask for.
+        requested = set(self.stages.masks.mask_types)
+        derived = requested.intersection(DERIVED_MASK_TYPES)
+        if derived and DERIVED_MASK_SOURCE not in requested:
+            raise ConfigError(
+                f"Mask type(s) {', '.join(sorted(derived))} are derived from "
+                f"'{DERIVED_MASK_SOURCE}', which is also the DECODE field-extent "
+                f"target. Add '{DERIVED_MASK_SOURCE}' to masks.mask_types."
+            )
 
     # ---- provenance -----------------------------------------------------
 

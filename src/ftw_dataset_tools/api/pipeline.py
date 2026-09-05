@@ -455,25 +455,31 @@ def stage_masks(ctx: PipelineContext) -> None:
     ]
     background_class_value = 3 if masks_cfg.presence_only else 0
 
-    for mask_type, subdir_name in requested:
-        ctx.log(f"Creating {mask_type.value} masks...")
-        mask_result = masks.create_masks(
-            chips_file=str(ctx.chips_path),
-            boundaries_file=str(ctx.field_polygons_path),
-            boundary_lines_file=str(ctx.boundary_lines_path),
-            output_dir=str(ctx.chips_base_dir),
-            field_dataset=ctx.field_dataset,
-            mask_type=mask_type,
-            min_coverage=ctx.config.stages.chips.min_coverage,
-            resolution=masks_cfg.resolution,
-            num_workers=masks_cfg.workers,
-            chip_dirs=chip_dirs,
-            year=ctx.effective_year,
-            background_class_value=background_class_value,
-            on_progress=ctx.on_mask_progress,
-            on_start=ctx.on_mask_start,
-        )
-        ctx.masks_results[subdir_name] = mask_result
+    requested_types = [mask_type for mask_type, _ in requested]
+    subdir_by_type = dict(requested)
+
+    # Types sharing a rasterization are burned once, so this is a single pass over
+    # the chips rather than one pass per type.
+    ctx.log(f"Creating {', '.join(m.value for m in requested_types)} masks...")
+    mask_results = masks.create_masks(
+        chips_file=str(ctx.chips_path),
+        boundaries_file=str(ctx.field_polygons_path),
+        boundary_lines_file=str(ctx.boundary_lines_path),
+        output_dir=str(ctx.chips_base_dir),
+        field_dataset=ctx.field_dataset,
+        mask_types=requested_types,
+        min_coverage=ctx.config.stages.chips.min_coverage,
+        resolution=masks_cfg.resolution,
+        num_workers=masks_cfg.workers,
+        chip_dirs=chip_dirs,
+        year=ctx.effective_year,
+        background_class_value=background_class_value,
+        on_progress=ctx.on_mask_progress,
+        on_start=ctx.on_mask_start,
+    )
+
+    for mask_type, mask_result in mask_results.items():
+        ctx.masks_results[subdir_by_type[mask_type]] = mask_result
         ctx.log(f"Created {mask_result.total_created} {mask_type.value} masks")
 
 
