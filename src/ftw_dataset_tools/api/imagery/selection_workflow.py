@@ -200,4 +200,8 @@ def select_imagery_for_catalog(
                 result.failed_details.append({"chip": item.id, "error": str(e)})
                 progress.mark_failed(str(e))
 
+        # Per-chip exceptions are swallowed above to keep the run going; without
+        # this the operator only ever sees a count.
+        progress.report_failures(result.failed_details)
+
     return result

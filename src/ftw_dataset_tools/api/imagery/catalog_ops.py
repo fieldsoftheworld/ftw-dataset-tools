@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pystac
 
+from ftw_dataset_tools.api.stac_items import write_item
+
 __all__ = [
     "IMAGERY_ASSET_KEYS",
     "IMAGERY_LINK_RELS",
@@ -316,6 +318,9 @@ def clear_chip_selections(item: pystac.Item) -> ClearResult:
     item.properties["datetime"] = restored_dt.isoformat()
 
     # Always save since we've modified the item (removed properties, restored datetime)
-    item.save_object(dest_href=str(chip_dir / f"{item.id}.json"))
+    parent_path = chip_dir / f"{item.id}.json"
+    if item.get_self_href() is None:
+        item.set_self_href(str(parent_path))
+    write_item(item, parent_path)
 
     return result
