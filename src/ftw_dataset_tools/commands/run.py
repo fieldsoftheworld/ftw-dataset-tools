@@ -188,6 +188,16 @@ def _print_summary(ctx: pipeline.PipelineContext) -> None:
     if ctx.masks_results:
         total = sum(r.total_created for r in ctx.masks_results.values())
         click.echo(f"  Masks created: {total:,}")
+    if ctx.crop_stats_result is None:
+        click.echo("  Crop composition: disabled")
+    elif ctx.crop_stats_result.skipped:
+        click.echo(f"  Crop composition: skipped ({ctx.crop_stats_result.reason})")
+    else:
+        result = ctx.crop_stats_result
+        click.echo(
+            f"  Crop composition: {result.chips_with_crops}/{result.chips_total} chips, "
+            f"{result.distinct_codes} HCAT codes"
+        )
     if ctx.stac_result:
         click.echo(f"  STAC items: {ctx.stac_result.total_items:,}")
     if ctx.selection_result is not None:

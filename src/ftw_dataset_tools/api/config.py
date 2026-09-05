@@ -553,6 +553,9 @@ class DatasetConfig:
         if not self.stages.masks.mask_types:
             raise ConfigError("masks.mask_types must list at least one mask type.")
 
+        if not isinstance(self.stages.chips.crop_stats, bool):
+            raise ConfigError("stages.chips.crop_stats must be true or false")
+
         if self.metadata is not None:
             self.metadata.validate()
 

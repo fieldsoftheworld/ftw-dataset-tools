@@ -141,6 +141,12 @@ class TestFromDict:
 
         assert config.stages.chips.crop_stats is False
 
+    def test_crop_stats_non_bool_raises(self) -> None:
+        with pytest.raises(ConfigError, match=r"stages\.chips\.crop_stats must be true or false"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"chips": {"crop_stats": "yes"}}}
+            )
+
 
 class TestFromKwargs:
     """Tests for building a config from create_dataset kwargs."""
