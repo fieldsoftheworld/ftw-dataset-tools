@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import duckdb
 
-from ftw_dataset_tools.api.geo import detect_crs
+from ftw_dataset_tools.api.geo import configure_source_coop_s3, detect_crs
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -117,10 +117,7 @@ def get_grid(
     # Create DuckDB connection with required extensions
     conn = duckdb.connect(":memory:")
     conn.execute("INSTALL spatial; LOAD spatial;")
-    conn.execute("INSTALL httpfs; LOAD httpfs;")
-
-    # Set S3 region for Source Coop
-    conn.execute("SET s3_region = 'us-west-2';")
+    configure_source_coop_s3(conn)
 
     # Load input file
     log("Loading input file...")
