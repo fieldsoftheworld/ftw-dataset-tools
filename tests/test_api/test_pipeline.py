@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import geopandas as gpd
 import pytest
@@ -12,9 +12,6 @@ from shapely.geometry import box
 from ftw_dataset_tools.api import pipeline
 from ftw_dataset_tools.api.config import ClassFilter, ClassFilterError, DatasetConfig
 from ftw_dataset_tools.api.pipeline import StageInputError
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _config(fields_file: Path, output_dir: Path, **kwargs: object) -> DatasetConfig:
@@ -586,3 +583,77 @@ class TestSourceResolution:
         assert provenance["source"]["href"] == str(sample_geoparquet_4326.resolve())
         assert provenance["source"]["fetched_at"] is None
         assert len(provenance["source"]["sha256"]) == 64
+
+
+class TestChipsStageCropStats:
+    def _ctx(self, tmp_path: Path, monkeypatch, *, crop_stats: bool):
+        from ftw_dataset_tools.api import field_stats, pipeline
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        fields = tmp_path / "fields.parquet"
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(
+            fields
+        )
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(fields),
+                "output_dir": str(tmp_path / "out"),
+                "year": 2024,
+                "stages": {"chips": {"crop_stats": crop_stats}},
+            }
+        )
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir()
+        fields_copy = ctx.field_polygons_path
+        gpd.read_parquet(fields).to_parquet(fields_copy)
+
+        def fake_field_stats(**kwargs):
+            gpd.GeoDataFrame(
+                {"id": ["ftw-33UXP0001"], "field_coverage_pct": [50.0]},
+                geometry=[box(0, 0, 1, 1)],
+                crs="EPSG:4326",
+            ).to_parquet(kwargs["output_file"])
+            return field_stats.FieldStatsResult(
+                output_path=Path(kwargs["output_file"]),
+                total_cells=1,
+                cells_with_coverage=1,
+                average_coverage=50.0,
+                max_coverage=50.0,
+            )
+
+        monkeypatch.setattr(field_stats, "add_field_stats", fake_field_stats)
+        return pipeline, ctx
+
+    def test_crop_stats_called_after_coverage(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import crop_stats
+
+        pipeline, ctx = self._ctx(tmp_path, monkeypatch, crop_stats=True)
+        calls: list[tuple] = []
+
+        def fake_add_crop_stats(chips, fields, **_kwargs):
+            calls.append((Path(chips), Path(fields)))
+            return crop_stats.CropStatsResult(1, 0, 0, True, "x")
+
+        monkeypatch.setattr(crop_stats, "add_crop_stats", fake_add_crop_stats)
+
+        pipeline.stage_chips(ctx)
+
+        assert calls == [(ctx.chips_path, ctx.field_polygons_path)]
+        assert ctx.crop_stats_result is not None and ctx.crop_stats_result.skipped is True
+
+    def test_crop_stats_disabled(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import crop_stats
+
+        pipeline, ctx = self._ctx(tmp_path, monkeypatch, crop_stats=False)
+
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError("called")
+
+        monkeypatch.setattr(crop_stats, "add_crop_stats", fail_if_called)
+
+        pipeline.stage_chips(ctx)
+
+        assert ctx.crop_stats_result is None

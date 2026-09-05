@@ -220,6 +220,8 @@ class ChipsConfig:
     # Alternate remote grid source (URL / S3 glob) overriding the Source Coop
     # default. Ignored when grid_file is set. Optional.
     grid_source: str | None = None
+    # Per-chip HCAT crop composition (skipped automatically when the fields lack hcat:code).
+    crop_stats: bool = True
 
 
 @dataclass

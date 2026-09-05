@@ -25,7 +25,15 @@ from urllib.parse import urlsplit
 
 import duckdb
 
-from ftw_dataset_tools.api import boundaries, class_filter, field_stats, masks, splits, stac
+from ftw_dataset_tools.api import (
+    boundaries,
+    class_filter,
+    crop_stats,
+    field_stats,
+    masks,
+    splits,
+    stac,
+)
 from ftw_dataset_tools.api import config as config_module
 from ftw_dataset_tools.api.geo import (
     detect_crs,
@@ -93,6 +101,7 @@ class PipelineContext:
     was_reprojected: bool = False
     source_crs: str | None = None
     chips_result: field_stats.FieldStatsResult | None = None
+    crop_stats_result: crop_stats.CropStatsResult | None = None
     splits_result: splits.CreateSplitsResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
@@ -420,6 +429,12 @@ def stage_chips(ctx: PipelineContext) -> None:
         f"Created chips: {ctx.chips_result.total_cells:,} cells, "
         f"{ctx.chips_result.cells_with_coverage:,} with coverage"
     )
+    if ctx.config.stages.chips.crop_stats:
+        # chips and field_polygons_path share a CRS: chips derive from the same
+        # (reprojected, class-filtered) fields used here, so no reprojection is needed.
+        ctx.crop_stats_result = crop_stats.add_crop_stats(
+            ctx.chips_path, ctx.field_polygons_path, on_progress=ctx.log
+        )
 
 
 def stage_splits(ctx: PipelineContext) -> None:
