@@ -126,14 +126,14 @@ def create_masks_cmd(
         sys.stdout.flush()
 
     try:
-        result = masks.create_masks(
+        results = masks.create_masks(
             chips_file=chips_file,
             boundaries_file=boundaries_file,
             boundary_lines_file=boundary_lines_file,
             output_dir=output_dir,
             field_dataset=field_dataset,
             grid_id_col=grid_id_col,
-            mask_type=mask_type_enum,
+            mask_types=[mask_type_enum],
             coverage_col=coverage_col,
             min_coverage=min_coverage,
             resolution=resolution,
@@ -141,6 +141,8 @@ def create_masks_cmd(
             on_progress=on_progress,
             on_start=on_start,
         )
+        # This command builds one mask type at a time.
+        result = results[mask_type_enum]
 
         # Finish progress line
         sys.stdout.write("\n")

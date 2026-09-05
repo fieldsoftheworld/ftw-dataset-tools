@@ -186,6 +186,50 @@ def _wkt_to_geometry(wkt: str):
 _DERIVED_MASK_TYPES = frozenset({MaskType.DECODE_BOUNDARY, MaskType.DECODE_DISTANCE})
 
 
+def _source_mask_type(mask_type: MaskType) -> MaskType:
+    """Return the mask type that must be rasterized to produce ``mask_type``."""
+    if mask_type in _DERIVED_MASK_TYPES:
+        return MaskType.SEMANTIC_2_CLASS
+    return mask_type
+
+
+def group_by_source(mask_types: list[MaskType]) -> dict[MaskType, list[MaskType]]:
+    """Bucket mask types by the single rasterization they can share.
+
+    The DECODE layers are post-processed from the 2-class mask, so requesting
+    them alongside it needs one burn rather than three. Every other type needs
+    its own burn (``instance`` is uint32 and keyed by field id, ``semantic_3_class``
+    keeps boundary lines as their own class), so it lands in a group of one.
+
+    Output order follows ``mask_types`` so callers report groups predictably.
+    """
+    groups: dict[MaskType, list[MaskType]] = {}
+    for mask_type in mask_types:
+        groups.setdefault(_source_mask_type(mask_type), []).append(mask_type)
+    return groups
+
+
+@dataclass
+class _MaskTask:
+    """One grid cell's worth of work: burn ``source_type`` once, write ``outputs``.
+
+    Module-level and plain-data so ``ProcessPoolExecutor`` can pickle it.
+    """
+
+    grid_id: str
+    bounds: tuple[float, float, float, float]
+    crs_wkt: str
+    boundaries_path: str
+    boundary_lines_path: str
+    boundaries_geom_col: str
+    boundary_lines_geom_col: str
+    source_type: MaskType
+    outputs: list[tuple[MaskType, str]]
+    resolution: float
+    id_col: str | None
+    background_class_value: int
+
+
 def _grid_raster_geometry(
     bounds: tuple[float, float, float, float],
     crs: CRS,
@@ -332,7 +376,7 @@ def _write_mask_raster(
     temp_path.unlink()
 
 
-def _create_single_mask(
+def _create_masks_for_cell(
     conn: duckdb.DuckDBPyConnection,
     grid_id: str,
     bounds: tuple[float, float, float, float],
@@ -341,21 +385,22 @@ def _create_single_mask(
     boundary_lines_path: Path,
     boundaries_geom_col: str,
     boundary_lines_geom_col: str,
-    output_path: Path,
-    mask_type: MaskType,
+    source_type: MaskType,
+    outputs: list[tuple[MaskType, Path]],
     resolution: float = 10.0,
     id_col: str | None = None,
     background_class_value: int = 0,
-) -> MaskResult:
-    """Create a single mask for a grid cell."""
+) -> list[tuple[MaskType, MaskResult]]:
+    """Rasterize ``source_type`` once for a grid cell and write every output from it.
+
+    The DECODE layers are post-processed from the 2-class mask rather than
+    rasterized directly, so a request for the 2-class mask plus either DECODE
+    layer shares a single burn. Rasterizing per output instead would repeat the
+    boundary queries, which dominate the cost of a chip.
+    """
     transform, width, height = _grid_raster_geometry(bounds, crs, resolution)
 
-    # The DECODE layers are derived from the 2-class mask rather than rasterized
-    # directly, so burn that one first and post-process it below.
-    is_derived = mask_type in _DERIVED_MASK_TYPES
-    source_type = MaskType.SEMANTIC_2_CLASS if is_derived else mask_type
-
-    mask = _rasterize_mask(
+    source = _rasterize_mask(
         conn=conn,
         boundaries_path=boundaries_path,
         boundary_lines_path=boundary_lines_path,
@@ -370,18 +415,29 @@ def _create_single_mask(
         background_class_value=background_class_value,
     )
 
-    tags: dict[str, str] = {}
-    if is_derived:
-        mask, tags = _derive_decode_layer(mask_type, mask)
+    results: list[tuple[MaskType, MaskResult]] = []
+    for mask_type, output_path in outputs:
+        tags: dict[str, str] = {}
+        if mask_type in _DERIVED_MASK_TYPES:
+            # Both derivations copy before mutating, so `source` stays reusable.
+            mask, tags = _derive_decode_layer(mask_type, source)
+        else:
+            mask = source
 
-    _write_mask_raster(mask, output_path, crs, transform, tags=tags)
+        _write_mask_raster(mask, output_path, crs, transform, tags=tags)
+        results.append(
+            (
+                mask_type,
+                MaskResult(
+                    grid_id=grid_id,
+                    output_path=output_path,
+                    width=width,
+                    height=height,
+                ),
+            )
+        )
 
-    return MaskResult(
-        grid_id=grid_id,
-        output_path=output_path,
-        width=width,
-        height=height,
-    )
+    return results
 
 
 def _convert_to_cog(input_path: Path, output_path: Path) -> None:
@@ -403,7 +459,9 @@ def _convert_to_cog(input_path: Path, output_path: Path) -> None:
                 dst.update_tags(**tags)
 
 
-def _process_single_grid_cell(args: tuple) -> tuple[MaskResult | None, tuple[str, str] | None]:
+def _process_single_grid_cell(
+    task: _MaskTask,
+) -> tuple[list[tuple[MaskType, MaskResult]], tuple[str, str] | None]:
     """
     Worker function to process a single grid cell.
 
@@ -411,28 +469,13 @@ def _process_single_grid_cell(args: tuple) -> tuple[MaskResult | None, tuple[str
     It creates its own DuckDB connection since connections can't be shared across processes.
 
     Args:
-        args: Tuple of (grid_id, bounds, crs_wkt, boundaries_path, boundary_lines_path,
-              boundaries_geom_col, boundary_lines_geom_col, output_path, mask_type,
-              resolution, id_col, background_class_value)
+        task: The cell's bounds, source mask type and every output to write from it.
 
     Returns:
-        Tuple of (MaskResult or None, error tuple or None)
+        Tuple of ((mask_type, MaskResult) pairs, error tuple or None). The list is
+        empty when the cell failed; a failure discards the whole group, since all
+        of its outputs come from the one rasterization.
     """
-    (
-        grid_id,
-        bounds,
-        crs_wkt,
-        boundaries_path,
-        boundary_lines_path,
-        boundaries_geom_col,
-        boundary_lines_geom_col,
-        output_path,
-        mask_type,
-        resolution,
-        id_col,
-        background_class_value,
-    ) = args
-
     # Suppress stdout/stderr from GDAL/rasterio progress output at OS level
     # (GDAL writes to C file descriptors, not Python's sys.stdout/stderr)
     devnull_fd = os.open(os.devnull, os.O_WRONLY)
@@ -443,35 +486,33 @@ def _process_single_grid_cell(args: tuple) -> tuple[MaskResult | None, tuple[str
         os.dup2(devnull_fd, 1)
         os.dup2(devnull_fd, 2)
 
-        # Convert string back to enum and CRS
-        mask_type_enum = MaskType(mask_type)
-        crs = CRS.from_wkt(crs_wkt)
+        crs = CRS.from_wkt(task.crs_wkt)
 
         # Create DuckDB connection for this process
         conn = duckdb.connect(":memory:")
         ensure_spatial_loaded(conn)
 
         try:
-            result = _create_single_mask(
+            results = _create_masks_for_cell(
                 conn=conn,
-                grid_id=grid_id,
-                bounds=bounds,
+                grid_id=task.grid_id,
+                bounds=task.bounds,
                 crs=crs,
-                boundaries_path=Path(boundaries_path),
-                boundary_lines_path=Path(boundary_lines_path),
-                boundaries_geom_col=boundaries_geom_col,
-                boundary_lines_geom_col=boundary_lines_geom_col,
-                output_path=Path(output_path),
-                mask_type=mask_type_enum,
-                resolution=resolution,
-                id_col=id_col,
-                background_class_value=background_class_value,
+                boundaries_path=Path(task.boundaries_path),
+                boundary_lines_path=Path(task.boundary_lines_path),
+                boundaries_geom_col=task.boundaries_geom_col,
+                boundary_lines_geom_col=task.boundary_lines_geom_col,
+                source_type=task.source_type,
+                outputs=[(mask_type, Path(path)) for mask_type, path in task.outputs],
+                resolution=task.resolution,
+                id_col=task.id_col,
+                background_class_value=task.background_class_value,
             )
             conn.close()
-            return (result, None)
+            return (results, None)
         except Exception as e:
             conn.close()
-            return (None, (grid_id, str(e)))
+            return ([], (task.grid_id, str(e)))
     finally:
         os.dup2(old_stdout_fd, 1)
         os.dup2(old_stderr_fd, 2)
@@ -487,7 +528,7 @@ def create_masks(
     output_dir: str | Path = "./masks",
     field_dataset: str = "unknown",
     grid_id_col: str = "id",
-    mask_type: MaskType = MaskType.SEMANTIC_2_CLASS,
+    mask_types: list[MaskType] | None = None,
     coverage_col: str = "field_coverage_pct",
     min_coverage: float = 0.01,
     resolution: float = 10.0,
@@ -497,7 +538,7 @@ def create_masks(
     background_class_value: int = 0,
     on_progress: Callable[[int, int], None] | None = None,
     on_start: Callable[[int, int], None] | None = None,
-) -> CreateMasksResult:
+) -> dict[MaskType, CreateMasksResult]:
     """
     Create raster masks from vector boundaries for each grid cell.
 
@@ -508,7 +549,8 @@ def create_masks(
         output_dir: Output directory for masks (default: ./masks)
         field_dataset: Name of the field dataset (used in output filenames)
         grid_id_col: Column name for grid cell ID (default: "id")
-        mask_type: Type of mask to create (default: semantic_2_class)
+        mask_types: Types of mask to create (default: [semantic_2_class]). Types that
+                    share a rasterization are burned once and written N times.
         coverage_col: Column name for field coverage percentage (to filter grids)
         min_coverage: Minimum coverage percentage to process (default: 0.01)
         resolution: Pixel resolution in CRS units (default: 10.0 meters)
@@ -523,12 +565,17 @@ def create_masks(
         on_start: Optional callback (total_grids, filtered_grids) called before processing
 
     Returns:
-        CreateMasksResult with information about created and skipped masks
+        A CreateMasksResult per requested mask type, keyed by that type.
 
     Raises:
         FileNotFoundError: If input files don't exist
         ValueError: If required columns are missing
     """
+    if mask_types is None:
+        mask_types = [MaskType.SEMANTIC_2_CLASS]
+    if not mask_types:
+        raise ValueError("mask_types must name at least one mask type")
+
     chips_path = Path(chips_file).resolve()
     boundaries_path = Path(boundaries_file).resolve()
     boundary_lines_path = Path(boundary_lines_file).resolve()
@@ -613,7 +660,7 @@ def create_masks(
 
     # Determine ID column for instance masks
     id_col_for_instance = None
-    if mask_type == MaskType.INSTANCE:
+    if MaskType.INSTANCE in mask_types:
         # Try to find an ID column in boundaries file
         try:
             schema = conn.execute(f"DESCRIBE SELECT * FROM '{boundaries_path}'").fetchall()
@@ -636,66 +683,78 @@ def create_masks(
     # Convert CRS to WKT for serialization
     crs_wkt = crs.to_wkt()
 
-    # Prepare arguments for parallel processing
-    work_items = []
+    # One task per (grid cell, group of mask types sharing a rasterization).
+    groups = group_by_source(mask_types)
+    work_items: list[_MaskTask] = []
     for grid_id, minx, miny, maxx, maxy in grid_cells:
         grid_id_str = str(grid_id)
-        mask_path = get_mask_output_path(
-            grid_id=grid_id_str,
-            mask_type=mask_type,
-            chip_dirs=chip_dirs,
-            output_dir=output_path,
-            field_dataset=field_dataset,
-            year=year,
-        )
+        for source_type, group in groups.items():
+            outputs: list[tuple[MaskType, str]] = []
+            for mask_type in group:
+                mask_path = get_mask_output_path(
+                    grid_id=grid_id_str,
+                    mask_type=mask_type,
+                    chip_dirs=chip_dirs,
+                    output_dir=output_path,
+                    field_dataset=field_dataset,
+                    year=year,
+                )
 
-        # Ensure parent directory exists when using chip_dirs
-        if chip_dirs is not None:
-            mask_path.parent.mkdir(parents=True, exist_ok=True)
+                # Ensure parent directory exists when using chip_dirs
+                if chip_dirs is not None:
+                    mask_path.parent.mkdir(parents=True, exist_ok=True)
 
-        work_items.append(
-            (
-                grid_id_str,
-                (minx, miny, maxx, maxy),
-                crs_wkt,
-                str(boundaries_path),
-                str(boundary_lines_path),
-                boundaries_geom_col,
-                boundary_lines_geom_col,
-                str(mask_path),
-                mask_type.value,  # Pass as string for serialization
-                resolution,
-                id_col_for_instance,
-                background_class_value,
+                outputs.append((mask_type, str(mask_path)))
+
+            work_items.append(
+                _MaskTask(
+                    grid_id=grid_id_str,
+                    bounds=(minx, miny, maxx, maxy),
+                    crs_wkt=crs_wkt,
+                    boundaries_path=str(boundaries_path),
+                    boundary_lines_path=str(boundary_lines_path),
+                    boundaries_geom_col=boundaries_geom_col,
+                    boundary_lines_geom_col=boundary_lines_geom_col,
+                    source_type=source_type,
+                    outputs=outputs,
+                    resolution=resolution,
+                    id_col=id_col_for_instance,
+                    background_class_value=background_class_value,
+                )
             )
-        )
 
     # Process in parallel
-    created: list[MaskResult] = []
-    skipped: list[tuple[str, str]] = []
+    created: dict[MaskType, list[MaskResult]] = {mask_type: [] for mask_type in mask_types}
+    skipped: dict[MaskType, list[tuple[str, str]]] = {mask_type: [] for mask_type in mask_types}
+    total_tasks = len(work_items)
     completed = 0
     executor = None
+
+    def record_failure(task: _MaskTask, error: tuple[str, str]) -> None:
+        """A failed burn loses every output in that group, so fail them together."""
+        for mask_type, _ in task.outputs:
+            skipped[mask_type].append(error)
 
     try:
         executor = ProcessPoolExecutor(max_workers=num_workers)
         # Submit all tasks
-        futures = {executor.submit(_process_single_grid_cell, item): item[0] for item in work_items}
+        futures = {executor.submit(_process_single_grid_cell, item): item for item in work_items}
 
         # Process results as they complete
         for future in as_completed(futures):
             completed += 1
             if on_progress:
-                on_progress(completed, total_cells)
+                on_progress(completed, total_tasks)
 
+            task = futures[future]
             try:
-                result, error = future.result()
-                if result:
-                    created.append(result)
-                elif error:
-                    skipped.append(error)
+                results, error = future.result()
+                for mask_type, result in results:
+                    created[mask_type].append(result)
+                if error:
+                    record_failure(task, error)
             except Exception as e:
-                grid_id = futures[future]
-                skipped.append((grid_id, str(e)))
+                record_failure(task, (task.grid_id, str(e)))
 
     except KeyboardInterrupt:
         if executor:
@@ -705,8 +764,11 @@ def create_masks(
         if executor:
             executor.shutdown(wait=True)
 
-    return CreateMasksResult(
-        masks_created=created,
-        masks_skipped=skipped,
-        field_dataset=field_dataset,
-    )
+    return {
+        mask_type: CreateMasksResult(
+            masks_created=created[mask_type],
+            masks_skipped=skipped[mask_type],
+            field_dataset=field_dataset,
+        )
+        for mask_type in mask_types
+    }
