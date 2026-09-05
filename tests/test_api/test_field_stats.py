@@ -43,38 +43,34 @@ class TestDetectBboxColumn:
         conn.close()
 
 
-class TestBuildCoverageQuery:
-    """Tests for _build_coverage_query function."""
+class TestBuildCoverageBatchQuery:
+    """Tests for _build_coverage_batch_query and _build_result_query."""
 
     def test_query_with_bbox_optimization(self) -> None:
-        """Test query includes bbox conditions when columns provided."""
-        from ftw_dataset_tools.api.field_stats import _build_coverage_query
+        from ftw_dataset_tools.api.field_stats import _build_coverage_batch_query
 
-        query = _build_coverage_query(
-            grid_geom_col="geometry",
-            fields_geom_col="geometry",
-            grid_bbox_col="bbox",
-            fields_bbox_col="bbox",
-            coverage_col="coverage",
-        )
+        query = _build_coverage_batch_query("geometry", "geometry", "bbox", "bbox", 10, 19)
 
         assert "bbox" in query.lower()
         assert "st_intersects" in query.lower()
+        assert "between 10 and 19" in query.lower()
+        assert "st_union_agg" in query.lower()
 
     def test_query_without_bbox_optimization(self) -> None:
-        """Test query works without bbox columns."""
-        from ftw_dataset_tools.api.field_stats import _build_coverage_query
+        from ftw_dataset_tools.api.field_stats import _build_coverage_batch_query
 
-        query = _build_coverage_query(
-            grid_geom_col="geometry",
-            fields_geom_col="geometry",
-            grid_bbox_col=None,
-            fields_bbox_col=None,
-            coverage_col="coverage",
-        )
+        query = _build_coverage_batch_query("geometry", "geometry", None, None, 0, 0)
 
+        assert "bbox" not in query.lower()
         assert "st_intersects" in query.lower()
-        assert "coverage" in query.lower()
+
+    def test_result_query_joins_coverage(self) -> None:
+        from ftw_dataset_tools.api.field_stats import _build_result_query
+
+        query = _build_result_query("geometry", "coverage")
+
+        assert "left join coverage" in query.lower()
+        assert '"coverage"' in query
 
 
 class TestFieldStatsResult:
@@ -182,6 +178,46 @@ class TestAddFieldStatsWithLocalGrid:
         assert result.output_path == output_file
         assert result.total_cells == 2  # Two grid cells
         assert output_file.exists()
+
+    def test_batch_size_does_not_change_coverage(
+        self, sample_grid_geoparquet: Path, sample_fields_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        """Coverage is identical whether cells are aggregated one at a time or all at once."""
+        import duckdb
+
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        outputs = {}
+        for batch_size in (1, 1000):
+            out = tmp_path / f"chips_{batch_size}.parquet"
+            add_field_stats(
+                grid_file=sample_grid_geoparquet,
+                fields_file=sample_fields_geoparquet,
+                output_file=out,
+                batch_size=batch_size,
+            )
+            con = duckdb.connect()
+            outputs[batch_size] = sorted(
+                con.execute(f"SELECT field_coverage_pct FROM read_parquet('{out}')").fetchall()
+            )
+            con.close()
+
+        assert outputs[1] == outputs[1000]
+        assert len(outputs[1]) == 2
+        assert any(v[0] > 0 for v in outputs[1])
+
+    def test_batch_size_must_be_positive(
+        self, sample_grid_geoparquet: Path, sample_fields_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        with pytest.raises(ValueError, match="batch_size"):
+            add_field_stats(
+                grid_file=sample_grid_geoparquet,
+                fields_file=sample_fields_geoparquet,
+                output_file=tmp_path / "x.parquet",
+                batch_size=0,
+            )
 
     def test_add_field_stats_with_progress(
         self, sample_grid_geoparquet: Path, sample_fields_geoparquet: Path, tmp_path: Path
