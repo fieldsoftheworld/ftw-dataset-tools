@@ -64,6 +64,8 @@ stages:
     min_coverage: 0.01
     # Drop chips on the outer border of the dataset (partial coverage).
     drop_border_chips: false
+    # Per-chip HCAT crop composition (skipped automatically when the fields lack hcat:code).
+    crop_stats: true
 
   splits:
     # One of: block3x3, predefined, random-uniform.
