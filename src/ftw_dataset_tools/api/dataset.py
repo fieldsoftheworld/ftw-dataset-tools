@@ -76,6 +76,12 @@ def create_dataset(
     4. Create boundary lines from polygons
     5. Create all three mask types (instance, semantic_2class, semantic_3class)
     6. Generate STAC static catalog
+    7. Document the collection: PMTiles and MapLibre styles when tippecanoe is
+       installed, README.md and AGENTS.md, all registered on the collection
+
+    Step 7 has no keyword argument here; configure or disable it through
+    ``stages.docs`` in a config file with ``ftwd run``, or stop the run earlier
+    with ``ftwd run --through stac``.
 
     Args:
         fields_file: Path to input GeoParquet file with field polygons
@@ -129,7 +135,7 @@ def create_dataset(
         config.class_filter = ClassFilter.from_file(class_filter)
     provenance = config.provenance_dict()
 
-    # Imagery stages are disabled in from_kwargs(), so this runs reproject..stac.
+    # Imagery stages are disabled in from_kwargs(), so this runs reproject..stac, docs.
     stages = pipeline.resolve_stages(config=config)
     ctx = pipeline.build_context(
         config,
