@@ -382,3 +382,48 @@ class TestPathsAndBbox:
         result = add_crop_stats(chips, fields)
 
         assert result.chips_with_crops == 1
+
+
+class TestDropCropStats:
+    def test_removes_the_composition_columns(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.crop_stats import add_crop_stats, drop_crop_stats
+
+        chips = _chips(tmp_path)
+        add_crop_stats(chips, _fields(tmp_path))
+
+        assert drop_crop_stats(chips) is True
+
+        gdf = gpd.read_parquet(chips)
+        assert not [col for col in gdf.columns if col.startswith("hcat_")]
+        assert list(gdf.columns) == ["id", "field_coverage_pct", "geometry"]
+        assert len(gdf) == 2
+
+    def test_is_a_no_op_without_them(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.crop_stats import drop_crop_stats
+
+        chips = _chips(tmp_path)
+        before = chips.read_bytes()
+
+        assert drop_crop_stats(chips) is False
+        assert chips.read_bytes() == before
+
+
+class TestCropStatsSummary:
+    def test_disabled(self) -> None:
+        from ftw_dataset_tools.api.crop_stats import crop_stats_summary
+
+        assert crop_stats_summary(None) == "Crop composition: disabled"
+
+    def test_skipped(self) -> None:
+        from ftw_dataset_tools.api.crop_stats import CropStatsResult, crop_stats_summary
+
+        result = CropStatsResult(10, 0, 0, skipped=True, reason="no hcat:code")
+
+        assert crop_stats_summary(result) == "Crop composition: skipped (no hcat:code)"
+
+    def test_computed(self) -> None:
+        from ftw_dataset_tools.api.crop_stats import CropStatsResult, crop_stats_summary
+
+        result = CropStatsResult(10, 7, 3, skipped=False)
+
+        assert crop_stats_summary(result) == "Crop composition: 7/10 chips, 3 HCAT codes"
