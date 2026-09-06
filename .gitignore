@@ -71,6 +71,8 @@ Thumbs.db
 
 # Project specific
 *.parquet
+# Default output_dir for create_dataset / ftwd run
+dataset/
 
 # Worktrees
 .worktrees/
