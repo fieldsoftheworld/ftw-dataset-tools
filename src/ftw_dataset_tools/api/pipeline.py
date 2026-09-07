@@ -774,6 +774,7 @@ def stage_select_images(ctx: PipelineContext) -> None:
         buffer_days=select_cfg.buffer_days,
         num_buffer_expansions=select_cfg.num_buffer_expansions,
         buffer_expansion_size=select_cfg.buffer_expansion_size,
+        workers=select_cfg.workers,
     )
 
 
@@ -790,6 +791,7 @@ def stage_download_images(ctx: PipelineContext) -> None:
         catalog_dir=ctx.output_dir,
         bands=download_cfg.bands,
         resolution=download_cfg.resolution,
+        workers=download_cfg.workers,
     )
 
 

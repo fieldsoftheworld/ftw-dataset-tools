@@ -116,12 +116,17 @@ stages:
     buffer_days: 14
     num_buffer_expansions: 3
     buffer_expansion_size: 14
+    # Chips selected at once. Each chip costs several STAC searches that are
+    # almost all network wait, so this is what decides how long a large run takes.
+    workers: 4
 
   download_images:
     # Disabled by default; imagery selection creates STAC references only.
     enabled: false
     bands: [red, green, blue, nir]
     resolution: 10.0
+    # Scenes downloaded at once. The STAC item writes stay serialized.
+    workers: 4
 
   docs:
     # PMTiles and the MapLibre styles that read them. "auto" builds them when the

@@ -123,12 +123,12 @@ class TestSelectImagesDirectoryMode:
         """A successful selection writes child STAC items under the chip's own directory."""
         from datetime import timedelta
 
+        from ftw_dataset_tools.api.imagery import selection_workflow
         from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
         from ftw_dataset_tools.api.imagery.scene_selection import (
             SceneSelectionResult,
             SelectedScene,
         )
-        from ftw_dataset_tools.commands import select_images as select_images_module
 
         dataset_dir = tmp_path / "dataset"
         dataset_dir.mkdir()
@@ -175,8 +175,9 @@ class TestSelectImagesDirectoryMode:
                 harvest_scene=harvest_scene,
             )
 
+        # The command shares the api's per-chip selection, so patch it there.
         monkeypatch.setattr(
-            select_images_module, "select_scenes_for_chip", _fake_select_scenes_for_chip
+            selection_workflow, "select_scenes_for_chip", _fake_select_scenes_for_chip
         )
 
         result = CliRunner().invoke(
