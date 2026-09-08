@@ -57,6 +57,25 @@ class TestMaskTypeRegistries:
 
         assert set(DEFAULT_MASK_TYPES) <= set(VALID_MASK_TYPES)
 
+    def test_derived_mask_types_agree_between_config_and_masks(self) -> None:
+        # config.py holds the string copy so validation need not import api.masks;
+        # a mismatch means config would enforce a dependency masks does not honour.
+        from ftw_dataset_tools.api.config import DERIVED_MASK_SOURCE, DERIVED_MASK_TYPES
+        from ftw_dataset_tools.api.masks import _DERIVED_MASK_TYPES, MaskType
+
+        assert {m.value for m in _DERIVED_MASK_TYPES} == set(DERIVED_MASK_TYPES)
+        assert MaskType.SEMANTIC_2_CLASS.value == DERIVED_MASK_SOURCE
+
+    def test_derived_mask_types_are_valid_types(self) -> None:
+        from ftw_dataset_tools.api.config import (
+            DERIVED_MASK_SOURCE,
+            DERIVED_MASK_TYPES,
+            VALID_MASK_TYPES,
+        )
+
+        assert set(DERIVED_MASK_TYPES) <= set(VALID_MASK_TYPES)
+        assert DERIVED_MASK_SOURCE in VALID_MASK_TYPES
+
     def test_every_mask_type_is_in_the_stac_asset_registry(self) -> None:
         from ftw_dataset_tools.api.pipeline import _MASK_TYPE_MAPPING
         from ftw_dataset_tools.api.stac import _MASK_TYPE_BY_ASSET_NAME
@@ -392,3 +411,80 @@ class TestFilterStage:
         # filtered fields do not exist yet -> error points at the filter stage.
         with pytest.raises(StageInputError, match="filter"):
             pipeline.stage_masks(ctx)
+
+
+class TestMasksStage:
+    """stage_masks wiring: one pass over the chips, one result per requested type."""
+
+    @staticmethod
+    def _write_stage_inputs(ctx: pipeline.PipelineContext) -> None:
+        """Write the chips, field polygons and boundary lines stage_masks reads."""
+        from shapely.geometry import LineString
+
+        ctx.output_dir.mkdir(parents=True, exist_ok=True)
+        ctx.chips_base_dir.mkdir(parents=True, exist_ok=True)
+
+        cell = box(18.0, 40.0, 18.01, 40.01)
+        gpd.GeoDataFrame(
+            {"id": ["cell_001"], "field_coverage_pct": [20.0]},
+            geometry=[cell],
+            crs="EPSG:4326",
+        ).to_parquet(ctx.chips_path)
+
+        fields = [box(18.002, 40.002, 18.004, 40.004), box(18.006, 40.002, 18.008, 40.004)]
+        gpd.GeoDataFrame({"id": [1, 2]}, geometry=fields, crs="EPSG:4326").to_parquet(
+            ctx.field_polygons_path
+        )
+        gpd.GeoDataFrame(
+            {"id": [1, 2]},
+            geometry=[LineString(f.exterior.coords) for f in fields],
+            crs="EPSG:4326",
+        ).to_parquet(ctx.boundary_lines_path)
+
+    def test_produces_a_result_and_file_per_requested_type(
+        self, sample_geoparquet_4326: Path, tmp_path: Path
+    ) -> None:
+        mask_types = ["semantic_2_class", "decode_boundary", "decode_distance"]
+        config = _config(
+            sample_geoparquet_4326,
+            tmp_path / "out",
+            year=2024,
+            stages={"masks": {"mask_types": mask_types, "workers": 1}},
+        )
+        ctx = pipeline.build_context(config)
+        self._write_stage_inputs(ctx)
+
+        pipeline.stage_masks(ctx)
+
+        # Keyed by the STAC asset name, which is what stage_stac later looks up.
+        assert set(ctx.masks_results) == {"semantic_2class", "decode_boundary", "decode_distance"}
+        for subdir_name, result in ctx.masks_results.items():
+            assert result.total_created == 1, (subdir_name, result.masks_skipped)
+            assert result.masks_created[0].output_path.exists()
+
+    def test_derived_layers_land_beside_the_mask_they_derive_from(
+        self, sample_geoparquet_4326: Path, tmp_path: Path
+    ) -> None:
+        """All three outputs belong to the same chip directory."""
+        config = _config(
+            sample_geoparquet_4326,
+            tmp_path / "out",
+            year=2024,
+            stages={
+                "masks": {
+                    "mask_types": ["semantic_2_class", "decode_distance"],
+                    "workers": 1,
+                }
+            },
+        )
+        ctx = pipeline.build_context(config)
+        self._write_stage_inputs(ctx)
+
+        pipeline.stage_masks(ctx)
+
+        paths = {
+            name: result.masks_created[0].output_path for name, result in ctx.masks_results.items()
+        }
+        assert paths["semantic_2class"].parent == paths["decode_distance"].parent
+        assert paths["semantic_2class"].name == "cell_001_2024_semantic_2_class.tif"
+        assert paths["decode_distance"].name == "cell_001_2024_decode_distance.tif"

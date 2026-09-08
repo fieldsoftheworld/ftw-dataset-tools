@@ -105,16 +105,19 @@ def create_masks_cmd(
     mask_type_enum = MaskType(mask_type)
 
     # Callback to show grid counts before processing
-    def on_start(total_grids: int, filtered_grids: int) -> None:
+    def on_start(total_grids: int, filtered_grids: int, total_tasks: int) -> None:
         click.echo(f"Total grids in chips file: {total_grids:,}")
         skipped = total_grids - filtered_grids
+        # total_tasks is what the progress bar counts to. This command asks for one
+        # mask type, so it matches the grid count unless that ever changes.
+        tasks = f" -> {total_tasks:,} rasterization tasks" if total_tasks != filtered_grids else ""
         if skipped > 0:
             click.echo(
                 f"Grids to process: {filtered_grids:,} "
-                f"(skipping {skipped:,} with {coverage_col} < {min_coverage})"
+                f"(skipping {skipped:,} with {coverage_col} < {min_coverage}){tasks}"
             )
         else:
-            click.echo(f"Grids to process: {filtered_grids:,}")
+            click.echo(f"Grids to process: {filtered_grids:,}{tasks}")
 
     # Simple progress tracking using carriage return (works well with multiprocessing)
     def on_progress(current: int, total: int) -> None:
@@ -126,14 +129,14 @@ def create_masks_cmd(
         sys.stdout.flush()
 
     try:
-        result = masks.create_masks(
+        results = masks.create_masks(
             chips_file=chips_file,
             boundaries_file=boundaries_file,
             boundary_lines_file=boundary_lines_file,
             output_dir=output_dir,
             field_dataset=field_dataset,
             grid_id_col=grid_id_col,
-            mask_type=mask_type_enum,
+            mask_types=[mask_type_enum],
             coverage_col=coverage_col,
             min_coverage=min_coverage,
             resolution=resolution,
@@ -141,6 +144,8 @@ def create_masks_cmd(
             on_progress=on_progress,
             on_start=on_start,
         )
+        # This command builds one mask type at a time.
+        result = results[mask_type_enum]
 
         # Finish progress line
         sys.stdout.write("\n")

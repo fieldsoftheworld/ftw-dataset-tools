@@ -178,13 +178,13 @@ class TestBackgroundClassValue:
         # Should have default value of 0
         assert sig.parameters["background_class_value"].default == 0
 
-    def test_create_single_mask_accepts_background_class_value_parameter(self) -> None:
-        """Test that _create_single_mask signature accepts background_class_value parameter."""
+    def test_create_masks_for_cell_accepts_background_class_value_parameter(self) -> None:
+        """Test that _create_masks_for_cell signature accepts background_class_value parameter."""
         import inspect
 
-        from ftw_dataset_tools.api.masks import _create_single_mask
+        from ftw_dataset_tools.api.masks import _create_masks_for_cell
 
-        sig = inspect.signature(_create_single_mask)
+        sig = inspect.signature(_create_masks_for_cell)
         assert "background_class_value" in sig.parameters
         # Should have default value of 0
         assert sig.parameters["background_class_value"].default == 0
@@ -238,10 +238,10 @@ class TestDecodeMaskTypes:
             boundary_lines_file=lines,
             output_dir=output_dir,
             field_dataset="test",
-            mask_type=mask_type,
+            mask_types=[mask_type],
             num_workers=1,
             **kwargs,
-        )
+        )[mask_type]
 
         assert result.total_created == 1, result.masks_skipped
         return result.masks_created[0].output_path
@@ -376,10 +376,10 @@ class TestDecodeMaskTypes:
                 boundary_lines_file=lines,
                 output_dir=tmp_path / mask_type.value,
                 field_dataset="test",
-                mask_type=mask_type,
+                mask_types=[mask_type],
                 min_coverage=0.0,
                 num_workers=1,
-            )
+            )[mask_type]
             assert result.total_created == 1, result.masks_skipped
 
             with rasterio.open(result.masks_created[0].output_path) as src:
@@ -414,10 +414,10 @@ class TestDecodeMaskTypes:
             boundary_lines_file=lines,
             output_dir=tmp_path / "dist",
             field_dataset="test",
-            mask_type=MaskType.DECODE_DISTANCE,
+            mask_types=[MaskType.DECODE_DISTANCE],
             min_coverage=0.0,
             num_workers=1,
-        )
+        )[MaskType.DECODE_DISTANCE]
 
         with rasterio.open(result.masks_created[0].output_path) as src:
             assert float(src.tags()["decode_distance_max_px"]) == 0.0
@@ -506,3 +506,287 @@ class TestDeriveDecodeLayer:
         assert MaskType.INSTANCE not in _DERIVED_MASK_TYPES
         assert MaskType.SEMANTIC_2_CLASS not in _DERIVED_MASK_TYPES
         assert MaskType.SEMANTIC_3_CLASS not in _DERIVED_MASK_TYPES
+
+
+class TestSharedRasterization:
+    """The DECODE layers share one burn with the 2-class mask they derive from."""
+
+    def _inputs(self, tmp_path):
+        return TestDecodeMaskTypes._build_inputs(tmp_path)
+
+    def test_grouping_matches_one_call_per_type_byte_for_byte(self, tmp_path) -> None:
+        """Grouped output must be identical to rasterizing each type separately."""
+        import hashlib
+
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        requested = [
+            MaskType.SEMANTIC_2_CLASS,
+            MaskType.DECODE_BOUNDARY,
+            MaskType.DECODE_DISTANCE,
+        ]
+        chips, boundaries, lines = self._inputs(tmp_path)
+
+        def run(output_dir, mask_types):
+            return create_masks(
+                chips_file=chips,
+                boundaries_file=boundaries,
+                boundary_lines_file=lines,
+                output_dir=output_dir,
+                field_dataset="test",
+                mask_types=mask_types,
+                num_workers=1,
+            )
+
+        grouped = run(tmp_path / "grouped", requested)
+        separate = {
+            mask_type: run(tmp_path / f"separate_{mask_type.value}", [mask_type])[mask_type]
+            for mask_type in requested
+        }
+
+        for mask_type in requested:
+            grouped_path = grouped[mask_type].masks_created[0].output_path
+            separate_path = separate[mask_type].masks_created[0].output_path
+            assert (
+                hashlib.sha256(grouped_path.read_bytes()).hexdigest()
+                == hashlib.sha256(separate_path.read_bytes()).hexdigest()
+            ), f"{mask_type.value} differs when grouped"
+
+    def test_shared_group_rasterizes_once(self, tmp_path, monkeypatch) -> None:
+        """Three shared outputs must cost one burn, not three."""
+        import duckdb
+        from rasterio.crs import CRS
+
+        from ftw_dataset_tools.api import masks as masks_module
+        from ftw_dataset_tools.api.geo import ensure_spatial_loaded
+        from ftw_dataset_tools.api.masks import MaskType, _create_masks_for_cell
+
+        calls = []
+        original = masks_module._rasterize_mask
+
+        def counting_rasterize(**kwargs):
+            calls.append(kwargs["mask_type"])
+            return original(**kwargs)
+
+        monkeypatch.setattr(masks_module, "_rasterize_mask", counting_rasterize)
+
+        # create_masks runs its workers in subprocesses, which would not see the
+        # patch, so exercise the in-process function the workers call.
+        _, boundaries, lines = self._inputs(tmp_path)
+        outputs = [
+            (MaskType.SEMANTIC_2_CLASS, tmp_path / "2class.tif"),
+            (MaskType.DECODE_BOUNDARY, tmp_path / "boundary.tif"),
+            (MaskType.DECODE_DISTANCE, tmp_path / "distance.tif"),
+        ]
+
+        conn = duckdb.connect(":memory:")
+        ensure_spatial_loaded(conn)
+        try:
+            results = _create_masks_for_cell(
+                conn=conn,
+                grid_id="grid_001",
+                bounds=(4000000, 3000000, 4001000, 3001000),
+                crs=CRS.from_epsg(3035),
+                boundaries_path=boundaries,
+                boundary_lines_path=lines,
+                boundaries_geom_col="geometry",
+                boundary_lines_geom_col="geometry",
+                source_type=MaskType.SEMANTIC_2_CLASS,
+                outputs=outputs,
+            )
+        finally:
+            conn.close()
+
+        assert calls == [MaskType.SEMANTIC_2_CLASS], calls
+        assert [mask_type for mask_type, _ in results] == [mask_type for mask_type, _ in outputs]
+        for _, path in outputs:
+            assert path.exists()
+
+    def test_unrelated_types_keep_their_own_burn(self) -> None:
+        """instance and 3-class need their own rasterization; they must not merge."""
+        from ftw_dataset_tools.api.masks import MaskType, _group_by_source
+
+        groups = _group_by_source(
+            [
+                MaskType.INSTANCE,
+                MaskType.SEMANTIC_2_CLASS,
+                MaskType.SEMANTIC_3_CLASS,
+                MaskType.DECODE_BOUNDARY,
+                MaskType.DECODE_DISTANCE,
+            ]
+        )
+
+        assert groups == {
+            MaskType.INSTANCE: [MaskType.INSTANCE],
+            MaskType.SEMANTIC_2_CLASS: [
+                MaskType.SEMANTIC_2_CLASS,
+                MaskType.DECODE_BOUNDARY,
+                MaskType.DECODE_DISTANCE,
+            ],
+            MaskType.SEMANTIC_3_CLASS: [MaskType.SEMANTIC_3_CLASS],
+        }
+
+    def test_decode_alone_still_burns_its_source(self) -> None:
+        """The standalone command asks for one DECODE layer with no 2-class output."""
+        from ftw_dataset_tools.api.masks import MaskType, _group_by_source
+
+        assert _group_by_source([MaskType.DECODE_DISTANCE]) == {
+            MaskType.SEMANTIC_2_CLASS: [MaskType.DECODE_DISTANCE]
+        }
+
+    def test_every_requested_type_gets_a_result(self, tmp_path) -> None:
+        """Callers index the result by type, so every requested type must be a key."""
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        requested = [
+            MaskType.SEMANTIC_3_CLASS,
+            MaskType.SEMANTIC_2_CLASS,
+            MaskType.DECODE_BOUNDARY,
+        ]
+        chips, boundaries, lines = self._inputs(tmp_path)
+
+        results = create_masks(
+            chips_file=chips,
+            boundaries_file=boundaries,
+            boundary_lines_file=lines,
+            output_dir=tmp_path / "out",
+            field_dataset="test",
+            mask_types=requested,
+            num_workers=1,
+        )
+
+        assert set(results) == set(requested)
+        for mask_type in requested:
+            assert results[mask_type].total_created == 1, results[mask_type].masks_skipped
+            assert results[mask_type].masks_created[0].output_path.exists()
+
+    def test_write_failure_keeps_the_outputs_already_written(self, tmp_path) -> None:
+        """A failed 2nd output must not discard the 1st, which is on disk."""
+        from rasterio.crs import CRS
+
+        from ftw_dataset_tools.api.masks import (
+            MaskType,
+            _MaskTask,
+            _process_single_grid_cell,
+        )
+
+        _, boundaries, lines = self._inputs(tmp_path)
+        written = tmp_path / "2class.tif"
+        blocked = tmp_path / "boundary.tif"
+        # A directory where the raster should go: rasterio cannot write over it.
+        blocked.mkdir()
+
+        results, error = _process_single_grid_cell(
+            _MaskTask(
+                grid_id="grid_001",
+                bounds=(4000000, 3000000, 4001000, 3001000),
+                crs_wkt=CRS.from_epsg(3035).to_wkt(),
+                boundaries_path=str(boundaries),
+                boundary_lines_path=str(lines),
+                boundaries_geom_col="geometry",
+                boundary_lines_geom_col="geometry",
+                source_type=MaskType.SEMANTIC_2_CLASS,
+                outputs=[
+                    (MaskType.SEMANTIC_2_CLASS, str(written)),
+                    (MaskType.DECODE_BOUNDARY, str(blocked)),
+                ],
+                resolution=10.0,
+                id_col=None,
+                background_class_value=0,
+            )
+        )
+
+        assert [mask_type for mask_type, _ in results] == [MaskType.SEMANTIC_2_CLASS]
+        assert written.exists()
+        assert error is not None
+        assert error[0] == "grid_001"
+        assert "decode_boundary" in error[1]
+
+    def test_write_failure_is_only_reported_for_the_unwritten_type(self, tmp_path) -> None:
+        """The type that succeeded counts as created, not as skipped."""
+        from ftw_dataset_tools.api.masks import MaskType, create_masks, get_mask_output_path
+
+        chips, boundaries, lines = self._inputs(tmp_path)
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        blocked = get_mask_output_path(
+            grid_id="grid_001",
+            mask_type=MaskType.DECODE_BOUNDARY,
+            chip_dirs=None,
+            output_dir=output_dir,
+            field_dataset="test",
+        )
+        blocked.mkdir(parents=True)
+
+        results = create_masks(
+            chips_file=chips,
+            boundaries_file=boundaries,
+            boundary_lines_file=lines,
+            output_dir=output_dir,
+            field_dataset="test",
+            mask_types=[MaskType.SEMANTIC_2_CLASS, MaskType.DECODE_BOUNDARY],
+            num_workers=1,
+        )
+
+        assert results[MaskType.SEMANTIC_2_CLASS].total_created == 1
+        assert results[MaskType.SEMANTIC_2_CLASS].total_skipped == 0
+        assert results[MaskType.DECODE_BOUNDARY].total_created == 0
+        assert results[MaskType.DECODE_BOUNDARY].total_skipped == 1
+
+    def test_duplicate_mask_types_are_written_and_counted_once(self, tmp_path) -> None:
+        """A repeated type must not write the same path twice or double-count it."""
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        chips, boundaries, lines = self._inputs(tmp_path)
+        starts: list[tuple[int, int, int]] = []
+
+        results = create_masks(
+            chips_file=chips,
+            boundaries_file=boundaries,
+            boundary_lines_file=lines,
+            output_dir=tmp_path / "out",
+            field_dataset="test",
+            mask_types=[
+                MaskType.SEMANTIC_2_CLASS,
+                MaskType.SEMANTIC_2_CLASS,
+                MaskType.DECODE_BOUNDARY,
+            ],
+            num_workers=1,
+            on_start=lambda *args: starts.append(args),
+        )
+
+        assert set(results) == {MaskType.SEMANTIC_2_CLASS, MaskType.DECODE_BOUNDARY}
+        assert results[MaskType.SEMANTIC_2_CLASS].total_created == 1
+        assert results[MaskType.DECODE_BOUNDARY].total_created == 1
+        # One cell, one group after de-duplication: one task, not two.
+        assert starts == [(1, 1, 1)]
+
+    def test_on_start_announces_the_total_the_progress_bar_counts_to(self, tmp_path) -> None:
+        """on_start's task total must be cells x groups, matching on_progress."""
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        chips, boundaries, lines = self._inputs(tmp_path)
+        starts: list[tuple[int, int, int]] = []
+        progress: list[tuple[int, int]] = []
+
+        create_masks(
+            chips_file=chips,
+            boundaries_file=boundaries,
+            boundary_lines_file=lines,
+            output_dir=tmp_path / "out",
+            field_dataset="test",
+            # Two groups: instance burns on its own, the DECODE layer shares 2-class.
+            mask_types=[
+                MaskType.INSTANCE,
+                MaskType.SEMANTIC_2_CLASS,
+                MaskType.DECODE_BOUNDARY,
+            ],
+            num_workers=1,
+            on_start=lambda *args: starts.append(args),
+            on_progress=lambda current, total: progress.append((current, total)),
+        )
+
+        # One cell x two groups.
+        assert starts == [(1, 1, 2)]
+        assert [total for _, total in progress] == [2, 2]
+        assert progress[-1][0] == 2

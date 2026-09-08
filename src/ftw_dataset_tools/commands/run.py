@@ -33,12 +33,17 @@ def _on_mask_progress(current: int, total: int) -> None:
     sys.stdout.flush()
 
 
-def _on_mask_start(total_grids: int, filtered_grids: int) -> None:
+def _on_mask_start(total_grids: int, filtered_grids: int, total_tasks: int) -> None:
     skipped = total_grids - filtered_grids
+    # total_tasks is what the progress bar counts to: one task per grid per group
+    # of mask types that share a rasterization.
+    tasks = f" -> {total_tasks:,} rasterization tasks" if total_tasks != filtered_grids else ""
     if skipped > 0:
-        click.echo(f"  Processing {filtered_grids:,} grids (skipping {skipped:,} below threshold)")
+        click.echo(
+            f"  Processing {filtered_grids:,} grids (skipping {skipped:,} below threshold){tasks}"
+        )
     else:
-        click.echo(f"  Processing {filtered_grids:,} grids")
+        click.echo(f"  Processing {filtered_grids:,} grids{tasks}")
 
 
 @click.command("run")
