@@ -460,6 +460,7 @@ def _write_mask_raster(
     crs: CRS,
     transform: Affine,
     tags: dict[str, str] | None = None,
+    nodata: int | None = None,
 ) -> None:
     """Write a label array to disk as a Cloud Optimized GeoTIFF with embedded band statistics.
 
@@ -468,9 +469,14 @@ def _write_mask_raster(
     chips: a distance transform is mostly exact zeros and holds only a few
     dozen distinct values, so deflate is already compressing long byte runs
     that the predictor would shuffle apart.
+
+    ``nodata``, when given, is declared on the band and excluded from the
+    statistics, so the embedded minimum/maximum describe the labelled pixels
+    only. The class-valued masks leave it unset: their background is a class,
+    not missing data.
     """
     height, width = mask.shape
-    stats = compute_band_stats(mask)
+    stats = compute_band_stats(mask, nodata=nodata)
 
     # Build the file somewhere else and rename it into place. The destination is
     # created the moment it is opened for writing, so a worker killed mid-write
@@ -493,6 +499,7 @@ def _write_mask_raster(
             dtype=mask.dtype,
             crs=crs,
             transform=transform,
+            nodata=nodata,
             compress="deflate",
             blocksize=512,
         ) as dst:
@@ -555,7 +562,12 @@ def _create_masks_for_cell(
             else:
                 mask = source
 
-            _write_mask_raster(mask, output_path, crs, transform, tags=tags)
+            # Instance ids are arbitrary and often global, so a viewer needs the
+            # chip's own id range to stretch over: declaring the background as
+            # nodata keeps it out of the embedded statistics (and out of the
+            # render's rescale).
+            nodata = background_class_value if mask_type == MaskType.INSTANCE else None
+            _write_mask_raster(mask, output_path, crs, transform, tags=tags, nodata=nodata)
         except Exception as e:
             # The earlier outputs are on disk; hand them back with the error.
             raise _PartialCellFailure(results, f"{mask_type.value}: {e}") from e

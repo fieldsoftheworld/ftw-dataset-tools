@@ -71,7 +71,7 @@ def _categorical_render(render_key: str, asset_key: str) -> dict:
     return {
         "title": _RENDER_TITLES[render_key],
         "assets": [asset_key],
-        "nodata": [_BACKGROUND],
+        "nodata": _BACKGROUND,
     }
 
 
@@ -82,31 +82,51 @@ def _decode_distance_render(asset_key: str, band: dict) -> dict:
         "title": _RENDER_TITLES["decode_distance"],
         "assets": [asset_key],
         "rescale": [[0, 1]],
-        "nodata": [nodata if nodata is not None else _BACKGROUND],
+        "nodata": nodata if nodata is not None else _BACKGROUND,
         "colormap_name": _CONTINUOUS_COLORMAP,
     }
 
 
-def _instance_render(asset_key: str, band: dict) -> dict:
-    """Instance ids, stretched over the band's actual value range."""
-    maximum = (band.get("statistics") or {}).get("maximum")
-    return {
+def _instance_rescale(band: dict) -> list[list[float]]:
+    """The chip's own id range, or the default stretch when the band cannot supply one.
+
+    Instance ids are global rather than per-chip, so a chip whose ids all sit in
+    the millions needs its own minimum, not zero, as the low end of the ramp. The
+    mask declares its background as nodata, so these statistics already exclude it.
+    """
+    statistics = band.get("statistics") or {}
+    minimum = statistics.get("minimum")
+    maximum = statistics.get("maximum")
+    if minimum is None or maximum is None or maximum <= minimum:
+        return [[0, 1]]
+    return [[minimum, maximum]]
+
+
+def _instance_render(asset_key: str, band: dict | None) -> dict:
+    """Instance ids drawn as a ramp; ``band`` is None where no stretch is knowable."""
+    render = {
         "title": _RENDER_TITLES["instance"],
         "assets": [asset_key],
-        "rescale": [[0, maximum if maximum else 1]],
-        "nodata": [_BACKGROUND],
-        "colormap_name": _CONTINUOUS_COLORMAP,
     }
+    if band is not None:
+        render["rescale"] = _instance_rescale(band)
+    render["nodata"] = _BACKGROUND
+    render["colormap_name"] = _CONTINUOUS_COLORMAP
+    return render
 
 
 def _render_for(render_key: str, asset_key: str, asset: pystac.Asset | None) -> dict:
-    """Build one render definition, reading band metadata from the asset when present."""
+    """Build one render definition, reading band metadata from the asset when present.
+
+    ``asset`` is None on the collection, where per-chip band statistics do not
+    exist; the instance render then carries no ``rescale`` at all rather than a
+    stretch that would be wrong for every chip.
+    """
     if render_key in _CATEGORICAL:
         return _categorical_render(render_key, asset_key)
-    band = _first_band(asset)
     if render_key == "decode_distance":
-        return _decode_distance_render(asset_key, band)
-    return _instance_render(asset_key, band)
+        return _decode_distance_render(asset_key, _first_band(asset))
+    return _instance_render(asset_key, _first_band(asset) if asset is not None else None)
 
 
 def build_item_renders(item: pystac.Item) -> dict:
@@ -130,8 +150,8 @@ def build_item_renders(item: pystac.Item) -> dict:
 def build_collection_renders() -> dict:
     """Build collection-level ``renders``, keyed by the asset name each one draws.
 
-    Per-item band statistics are not available here, so the instance render falls
-    back to its default stretch; the item's own render is the precise one.
+    Per-item band statistics are not available here, so the instance render omits
+    ``rescale`` entirely; the item's own render carries the real stretch.
     """
     return {
         asset_key: _render_for(render_key, asset_key, None)

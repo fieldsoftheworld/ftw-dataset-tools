@@ -1778,3 +1778,93 @@ class TestMaskRunSummaryLines:
         from ftw_dataset_tools.api.masks import mask_run_summary_lines
 
         assert mask_run_summary_lines([]) == []
+
+
+class TestInstanceMaskStatistics:
+    """The instance mask declares its background as nodata, so stats cover only fields."""
+
+    @staticmethod
+    def _build_inputs(tmp_path, ids):
+        """One-cell chips file plus two fields carrying the given instance ids."""
+        import geopandas as gpd
+        from shapely.geometry import LineString, box
+
+        crs = "EPSG:3035"
+        cell = box(4000000, 3000000, 4001000, 3001000)
+
+        chips = tmp_path / "chips.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["grid_001"], "field_coverage_pct": [20.0]},
+            geometry=[cell],
+            crs=crs,
+        ).to_parquet(chips)
+
+        fields = [
+            box(4000100, 3000100, 4000400, 3000400),
+            box(4000500, 3000100, 4000800, 3000400),
+        ]
+        boundaries = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame({"id": ids}, geometry=fields, crs=crs).to_parquet(boundaries)
+
+        lines = tmp_path / "lines.parquet"
+        gpd.GeoDataFrame(
+            {"id": ids},
+            geometry=[LineString(f.exterior.coords) for f in fields],
+            crs=crs,
+        ).to_parquet(lines)
+
+        return chips, boundaries, lines
+
+    def _create(self, tmp_path, mask_type, ids=(1000, 1010), **kwargs):
+        from ftw_dataset_tools.api.masks import create_masks
+
+        chips, boundaries, lines = self._build_inputs(tmp_path, list(ids))
+        result = create_masks(
+            chips_file=chips,
+            boundaries_file=boundaries,
+            boundary_lines_file=lines,
+            output_dir=tmp_path / mask_type.value,
+            field_dataset="test",
+            mask_type=mask_type,
+            num_workers=1,
+            **kwargs,
+        )
+        assert result.total_created == 1, result.masks_skipped
+        return result.masks_created[0].output_path
+
+    def test_instance_mask_declares_background_as_nodata(self, tmp_path) -> None:
+        import rasterio
+
+        from ftw_dataset_tools.api.masks import MaskType
+
+        path = self._create(tmp_path, MaskType.INSTANCE)
+
+        with rasterio.open(path) as src:
+            assert src.nodata == 0
+            tags = src.tags(1)
+
+        assert float(tags["STATISTICS_MINIMUM"]) == 1000
+        assert float(tags["STATISTICS_MAXIMUM"]) == 1010
+        assert float(tags["STATISTICS_VALID_PERCENT"]) < 100
+
+    def test_presence_only_background_is_the_nodata_value(self, tmp_path) -> None:
+        import rasterio
+
+        from ftw_dataset_tools.api.masks import MaskType
+
+        path = self._create(tmp_path, MaskType.INSTANCE, background_class_value=3)
+
+        with rasterio.open(path) as src:
+            assert src.nodata == 3
+            assert float(src.tags(1)["STATISTICS_MINIMUM"]) == 1000
+
+    def test_semantic_masks_keep_background_in_their_statistics(self, tmp_path) -> None:
+        import rasterio
+
+        from ftw_dataset_tools.api.masks import MaskType
+
+        path = self._create(tmp_path, MaskType.SEMANTIC_2_CLASS)
+
+        with rasterio.open(path) as src:
+            assert src.nodata is None
+            assert float(src.tags(1)["STATISTICS_MINIMUM"]) == 0

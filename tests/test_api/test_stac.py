@@ -949,7 +949,7 @@ class TestRendersOnCatalog:
         renders = item["renders"]
         assert set(renders) == {"semantic_2class"}
         assert renders["semantic_2class"]["assets"] == ["semantic_2class_mask"]
-        assert renders["semantic_2class"]["nodata"] == [0]
+        assert renders["semantic_2class"]["nodata"] == 0
         assert "colormap" not in renders["semantic_2class"]
         assert item["stac_extensions"].count(RENDER_SCHEMA_URI) == 1
         assert result.total_items == 1
@@ -1007,6 +1007,47 @@ class TestImageryReattachedOnStacRerun:
         assert assets["planting_image"]["file:size"] > 0
         assert assets["planting_image"]["raster:bands"][0]["data_type"] == "uint16"
         assert "harvest_image" not in assets
+
+    def test_overlay_thumbnail_comes_back(self, tmp_path: Path) -> None:
+        import json
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        _write_season_child(chip_dir, CHIP_ID, "planting")
+        (chip_dir / f"{CHIP_ID}_overlay.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+
+        thumbnail = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())["assets"]["thumbnail"]
+        assert thumbnail["href"] == f"./{CHIP_ID}_overlay.jpg"
+        assert thumbnail["roles"] == ["thumbnail"]
+        assert thumbnail["type"] == "image/jpeg"
+        assert thumbnail["file:size"] == 4
+
+    def test_plain_season_thumbnail_is_the_fallback(self, tmp_path: Path) -> None:
+        import json
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        _write_season_child(chip_dir, CHIP_ID, "planting")
+        (chip_dir / f"{CHIP_ID}_planting_image_s2.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+
+        item = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())
+        assert item["assets"]["thumbnail"]["href"] == f"./{CHIP_ID}_planting_image_s2.jpg"
+
+    def test_no_thumbnail_file_means_no_thumbnail_asset(self, tmp_path: Path) -> None:
+        import json
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        _write_season_child(chip_dir, CHIP_ID, "planting")
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+
+        item = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())
+        assert "thumbnail" not in item["assets"]
 
     def test_rerun_does_not_duplicate_links(self, tmp_path: Path) -> None:
         import json

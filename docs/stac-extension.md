@@ -211,7 +211,7 @@ Semantic mask assets add `classification:classes`
 |------|---------|
 | `semantic_2class_mask` | 0 background, 1 field (background is 3 when `presence_only` is set) |
 | `semantic_3class_mask` | 0 background, 1 field, 2 boundary |
-| `instance_mask` | no class list; background (0, or 3 for presence-only) marks non-field pixels, other values are instance ids |
+| `instance_mask` | no class list; background (0, or 3 for presence-only) marks non-field pixels and is declared as the band's `nodata`, other values are instance ids |
 | | Field ids that are float-like (e.g. `'111205887.0'`) or otherwise non-numeric are coerced to integers, or replaced with sequential ids (1..n) for that chip when any id in it can't be coerced. |
 | `decode_boundary_mask` | 0 background, 1 boundary |
 | `decode_distance_mask` | no class list; float32 normalized distance in [0, 1], with a `decode_distance_max_px` dataset tag |
@@ -258,22 +258,28 @@ to be transparent rather than coloured.
 
 **Renders.** Items and the collection carry `renders`
 ([render extension](https://github.com/stac-extensions/render)). The categorical masks get
-an entry with only `assets`, `title` and `nodata: [0]`, so a viewer that ignores
+an entry with only `assets`, `title` and `nodata: 0`, so a viewer that ignores
 `classification:classes` still hides the background — deliberately no `colormap`, so the
 class hints stay the single source of colour. Only the continuous rasters get a ramp:
 
 | Render | Assets | Definition |
 |--------|--------|------------|
-| `semantic_2class` | `semantic_2class_mask` | `nodata: [0]` |
-| `semantic_3class` | `semantic_3class_mask` | `nodata: [0]` |
-| `decode_boundary` | `decode_boundary_mask` | `nodata: [0]` |
+| `semantic_2class` | `semantic_2class_mask` | `nodata: 0` |
+| `semantic_3class` | `semantic_3class_mask` | `nodata: 0` |
+| `decode_boundary` | `decode_boundary_mask` | `nodata: 0` |
 | `decode_distance` | `decode_distance_mask` | `rescale: [[0, 1]]`, `nodata` from the band, `colormap_name: viridis` |
-| `instance` | `instance_mask` | `rescale: [[0, band maximum]]`, `nodata: [0]`, `colormap_name: viridis` |
+| `instance` | `instance_mask` | `rescale: [[band minimum, band maximum]]`, `nodata: 0`, `colormap_name: viridis` |
+
+Instance ids are global rather than per-chip, so the instance mask declares its background
+value as the band's `nodata`. Its embedded statistics therefore cover the labelled pixels
+only, and the render stretches from the chip's smallest field id to its largest instead of
+from zero. Where those statistics are missing or degenerate the render falls back to
+`[[0, 1]]`.
 
 Item renders are keyed by mask kind and only cover the masks that chip actually has; the
 collection mirrors the same definitions keyed by asset name, as a default for clients that
-read the collection first. The instance render on the collection uses a default stretch,
-since per-chip band statistics are only known on the item.
+read the collection first. The collection's instance render carries no `rescale` at all —
+there is no meaningful collection-wide id range — so use the item's.
 
 ## Output Layout
 

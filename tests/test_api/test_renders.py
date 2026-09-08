@@ -58,11 +58,23 @@ class TestBuildItemRenders:
 
         for key in ("semantic_2class", "semantic_3class", "decode_boundary"):
             assert set(renders[key]) == {"assets", "title", "nodata"}
-            assert renders[key]["nodata"] == [0]
+            assert renders[key]["nodata"] == 0
             assert "colormap" not in renders[key]
             assert "colormap_name" not in renders[key]
 
-    def test_instance_rescales_to_band_maximum(self) -> None:
+    def test_instance_stretches_over_the_ids_actually_present(self) -> None:
+        """Instance ids are global, so the stretch must start at the chip's own minimum."""
+        from ftw_dataset_tools.api.renders import build_item_renders
+
+        renders = build_item_renders(
+            _item({"instance_mask": [{"statistics": {"minimum": 1000, "maximum": 1010}}]})
+        )
+
+        assert renders["instance"]["rescale"] == [[1000, 1010]]
+        assert renders["instance"]["nodata"] == 0
+        assert renders["instance"]["colormap_name"] == "viridis"
+
+    def test_instance_stretch_from_zero_when_the_minimum_is_zero(self) -> None:
         from ftw_dataset_tools.api.renders import build_item_renders
 
         renders = build_item_renders(
@@ -70,15 +82,15 @@ class TestBuildItemRenders:
         )
 
         assert renders["instance"]["rescale"] == [[0, 945174]]
-        assert renders["instance"]["nodata"] == [0]
-        assert renders["instance"]["colormap_name"] == "viridis"
 
-    def test_instance_falls_back_to_one_without_statistics(self) -> None:
+    def test_instance_falls_back_to_one_without_usable_statistics(self) -> None:
         from ftw_dataset_tools.api.renders import build_item_renders
 
         assert build_item_renders(_item({"instance_mask": None}))["instance"]["rescale"] == [[0, 1]]
         bandless = _item({"instance_mask": [{"data_type": "uint32"}]})
         assert build_item_renders(bandless)["instance"]["rescale"] == [[0, 1]]
+        flat = _item({"instance_mask": [{"statistics": {"minimum": 7, "maximum": 7}}]})
+        assert build_item_renders(flat)["instance"]["rescale"] == [[0, 1]]
 
     def test_decode_distance_is_a_continuous_ramp(self) -> None:
         from ftw_dataset_tools.api.renders import build_item_renders
@@ -86,7 +98,7 @@ class TestBuildItemRenders:
         renders = build_item_renders(_item({"decode_distance_mask": None}))
 
         assert renders["decode_distance"]["rescale"] == [[0, 1]]
-        assert renders["decode_distance"]["nodata"] == [0]
+        assert renders["decode_distance"]["nodata"] == 0
         assert renders["decode_distance"]["colormap_name"] == "viridis"
 
     def test_decode_distance_uses_declared_band_nodata(self) -> None:
@@ -96,7 +108,7 @@ class TestBuildItemRenders:
             _item({"decode_distance_mask": [{"nodata": -1, "data_type": "float32"}]})
         )
 
-        assert renders["decode_distance"]["nodata"] == [-1]
+        assert renders["decode_distance"]["nodata"] == -1
 
 
 class TestBuildCollectionRenders:
@@ -115,6 +127,14 @@ class TestBuildCollectionRenders:
         assert renders["semantic_3class_mask"]["assets"] == ["semantic_3class_mask"]
         assert "colormap" not in renders["semantic_3class_mask"]
         assert renders["instance_mask"]["colormap_name"] == "viridis"
+        assert renders["instance_mask"]["nodata"] == 0
+        assert renders["decode_distance_mask"]["rescale"] == [[0, 1]]
+
+    def test_instance_has_no_global_stretch(self) -> None:
+        """There is no meaningful collection-wide instance id range, so no rescale."""
+        from ftw_dataset_tools.api.renders import build_collection_renders
+
+        assert "rescale" not in build_collection_renders()["instance_mask"]
 
 
 class TestLabelColors:

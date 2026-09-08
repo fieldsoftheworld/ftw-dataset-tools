@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 __all__ = [
     "attach_existing_seasons",
     "attach_season_to_parent",
+    "attach_thumbnail_to_parent",
     "create_child_items_from_selection",
 ]
 
@@ -363,13 +364,52 @@ def attach_season_to_parent(
     _attach_local_image_asset(parent_item, child_item, season, chip_dir)
 
 
+#: Chip preview candidates, in the order ``image_download`` itself prefers them:
+#: the mask overlay when it could be drawn, otherwise the plain planting preview.
+#: Each entry is (filename suffix, asset title).
+_THUMBNAIL_CANDIDATES = (
+    ("_overlay.jpg", "Chip preview with field overlay"),
+    ("_planting_image_s2.jpg", "Chip preview (planting season)"),
+)
+
+
+def attach_thumbnail_to_parent(parent_item: pystac.Item, chip_dir: Path) -> bool:
+    """Re-add the chip's preview asset from whichever thumbnail file is on disk.
+
+    The preview is written by the download stage and is not referenced from the
+    season children, so a rebuilt chip item would otherwise lose it.
+
+    Args:
+        parent_item: Chip item to update in place
+        chip_dir: Directory holding the chip's files
+
+    Returns:
+        Whether a thumbnail asset was added.
+    """
+    for suffix, title in _THUMBNAIL_CANDIDATES:
+        filename = f"{parent_item.id}{suffix}"
+        path = chip_dir / filename
+        if not path.exists():
+            continue
+        asset = pystac.Asset(
+            href=f"./{filename}",
+            media_type=pystac.MediaType.JPEG,
+            title=title,
+            roles=["thumbnail"],
+        )
+        parent_item.add_asset("thumbnail", asset)
+        add_file_info(asset, path)
+        return True
+    return False
+
+
 def attach_existing_seasons(parent_item: pystac.Item, chip_dir: Path) -> list[str]:
     """Re-attach the season children already on disk to a freshly built chip item.
 
     The STAC stage rebuilds every chip item from the mask files alone, which would
     otherwise drop the season links and imagery assets that the select/download
     stages added. This reads whichever ``<chip>_<season>_s2.json`` children are
-    present and puts them back.
+    present and puts them back, along with the chip's preview thumbnail.
 
     Args:
         parent_item: Newly built chip item to update in place
@@ -386,4 +426,5 @@ def attach_existing_seasons(parent_item: pystac.Item, chip_dir: Path) -> list[st
         child_item = pystac.Item.from_file(str(child_path))
         attach_season_to_parent(parent_item, child_item, season, chip_dir=chip_dir)
         attached.append(season)
+    attach_thumbnail_to_parent(parent_item, chip_dir)
     return attached
