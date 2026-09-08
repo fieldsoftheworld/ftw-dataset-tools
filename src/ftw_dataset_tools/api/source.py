@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import urllib.error
@@ -25,8 +26,18 @@ class SourceFetchError(OSError):
 
 
 def is_url(value: str) -> bool:
-    """True for http(s) URLs; everything else is treated as a local path."""
+    """True for http(s) URLs; everything else is treated as a local path.
+
+    Plain ``http://`` is recognised here so it gets a clear error instead of
+    being mistaken for a local path; only ``https://`` is actually fetchable
+    (see :func:`fetch_source`).
+    """
     return value.startswith(("http://", "https://"))
+
+
+def is_https_url(value: str) -> bool:
+    """True only for ``https://`` URLs, the only remote scheme ftwd will fetch."""
+    return value.startswith("https://")
 
 
 def cache_filename(url: str) -> str:
@@ -66,12 +77,34 @@ def _hash_file(path: Path) -> tuple[str, int]:
 
 
 def describe_local_source(path: Path | str) -> SourceRecord:
-    """Provenance for a local input file."""
+    """Provenance for a local input file.
+
+    ``href`` is the bare filename: the published provenance identifies the file
+    without recording the build machine's directory layout. ``local_path`` keeps
+    the resolved path for use inside this process.
+    """
     local = Path(path).resolve()
     sha256, size = _hash_file(local)
     return SourceRecord(
-        href=str(local), local_path=local, sha256=sha256, size=size, fetched_at=None
+        href=local.name, local_path=local, sha256=sha256, size=size, fetched_at=None
     )
+
+
+def _raise_on_size_mismatch(url: str, content_length: str, size: int) -> None:
+    """Check a downloaded body against the declared Content-Length.
+
+    Raises:
+        SourceFetchError: If the header is not a number, or the body was short.
+    """
+    try:
+        declared = int(content_length)
+    except (TypeError, ValueError) as err:
+        raise SourceFetchError(
+            f"could not fetch {url}: server sent a non-numeric Content-Length "
+            f"header ({content_length!r}); the download cannot be verified."
+        ) from err
+    if declared != size:
+        raise SourceFetchError(f"{url}: expected {declared} bytes, got {size}")
 
 
 def fetch_source(
@@ -88,6 +121,12 @@ def fetch_source(
     fetch leaves nothing behind. ``fetched_at`` is set only when bytes were
     actually fetched in this call.
     """
+    if not is_https_url(url):
+        raise SourceFetchError(
+            f"refusing to fetch {url}: source URLs must use https:// so the recorded "
+            "checksum attests to bytes that could not be tampered with in transit."
+        )
+
     cache = Path(cache_dir).expanduser()
     cache.mkdir(parents=True, exist_ok=True)
     target = cache / cache_filename(url)
@@ -111,8 +150,8 @@ def fetch_source(
             expected = (
                 response_headers.get("Content-Length") if response_headers is not None else None
             )
-        if expected is not None and int(expected) != size:
-            raise SourceFetchError(f"{url}: expected {expected} bytes, got {size}")
+        if expected is not None:
+            _raise_on_size_mismatch(url, expected, size)
         partial.replace(target)
     except SourceFetchError:
         partial.unlink(missing_ok=True)
@@ -120,7 +159,9 @@ def fetch_source(
     except urllib.error.HTTPError as err:
         partial.unlink(missing_ok=True)
         raise SourceFetchError(f"could not fetch {url}: HTTP {err.code}: {err.reason}") from err
-    except OSError as err:
+    except (OSError, http.client.HTTPException) as err:
+        # HTTPException (e.g. IncompleteRead when a connection drops mid-body)
+        # is not an OSError, so it needs catching explicitly.
         partial.unlink(missing_ok=True)
         raise SourceFetchError(f"could not fetch {url}: {err}") from err
     except BaseException:

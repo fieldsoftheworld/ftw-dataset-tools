@@ -472,6 +472,16 @@ class TestSourceKeys:
         with pytest.raises(ConfigError, match="source_via"):
             DatasetConfig.from_dict({"fields_file": "f.parquet", "source_via": "not a url"})
 
+    def test_source_via_must_be_https(self) -> None:
+        with pytest.raises(ConfigError, match="https"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "source_via": "http://x/collection.json"}
+            )
+
+    def test_plain_http_fields_file_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="https"):
+            DatasetConfig.from_dict({"fields_file": "http://x/y.parquet"})
+
     def test_provenance_defaults_null(self) -> None:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
         prov = config.provenance_dict()

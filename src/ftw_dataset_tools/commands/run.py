@@ -152,6 +152,7 @@ def run_cmd(
     try:
         ctx = pipeline.build_context(
             config,
+            stages=stages,
             on_progress=_on_progress,
             on_mask_progress=_on_mask_progress,
             on_mask_start=_on_mask_start,

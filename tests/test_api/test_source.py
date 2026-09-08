@@ -11,9 +11,17 @@ class TestIsUrl:
         from ftw_dataset_tools.api.source import is_url
 
         assert is_url("https://data.source.coop/x/y.parquet")
+        # http is still recognised as a URL so it gets a clear error, not a path error.
         assert is_url("http://example.org/y.parquet")
         assert not is_url("/tmp/y.parquet")
         assert not is_url("s3://bucket/y.parquet")
+
+    def test_only_https_is_fetchable(self) -> None:
+        from ftw_dataset_tools.api.source import is_https_url
+
+        assert is_https_url("https://data.source.coop/x/y.parquet")
+        assert not is_https_url("http://example.org/y.parquet")
+        assert not is_https_url("/tmp/y.parquet")
 
 
 class TestCacheFilename:
@@ -118,6 +126,71 @@ class TestFetchSource:
         assert list(tmp_path.iterdir()) == []
         assert not list(tmp_path.glob("*.part"))
 
+    def test_connection_drop_mid_body_surfaces_as_source_fetch_error(self, tmp_path: Path) -> None:
+        """A real mid-body failure: the read itself raises IncompleteRead.
+
+        ``http.client.IncompleteRead`` is an ``HTTPException``, not an ``OSError``,
+        so it needs catching explicitly. The size guard never gets a chance to run.
+        """
+        import http.client
+
+        import pytest
+
+        from ftw_dataset_tools.api.source import SourceFetchError, fetch_source
+
+        class _DroppingStream(io.BytesIO):
+            def __init__(self) -> None:
+                super().__init__(b"PAR1fake")
+                self.headers = {"Content-Length": "108"}
+                self._reads = 0
+
+            def read(self, size: int = -1) -> bytes:
+                self._reads += 1
+                if self._reads == 1:
+                    return super().read(size)
+                raise http.client.IncompleteRead(b"", 100)
+
+        def opener(request, timeout=None):  # noqa: ARG001
+            return _DroppingStream()
+
+        url = "https://example.org/data/lu.parquet"
+        with pytest.raises(SourceFetchError, match="could not fetch"):
+            fetch_source(url, tmp_path, opener=opener)
+
+        assert list(tmp_path.iterdir()) == []
+        assert not list(tmp_path.glob("*.part"))
+
+    def test_non_numeric_content_length_explains_itself(self, tmp_path: Path) -> None:
+        import pytest
+
+        from ftw_dataset_tools.api.source import SourceFetchError, fetch_source
+
+        class _BadHeaderStream(io.BytesIO):
+            def __init__(self) -> None:
+                super().__init__(b"PAR1fake")
+                self.headers = {"Content-Length": "not-a-number"}
+
+        def opener(request, timeout=None):  # noqa: ARG001
+            return _BadHeaderStream()
+
+        with pytest.raises(SourceFetchError, match="non-numeric Content-Length"):
+            fetch_source("https://example.org/data/lu.parquet", tmp_path, opener=opener)
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_plain_http_url_is_refused(self, tmp_path: Path) -> None:
+        import pytest
+
+        from ftw_dataset_tools.api.source import SourceFetchError, fetch_source
+
+        def opener(request, timeout=None):  # noqa: ARG001
+            raise AssertionError("must not open a plain http URL")
+
+        with pytest.raises(SourceFetchError, match="must use https"):
+            fetch_source("http://example.org/data/lu.parquet", tmp_path, opener=opener)
+
+        assert not tmp_path.exists() or list(tmp_path.iterdir()) == []
+
     def test_http_error_surfaces_as_source_fetch_error(self, tmp_path: Path) -> None:
         import urllib.error
 
@@ -144,7 +217,9 @@ class TestDescribeLocalSource:
         p.write_bytes(b"abc")
         rec = describe_local_source(p)
 
-        assert rec.href == str(p.resolve())
+        # href is the bare filename: the build machine's layout is not published.
+        assert rec.href == "f.parquet"
+        assert str(tmp_path) not in rec.href
         assert rec.local_path == p.resolve()
         assert rec.sha256 == hashlib.sha256(b"abc").hexdigest()
         assert rec.size == 3

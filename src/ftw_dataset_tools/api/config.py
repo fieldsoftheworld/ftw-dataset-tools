@@ -533,8 +533,14 @@ class DatasetConfig:
 
     def validate(self) -> None:
         """Validate values, raising ConfigError on the first problem found."""
-        if self.source_via is not None and not self.source_via.startswith(("http://", "https://")):
-            raise ConfigError("source_via must be an http(s) URL.")
+        # HTTPS only: the recorded checksum should attest to bytes that could not
+        # have been swapped in transit, and the intended sources are all HTTPS.
+        if self.fields_file.startswith("http://"):
+            raise ConfigError(
+                "fields_file must use https:// for remote inputs; plain http:// is not allowed."
+            )
+        if self.source_via is not None and not self.source_via.startswith("https://"):
+            raise ConfigError("source_via must be an https URL.")
 
         split_type = self.stages.splits.split_type
         if split_type is not None and split_type not in splits.SPLIT_TYPE_CHOICES:
@@ -648,6 +654,21 @@ def write_provenance_file(
     out_path = out_dir / filename
     out_path.write_text(yaml.safe_dump(provenance, sort_keys=False, default_flow_style=False))
     return out_path
+
+
+def read_provenance_file(
+    output_dir: str | Path,
+    filename: str = "ftwd-config.resolved.yaml",
+) -> dict[str, Any] | None:
+    """Read a provenance record written by an earlier run, or None if unavailable."""
+    path = Path(output_dir) / filename
+    if not path.exists():
+        return None
+    try:
+        data = yaml.safe_load(path.read_text())
+    except (yaml.YAMLError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 # ---- internal helpers ---------------------------------------------------

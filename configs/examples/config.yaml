@@ -20,7 +20,7 @@ version: 1
 
 # Path to the input GeoParquet field boundaries.
 fields_file: austria_fields.parquet
-# fields_file may also be an http(s) URL, e.g. a harmonized fiboa collection file; it is
+# fields_file may also be an https URL, e.g. a harmonized fiboa collection file; it is
 # downloaded once into the fetch cache and reused on later runs:
 # fields_file: https://data.source.coop/ftw/harmonized-field-data/lu/latest/lu.parquet
 # source_via: https://data.source.coop/ftw/harmonized-field-data/lu/collection.json  # written as a rel:via link

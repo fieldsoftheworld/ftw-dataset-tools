@@ -120,15 +120,16 @@ def create_dataset(
         config.class_filter = ClassFilter.from_file(class_filter)
     provenance = config.provenance_dict()
 
+    # Imagery stages are disabled in from_kwargs(), so this runs reproject..stac.
+    stages = pipeline.resolve_stages(config=config)
     ctx = pipeline.build_context(
         config,
+        stages=stages,
         on_progress=on_progress,
         on_mask_progress=on_mask_progress,
         on_mask_start=on_mask_start,
         provenance=provenance,
     )
-    # Imagery stages are disabled in from_kwargs(), so this runs reproject..stac.
-    stages = pipeline.resolve_stages(config=config)
     pipeline.run_pipeline(ctx, stages)
 
     return CreateDatasetResult(
