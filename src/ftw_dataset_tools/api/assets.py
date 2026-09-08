@@ -93,6 +93,15 @@ def add_file_info(asset: pystac.Asset, path: Path, *, checksum: bool = False) ->
         ext.checksum = multihash_sha256(path)
 
 
+def _top_level_type(dtype: str) -> str:
+    """Return the top-level DuckDB type name, dropping any nested declaration.
+
+    DuckDB reports nested types in full (``STRUCT(a INTEGER, b VARCHAR, ...)``),
+    which would embed kilobytes of type declaration in the collection JSON.
+    """
+    return str(dtype).split("(", 1)[0].strip().lower()
+
+
 def add_table_columns(asset: pystac.Asset, path: Path, geometry_column: str | None = None) -> None:
     """Set ``table:columns`` (name, type) and ``table:row_count`` from a parquet file.
 
@@ -103,20 +112,23 @@ def add_table_columns(asset: pystac.Asset, path: Path, geometry_column: str | No
     import duckdb
     from pystac.extensions.table import Column, TableExtension
 
-    from ftw_dataset_tools.api.geo import detect_geometry_column
+    from ftw_dataset_tools.api.geo import detect_geometry_column, sql_path
 
     path = Path(path)
     geometry_column = geometry_column or detect_geometry_column(path)
+    # DESCRIBE does not accept a query parameter for read_parquet's argument, so
+    # the path is escaped rather than bound.
+    source = f"read_parquet('{sql_path(path)}')"
     con = duckdb.connect(":memory:")
     try:
-        rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{path}')").fetchall()
-        row_count = con.execute(f"SELECT count(*) FROM read_parquet('{path}')").fetchone()[0]
+        rows = con.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()
+        row_count = con.execute(f"SELECT count(*) FROM {source}").fetchone()[0]
     finally:
         con.close()
 
     columns = []
     for name, dtype, *_ in rows:
-        column_type = "geometry" if name == geometry_column else str(dtype).lower()
+        column_type = "geometry" if name == geometry_column else _top_level_type(dtype)
         columns.append(Column({"name": name, "type": column_type}))
 
     table = TableExtension.ext(asset, add_if_missing=True)

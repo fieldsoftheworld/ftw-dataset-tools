@@ -788,7 +788,9 @@ def generate_stac_catalog(
     if metadata is None or not metadata.license:
         log("Warning: no metadata.license; the collection is not Portolan-publishable without one")
     updated = _updated_stamp(provenance)
-    base_title = metadata.title if metadata and metadata.title else field_dataset
+    # No configured title means the collection constructors' titles ("<name> Chips",
+    # "<name> Source Data") stand; overriding with the dataset name would lose them.
+    base_title = metadata.title if metadata and metadata.title else None
     _apply_collection_metadata(
         chips_collection,
         metadata,
@@ -797,7 +799,10 @@ def generate_stac_catalog(
         description=metadata.description if metadata else None,
     )
     _apply_collection_metadata(
-        source_collection, metadata, updated=updated, title=f"{base_title} source fields"
+        source_collection,
+        metadata,
+        updated=updated,
+        title=f"{base_title} source fields" if base_title else None,
     )
     if config is not None:
         chips_collection.extra_fields.update(_collection_ftw_properties(config))

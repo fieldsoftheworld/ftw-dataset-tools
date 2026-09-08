@@ -377,3 +377,50 @@ class TestAddRasterBandsOpensOnce:
 
         assert len(opens) == 1
         assert asset.extra_fields["raster:bands"][0]["statistics"]["maximum"] == 2
+
+
+class TestTableColumnTypes:
+    """Nested DuckDB types are truncated and paths are escaped, not interpolated raw."""
+
+    def _nested_parquet(self, path: Path) -> None:
+        import duckdb
+
+        con = duckdb.connect(":memory:")
+        try:
+            con.execute(
+                "COPY (SELECT 1 AS id, {'href': 'a.tif', 'type': 'image/tiff'} AS asset) "
+                f"TO '{path!s}' (FORMAT PARQUET)"
+            )
+        finally:
+            con.close()
+
+    def test_nested_type_truncated_to_top_level_name(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import add_table_columns
+
+        path = tmp_path / "nested.parquet"
+        self._nested_parquet(path)
+        _, asset = _item_with_asset(path, ["data"])
+
+        add_table_columns(asset, path)
+
+        columns = {c["name"]: c["type"] for c in asset.extra_fields["table:columns"]}
+        assert columns["asset"] == "struct"
+        assert all("(" not in c["type"] for c in asset.extra_fields["table:columns"])
+
+    def test_path_with_single_quote(self, tmp_path: Path) -> None:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.assets import add_table_columns
+
+        quoted_dir = tmp_path / "o'brien"
+        quoted_dir.mkdir()
+        path = quoted_dir / "fields.parquet"
+        gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(path)
+        _, asset = _item_with_asset(path, ["data"])
+
+        add_table_columns(asset, path, geometry_column="geometry")
+
+        columns = {c["name"] for c in asset.extra_fields["table:columns"]}
+        assert columns == {"id", "geometry"}
+        assert asset.extra_fields["table:row_count"] == 1

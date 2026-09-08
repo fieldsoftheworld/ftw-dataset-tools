@@ -464,3 +464,41 @@ class TestGetBboxColumnName:
 
         result = get_bbox_column_name(path)
         assert result == "bbox"
+
+
+class TestSqlPath:
+    """sql_path escapes paths for interpolation into DuckDB SQL literals."""
+
+    def test_plain_path_unchanged(self) -> None:
+        from ftw_dataset_tools.api.geo import sql_path
+
+        assert sql_path("/tmp/fields.parquet") == "/tmp/fields.parquet"
+
+    def test_single_quote_doubled(self) -> None:
+        from ftw_dataset_tools.api.geo import sql_path
+
+        assert sql_path("/tmp/o'brien/fields.parquet") == "/tmp/o''brien/fields.parquet"
+
+    def test_accepts_path_objects(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.geo import sql_path
+
+        assert sql_path(tmp_path / "a.parquet") == str(tmp_path / "a.parquet")
+
+    def test_escaped_path_reads_back(self, tmp_path: Path) -> None:
+        import duckdb
+
+        from ftw_dataset_tools.api.geo import sql_path
+
+        quoted_dir = tmp_path / "o'brien"
+        quoted_dir.mkdir()
+        path = quoted_dir / "rows.parquet"
+        con = duckdb.connect(":memory:")
+        try:
+            con.execute(f"COPY (SELECT 1 AS id) TO '{sql_path(path)}' (FORMAT PARQUET)")
+            count = con.execute(
+                f"SELECT count(*) FROM read_parquet('{sql_path(path)}')"
+            ).fetchone()[0]
+        finally:
+            con.close()
+
+        assert count == 1

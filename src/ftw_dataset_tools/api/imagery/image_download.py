@@ -16,7 +16,7 @@ from rasterio.vrt import WarpedVRT
 from rasterio.warp import Resampling
 
 from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
-from ftw_dataset_tools.api.imagery.settings import BANDS_OF_INTEREST
+from ftw_dataset_tools.api.imagery.settings import BANDS_OF_INTEREST, REFLECTANCE_BANDS
 from ftw_dataset_tools.api.imagery.thumbnails import (
     ThumbnailError,
     generate_overlay_thumbnail,
@@ -39,7 +39,25 @@ __all__ = [
     "download_and_clip_scene",
     "find_reference_mask_for_output",
     "process_downloaded_scene",
+    "stack_nodata",
 ]
+
+
+def stack_nodata(found_bands: list[str]) -> int | None:
+    """Return 0 as the stack's nodata value, or None when 0 is a real measurement.
+
+    Sentinel-2 L2A uses 0 as the reflectance fill value, and declaring it keeps
+    fill out of the band statistics. GeoTIFF nodata is per-dataset, though, so it
+    applies to every band written. The non-reflectance bands (cloud and snow
+    probability, aot, wvp, scl) use 0 as a genuine value, so declaring it
+    alongside them would drop valid pixels from the statistics and from masked
+    reads. Only declare it when the whole stack is reflectance.
+    """
+    if not found_bands:
+        return None
+    if all(band.lower() in REFLECTANCE_BANDS for band in found_bands):
+        return 0
+    return None
 
 
 @dataclass
@@ -415,8 +433,8 @@ def download_and_clip_scene(
         "crs": target_crs,
         "transform": target_transform,
         "compress": "deflate",
-        # Sentinel-2 L2A uses 0 as the fill value; declaring it keeps fill out of the statistics
-        "nodata": 0,
+        # Only set when every band in the stack treats 0 as fill; see stack_nodata.
+        "nodata": stack_nodata(found_bands),
     }
 
     log(f"Writing to {output_path}...")

@@ -573,6 +573,18 @@ class TestCollectionMetadata:
         assert source["title"] == "Austria source fields"
         assert source["version"] == "2.0.0-alpha.1"
 
+    def test_metadata_without_title_keeps_default_titles(self, tmp_path: Path) -> None:
+        import json
+
+        config = self._config(license="CC-BY-4.0")
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, config=config)
+
+        chips = json.loads(result.chips_collection_path.read_text())
+        source = json.loads(result.source_collection_path.read_text())
+        assert chips["title"] == "ds Chips"
+        assert source["title"] == "ds Source Data"
+        assert chips["license"] == "CC-BY-4.0"
+
     def test_license_link_when_other(self, tmp_path: Path) -> None:
         import json
 

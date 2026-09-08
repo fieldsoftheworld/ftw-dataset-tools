@@ -67,7 +67,7 @@ describing how the whole dataset was built:
 | `ftw:presence_only` | boolean | Whether labels are presence-only (background class value is 3 instead of 0) |
 | `ftw:min_coverage_pct` | number | Minimum field-coverage percentage required to keep a grid cell |
 | `ftw:cloud_cover_chip_threshold` | number | Chip-level cloud cover threshold percentage (present only when image selection is enabled) |
-| `ftw:nodata_max` | number | Maximum allowed nodata fraction for a selected scene (present only when image selection is enabled) |
+| `ftw:nodata_max` | number | Maximum allowed nodata percentage (0-100) for a selected scene (present only when image selection is enabled) |
 | `ftw:buffer_days` | integer | Search buffer in days around crop calendar dates (present only when image selection is enabled) |
 | `ftw:num_buffer_expansions` | integer | Number of times to expand the buffer if no cloud-free scenes are found (present only when image selection is enabled) |
 | `ftw:buffer_expansion_size` | integer | Days added to the buffer on each expansion (present only when image selection is enabled) |

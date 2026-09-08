@@ -199,7 +199,9 @@ ftwd create-dataset fields.parquet --split-type block3x3 --min-coverage 1.0 --re
 - `--resolution` - Pixel resolution in meters for masks (default: 10.0)
 - `--workers` - Number of parallel workers (default: half of CPUs)
 - `--skip-reproject` - Fail if input is not EPSG:4326 instead of auto-reprojecting
-- `--checksums` - Add `file:checksum` (multihash sha256) to every STAC asset; slow on large datasets
+- `--checksums` - Add `file:checksum` (multihash sha256) to the assets written by the stac
+  stage (source parquet, chips parquet, items parquet, masks); slow on large datasets.
+  Imagery and thumbnails are written after the stac stage and do not get checksums.
 
 **Output structure:**
 ```

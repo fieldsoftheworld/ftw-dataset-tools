@@ -29,6 +29,27 @@ S2_COLLECTIONS = {
 # Default bands of interest
 BANDS_OF_INTEREST = ["red", "green", "blue", "nir"]
 
+# Sentinel-2 L2A bands that carry surface reflectance, for which 0 is the scene
+# fill value. Everything else EarthSearch offers (aot, wvp, scl, cloud, snow,
+# visual) uses 0 as a genuine measurement, so 0 must not be declared as nodata
+# when one of those shares the stack: GeoTIFF nodata is per-dataset.
+REFLECTANCE_BANDS = frozenset(
+    {
+        "coastal",
+        "blue",
+        "green",
+        "red",
+        "rededge1",
+        "rededge2",
+        "rededge3",
+        "nir",
+        "nir08",
+        "nir09",
+        "swir16",
+        "swir22",
+    }
+)
+
 # Cloud probability band (for pixel-level cloud filtering)
 CLOUD_PROBABILITY_BAND = "cloud_probability"
 
