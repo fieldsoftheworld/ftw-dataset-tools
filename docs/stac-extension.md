@@ -211,7 +211,7 @@ Semantic mask assets add `classification:classes`
 |------|---------|
 | `semantic_2class_mask` | 0 background, 1 field (background is 3 when `presence_only` is set) |
 | `semantic_3class_mask` | 0 background, 1 field, 2 boundary |
-| `instance_mask` | no class list; background (0, or 3 for presence-only) marks non-field pixels and is declared as the band's `nodata`, other values are instance ids |
+| `instance_mask` | no class list; background (0, or 3 for presence-only) marks non-field pixels and is excluded from the band statistics — declared as the band's `nodata` only when it is 0 — other values are instance ids |
 | | Field ids that are float-like (e.g. `'111205887.0'`) or otherwise non-numeric are coerced to integers, or replaced with sequential ids (1..n) for that chip when any id in it can't be coerced. |
 | `decode_boundary_mask` | 0 background, 1 boundary |
 | `decode_distance_mask` | no class list; float32 normalized distance in [0, 1], with a `decode_distance_max_px` dataset tag |
@@ -256,25 +256,42 @@ rendering mechanism for those rasters. Field interiors are `009E73` and boundari
 `D55E00` (Okabe-Ito, colour-blind safe); background carries no hint, because it is meant
 to be transparent rather than coloured.
 
-**Renders.** Items and the collection carry `renders`
-([render extension](https://github.com/stac-extensions/render)). The categorical masks get
-an entry with only `assets`, `title` and `nodata: 0`, so a viewer that ignores
-`classification:classes` still hides the background — deliberately no `colormap`, so the
-class hints stay the single source of colour. Only the continuous rasters get a ramp:
+**Renders.** Items carry `renders` under `properties` and the collection carries it at the
+top level, as the [render extension](https://github.com/stac-extensions/render) v2.0.0
+schema requires for each type. The categorical masks get an entry with only `assets`,
+`title` and `nodata`, so a viewer that ignores `classification:classes` still hides the
+background — deliberately no `colormap`, so the class hints stay the single source of
+colour. Only the continuous rasters get a ramp:
 
 | Render | Assets | Definition |
 |--------|--------|------------|
-| `semantic_2class` | `semantic_2class_mask` | `nodata: 0` |
-| `semantic_3class` | `semantic_3class_mask` | `nodata: 0` |
+| `semantic_2class` | `semantic_2class_mask` | `nodata`: the background value |
+| `semantic_3class` | `semantic_3class_mask` | `nodata`: the background value |
 | `decode_boundary` | `decode_boundary_mask` | `nodata: 0` |
-| `decode_distance` | `decode_distance_mask` | `rescale: [[0, 1]]`, `nodata` from the band, `colormap_name: viridis` |
-| `instance` | `instance_mask` | `rescale: [[band minimum, band maximum]]`, `nodata: 0`, `colormap_name: viridis` |
+| `decode_distance` | `decode_distance_mask` | `rescale: [[0, 1]]`, `nodata` from the band, else 0 |
+| `instance` | `instance_mask` | `rescale: [[band minimum, band maximum]]`, `nodata`: the background value, `colormap_name: viridis` |
 
-Instance ids are global rather than per-chip, so the instance mask declares its background
-value as the band's `nodata`. Its embedded statistics therefore cover the labelled pixels
-only, and the render stretches from the chip's smallest field id to its largest instead of
-from zero. Where those statistics are missing or degenerate the render falls back to
-`[[0, 1]]`.
+`nodata` is the dataset's background pixel value — 0 normally, **3** when
+`presence_only` is set — for the three class-valued masks (`semantic_2class`,
+`semantic_3class`, `instance`). The DECODE layers always fold their background into 0, so
+they always use 0.
+
+Instance ids are global rather than per-chip, so the instance mask's background is excluded
+from its embedded statistics: the render then stretches from the chip's smallest field id
+to its largest instead of from zero, and a chip whose ids all sit in the hundreds of
+thousands still shows its fields apart. Where those statistics are missing or degenerate
+the render falls back to `[[0, 1]]`.
+
+Two caveats on that:
+
+- The instance band declares `nodata` **only when the background is 0**. A presence-only
+  background of 3 is also a legal instance id (ids are renumbered `1..n` for a chip whose
+  raw ids cannot be coerced), so declaring it would make a real field vanish for any
+  nodata-respecting reader. Presence-only instance masks therefore exclude 3 from their
+  statistics but leave the band's `nodata` unset.
+- Masks written before this behaviour existed carry statistics that include the background
+  and so still yield a `[[0, maximum]]` stretch. Re-run the `masks` stage (then `stac`) to
+  pick up the tighter range.
 
 Item renders are keyed by mask kind and only cover the masks that chip actually has; the
 collection mirrors the same definitions keyed by asset name, as a default for clients that

@@ -1324,3 +1324,96 @@ def _write_child(chip_dir: Path, chip_id: str, season: str, image: bool = False)
             "roles": ["data"],
         }
     (chip_dir / f"{chip_id}_{season}_s2.json").write_text(json.dumps(child))
+
+
+class TestSeasonImageTitleFallback:
+    """A GeoTIFF without band descriptions must not lose the band list in the title."""
+
+    def test_falls_back_to_the_childs_own_image_title(self, tmp_path: Path) -> None:
+        import json
+
+        import numpy as np
+        import rasterio
+        from rasterio.transform import from_bounds
+
+        from ftw_dataset_tools.api.imagery.stac_child_items import attach_existing_seasons
+
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+        _write_child(chip_dir, "chip_001", "planting", image=True)
+
+        # A one-band COG with no band descriptions at all.
+        image_path = chip_dir / "chip_001_planting_image_s2.tif"
+        data = np.array([[1, 2], [3, 4]], dtype="uint16")
+        with rasterio.open(
+            image_path,
+            "w",
+            driver="COG",
+            width=2,
+            height=2,
+            count=1,
+            dtype="uint16",
+            crs="EPSG:4326",
+            transform=from_bounds(0, 0, 1, 1, 2, 2),
+        ) as dst:
+            dst.write(data, 1)
+
+        child = json.loads((chip_dir / "chip_001_planting_s2.json").read_text())
+        child["assets"]["image"]["title"] = "Clipped 4-band image (red,green,blue,nir)"
+        (chip_dir / "chip_001_planting_s2.json").write_text(json.dumps(child))
+
+        parent_item = pystac.Item(
+            id="chip_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime.now(UTC),
+            properties={},
+        )
+
+        attach_existing_seasons(parent_item, chip_dir)
+
+        assert parent_item.assets["planting_image"].title == (
+            "Planting season imagery (red,green,blue,nir)"
+        )
+
+
+class TestParentSurvivesAChildFailure:
+    """A raise inside the season loop must not lose the selection properties."""
+
+    def test_parent_is_written_even_when_a_child_fails(
+        self, tmp_path: Path, mock_selection_result: SceneSelectionResult
+    ) -> None:
+        import json
+        from unittest.mock import patch
+
+        import pytest
+
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+        parent_item = pystac.Item(
+            id="chip_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime.now(UTC),
+            properties={},
+        )
+
+        with (
+            patch(
+                "ftw_dataset_tools.api.imagery.stac_child_items._create_season_child_item",
+                side_effect=OSError("disk full"),
+            ),
+            pytest.raises(OSError, match="disk full"),
+        ):
+            create_child_items_from_selection(
+                chip_dir=chip_dir,
+                parent_item=parent_item,
+                result=mock_selection_result,
+                year=2024,
+                cloud_cover_chip=2.0,
+                buffer_days=14,
+            )
+
+        saved = json.loads((chip_dir / "chip_001.json").read_text())
+        assert saved["properties"]["ftw:calendar_year"] == 2024
+        assert saved["properties"]["ftw:planting_day"] == 150

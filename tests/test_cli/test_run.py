@@ -306,9 +306,9 @@ class TestRunSourceFetchError:
 class TestRunPmtilesTrueWithoutTippecanoe:
     def test_missing_tippecanoe_prints_clean_error(self, tmp_path: Path, monkeypatch) -> None:
         from ftw_dataset_tools.api import tiles
-        from tests.test_api.test_stac import TestCollectionAssetMetadata
+        from tests.test_api.test_stac import build_catalog
 
-        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        build_catalog(tmp_path)
         monkeypatch.setattr(tiles, "tippecanoe_available", lambda: False)
 
         cfg = tmp_path / "c.yaml"

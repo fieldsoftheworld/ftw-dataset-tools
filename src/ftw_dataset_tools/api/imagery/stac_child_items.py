@@ -127,22 +127,25 @@ def create_child_items_from_selection(
         parent_item.assets.pop(key, None)
 
     # Create each season's child item, then link and mirror it onto the parent.
+    # The parent is written in a finally: the FTW selection properties are already
+    # set on it, and losing them because one season's child could not be written
+    # would leave the chip looking unselected on the next run.
     scenes = {"planting": result.planting_scene, "harvest": result.harvest_scene}
-    for season in SEASONS:
-        scene = scenes[season]
-        if scene is None:
-            continue
-        child_item = _create_season_child_item(
-            chip_dir=chip_dir,
-            parent_item=parent_item,
-            scene=scene,
-            season=season,
-            year=year,
-        )
-        attach_season_to_parent(parent_item, child_item, season, chip_dir=chip_dir)
-
-    # Save updated parent
-    write_item(parent_item, parent_path)
+    try:
+        for season in SEASONS:
+            scene = scenes[season]
+            if scene is None:
+                continue
+            child_item = _create_season_child_item(
+                chip_dir=chip_dir,
+                parent_item=parent_item,
+                scene=scene,
+                season=season,
+                year=year,
+            )
+            attach_season_to_parent(parent_item, child_item, season, chip_dir=chip_dir)
+    finally:
+        write_item(parent_item, parent_path)
 
 
 def _create_season_child_item(
@@ -290,11 +293,29 @@ def _attach_visual_asset(
     parent_item.add_asset(f"{season}_visual", asset)
 
 
+def _band_list_from(asset: pystac.Asset, fallback_title: str | None) -> str | None:
+    """The comma-joined band names for an image asset's title, or None.
+
+    Prefers the GeoTIFF's own band descriptions; a file written without them falls
+    back to the parenthesised list in the child's ``image`` asset title, which is
+    where ``stac_items.update_parent_item`` originally put it.
+    """
+    bands = [band.get("description") for band in asset.extra_fields.get("raster:bands", [])]
+    named = [band for band in bands if band]
+    if named:
+        return ",".join(named)
+    if fallback_title and "(" in fallback_title and fallback_title.rstrip().endswith(")"):
+        return fallback_title.rstrip()[fallback_title.index("(") + 1 : -1] or None
+    return None
+
+
 def _attach_local_image_asset(
     parent_item: pystac.Item,
     child_item: pystac.Item,
     season: Literal["planting", "harvest"],
     chip_dir: Path,
+    *,
+    checksums: bool = False,
 ) -> None:
     """Restore the parent's ``<season>_image`` asset from the child's clipped image.
 
@@ -316,13 +337,12 @@ def _attach_local_image_asset(
         roles=["data"],
     )
     parent_item.add_asset(f"{season}_image", asset)
-    add_file_info(asset, image_path)
+    add_file_info(asset, image_path, checksum=checksums)
     add_raster_bands(asset, image_path)
 
-    bands = [band.get("description") for band in asset.extra_fields.get("raster:bands", [])]
-    named = [band for band in bands if band]
-    if named:
-        asset.title = f"{season.capitalize()} season imagery ({','.join(named)})"
+    band_list = _band_list_from(asset, image.title)
+    if band_list:
+        asset.title = f"{season.capitalize()} season imagery ({band_list})"
 
 
 def attach_season_to_parent(
@@ -330,6 +350,8 @@ def attach_season_to_parent(
     child_item: pystac.Item,
     season: Literal["planting", "harvest"],
     chip_dir: Path | None = None,
+    *,
+    checksums: bool = False,
 ) -> None:
     """Link a season's child item to its parent chip and mirror its imagery assets.
 
@@ -342,6 +364,7 @@ def attach_season_to_parent(
         child_item: The season child item, freshly created or read back from disk
         season: Season identifier
         chip_dir: Directory holding both items; defaults to the parent's own directory
+        checksums: Also compute ``file:checksum`` for the re-attached local image
 
     Side Effects:
         Mutates ``parent_item``. The caller is responsible for writing it.
@@ -361,7 +384,7 @@ def attach_season_to_parent(
     )
 
     _attach_visual_asset(parent_item, child_item, season)
-    _attach_local_image_asset(parent_item, child_item, season, chip_dir)
+    _attach_local_image_asset(parent_item, child_item, season, chip_dir, checksums=checksums)
 
 
 #: Chip preview candidates, in the order ``image_download`` itself prefers them:
@@ -373,7 +396,9 @@ _THUMBNAIL_CANDIDATES = (
 )
 
 
-def attach_thumbnail_to_parent(parent_item: pystac.Item, chip_dir: Path) -> bool:
+def attach_thumbnail_to_parent(
+    parent_item: pystac.Item, chip_dir: Path, *, checksums: bool = False
+) -> None:
     """Re-add the chip's preview asset from whichever thumbnail file is on disk.
 
     The preview is written by the download stage and is not referenced from the
@@ -382,9 +407,7 @@ def attach_thumbnail_to_parent(parent_item: pystac.Item, chip_dir: Path) -> bool
     Args:
         parent_item: Chip item to update in place
         chip_dir: Directory holding the chip's files
-
-    Returns:
-        Whether a thumbnail asset was added.
+        checksums: Also compute ``file:checksum`` for the thumbnail
     """
     for suffix, title in _THUMBNAIL_CANDIDATES:
         filename = f"{parent_item.id}{suffix}"
@@ -398,12 +421,13 @@ def attach_thumbnail_to_parent(parent_item: pystac.Item, chip_dir: Path) -> bool
             roles=["thumbnail"],
         )
         parent_item.add_asset("thumbnail", asset)
-        add_file_info(asset, path)
-        return True
-    return False
+        add_file_info(asset, path, checksum=checksums)
+        return
 
 
-def attach_existing_seasons(parent_item: pystac.Item, chip_dir: Path) -> list[str]:
+def attach_existing_seasons(
+    parent_item: pystac.Item, chip_dir: Path, *, checksums: bool = False
+) -> list[str]:
     """Re-attach the season children already on disk to a freshly built chip item.
 
     The STAC stage rebuilds every chip item from the mask files alone, which would
@@ -414,6 +438,7 @@ def attach_existing_seasons(parent_item: pystac.Item, chip_dir: Path) -> list[st
     Args:
         parent_item: Newly built chip item to update in place
         chip_dir: Directory holding the chip item and its season children
+        checksums: Also compute ``file:checksum`` for the re-attached local files
 
     Returns:
         The seasons that were re-attached, in order.
@@ -424,7 +449,9 @@ def attach_existing_seasons(parent_item: pystac.Item, chip_dir: Path) -> list[st
         if not child_path.exists():
             continue
         child_item = pystac.Item.from_file(str(child_path))
-        attach_season_to_parent(parent_item, child_item, season, chip_dir=chip_dir)
+        attach_season_to_parent(
+            parent_item, child_item, season, chip_dir=chip_dir, checksums=checksums
+        )
         attached.append(season)
-    attach_thumbnail_to_parent(parent_item, chip_dir)
+    attach_thumbnail_to_parent(parent_item, chip_dir, checksums=checksums)
     return attached

@@ -1847,7 +1847,8 @@ class TestInstanceMaskStatistics:
         assert float(tags["STATISTICS_MAXIMUM"]) == 1010
         assert float(tags["STATISTICS_VALID_PERCENT"]) < 100
 
-    def test_presence_only_background_is_the_nodata_value(self, tmp_path) -> None:
+    def test_presence_only_background_is_excluded_but_not_declared(self, tmp_path) -> None:
+        """Background 3 is a legal instance id, so it must not become the band nodata."""
         import rasterio
 
         from ftw_dataset_tools.api.masks import MaskType
@@ -1855,8 +1856,11 @@ class TestInstanceMaskStatistics:
         path = self._create(tmp_path, MaskType.INSTANCE, background_class_value=3)
 
         with rasterio.open(path) as src:
-            assert src.nodata == 3
-            assert float(src.tags(1)["STATISTICS_MINIMUM"]) == 1000
+            assert src.nodata is None
+            tags = src.tags(1)
+
+        assert float(tags["STATISTICS_MINIMUM"]) == 1000
+        assert float(tags["STATISTICS_MAXIMUM"]) == 1010
 
     def test_semantic_masks_keep_background_in_their_statistics(self, tmp_path) -> None:
         import rasterio

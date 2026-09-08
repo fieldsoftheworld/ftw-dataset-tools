@@ -525,6 +525,7 @@ def _create_collection(
     *,
     filtered_fields_file: Path | None = None,
     checksums: bool = False,
+    background_class_value: int = 0,
 ) -> Collection:
     """
     Create the single dataset collection with source-data and chip-definition assets.
@@ -538,6 +539,8 @@ def _create_collection(
         spatial_extent: Bounding box [xmin, ymin, xmax, ymax]
         filtered_fields_file: Optional path to the class-filtered fields parquet file
         checksums: Compute file:checksum (multihash sha256) for every asset.
+        background_class_value: Pixel value used for background in masks
+            (3 for presence-only); the collection renders hide it.
 
     Returns:
         pystac Collection
@@ -582,7 +585,10 @@ def _create_collection(
     )
 
     collection.item_assets = _build_item_assets()
-    collection.extra_fields["renders"] = build_collection_renders()
+    # A Collection carries renders at its top level (the schema's Collection branch).
+    collection.extra_fields["renders"] = build_collection_renders(
+        background_value=background_class_value
+    )
     add_render_schema(collection)
 
     return collection
@@ -670,17 +676,19 @@ def _create_chip_item(
 
     # Season children survive a STAC rerun on disk; put their links and imagery
     # assets back onto the item this run rebuilt from the mask files alone.
-    _reattach_existing_seasons(item, chip_dir)
+    _reattach_existing_seasons(item, chip_dir, checksums=checksums)
 
-    renders = build_item_renders(item)
+    # The render extension's Feature branch requires properties.renders, not a
+    # top-level key, so this must not go through extra_fields.
+    renders = build_item_renders(item, background_value=background_class_value)
     if renders:
-        item.extra_fields["renders"] = renders
+        item.properties["renders"] = renders
         add_render_schema(item)
 
     return item
 
 
-def _reattach_existing_seasons(item: Item, chip_dir: Path) -> None:
+def _reattach_existing_seasons(item: Item, chip_dir: Path, *, checksums: bool = False) -> None:
     """Restore the season links and imagery assets left on disk by the imagery stages.
 
     Imported inside the function: ``api.imagery.stac_child_items`` imports this
@@ -688,7 +696,7 @@ def _reattach_existing_seasons(item: Item, chip_dir: Path) -> None:
     """
     from ftw_dataset_tools.api.imagery.stac_child_items import attach_existing_seasons
 
-    attach_existing_seasons(item, chip_dir)
+    attach_existing_seasons(item, chip_dir, checksums=checksums)
 
 
 def _get_mask_title(mask_name: str) -> str:
@@ -860,6 +868,7 @@ def generate_stac_catalog(
         spatial_extent=spatial_extent,
         filtered_fields_file=filtered_fields_file,
         checksums=checksums,
+        background_class_value=background_class_value,
     )
 
     updated = _updated_stamp(provenance)
