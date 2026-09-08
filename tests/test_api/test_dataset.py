@@ -59,12 +59,12 @@ class TestCreateDatasetResult:
 class TestCreateDatasetInputValidation:
     """Tests for create_dataset input validation."""
 
-    def test_fields_file_not_found(self) -> None:
+    def test_fields_file_not_found(self, tmp_path: Path) -> None:
         """Test FileNotFoundError for missing fields file."""
         from ftw_dataset_tools.api.dataset import create_dataset
 
         with pytest.raises(FileNotFoundError, match="Fields file not found"):
-            create_dataset("/nonexistent/fields.parquet")
+            create_dataset("/nonexistent/fields.parquet", output_dir=tmp_path / "out")
 
     def test_year_required_without_datetime_column(self, tmp_path: Path) -> None:
         """Test ValueError when year not provided and no datetime column."""
