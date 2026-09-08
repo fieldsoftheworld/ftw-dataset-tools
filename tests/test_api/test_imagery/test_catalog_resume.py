@@ -88,7 +88,9 @@ def _make_selected_item(item_path: Path, properties: dict | None = None) -> pyst
     """Create a parent item that carries a completed imagery selection.
 
     The child season items the links point at are written too, since
-    preservation only trusts a link whose target is still on disk.
+    preservation only trusts a link whose target is still on disk, and a
+    catalog rebuild reads each child back to re-derive the parent's season
+    assets. They are real items, not placeholders, for that reason.
     """
     item = _make_item(item_path.stem, properties)
     item.properties["ftw:calendar_year"] = YEAR
@@ -105,7 +107,10 @@ def _make_selected_item(item_path: Path, properties: dict | None = None) -> pyst
                 media_type="application/json",
             )
         )
-        (item_path.parent / f"{item.id}_{season}_s2.json").touch()
+        child = _make_item(f"{item.id}_{season}_s2", {"ftw:season": season})
+        child_path = item_path.parent / f"{child.id}.json"
+        child.set_self_href(str(child_path))
+        child.save_object(dest_href=str(child_path))
     item.set_self_href(str(item_path))
     item.save_object(dest_href=str(item_path))
     return item
@@ -414,6 +419,70 @@ class TestCatalogRegenerationResume:
         rels = {link.rel for link in regenerated.links}
         assert "ftw:planting" not in rels
         assert not has_existing_scenes(regenerated)
+
+    def test_regeneration_does_not_duplicate_season_links(
+        self,
+        catalog_inputs: dict[str, Path],
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        """Each season keeps exactly one link after a rebuild.
+
+        Two mechanisms restore a selection: the rebuild re-attaches the season
+        children it finds on disk, and ``preserve_imagery_selection`` carries
+        over the previous parent's bookkeeping. Both know about
+        ``ftw:planting``/``ftw:harvest``, so a chip whose children are on disk
+        must not end up linked to each of them twice.
+        """
+        _generate(catalog_inputs)
+
+        item_path = catalog_inputs["chip_dir"] / f"{ITEM_ID}.json"
+        create_child_items_from_selection(
+            chip_dir=catalog_inputs["chip_dir"],
+            parent_item=pystac.Item.from_file(str(item_path)),
+            result=mock_selection_result,
+            year=YEAR,
+            cloud_cover_chip=2.0,
+            buffer_days=14,
+        )
+
+        _generate(catalog_inputs)
+
+        rels = [link["rel"] for link in json.loads(item_path.read_text())["links"]]
+        assert rels.count("ftw:planting") == 1
+        assert rels.count("ftw:harvest") == 1
+
+    def test_regeneration_survives_a_half_written_child(
+        self,
+        catalog_inputs: dict[str, Path],
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        """A truncated child item must not abort generation for the whole dataset.
+
+        The rebuild reads each child back to re-derive the parent's season
+        assets, so an interrupted write is skipped: that season simply gains no
+        derived assets, while the readable season is restored as usual.
+        """
+        _generate(catalog_inputs)
+
+        item_path = catalog_inputs["chip_dir"] / f"{ITEM_ID}.json"
+        create_child_items_from_selection(
+            chip_dir=catalog_inputs["chip_dir"],
+            parent_item=pystac.Item.from_file(str(item_path)),
+            result=mock_selection_result,
+            year=YEAR,
+            cloud_cover_chip=2.0,
+            buffer_days=14,
+        )
+        (catalog_inputs["chip_dir"] / f"{ITEM_ID}_planting_s2.json").write_text("")
+
+        _generate(catalog_inputs)
+
+        regenerated = pystac.Item.from_file(str(item_path))
+        assert "planting_visual" not in regenerated.assets
+        assert "harvest_visual" in regenerated.assets
+        # The link is still carried over, so the chip is not silently re-selected
+        # behind the operator's back; --force-image-selection remains the way out.
+        assert has_existing_scenes(regenerated)
 
     def test_preserves_selection_from_the_square_nested_chip_dir(
         self, catalog_inputs: dict[str, Path]

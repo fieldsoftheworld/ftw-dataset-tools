@@ -1825,10 +1825,10 @@ class TestInstanceMaskStatistics:
             boundary_lines_file=lines,
             output_dir=tmp_path / mask_type.value,
             field_dataset="test",
-            mask_type=mask_type,
+            mask_types=[mask_type],
             num_workers=1,
             **kwargs,
-        )
+        )[mask_type]
         assert result.total_created == 1, result.masks_skipped
         return result.masks_created[0].output_path
 

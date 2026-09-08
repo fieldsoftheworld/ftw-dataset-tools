@@ -435,6 +435,11 @@ def attach_existing_seasons(
     stages added. This reads whichever ``<chip>_<season>_s2.json`` children are
     present and puts them back, along with the chip's preview thumbnail.
 
+    A child that cannot be parsed -- half-written by an interrupted run, or
+    truncated -- is skipped rather than raised: the season is then treated as
+    unselected and re-selected on the next pass, which is far cheaper than
+    failing catalog generation for the whole dataset.
+
     Args:
         parent_item: Newly built chip item to update in place
         chip_dir: Directory holding the chip item and its season children
@@ -448,7 +453,10 @@ def attach_existing_seasons(
         child_path = chip_dir / f"{parent_item.id}_{season}_s2.json"
         if not child_path.exists():
             continue
-        child_item = pystac.Item.from_file(str(child_path))
+        try:
+            child_item = pystac.Item.from_file(str(child_path))
+        except Exception:
+            continue
         attach_season_to_parent(
             parent_item, child_item, season, chip_dir=chip_dir, checksums=checksums
         )

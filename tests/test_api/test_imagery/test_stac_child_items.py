@@ -1229,19 +1229,31 @@ class TestVisualSeasonAssets:
         rels = [link.rel for link in parent_item.links]
         assert rels.count("ftw:planting") == 1
 
-    def test_local_image_assets_survive_a_reselection(
+    def test_reselection_drops_the_replaced_scenes_local_image(
         self, tmp_path: Path, mock_selection_result: SceneSelectionResult
     ) -> None:
+        """A new selection stops advertising the previous scene's clipped image.
+
+        The GeoTIFF on disk was clipped from the scene that has just been
+        replaced, so the parent must not keep describing it as this chip's
+        imagery. The file itself is left alone: the next download overwrites it
+        and ``attach_season_to_parent`` re-derives the asset from it.
+        """
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+        image_path = chip_dir / "chip_001_planting_image_s2.tif"
+        image_path.write_bytes(b"not really a geotiff")
+
         parent_item = self._parent()
         parent_item.add_asset(
             "planting_image",
             pystac.Asset(href="./chip_001_planting_image_s2.tif", roles=["data"]),
         )
 
-        self._run(tmp_path / "chip_001", parent_item, mock_selection_result)
+        self._run(chip_dir, parent_item, mock_selection_result)
 
-        assert parent_item.assets["planting_image"].roles == ["data"]
-        assert parent_item.assets["planting_image"].href == "./chip_001_planting_image_s2.tif"
+        assert "planting_image" not in parent_item.assets
+        assert image_path.exists()
 
 
 class TestAttachSeasonToParent:
