@@ -593,7 +593,16 @@ def generate_stac_catalog(
 
     # Create items for each chip
     log("Creating STAC items...")
+    # Imported here to avoid a circular import: api.imagery imports back into
+    # this module.
+    from ftw_dataset_tools.api.imagery.catalog_ops import preserve_imagery_selection
+
+    # Fallback for the legacy layout, where no chip directory is given: this is
+    # where catalog.save() writes each item, and so where a previous run's item
+    # JSON (with its imagery selection) is found.
+    saved_items_dir = output_dir / f"{field_dataset}-chips"
     items = []
+    resumed = 0
     for chip_info in chip_infos:
         # Determine chip directory if using new structure
         chip_dir = None
@@ -612,9 +621,20 @@ def generate_stac_catalog(
             mask_dirs=mask_dirs if chip_dir is None else None,
         )
         if item:
+            # Items are rebuilt from scratch, so carry over any imagery
+            # selection the previous run recorded; otherwise saving the catalog
+            # would wipe it and every chip would re-select.
+            # Read the previous run's item from the chip directory actually in
+            # use, so preservation keeps working under nested chip layouts.
+            existing_dir = chip_dir if chip_dir is not None else saved_items_dir / item.id
+            existing_item_path = existing_dir / f"{item.id}.json"
+            if preserve_imagery_selection(item, existing_item_path):
+                resumed += 1
             items.append(item)
 
     log(f"Created {len(items)} items with mask assets")
+    if resumed:
+        log(f"Preserved existing imagery selections for {resumed} items")
 
     # Create root catalog
     log("Creating root catalog...")

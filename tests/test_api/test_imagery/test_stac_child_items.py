@@ -263,6 +263,48 @@ class TestCreateChildItemsFromSelection:
         assert "derived" not in link_rels
         assert "self" in link_rels  # Should be preserved
 
+    def test_removes_stale_imagery_assets(
+        self,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        """Test that imagery assets from a replaced selection are dropped.
+
+        A --force-image-selection re-run picks a different scene, so the
+        planting/harvest GeoTIFFs and the thumbnail the parent advertises no
+        longer describe the selection. Mask assets are untouched.
+        """
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+
+        parent_item = pystac.Item(
+            id="chip_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime.now(UTC),
+            properties={},
+        )
+        parent_item.add_asset(
+            "planting_image", pystac.Asset(href="./chip_001_planting_image_s2.tif")
+        )
+        parent_item.add_asset("harvest_image", pystac.Asset(href="./chip_001_harvest_image_s2.tif"))
+        parent_item.add_asset("thumbnail", pystac.Asset(href="./chip_001_thumbnail.jpg"))
+        parent_item.add_asset("instance_mask", pystac.Asset(href="./chip_001_instance.tif"))
+
+        create_child_items_from_selection(
+            chip_dir=chip_dir,
+            parent_item=parent_item,
+            result=mock_selection_result,
+            year=2024,
+            cloud_cover_chip=2.0,
+            buffer_days=14,
+        )
+
+        assert "planting_image" not in parent_item.assets
+        assert "harvest_image" not in parent_item.assets
+        assert "thumbnail" not in parent_item.assets
+        assert "instance_mask" in parent_item.assets
+
     def test_adds_planting_link(
         self,
         tmp_path: Path,
