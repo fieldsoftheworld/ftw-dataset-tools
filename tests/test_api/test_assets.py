@@ -285,6 +285,56 @@ class TestDecodeMaskClassification:
             add_mask_classification(asset, "bogus")
 
 
+class TestClassColorHints:
+    """Colour hints are the primary rendering mechanism for the categorical masks."""
+
+    def _classes(self, tmp_path: Path, kind: str, data: np.ndarray) -> list[dict]:
+        from ftw_dataset_tools.api.assets import add_mask_classification, add_raster_bands
+
+        p = tmp_path / f"{kind}.tif"
+        _write_cog(p, data)
+        _, asset = _item_with_asset(p, ["labels"])
+        add_raster_bands(asset, p)
+        add_mask_classification(asset, kind)
+        return asset.extra_fields["raster:bands"][0]["classification:classes"]
+
+    def test_semantic_3class_colour_hints(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import LABEL_COLORS
+
+        classes = self._classes(tmp_path, "semantic_3class", np.array([[0, 1], [2, 0]], np.uint8))
+        hints = {c["name"]: c.get("color_hint") for c in classes}
+
+        assert hints == {
+            "background": None,
+            "field": LABEL_COLORS["field"],
+            "boundary": LABEL_COLORS["boundary"],
+        }
+        assert "color_hint" not in classes[0]
+
+    def test_semantic_2class_colour_hints(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import LABEL_COLORS
+
+        classes = self._classes(tmp_path, "semantic_2class", np.array([[0, 1], [1, 0]], np.uint8))
+
+        assert [c.get("color_hint") for c in classes] == [None, LABEL_COLORS["field"]]
+
+    def test_decode_boundary_colour_hint(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import LABEL_COLORS
+
+        classes = self._classes(tmp_path, "decode_boundary", np.array([[0, 1], [1, 0]], np.uint8))
+
+        assert [c.get("color_hint") for c in classes] == [None, LABEL_COLORS["boundary"]]
+
+    def test_names_and_descriptions_are_unchanged(self, tmp_path: Path) -> None:
+        classes = self._classes(tmp_path, "semantic_3class", np.array([[0, 1], [2, 0]], np.uint8))
+
+        assert [(c["value"], c["name"], c["description"]) for c in classes] == [
+            (0, "background", "Not a field"),
+            (1, "field", "Field polygon interior"),
+            (2, "boundary", "Field boundary line"),
+        ]
+
+
 class TestMaskKindRegistry:
     """Drift guard: every STAC mask asset kind must be classifiable or described."""
 

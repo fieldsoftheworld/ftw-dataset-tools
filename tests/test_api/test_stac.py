@@ -423,7 +423,7 @@ class TestCollectionAssetMetadata:
         chips_base = tmp_path / "chips"
         square = get_mgrs_square(grid_id)
         chip_dir = chips_base / square / f"{grid_id}_2024"
-        chip_dir.mkdir(parents=True)
+        chip_dir.mkdir(parents=True, exist_ok=True)
         if with_masks:
             _write_mask(chip_dir / f"{grid_id}_2024_semantic_2_class.tif", [[0, 1], [1, 0]])
 
@@ -891,3 +891,133 @@ class TestChipsPathEscaping:
 
         assert [chip.grid_id for chip in chips] == ["ftw-33UXP0410"]
         assert chips[0].properties["ftw:split"] == "test"
+
+
+RENDER_SCHEMA_URI = "https://stac-extensions.github.io/render/v2.0.0/schema.json"
+MEDIA_TYPE_COG = "image/tiff; application=geotiff; profile=cloud-optimized"
+CHIP_ID = "ftw-33UXP0410_2024"
+
+
+def _write_season_child(
+    chip_dir: Path, chip_id: str, season: str, with_image: bool = False
+) -> None:
+    """Write a season child item of the kind the imagery stages leave on disk."""
+    import json
+
+    scene_id = f"S2B_T33UXP_2024{season[0].upper()}_L2A"
+    child = {
+        "type": "Feature",
+        "stac_version": "1.1.0",
+        "id": f"{chip_id}_{season}_s2",
+        "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+        "bbox": [0.0, 0.0, 1.0, 1.0],
+        "properties": {"ftw:season": season, "datetime": "2024-06-15T10:00:00Z"},
+        "links": [
+            {
+                "rel": "via",
+                "href": f"https://earth-search.aws.element84.com/v1/items/{scene_id}",
+                "type": "application/json",
+            }
+        ],
+        "assets": {
+            "visual": {
+                "href": f"https://example.com/{scene_id}/TCI.tif",
+                "type": MEDIA_TYPE_COG,
+                "roles": ["visual"],
+            }
+        },
+    }
+    if with_image:
+        child["assets"]["image"] = {
+            "href": f"./{chip_id}_{season}_image_s2.tif",
+            "type": MEDIA_TYPE_COG,
+            "roles": ["data"],
+        }
+    (chip_dir / f"{chip_id}_{season}_s2.json").write_text(json.dumps(child))
+
+
+class TestRendersOnCatalog:
+    """Render definitions and the visual item-asset declarations."""
+
+    def test_item_carries_renders_once(self, tmp_path: Path) -> None:
+        import json
+
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        item_path = tmp_path / "chips" / "33UXP" / CHIP_ID / f"{CHIP_ID}.json"
+
+        item = json.loads(item_path.read_text())
+        renders = item["renders"]
+        assert set(renders) == {"semantic_2class"}
+        assert renders["semantic_2class"]["assets"] == ["semantic_2class_mask"]
+        assert renders["semantic_2class"]["nodata"] == [0]
+        assert "colormap" not in renders["semantic_2class"]
+        assert item["stac_extensions"].count(RENDER_SCHEMA_URI) == 1
+        assert result.total_items == 1
+
+    def test_collection_renders_keyed_by_asset_name(self, tmp_path: Path) -> None:
+        import json
+
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+
+        coll = json.loads(result.collection_path.read_text())
+        assert "semantic_2class_mask" in coll["renders"]
+        assert coll["renders"]["instance_mask"]["colormap_name"] == "viridis"
+        assert coll["stac_extensions"].count(RENDER_SCHEMA_URI) == 1
+
+    def test_visual_season_item_assets_declared(self, tmp_path: Path) -> None:
+        import json
+
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+
+        ia = json.loads(result.collection_path.read_text())["item_assets"]
+        assert ia["planting_visual"]["roles"] == ["visual"]
+        assert ia["harvest_visual"]["type"] == MEDIA_TYPE_COG
+        assert ia["planting_image"]["roles"] == ["data"]
+
+
+class TestImageryReattachedOnStacRerun:
+    """A STAC rerun must not drop imagery that earlier stages attached."""
+
+    def test_links_and_assets_come_back(self, tmp_path: Path) -> None:
+        import json
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        item_path = chip_dir / f"{CHIP_ID}.json"
+        assert "planting_visual" not in json.loads(item_path.read_text())["assets"]
+
+        _write_season_child(chip_dir, CHIP_ID, "planting", with_image=True)
+        _write_season_child(chip_dir, CHIP_ID, "harvest")
+        _write_mask(chip_dir / f"{CHIP_ID}_planting_image_s2.tif", [[1, 2], [3, 4]], dtype="uint16")
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+
+        item = json.loads(item_path.read_text())
+        rels = {link["rel"]: link["href"] for link in item["links"]}
+        assert rels["ftw:planting"] == f"./{CHIP_ID}_planting_s2.json"
+        assert rels["ftw:harvest"] == f"./{CHIP_ID}_harvest_s2.json"
+
+        assets = item["assets"]
+        assert assets["planting_visual"]["href"].startswith("https://")
+        assert assets["planting_visual"]["roles"] == ["visual"]
+        assert assets["harvest_visual"]["href"].startswith("https://")
+        assert assets["planting_visual"]["ftw:scene"] == "S2B_T33UXP_2024P_L2A"
+        assert assets["planting_image"]["href"] == f"./{CHIP_ID}_planting_image_s2.tif"
+        assert assets["planting_image"]["roles"] == ["data"]
+        assert assets["planting_image"]["file:size"] > 0
+        assert assets["planting_image"]["raster:bands"][0]["data_type"] == "uint16"
+        assert "harvest_image" not in assets
+
+    def test_rerun_does_not_duplicate_links(self, tmp_path: Path) -> None:
+        import json
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        _write_season_child(chip_dir, CHIP_ID, "planting")
+
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+
+        item = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())
+        rels = [link["rel"] for link in item["links"]]
+        assert rels.count("ftw:planting") == 1

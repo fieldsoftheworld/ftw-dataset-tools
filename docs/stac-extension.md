@@ -237,6 +237,44 @@ replaces these assets and the `describedby`/`agents` links in place (matched by 
 by `rel` + `href`) rather than duplicating them, and drops any tile, style or document
 entry a previous run wrote that this run did not produce.
 
+## Rendering
+
+A chip item's own COGs are label masks and a 16-bit four-band scene stack, so a browser
+that picks one to draw unaided shows a near-black square. Three pieces of metadata make a
+chip item render meaningfully.
+
+**Visual season assets.** Once imagery has been selected, the parent chip item carries
+`planting_visual` and `harvest_visual`: the selected Sentinel-2 scene's true-colour COG
+(Earth Search's `visual` asset), by absolute `https` href, with role `visual`, plus
+`ftw:scene` (the source scene id) and the scene's `datetime`. They are the natural default
+for a client that scores candidate assets by role. The downloaded, chip-clipped
+`planting_image` / `harvest_image` assets keep role `data` and are unchanged.
+
+**Colour hints.** Colours for the categorical masks come from
+`classification:classes[].color_hint` (6-digit hex, no `#`) — this is the primary
+rendering mechanism for those rasters. Field interiors are `009E73` and boundaries
+`D55E00` (Okabe-Ito, colour-blind safe); background carries no hint, because it is meant
+to be transparent rather than coloured.
+
+**Renders.** Items and the collection carry `renders`
+([render extension](https://github.com/stac-extensions/render)). The categorical masks get
+an entry with only `assets`, `title` and `nodata: [0]`, so a viewer that ignores
+`classification:classes` still hides the background — deliberately no `colormap`, so the
+class hints stay the single source of colour. Only the continuous rasters get a ramp:
+
+| Render | Assets | Definition |
+|--------|--------|------------|
+| `semantic_2class` | `semantic_2class_mask` | `nodata: [0]` |
+| `semantic_3class` | `semantic_3class_mask` | `nodata: [0]` |
+| `decode_boundary` | `decode_boundary_mask` | `nodata: [0]` |
+| `decode_distance` | `decode_distance_mask` | `rescale: [[0, 1]]`, `nodata` from the band, `colormap_name: viridis` |
+| `instance` | `instance_mask` | `rescale: [[0, band maximum]]`, `nodata: [0]`, `colormap_name: viridis` |
+
+Item renders are keyed by mask kind and only cover the masks that chip actually has; the
+collection mirrors the same definitions keyed by asset name, as a default for clients that
+read the collection first. The instance render on the collection uses a default stretch,
+since per-chip band statistics are only known on the item.
+
 ## Output Layout
 
 The output directory is a self-contained STAC collection. `collection.json` sits at the root, and chip items are organized into sub-catalogs by MGRS 100 km square to keep directory sizes manageable:
@@ -308,6 +346,7 @@ sub-catalog and every item — declares the
 | `scl` | Scene Classification Layer |
 | `cloud_probability` | Cloud probability mask |
 | `clipped` | Local clipped multi-band image (after download) |
+| `planting_visual` / `harvest_visual` | The season's source scene as a true-colour COG (role `visual`, remote href) |
 
 ## File Naming Convention
 

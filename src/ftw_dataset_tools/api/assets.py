@@ -41,6 +41,17 @@ _MULTIHASH_SHA256_PREFIX = "1220"
 # the geometry the raster was actually built on.
 METRES_PER_DEGREE = 111000.0
 
+# The one place label colours are defined. Keys are ``MASK_CLASSES`` class names;
+# values are 6-digit hex without a leading "#", the form the classification
+# extension's ``color_hint`` requires. api/renders.py reads the same table so a
+# render and a class hint can never disagree. The hues are Okabe-Ito
+# colour-blind-safe: bluish green for field interiors, vermillion for boundaries.
+# Background is deliberately absent: it is rendered transparent, not coloured.
+LABEL_COLORS: dict[str, str] = {
+    "field": "009E73",
+    "boundary": "D55E00",
+}
+
 # (value, name, description) per classified mask kind. The background value is
 # substituted at call time ONLY for the semantic kinds: presence-only masks use
 # background=3 there, while the DECODE layers fold presence-only into 0.
@@ -255,6 +266,7 @@ def add_mask_classification(asset: pystac.Asset, mask_kind: str, background_valu
             value=background_value if (substitute and name == "background") else value,
             name=name,
             description=description,
+            color_hint=LABEL_COLORS.get(name),
         )
         for value, name, description in spec
     ]

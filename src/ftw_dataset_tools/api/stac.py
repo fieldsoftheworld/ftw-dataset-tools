@@ -37,6 +37,11 @@ from ftw_dataset_tools.api.assets import (
 from ftw_dataset_tools.api.crop_stats import _sql_path
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded
 from ftw_dataset_tools.api.masks import MaskType, get_mgrs_square
+from ftw_dataset_tools.api.renders import (
+    add_render_schema,
+    build_collection_renders,
+    build_item_renders,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -474,6 +479,13 @@ def _build_item_assets() -> dict[str, ItemAssetDefinition]:
                 "title": f"{season.capitalize()} season imagery",
             }
         )
+        defs[f"{season}_visual"] = ItemAssetDefinition(
+            {
+                "type": MEDIA_TYPE_COG,
+                "roles": ["visual"],
+                "title": f"{season.capitalize()} season scene (true colour)",
+            }
+        )
     defs["thumbnail"] = ItemAssetDefinition(
         {"type": MEDIA_TYPE_JPEG, "roles": ["thumbnail"], "title": "Chip preview"}
     )
@@ -570,6 +582,8 @@ def _create_collection(
     )
 
     collection.item_assets = _build_item_assets()
+    collection.extra_fields["renders"] = build_collection_renders()
+    add_render_schema(collection)
 
     return collection
 
@@ -654,7 +668,27 @@ def _create_chip_item(
             asset, key.removesuffix("_mask"), background_value=background_class_value
         )
 
+    # Season children survive a STAC rerun on disk; put their links and imagery
+    # assets back onto the item this run rebuilt from the mask files alone.
+    _reattach_existing_seasons(item, chip_dir)
+
+    renders = build_item_renders(item)
+    if renders:
+        item.extra_fields["renders"] = renders
+        add_render_schema(item)
+
     return item
+
+
+def _reattach_existing_seasons(item: Item, chip_dir: Path) -> None:
+    """Restore the season links and imagery assets left on disk by the imagery stages.
+
+    Imported inside the function: ``api.imagery.stac_child_items`` imports this
+    module, so a module-level import would be circular.
+    """
+    from ftw_dataset_tools.api.imagery.stac_child_items import attach_existing_seasons
+
+    attach_existing_seasons(item, chip_dir)
 
 
 def _get_mask_title(mask_name: str) -> str:
