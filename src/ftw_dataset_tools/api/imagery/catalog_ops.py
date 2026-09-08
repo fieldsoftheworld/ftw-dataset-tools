@@ -8,12 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pystac
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 __all__ = [
     "IMAGERY_ASSET_KEYS",
@@ -106,8 +103,13 @@ def preserve_imagery_selection(item: pystac.Item, existing_item_path: Path) -> b
     if not has_existing_scenes(existing):
         return False
 
+    # The child season items are not regenerated, so a link is only worth
+    # carrying over while the item JSON it points at is still on disk. A chip
+    # whose children were deleted re-selects instead of keeping a dangling link
+    # that would make it look selected forever.
+    chip_dir = existing_item_path.parent
     for link in existing.links:
-        if link.rel in IMAGERY_LINK_RELS:
+        if link.rel in IMAGERY_LINK_RELS and (chip_dir / Path(link.href).name).exists():
             item.add_link(link.clone())
 
     for key in (*IMAGERY_PROPERTIES, *IMAGERY_TEMPORAL_PROPERTIES):
@@ -116,10 +118,9 @@ def preserve_imagery_selection(item: pystac.Item, existing_item_path: Path) -> b
 
     # Downloaded imagery outlives the catalog, but only advertise assets whose
     # files are still on disk.
-    chip_dir = existing_item_path.parent
     for key in IMAGERY_ASSET_KEYS:
         asset = existing.assets.get(key)
-        if asset is not None and (chip_dir / asset.href.lstrip("./")).exists():
+        if asset is not None and (chip_dir / Path(asset.href).name).exists():
             item.add_asset(key, asset.clone())
 
     return True

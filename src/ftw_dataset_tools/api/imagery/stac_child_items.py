@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Literal
 
 import pystac
 
+from ftw_dataset_tools.api.imagery.catalog_ops import IMAGERY_ASSET_KEYS
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -104,6 +106,11 @@ def create_child_items_from_selection(
         for link in parent_item.links
         if link.rel not in ("ftw:planting", "ftw:harvest", "derived")
     ]
+
+    # Drop imagery assets from the scene being replaced; they describe the old
+    # selection's GeoTIFFs and are re-added when the new scenes are downloaded.
+    for key in IMAGERY_ASSET_KEYS:
+        parent_item.assets.pop(key, None)
 
     # Add links from parent to child items
     if result.planting_scene:
