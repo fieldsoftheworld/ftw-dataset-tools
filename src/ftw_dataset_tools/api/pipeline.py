@@ -110,7 +110,7 @@ class PipelineContext:
             self.field_polygons_path = self.output_fields_path
         self.chips_path = self.output_dir / f"{name}_chips.parquet"
         self.boundary_lines_path = self.output_dir / f"{name}_boundary_lines.parquet"
-        self.chips_base_dir = self.output_dir / "chips"
+        self.chips_base_dir = stac.chips_base_dir_for(self.output_dir)
 
     @property
     def field_polygons_producer(self) -> str:
@@ -489,6 +489,8 @@ def stage_stac(ctx: PipelineContext) -> None:
     _require(ctx.chips_path, stage="stac", produced_by="chips")
     _require(ctx.output_fields_path, stage="stac", produced_by="reproject")
     _require(ctx.boundary_lines_path, stage="stac", produced_by="boundaries")
+    if ctx.config.class_filter is not None:
+        _require(ctx.field_polygons_path, stage="stac", produced_by="filter")
 
     ctx.log("Generating STAC catalog...")
     ctx.stac_result = stac.generate_stac_catalog(
@@ -497,7 +499,6 @@ def stage_stac(ctx: PipelineContext) -> None:
         fields_file=ctx.output_fields_path,
         chips_file=ctx.chips_path,
         boundary_lines_file=ctx.boundary_lines_path,
-        chips_base_dir=ctx.chips_base_dir,
         filtered_fields_file=(
             ctx.field_polygons_path if ctx.config.class_filter is not None else None
         ),

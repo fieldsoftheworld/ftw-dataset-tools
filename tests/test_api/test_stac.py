@@ -246,14 +246,19 @@ class TestChipItemAssetHrefs:
 class TestGenerateStacCatalogSignature:
     """Tests for generate_stac_catalog function signature."""
 
-    def test_accepts_chips_base_dir_parameter(self) -> None:
-        """Test that generate_stac_catalog accepts chips_base_dir parameter."""
+    def test_chips_base_dir_is_derived_not_a_parameter(self) -> None:
+        """The chip layout is fixed, so no caller can point it somewhere else.
+
+        CHIP_LAYOUT writes every item to ``<output_dir>/chips/...``; a caller
+        that could pass a different base would produce dangling asset hrefs.
+        """
         import inspect
 
-        from ftw_dataset_tools.api.stac import generate_stac_catalog
+        from ftw_dataset_tools.api.stac import chips_base_dir_for, generate_stac_catalog
 
         sig = inspect.signature(generate_stac_catalog)
-        assert "chips_base_dir" in sig.parameters
+        assert "chips_base_dir" not in sig.parameters
+        assert chips_base_dir_for(Path("/data/out")) == Path("/data/out/chips")
 
 
 class TestChipItemAssetMetadata:
@@ -423,7 +428,6 @@ class TestCollectionAssetMetadata:
             fields_file=fields_path,
             chips_file=chips_path,
             boundary_lines_file=lines_path,
-            chips_base_dir=chips_base,
             filtered_fields_file=filtered_fields_path,
             year=2024,
             checksums=checksums,
@@ -514,6 +518,30 @@ class TestSingleCollectionLayout:
             f"SELECT DISTINCT collection FROM read_parquet('{result.items_parquet_path}')"
         ).fetchall()
         assert distinct_collections == [("ds",)]
+
+    def test_items_parquet_links_are_relative(self, tmp_path: Path) -> None:
+        """The mirror ships inside the collection, so its links must travel.
+
+        items.parquet is a root asset of a self-contained collection. Any
+        absolute href in it is a path on the build machine that resolves
+        nowhere for whoever downloads the collection.
+        """
+        import duckdb
+
+        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+
+        con = duckdb.connect()
+        con.install_extension("spatial")
+        con.load_extension("spatial")
+        rows = con.execute(
+            f"SELECT links FROM read_parquet('{result.items_parquet_path}')"
+        ).fetchall()
+        hrefs = [link["href"] for (links,) in rows for link in links]
+
+        assert hrefs
+        assert [href for href in hrefs if href.startswith("/")] == []
+        assert not any(str(tmp_path) in href for href in hrefs)
+        assert "../../../collection.json" in hrefs
 
     def test_filtered_fields_asset(self, tmp_path: Path) -> None:
         import json

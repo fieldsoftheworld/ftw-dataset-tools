@@ -52,8 +52,20 @@ CHIP_LAYOUT = TemplateLayoutStrategy(
     catalog_template="chips/${id}/catalog.json", item_template="${id}/${id}.json"
 )
 
+
+def chips_base_dir_for(output_dir: Path | str) -> Path:
+    """Return the chips base directory :data:`CHIP_LAYOUT` writes items into.
+
+    Single source of truth for the ``<output>/chips`` convention, so the stage
+    that writes masks and the one that builds the catalog cannot disagree about
+    where a chip's files live.
+    """
+    return Path(output_dir) / "chips"
+
+
 __all__ = [
     "STACGenerationResult",
+    "chips_base_dir_for",
     "generate_stac_catalog",
     "get_temporal_extent_from_year",
     "get_year_from_datetime_column",
@@ -589,8 +601,10 @@ async def _write_items_parquet_async(
     """Write STAC items to stac-geoparquet format using rustac."""
     import rustac
 
-    # Convert pystac Items to dicts
-    item_dicts = [item.to_dict() for item in items]
+    # Convert pystac Items to dicts. include_self_link=False matches what
+    # SELF_CONTAINED save() writes to disk: a self link would be the one href
+    # pystac leaves absolute, putting the build machine's paths in the mirror.
+    item_dicts = [item.to_dict(include_self_link=False) for item in items]
 
     # Write using rustac async API
     await rustac.write(str(output_path), item_dicts)
@@ -610,7 +624,6 @@ def generate_stac_catalog(
     fields_file: Path | str,
     chips_file: Path | str,
     boundary_lines_file: Path | str,
-    chips_base_dir: Path | str,
     *,
     filtered_fields_file: Path | None = None,
     year: int | None = None,
@@ -627,15 +640,17 @@ def generate_stac_catalog(
     are per-MGRS-square sub-catalogs holding the chip items (custom, non-FTW grid
     ids are grouped under an ``other`` sub-catalog).
 
+    Chip assets are read from, and written back to, ``output_dir/chips/{square}/
+    {item_id}/``. That directory is derived from ``output_dir`` rather than passed
+    in, because :data:`CHIP_LAYOUT` writes each item there: a caller-supplied base
+    that pointed elsewhere would leave every asset href dangling.
+
     Args:
         output_dir: Base directory for dataset and STAC output
         field_dataset: Dataset name (used as the collection id)
         fields_file: Path to fields parquet file
         chips_file: Path to chips parquet file
         boundary_lines_file: Path to boundary lines parquet file
-        chips_base_dir: Base directory containing chip subdirectories with co-located
-                        masks, nested by MGRS square:
-                        {chips_base_dir}/{square}/{item_id}/{item_id}_*.tif
         filtered_fields_file: Optional path to the class-filtered fields parquet file;
             when given, a ``fields_filtered`` asset is added to the collection.
         year: Optional year for temporal extent (required if no determination_datetime)
@@ -657,7 +672,7 @@ def generate_stac_catalog(
     fields_file = Path(fields_file)
     chips_file = Path(chips_file)
     boundary_lines_file = Path(boundary_lines_file)
-    chips_base_dir = Path(chips_base_dir)
+    chips_base_dir = chips_base_dir_for(output_dir)
     filtered_fields_file = Path(filtered_fields_file) if filtered_fields_file else None
 
     def log(msg: str) -> None:
@@ -717,9 +732,8 @@ def generate_stac_catalog(
             # selection the previous run recorded; otherwise saving the catalog
             # would wipe it and every chip would re-select.
             # Read the previous run's item from the chip directory actually in
-            # use: CHIP_LAYOUT writes each item next to its masks, so the chip
-            # directory is where the last run's JSON is, whatever chips base
-            # directory the caller passed.
+            # use: CHIP_LAYOUT writes each item next to its masks, nested under
+            # its MGRS square, so that is where the last run's JSON is.
             if preserve_imagery_selection(item, chip_dir / f"{item.id}.json"):
                 resumed += 1
             items.append(item)
@@ -779,6 +793,11 @@ def generate_stac_catalog(
     # serialize them below) without writing any files yet.
     log("Writing STAC catalog...")
     collection.normalize_hrefs(str(output_dir), strategy=CHIP_LAYOUT)
+    # Set the catalog type before serializing the items below: item.to_dict()
+    # renders hierarchical link hrefs relative only when the root catalog is a
+    # relative one, so leaving it until save() would bake this build machine's
+    # absolute filesystem paths into the published parquet mirror.
+    collection.catalog_type = pystac.CatalogType.SELF_CONTAINED
 
     # Write stac-geoparquet before the single collection.save() below so its file:size
     # lands in the collection.json that save writes; a second save_object() call
@@ -797,7 +816,7 @@ def generate_stac_catalog(
             roles=["collection-mirror"],
         )
 
-    collection.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
+    collection.save(catalog_type=collection.catalog_type)
 
     log("STAC catalog generation complete")
 

@@ -224,17 +224,14 @@ class TestPreserveImagerySelection:
         assert "instance_mask" in fresh.assets
 
 
-def _build_inputs(tmp_path: Path, chips_base_dir: Path | None = None) -> dict[str, Path]:
+def _build_inputs(tmp_path: Path) -> dict[str, Path]:
     """Minimal fields/chips/boundaries inputs plus one chip dir with a mask.
 
-    ``chips_base_dir`` defaults to the collection layout's ``<output>/chips``;
-    pass another base to exercise a chips directory that does not sit inside the
-    collection, where the chip directory is not where ``collection.save()``
-    writes the item.
+    Chip files live in the collection layout the catalog writes:
+    ``<output>/chips/<square>/<item_id>/``.
     """
     output_dir = tmp_path / "dataset"
-    if chips_base_dir is None:
-        chips_base_dir = output_dir / "chips"
+    chips_base_dir = output_dir / "chips"
     chip_dir = chips_base_dir / SQUARE / ITEM_ID
     chip_dir.mkdir(parents=True)
     _write_instance_mask(chip_dir / f"{ITEM_ID}_instance.tif")
@@ -278,7 +275,6 @@ def _generate(inputs: dict[str, Path]) -> None:
         fields_file=inputs["fields_file"],
         chips_file=inputs["chips_file"],
         boundary_lines_file=inputs["boundary_lines_file"],
-        chips_base_dir=inputs["chips_base_dir"],
         year=YEAR,
     )
 
@@ -419,25 +415,34 @@ class TestCatalogRegenerationResume:
         assert "ftw:planting" not in rels
         assert not has_existing_scenes(regenerated)
 
-    def test_preserves_selection_under_relocated_chip_layout(self, tmp_path: Path) -> None:
+    def test_preserves_selection_from_the_square_nested_chip_dir(
+        self, catalog_inputs: dict[str, Path]
+    ) -> None:
         """Resuming reads the chip directory in use, not a fixed layout path.
 
-        The previous run's item lives in the chip directory the pipeline was
-        handed, which need not be the ``<output>/chips`` tree the collection is
-        written into.
+        Chip directories are nested under their MGRS square. A run that looked
+        for the previous item at a flat ``chips/<item_id>`` path would miss the
+        recorded selection and resume from a stale item left there instead.
         """
-        inputs = _build_inputs(tmp_path, chips_base_dir=tmp_path / "elsewhere" / "chips")
-        _generate(inputs)
+        _generate(catalog_inputs)
 
-        # Record a selection where a real select-images run would write it
-        _make_selected_item(inputs["chip_dir"] / f"{ITEM_ID}.json")
+        # A leftover item at the pre-nesting flat location, which must be ignored
+        stale_dir = catalog_inputs["output_dir"] / "chips" / ITEM_ID
+        _make_selected_item(stale_dir / f"{ITEM_ID}.json", properties={"ftw:harvest_day": 999})
 
-        _generate(inputs)
+        # The selection a real select-images run records, in the chip dir in use
+        _make_selected_item(catalog_inputs["chip_dir"] / f"{ITEM_ID}.json")
 
-        saved_path = inputs["output_dir"] / "chips" / SQUARE / ITEM_ID / f"{ITEM_ID}.json"
+        _generate(catalog_inputs)
+
+        saved_path = catalog_inputs["chip_dir"] / f"{ITEM_ID}.json"
+        assert saved_path == catalog_inputs["output_dir"] / "chips" / SQUARE / ITEM_ID / (
+            f"{ITEM_ID}.json"
+        )
         regenerated = pystac.Item.from_file(str(saved_path))
         assert has_existing_scenes(regenerated)
         assert regenerated.properties["ftw:planting_day"] == 150
+        assert "ftw:harvest_day" not in regenerated.properties
 
 
 class TestImageryPropertyAllowList:

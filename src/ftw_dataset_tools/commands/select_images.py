@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from ftw_dataset_tools.api.imagery import (
     ImageryProgressBar,
+    chip_dir_for_item,
     clear_chip_selections,
     create_child_items_from_selection,
     find_chip_items,
@@ -280,7 +281,7 @@ def select_images_cmd(
         with tqdm(total=len(chip_items), desc="Clearing selections", unit="chip") as pbar:
             for item in chip_items:
                 if has_existing_scenes(item):
-                    result = clear_chip_selections(catalog_dir, item)
+                    result = clear_chip_selections(item)
                     total_stac += result.stac_items_deleted
                     total_tifs += result.geotiffs_deleted
                     chips_cleared += 1
@@ -376,10 +377,7 @@ def select_images_cmd(
 
                 if result.success:
                     # Create child STAC items for planting and harvest
-                    item_self_href = item.get_self_href()
-                    chip_dir = (
-                        Path(item_self_href).parent if item_self_href else catalog_dir / item.id
-                    )
+                    chip_dir = chip_dir_for_item(item)
                     create_child_items_from_selection(
                         chip_dir=chip_dir,
                         parent_item=item,

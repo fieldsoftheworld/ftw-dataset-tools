@@ -3,6 +3,7 @@
 from ftw_dataset_tools.api.imagery.catalog_ops import (
     ClearResult,
     ImageryStats,
+    chip_dir_for_item,
     clear_chip_selections,
     find_collection_dir,
     get_imagery_stats,
@@ -61,6 +62,7 @@ __all__ = [
     "SelectionStats",
     "SelectionWorkflowResult",
     "calculate_pixel_cloud_cover",
+    "chip_dir_for_item",
     "clear_chip_selections",
     "create_child_items_from_selection",
     "download_and_clip_scene",

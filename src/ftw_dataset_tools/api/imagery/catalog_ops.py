@@ -19,6 +19,7 @@ __all__ = [
     "IMAGERY_TEMPORAL_PROPERTIES",
     "ClearResult",
     "ImageryStats",
+    "chip_dir_for_item",
     "clear_chip_selections",
     "find_collection_dir",
     "get_imagery_stats",
@@ -225,22 +226,44 @@ class ClearResult:
     geotiffs_deleted: int = 0
 
 
-def clear_chip_selections(catalog_dir: Path, item: pystac.Item) -> ClearResult:
+def chip_dir_for_item(item: pystac.Item) -> Path:
+    """Return the on-disk directory holding a chip item and its assets.
+
+    Chip files are co-located with the item JSON, so the item's self href is the
+    only reliable way to find them: the layout nests each chip under its MGRS
+    square, and an item read from anywhere else may not follow that convention.
+
+    Raises:
+        ValueError: If the item has no self href, meaning its directory is
+            unknowable and any file operation would silently do nothing.
+    """
+    self_href = item.get_self_href()
+    if self_href is None:
+        raise ValueError(
+            f"Chip item '{item.id}' has no self href, so its directory on disk is "
+            "unknown. Read the item from its catalog (or call set_self_href) "
+            "before operating on its files."
+        )
+    return Path(self_href).parent
+
+
+def clear_chip_selections(item: pystac.Item) -> ClearResult:
     """Clear imagery selections for a single chip.
 
     Removes child STAC items, GeoTIFF files, and imagery-related properties
     from the parent item. Restores the item's datetime to a valid state.
 
     Args:
-        catalog_dir: Path to the catalog directory (used as a fallback if the
-            item has no self href)
-        item: Parent chip STAC item (will be modified and saved)
+        item: Parent chip STAC item (will be modified and saved). Must carry a
+            self href, which locates the chip directory whose files are deleted.
 
     Returns:
         ClearResult with counts of deleted items
+
+    Raises:
+        ValueError: If the item has no self href.
     """
-    item_self_href = item.get_self_href()
-    chip_dir = Path(item_self_href).parent if item_self_href else catalog_dir / item.id
+    chip_dir = chip_dir_for_item(item)
     result = ClearResult()
 
     # Delete planting and harvest child STAC items and their GeoTIFFs
@@ -293,9 +316,6 @@ def clear_chip_selections(catalog_dir: Path, item: pystac.Item) -> ClearResult:
     item.properties["datetime"] = restored_dt.isoformat()
 
     # Always save since we've modified the item (removed properties, restored datetime)
-    parent_path = chip_dir / f"{item.id}.json"
-    if item.get_self_href() is None:
-        item.set_self_href(str(parent_path))
-    item.save_object(dest_href=str(parent_path))
+    item.save_object(dest_href=str(chip_dir / f"{item.id}.json"))
 
     return result

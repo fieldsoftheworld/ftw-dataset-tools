@@ -193,17 +193,19 @@ The output directory is a self-contained STAC collection. `collection.json` sits
 ├── collection.json                   # STAC collection root
 ├── {name}_fields.parquet             # Field boundaries in EPSG:4326
 ├── {name}_fields_filtered.parquet    # Filtered fields (if class filter applied)
+├── {name}_chips.parquet              # Chip definitions with field coverage stats
 ├── {name}_boundary_lines.parquet     # Boundary lines from vector data
 ├── items.parquet                     # Collection mirror (STAC items as Parquet; only if any chip has masks)
 └── chips/
     ├── {mgrs100k}/
     │   ├── catalog.json              # Sub-catalog for MGRS 100 km square
-    │   └── {item_id}/
-    │       ├── {item_id}.json        # Chip item
-    │       ├── masks/                # Mask files (if masks generated)
-    │       ├── imagery/              # Clipped imagery (if selected/downloaded)
-    │       └── ...
-    └── other/                         # For non-FTW grid ids
+    │   └── {item_id}/                # Item JSON and its assets, flat, side by side
+    │       ├── {item_id}.json                   # Chip item
+    │       ├── {item_id}_{mask_type}.tif        # Masks (if masks generated)
+    │       ├── {item_id}_{season}_s2.json       # Scene items (if imagery selected)
+    │       ├── {item_id}_{season}_image_s2.tif  # Clipped imagery (if downloaded)
+    │       └── {item_id}_{season}_image_s2.jpg  # Thumbnails (if downloaded)
+    └── other/                        # For non-FTW grid ids
         ├── catalog.json
         └── {item_id}/...
 ```

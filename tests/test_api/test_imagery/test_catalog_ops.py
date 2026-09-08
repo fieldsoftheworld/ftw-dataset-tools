@@ -94,9 +94,9 @@ class TestClearChipSelections:
         (other_chip_dir / "chip2_planting_s2.json").write_text("{}")
         (other_chip_dir / "chip2_planting_image_s2.tif").write_bytes(b"tif")
 
-        # Call the way the CLI does: pass the collection (dataset) dir plus
-        # the in-memory parent item.
-        result = clear_chip_selections(tmp_path, parent)
+        # Call the way the CLI does: pass the item read back from the catalog,
+        # whose self href locates its chip directory.
+        result = clear_chip_selections(parent)
 
         assert result.stac_items_deleted == 2
         assert result.geotiffs_deleted == 2
@@ -118,3 +118,49 @@ class TestClearChipSelections:
         # Sibling chip's files are untouched.
         assert (other_chip_dir / "chip2_planting_s2.json").exists()
         assert (other_chip_dir / "chip2_planting_image_s2.tif").exists()
+
+
+class TestChipDirForItem:
+    """A chip's directory comes from its self href, or not at all."""
+
+    def test_returns_the_directory_holding_the_item(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.imagery.catalog_ops import chip_dir_for_item
+
+        chip_dir = tmp_path / "chips" / "33UXP" / "chip1"
+        chip_dir.mkdir(parents=True)
+        item = _bare_item("chip1")
+        item.set_self_href(str(chip_dir / "chip1.json"))
+
+        assert chip_dir_for_item(item) == chip_dir
+
+    def test_raises_for_an_item_with_no_self_href(self) -> None:
+        """An in-memory item has no directory; deleting nothing is not success."""
+        import pytest
+
+        from ftw_dataset_tools.api.imagery.catalog_ops import chip_dir_for_item
+
+        with pytest.raises(ValueError, match="no self href"):
+            chip_dir_for_item(_bare_item("chip1"))
+
+    def test_clear_chip_selections_raises_without_a_self_href(self) -> None:
+        import pytest
+
+        from ftw_dataset_tools.api.imagery.catalog_ops import clear_chip_selections
+
+        with pytest.raises(ValueError, match="no self href"):
+            clear_chip_selections(_bare_item("chip1"))
+
+
+def _bare_item(item_id: str):
+    """A parent chip item that has never been written to disk."""
+    from datetime import UTC, datetime
+
+    import pystac
+
+    return pystac.Item(
+        id=item_id,
+        geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+        bbox=(0.0, 0.0, 1.0, 1.0),
+        datetime=datetime(2024, 1, 1, tzinfo=UTC),
+        properties={"ftw:calendar_year": 2024},
+    )

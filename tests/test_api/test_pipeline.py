@@ -413,6 +413,19 @@ class TestFilterStage:
         with pytest.raises(StageInputError, match="filter"):
             pipeline.stage_masks(ctx)
 
+    def test_stac_requires_filtered_fields_when_configured(self, tmp_path: Path) -> None:
+        """A missing filtered-fields file must name the stage that produces it."""
+        fields = _fields_with_classes(tmp_path)
+        config = _config(fields, tmp_path / "out", name="ds", year=2023)
+        config.class_filter = ClassFilter("crop", ["wheat", "maize"], ["water"])
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        for path in (ctx.chips_path, ctx.output_fields_path, ctx.boundary_lines_path):
+            path.touch()
+        # filtered fields do not exist yet -> error points at the filter stage.
+        with pytest.raises(StageInputError, match="filter"):
+            pipeline.stage_stac(ctx)
+
 
 class TestMasksStage:
     """stage_masks wiring: one pass over the chips, one result per requested type."""
