@@ -30,6 +30,12 @@ def configure_source_coop_s3(conn: duckdb.DuckDBPyConnection) -> None:
     virtual-hosted URL DuckDB 1.5+ builds by default does not match the
     wildcard TLS certificate and every request fails with a peer-certificate
     error.
+
+    Both settings are connection-wide, not scoped to the Source Cooperative
+    buckets: any other S3 URL read on the same connection also gets path-style
+    addressing and this region. That is harmless for the sources ftwd reads,
+    but a caller who reuses the connection for an unrelated bucket in another
+    region has to set the region again itself.
     """
     conn.execute("INSTALL httpfs; LOAD httpfs;")
     conn.execute(f"SET s3_region = '{SOURCE_COOP_S3_REGION}';")
