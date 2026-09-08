@@ -74,6 +74,30 @@ class TestRunCommand:
         assert result.exit_code != 0
         assert "Unknown stage" in result.output
 
+    def test_corrupt_mask_reports_the_file_without_a_traceback(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A MaskReadError from the stac stage becomes a plain CLI error, not a traceback."""
+        from ftw_dataset_tools.api import pipeline
+        from ftw_dataset_tools.api.assets import MaskReadError
+
+        mask_path = tmp_path / "out" / "ftw-1" / "ftw-1_semantic_3_class.tif"
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise MaskReadError(mask_path, f"Could not read raster {mask_path}: corrupt")
+
+        monkeypatch.setattr(pipeline, "run_pipeline", _boom)
+        config_path = _write_config(
+            tmp_path / "c.yaml", sample_geoparquet_4326, output_dir=str(tmp_path / "out"), name="ds"
+        )
+
+        result = CliRunner().invoke(run, [str(config_path), "--through", "stac"])
+
+        assert result.exit_code == 1
+        assert "ftw-1_semantic_3_class.tif" in result.output
+        assert "Traceback" not in result.output
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+
     def test_run_through_reproject_writes_provenance(
         self, sample_geoparquet_4326: Path, tmp_path: Path
     ) -> None:

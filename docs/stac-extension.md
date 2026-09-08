@@ -128,7 +128,11 @@ parquet outputs) carries `type`, at least one role, and `file:size`
 ([file extension](https://github.com/stac-extensions/file)). Assets that reference remote
 source scenes (the Sentinel-2 band assets on child items) are carried through as provided
 by the upstream catalog. `file:checksum` (multihash sha2-256) is added when
-`stages.stac.checksums: true`; it is off by default because it is slow on large datasets.
+`stages.stac.checksums: true`, and only to the assets the `stac` stage writes: the label
+masks on chip items and the parquet collection assets (`fields`, `boundary_lines`,
+`chips`, `items`). Clipped imagery and thumbnails never carry one, because the
+`select_images` and `download_images` stages add those assets after `stac` has run.
+Checksums are off by default because they are slow on large datasets.
 
 Raster assets (masks and clipped imagery) carry `raster:bands`
 ([raster extension](https://github.com/stac-extensions/raster)) with `data_type`,

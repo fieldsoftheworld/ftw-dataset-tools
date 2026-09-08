@@ -383,6 +383,42 @@ class TestChipItemAssetMetadata:
             in item.stac_extensions
         )
 
+    def test_corrupt_mask_raises_mask_read_error_naming_the_file(self, tmp_path: Path) -> None:
+        """A mask truncated by a killed run must fail loudly, not with a traceback."""
+        import pytest
+        from rasterio.errors import RasterioError
+
+        from ftw_dataset_tools.api.assets import MaskReadError
+        from ftw_dataset_tools.api.stac import ChipInfo, _create_chip_item
+
+        chip_dir = tmp_path / "ftw-1"
+        chip_dir.mkdir()
+        mask_path = chip_dir / "ftw-1_semantic_3_class.tif"
+        _write_mask(mask_path, [[0, 1], [2, 0]])
+        with mask_path.open("r+b") as handle:
+            handle.truncate(16)
+
+        chip_info = ChipInfo(
+            grid_id="ftw-1",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+        )
+
+        with pytest.raises(MaskReadError) as excinfo:
+            _create_chip_item(
+                chip_info=chip_info,
+                field_dataset="ds",
+                temporal_extent=(
+                    datetime(2024, 1, 1, tzinfo=UTC),
+                    datetime(2024, 12, 31, tzinfo=UTC),
+                ),
+                chip_dir=chip_dir,
+            )
+
+        assert "ftw-1_semantic_3_class.tif" in str(excinfo.value)
+        assert excinfo.value.path == mask_path
+        assert not isinstance(excinfo.value, RasterioError)
+
     def test_decode_assets_classified_or_described(self, tmp_path: Path) -> None:
         item = self._chip_item(tmp_path)
         assert item is not None

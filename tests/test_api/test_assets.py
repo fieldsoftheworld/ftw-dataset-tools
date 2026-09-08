@@ -1,11 +1,14 @@
 """Tests for STAC asset decoration helpers."""
 
 import hashlib
+import re
 from pathlib import Path
 
 import numpy as np
 import pystac
+import pytest
 import rasterio
+from rasterio.errors import RasterioError
 from rasterio.transform import from_bounds
 
 
@@ -154,6 +157,39 @@ class TestAddRasterBands:
 
         band = asset.extra_fields["raster:bands"][0]
         assert band["nodata"] == "nan"
+
+
+class TestUnreadableRaster:
+    """An unreadable raster is a corrupt output: loud, but without a traceback."""
+
+    def test_truncated_file_raises_mask_read_error_naming_the_file(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import MaskReadError, add_raster_bands
+
+        p = tmp_path / "truncated.tif"
+        _write_cog(p, np.array([[0, 1], [1, 0]], dtype=np.uint8))
+        # Simulate a run killed mid-write or a full disk: keep the TIFF magic but
+        # drop everything the IFD points at.
+        with p.open("r+b") as handle:
+            handle.truncate(16)
+        _, asset = _item_with_asset(p, ["labels"])
+
+        with pytest.raises(MaskReadError) as excinfo:
+            add_raster_bands(asset, p)
+
+        assert "truncated.tif" in str(excinfo.value)
+        assert excinfo.value.path == p
+        assert not isinstance(excinfo.value, RasterioError)
+        assert "raster:bands" not in asset.extra_fields
+
+    def test_garbage_file_raises_mask_read_error(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import MaskReadError, add_raster_bands
+
+        p = tmp_path / "garbage.tif"
+        p.write_bytes(b"this is not a GeoTIFF")
+        _, asset = _item_with_asset(p, ["labels"])
+
+        with pytest.raises(MaskReadError, match=re.escape("garbage.tif")):
+            add_raster_bands(asset, p)
 
 
 class TestAddMaskClassification:

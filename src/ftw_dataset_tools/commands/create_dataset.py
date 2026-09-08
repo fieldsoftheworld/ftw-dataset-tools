@@ -11,6 +11,7 @@ import pystac
 from tqdm import tqdm
 
 from ftw_dataset_tools.api import dataset, splits
+from ftw_dataset_tools.api.assets import MaskReadError
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
     download_and_clip_scene,
@@ -455,7 +456,7 @@ def create_dataset_cmd(
     except FileNotFoundError as e:
         click.echo(click.style(f"\nError: {e}", fg="red"))
         raise SystemExit(1) from e
-    except ValueError as e:
+    except (ValueError, MaskReadError) as e:
         click.echo(click.style(f"\nError: {e}", fg="red"))
         raise SystemExit(1) from e
 

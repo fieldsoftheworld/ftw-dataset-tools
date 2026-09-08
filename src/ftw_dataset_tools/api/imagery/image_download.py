@@ -419,6 +419,11 @@ def download_and_clip_scene(
 
     log(f"Writing to {output_path}...")
 
+    # NOTE: profile.get("nodata") is always None here - the profile built above
+    # carries no "nodata" key, so the COG is written without one and its band
+    # statistics are computed over fill zeros as well as real pixels. The call is
+    # left in place for the follow-up branch that plumbs a real nodata value
+    # through; until then this argument is inert.
     write_error = write_cog(
         output_path, stacked, found_bands, profile, nodata=profile.get("nodata")
     )

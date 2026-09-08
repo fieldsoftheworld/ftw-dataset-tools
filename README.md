@@ -68,8 +68,12 @@ Stages run in this order: `reproject`, `chips`, `splits`, `boundaries`, `masks`,
 naming convention in the output directory, so individual stages can be re-run on
 their own as long as their inputs already exist.
 
-Set `stages.stac.checksums: true` to add a `file:checksum` to every STAC asset. This is
-off by default because hashing tens of thousands of COGs is slow.
+Set `stages.stac.checksums: true` to add a `file:checksum` to the assets the `stac` stage
+itself writes: the label masks on every chip item, and the parquet collection assets
+(`fields`, `boundary_lines`, `chips`, `items`). Imagery and thumbnail assets do not get a
+checksum, because `select_images` and `download_images` run after `stac` and add those
+assets later. Checksums are off by default because hashing tens of thousands of COGs is
+slow.
 
 #### Class filter (optional)
 

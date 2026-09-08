@@ -18,6 +18,7 @@ from pystac.extensions.classification import (
 )
 from pystac.extensions.file import FileExtension
 from pystac.extensions.raster import DataType, RasterBand, RasterExtension, Statistics
+from rasterio.errors import RasterioError
 
 from ftw_dataset_tools.api.raster_stats import read_band_stats
 
@@ -29,6 +30,15 @@ _MULTIHASH_SHA256_PREFIX = "1220"
 
 # Matches the metres-per-degree factor used in masks._grid_raster_geometry to
 # convert a metre resolution into degrees for geographic-CRS grids.
+#
+# APPROXIMATION: this is the length of a degree of longitude at the equator, and
+# it is applied to the pixel's x size only, so a mask on a geographic CRS reports
+# its longitudinal pixel size. Away from the equator the reported value
+# understates the pixel's north-south extent (a "10 m" pixel at 50 degrees north
+# is about 15.5 m tall). The number is kept as-is deliberately: masks are written
+# on a grid whose degree resolution comes from the same constant in
+# masks._grid_raster_geometry, so reporting anything else here would disagree with
+# the geometry the raster was actually built on.
 METRES_PER_DEGREE = 111000.0
 
 # (value, name, description) per classified mask kind. The background value is
@@ -88,7 +98,9 @@ def _spatial_resolution(transform: rasterio.Affine, crs: rasterio.crs.CRS | None
 
     The transform's pixel size is in CRS units, which is degrees for a geographic
     CRS. Convert those to metres using the same factor as
-    ``masks._grid_raster_geometry`` uses to go the other way.
+    ``masks._grid_raster_geometry`` uses to go the other way. See the
+    ``METRES_PER_DEGREE`` note above: the result is the longitudinal pixel size,
+    which is what that grid geometry was built from.
     """
     pixel_size = abs(transform.a)
     if crs is not None and crs.is_geographic:
@@ -103,9 +115,19 @@ def _band_nodata(value: float | int | None) -> float | int | str | None:
     return value
 
 
-def add_raster_bands(asset: pystac.Asset, path: Path) -> None:
-    """Set ``raster:bands`` from the file's data types, nodata and embedded stats."""
-    path = Path(path)
+class MaskReadError(Exception):
+    """A raster ftwd wrote cannot be read back, so the output on disk is corrupt.
+
+    Carries ``path`` so the command layer can name the offending file.
+    """
+
+    def __init__(self, path: Path, message: str) -> None:
+        super().__init__(message)
+        self.path = path
+
+
+def _build_raster_bands(path: Path) -> list[RasterBand]:
+    """Read a raster's per-band metadata and embedded statistics."""
     with rasterio.open(path) as src:
         dtypes = list(src.dtypes)
         nodatas = list(src.nodatavals)
@@ -134,6 +156,29 @@ def add_raster_bands(asset: pystac.Asset, path: Path) -> None:
         if description:
             band.properties["description"] = description
         bands.append(band)
+    return bands
+
+
+def add_raster_bands(asset: pystac.Asset, path: Path) -> None:
+    """Set ``raster:bands`` from the file's data types, nodata and embedded stats.
+
+    An unreadable raster means the file ftwd wrote is corrupt - truncated by a
+    killed run or a full disk - so this stays fatal rather than skipping the
+    asset. The command layer turns ``MaskReadError`` into a plain message naming
+    the file instead of a rasterio traceback.
+
+    Raises:
+        MaskReadError: The file cannot be opened or read as a raster.
+    """
+    path = Path(path)
+    try:
+        bands = _build_raster_bands(path)
+    except RasterioError as err:
+        raise MaskReadError(
+            path,
+            f"Could not read raster {path}: {err}. The file is missing or corrupt "
+            "- delete it and re-run the stage that writes it.",
+        ) from err
 
     RasterExtension.ext(asset, add_if_missing=True).bands = bands
 
