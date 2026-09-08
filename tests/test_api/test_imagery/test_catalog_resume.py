@@ -24,6 +24,7 @@ from ftw_dataset_tools.api.imagery.catalog_ops import (
 )
 from ftw_dataset_tools.api.imagery.selection_workflow import select_imagery_for_catalog
 from ftw_dataset_tools.api.imagery.stac_child_items import create_child_items_from_selection
+from ftw_dataset_tools.api.masks import get_mgrs_square
 from ftw_dataset_tools.api.stac import generate_stac_catalog
 
 if TYPE_CHECKING:
@@ -35,6 +36,8 @@ FIELD_DATASET = "test_dataset"
 GRID_ID = "chip_a"
 YEAR = 2024
 ITEM_ID = f"{GRID_ID}_{YEAR}"
+# Chips live under their MGRS square; a custom grid id lands in "other".
+SQUARE = get_mgrs_square(GRID_ID)
 CHIP_BOX = (10.0, 50.0, 10.02, 50.02)
 
 
@@ -224,14 +227,15 @@ class TestPreserveImagerySelection:
 def _build_inputs(tmp_path: Path, chips_base_dir: Path | None = None) -> dict[str, Path]:
     """Minimal fields/chips/boundaries inputs plus one chip dir with a mask.
 
-    ``chips_base_dir`` defaults to the flat ``{dataset}-chips`` layout; pass a
-    nested one to exercise the MGRS-square layout, where the chip directory is
-    not where ``catalog.save()`` writes the item.
+    ``chips_base_dir`` defaults to the collection layout's ``<output>/chips``;
+    pass another base to exercise a chips directory that does not sit inside the
+    collection, where the chip directory is not where ``collection.save()``
+    writes the item.
     """
     output_dir = tmp_path / "dataset"
     if chips_base_dir is None:
-        chips_base_dir = output_dir / f"{FIELD_DATASET}-chips"
-    chip_dir = chips_base_dir / ITEM_ID
+        chips_base_dir = output_dir / "chips"
+    chip_dir = chips_base_dir / SQUARE / ITEM_ID
     chip_dir.mkdir(parents=True)
     _write_instance_mask(chip_dir / f"{ITEM_ID}_instance.tif")
 
@@ -262,7 +266,7 @@ def _build_inputs(tmp_path: Path, chips_base_dir: Path | None = None) -> dict[st
 
 @pytest.fixture
 def catalog_inputs(tmp_path: Path) -> dict[str, Path]:
-    """Catalog generation inputs in the default flat chip layout."""
+    """Catalog generation inputs in the default ``<output>/chips`` layout."""
     return _build_inputs(tmp_path)
 
 
@@ -340,7 +344,7 @@ class TestCatalogRegenerationResume:
         _generate(catalog_inputs)
 
         result = select_imagery_for_catalog(
-            catalog_dir=catalog_inputs["chips_base_dir"],
+            catalog_dir=catalog_inputs["output_dir"],
             year=YEAR,
         )
 
@@ -415,17 +419,14 @@ class TestCatalogRegenerationResume:
         assert "ftw:planting" not in rels
         assert not has_existing_scenes(regenerated)
 
-    def test_preserves_selection_under_nested_chip_layout(self, tmp_path: Path) -> None:
-        """Resuming works when chip dirs are nested, not at {dataset}-chips/{id}.
+    def test_preserves_selection_under_relocated_chip_layout(self, tmp_path: Path) -> None:
+        """Resuming reads the chip directory in use, not a fixed layout path.
 
-        Under the MGRS-square layout the previous run's item lives in the chip
-        directory the pipeline was handed, which is not where the flat layout
-        would look for it.
+        The previous run's item lives in the chip directory the pipeline was
+        handed, which need not be the ``<output>/chips`` tree the collection is
+        written into.
         """
-        inputs = _build_inputs(
-            tmp_path,
-            chips_base_dir=tmp_path / "dataset" / f"{FIELD_DATASET}-chips" / "32UPU",
-        )
+        inputs = _build_inputs(tmp_path, chips_base_dir=tmp_path / "elsewhere" / "chips")
         _generate(inputs)
 
         # Record a selection where a real select-images run would write it
@@ -433,7 +434,7 @@ class TestCatalogRegenerationResume:
 
         _generate(inputs)
 
-        saved_path = inputs["output_dir"] / f"{FIELD_DATASET}-chips" / ITEM_ID / f"{ITEM_ID}.json"
+        saved_path = inputs["output_dir"] / "chips" / SQUARE / ITEM_ID / f"{ITEM_ID}.json"
         regenerated = pystac.Item.from_file(str(saved_path))
         assert has_existing_scenes(regenerated)
         assert regenerated.properties["ftw:planting_day"] == 150
