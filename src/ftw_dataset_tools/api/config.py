@@ -415,10 +415,12 @@ class DatasetConfig:
         requested = set(self.stages.masks.mask_types)
         derived = requested.intersection(DERIVED_MASK_TYPES)
         if derived and DERIVED_MASK_SOURCE not in requested:
+            fixed = [DERIVED_MASK_SOURCE, *self.stages.masks.mask_types]
             raise ConfigError(
                 f"Mask type(s) {', '.join(sorted(derived))} are derived from "
                 f"'{DERIVED_MASK_SOURCE}', which is also the DECODE field-extent "
-                f"target. Add '{DERIVED_MASK_SOURCE}' to masks.mask_types."
+                f"target. Add '{DERIVED_MASK_SOURCE}' to masks.mask_types, i.e. "
+                f"mask_types: [{', '.join(fixed)}]"
             )
 
     # ---- provenance -----------------------------------------------------

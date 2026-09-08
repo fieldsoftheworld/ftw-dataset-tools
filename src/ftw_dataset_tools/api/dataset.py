@@ -54,7 +54,7 @@ def create_dataset(
     class_filter: str | Path | None = None,
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
-    on_mask_start: Callable[[int, int], None] | None = None,
+    on_mask_start: Callable[[int, int, int], None] | None = None,
 ) -> CreateDatasetResult:
     """
     Create a complete training dataset from a fields file.
@@ -85,7 +85,7 @@ def create_dataset(
             lists). Include classes count as field; all others become background.
         on_progress: Optional callback for progress messages
         on_mask_progress: Optional callback (current, total) for mask creation progress
-        on_mask_start: Optional callback (total_grids, filtered_grids) for mask start
+        on_mask_start: Optional callback (total_grids, filtered_grids, total_tasks) for mask start
 
     Returns:
         CreateDatasetResult with paths to all created files

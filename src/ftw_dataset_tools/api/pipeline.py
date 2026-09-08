@@ -77,7 +77,7 @@ class PipelineContext:
     provenance: dict[str, Any] | None = None
     on_progress: Callable[[str], None] | None = None
     on_mask_progress: Callable[[int, int], None] | None = None
-    on_mask_start: Callable[[int, int], None] | None = None
+    on_mask_start: Callable[[int, int, int], None] | None = None
 
     # Accumulated results / state, populated as stages run.
     was_reprojected: bool = False
@@ -126,7 +126,7 @@ def build_context(
     *,
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
-    on_mask_start: Callable[[int, int], None] | None = None,
+    on_mask_start: Callable[[int, int, int], None] | None = None,
     provenance: dict[str, Any] | None = None,
 ) -> PipelineContext:
     """Resolve paths, detect temporal extent, and prepare the output directory.

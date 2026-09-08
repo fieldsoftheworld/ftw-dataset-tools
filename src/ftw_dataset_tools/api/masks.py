@@ -193,7 +193,7 @@ def _source_mask_type(mask_type: MaskType) -> MaskType:
     return mask_type
 
 
-def group_by_source(mask_types: list[MaskType]) -> dict[MaskType, list[MaskType]]:
+def _group_by_source(mask_types: list[MaskType]) -> dict[MaskType, list[MaskType]]:
     """Bucket mask types by the single rasterization they can share.
 
     The DECODE layers are post-processed from the 2-class mask, so requesting
@@ -207,6 +207,18 @@ def group_by_source(mask_types: list[MaskType]) -> dict[MaskType, list[MaskType]
     for mask_type in mask_types:
         groups.setdefault(_source_mask_type(mask_type), []).append(mask_type)
     return groups
+
+
+class _PartialCellFailure(Exception):
+    """A cell failed after part of its group was already written.
+
+    ``results`` are the outputs that reached disk before the failure. Reporting
+    them keeps a file that exists from being counted as skipped for its type.
+    """
+
+    def __init__(self, results: list[tuple[MaskType, MaskResult]], message: str) -> None:
+        super().__init__(message)
+        self.results = list(results)
 
 
 @dataclass
@@ -417,14 +429,19 @@ def _create_masks_for_cell(
 
     results: list[tuple[MaskType, MaskResult]] = []
     for mask_type, output_path in outputs:
-        tags: dict[str, str] = {}
-        if mask_type in _DERIVED_MASK_TYPES:
-            # Both derivations copy before mutating, so `source` stays reusable.
-            mask, tags = _derive_decode_layer(mask_type, source)
-        else:
-            mask = source
+        try:
+            tags: dict[str, str] = {}
+            if mask_type in _DERIVED_MASK_TYPES:
+                # Both derivations copy before mutating, so `source` stays reusable.
+                mask, tags = _derive_decode_layer(mask_type, source)
+            else:
+                mask = source
 
-        _write_mask_raster(mask, output_path, crs, transform, tags=tags)
+            _write_mask_raster(mask, output_path, crs, transform, tags=tags)
+        except Exception as e:
+            # The earlier outputs are on disk; hand them back with the error.
+            raise _PartialCellFailure(results, f"{mask_type.value}: {e}") from e
+
         results.append(
             (
                 mask_type,
@@ -472,9 +489,10 @@ def _process_single_grid_cell(
         task: The cell's bounds, source mask type and every output to write from it.
 
     Returns:
-        Tuple of ((mask_type, MaskResult) pairs, error tuple or None). The list is
-        empty when the cell failed; a failure discards the whole group, since all
-        of its outputs come from the one rasterization.
+        Tuple of ((mask_type, MaskResult) pairs, error tuple or None). A failed
+        rasterization loses the whole group, since every output comes from that one
+        burn; a failed write only loses the outputs not yet written, so the pairs
+        already produced are returned alongside the error.
     """
     # Suppress stdout/stderr from GDAL/rasterio progress output at OS level
     # (GDAL writes to C file descriptors, not Python's sys.stdout/stderr)
@@ -510,6 +528,9 @@ def _process_single_grid_cell(
             )
             conn.close()
             return (results, None)
+        except _PartialCellFailure as e:
+            conn.close()
+            return (e.results, (task.grid_id, str(e)))
         except Exception as e:
             conn.close()
             return ([], (task.grid_id, str(e)))
@@ -537,7 +558,7 @@ def create_masks(
     year: int | None = None,
     background_class_value: int = 0,
     on_progress: Callable[[int, int], None] | None = None,
-    on_start: Callable[[int, int], None] | None = None,
+    on_start: Callable[[int, int, int], None] | None = None,
 ) -> dict[MaskType, CreateMasksResult]:
     """
     Create raster masks from vector boundaries for each grid cell.
@@ -562,7 +583,9 @@ def create_masks(
               When provided, item IDs and filenames include the year.
         background_class_value: Value to use for background pixels (default: 0). Use 3 for presence-only labels.
         on_progress: Optional callback (current, total) for progress updates
-        on_start: Optional callback (total_grids, filtered_grids) called before processing
+        on_start: Optional callback (total_grids, filtered_grids, total_tasks) called before
+                  processing. total_tasks is filtered_grids x rasterization groups, which is
+                  what on_progress counts up to.
 
     Returns:
         A CreateMasksResult per requested mask type, keyed by that type.
@@ -575,6 +598,8 @@ def create_masks(
         mask_types = [MaskType.SEMANTIC_2_CLASS]
     if not mask_types:
         raise ValueError("mask_types must name at least one mask type")
+    # A repeated type would write the same path twice and double-count it.
+    mask_types = list(dict.fromkeys(mask_types))
 
     chips_path = Path(chips_file).resolve()
     boundaries_path = Path(boundaries_file).resolve()
@@ -633,9 +658,14 @@ def create_masks(
 
     total_cells = len(grid_cells)
 
-    # Call on_start callback with grid counts
+    # One task per (grid cell, group of mask types sharing a rasterization), so the
+    # total the progress bar runs to is the total on_start announces.
+    groups = _group_by_source(mask_types)
+    total_tasks = total_cells * len(groups)
+
+    # Call on_start callback with grid counts and the task total
     if on_start:
-        on_start(total_grids, total_cells)
+        on_start(total_grids, total_cells, total_tasks)
 
     # Get CRS from GeoParquet metadata
     geo_meta_result = conn.execute(
@@ -683,8 +713,6 @@ def create_masks(
     # Convert CRS to WKT for serialization
     crs_wkt = crs.to_wkt()
 
-    # One task per (grid cell, group of mask types sharing a rasterization).
-    groups = group_by_source(mask_types)
     work_items: list[_MaskTask] = []
     for grid_id, minx, miny, maxx, maxy in grid_cells:
         grid_id_str = str(grid_id)
@@ -726,14 +754,17 @@ def create_masks(
     # Process in parallel
     created: dict[MaskType, list[MaskResult]] = {mask_type: [] for mask_type in mask_types}
     skipped: dict[MaskType, list[tuple[str, str]]] = {mask_type: [] for mask_type in mask_types}
-    total_tasks = len(work_items)
     completed = 0
     executor = None
 
-    def record_failure(task: _MaskTask, error: tuple[str, str]) -> None:
-        """A failed burn loses every output in that group, so fail them together."""
+    def record_failure(
+        task: _MaskTask, error: tuple[str, str], written: set[MaskType] | None = None
+    ) -> None:
+        """Fail every output of the group that did not reach disk."""
+        created_types = written or set()
         for mask_type, _ in task.outputs:
-            skipped[mask_type].append(error)
+            if mask_type not in created_types:
+                skipped[mask_type].append(error)
 
     try:
         executor = ProcessPoolExecutor(max_workers=num_workers)
@@ -752,7 +783,7 @@ def create_masks(
                 for mask_type, result in results:
                     created[mask_type].append(result)
                 if error:
-                    record_failure(task, error)
+                    record_failure(task, error, {mask_type for mask_type, _ in results})
             except Exception as e:
                 record_failure(task, (task.grid_id, str(e)))
 

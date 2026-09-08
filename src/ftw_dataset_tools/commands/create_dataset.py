@@ -290,15 +290,19 @@ def create_dataset_cmd(
         sys.stdout.write(f"\r  Creating masks: |{bar}| {current}/{total} ({percent}%)")
         sys.stdout.flush()
 
-    def on_mask_start(total_grids: int, filtered_grids: int) -> None:
-        current_mask_info["total"] = filtered_grids
+    def on_mask_start(total_grids: int, filtered_grids: int, total_tasks: int) -> None:
+        current_mask_info["total"] = total_tasks
         skipped = total_grids - filtered_grids
+        # total_tasks is what the progress bar counts to: one task per grid per group
+        # of mask types that share a rasterization.
+        tasks = f" -> {total_tasks:,} rasterization tasks" if total_tasks != filtered_grids else ""
         if skipped > 0:
             click.echo(
-                f"  Processing {filtered_grids:,} grids (skipping {skipped:,} below threshold)"
+                f"  Processing {filtered_grids:,} grids "
+                f"(skipping {skipped:,} below threshold){tasks}"
             )
         else:
-            click.echo(f"  Processing {filtered_grids:,} grids")
+            click.echo(f"  Processing {filtered_grids:,} grids{tasks}")
 
     try:
         # Validate at CLI layer for immediate user feedback with proper Click error formatting

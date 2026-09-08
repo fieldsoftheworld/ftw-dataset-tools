@@ -123,6 +123,18 @@ class TestFromDict:
                 {"fields_file": "f.parquet", "stages": {"masks": {"mask_types": mask_types}}}
             )
 
+    def test_decode_without_source_names_the_list_to_use(self) -> None:
+        """The error must spell out exactly what to put in the config."""
+        with pytest.raises(ConfigError) as excinfo:
+            DatasetConfig.from_dict(
+                {
+                    "fields_file": "f.parquet",
+                    "stages": {"masks": {"mask_types": ["decode_boundary"]}},
+                }
+            )
+
+        assert "mask_types: [semantic_2_class, decode_boundary]" in str(excinfo.value)
+
     def test_non_decode_mask_types_do_not_require_source(self) -> None:
         config = DatasetConfig.from_dict(
             {

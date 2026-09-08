@@ -49,7 +49,11 @@ stages:
     random_seed: 42
 
   masks:
-    # Any subset of: instance, semantic_2_class, semantic_3_class.
+    # Any subset of: instance, semantic_2_class, semantic_3_class,
+    # decode_boundary, decode_distance.
+    # The decode_* layers are derived from the 2-class mask (one rasterization
+    # covers all three), so requesting either of them requires semantic_2_class
+    # in this list.
     mask_types: [instance, semantic_2_class, semantic_3_class]
     # Pixel resolution in meters.
     resolution: 10.0
