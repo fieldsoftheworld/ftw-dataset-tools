@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 
-from ftw_dataset_tools.api.geo import ensure_spatial_loaded
+from ftw_dataset_tools.api.geo import ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
 from ftw_dataset_tools.api.styles import split_counts, top_codes
 
@@ -128,27 +128,22 @@ STYLE_BLURBS = {
 # --------------------------------------------------------------------------- #
 
 
-def _sql_path(path: Path | str) -> str:
-    """Escape a path for interpolation into a single-quoted SQL string literal."""
-    return str(path).replace("'", "''")
-
-
 def _connect(working_dir: Path | None = None) -> duckdb.DuckDBPyConnection:
     """A spatial connection whose relative paths resolve inside ``working_dir``."""
     con = duckdb.connect(":memory:")
     ensure_spatial_loaded(con)
     if working_dir is not None:
-        con.execute(f"SET file_search_path='{_sql_path(working_dir)}'")
+        con.execute(f"SET file_search_path='{sql_path(working_dir)}'")
     return con
 
 
 def _columns(con: duckdb.DuckDBPyConnection, path: Path) -> list[str]:
-    rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{_sql_path(path)}')").fetchall()
+    rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{sql_path(path)}')").fetchall()
     return [row[0] for row in rows]
 
 
 def _count(con: duckdb.DuckDBPyConnection, path: Path) -> int:
-    row = con.execute(f"SELECT COUNT(*) FROM read_parquet('{_sql_path(path)}')").fetchone()
+    row = con.execute(f"SELECT COUNT(*) FROM read_parquet('{sql_path(path)}')").fetchone()
     return int(row[0]) if row else 0
 
 
@@ -179,7 +174,7 @@ def _coverage_quantiles(con: duckdb.DuckDBPyConnection, chips: Path) -> dict[int
     fractions = ", ".join(str(q / 100) for q in QUANTILES)
     row = con.execute(
         f"SELECT quantile_cont(field_coverage_pct, [{fractions}]) "
-        f"FROM read_parquet('{_sql_path(chips)}') WHERE field_coverage_pct IS NOT NULL"
+        f"FROM read_parquet('{sql_path(chips)}') WHERE field_coverage_pct IS NOT NULL"
     ).fetchone()
     if not row or row[0] is None:
         return {}
@@ -252,7 +247,7 @@ def _child_records_from_parquet(con: duckdb.DuckDBPyConnection, items_parquet: P
     cloud = '"eo:cloud_cover"' if "eo:cloud_cover" in columns else "CAST(NULL AS DOUBLE)"
     rows = con.execute(
         f'SELECT "{parent}", "ftw:season", CAST({when} AS VARCHAR), {cloud} '
-        f"FROM read_parquet('{_sql_path(items_parquet)}') WHERE \"ftw:season\" IS NOT NULL"
+        f"FROM read_parquet('{sql_path(items_parquet)}') WHERE \"ftw:season\" IS NOT NULL"
     ).fetchall()
     return [_record(*row) for row in rows]
 
@@ -384,7 +379,7 @@ def run_agents_queries(
     relative = {
         key: _asset_href(collection, key, f"{key}.parquet") for key in ("items", "chips", "fields")
     }
-    absolute = {k: _sql_path(_resolve_href(output_dir, v)) for k, v in relative.items()}
+    absolute = {k: sql_path(_resolve_href(output_dir, v)) for k, v in relative.items()}
     executed: list[tuple[str, str, list[tuple]]] = []
     con = _connect(output_dir)
     try:

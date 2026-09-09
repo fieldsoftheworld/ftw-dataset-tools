@@ -18,7 +18,7 @@ from pystac.extensions.classification import (
 )
 from pystac.extensions.file import FileExtension
 from pystac.extensions.raster import DataType, RasterBand, RasterExtension, Statistics
-from rasterio.errors import RasterioError
+from rasterio.errors import RasterioError, RasterioIOError
 
 from ftw_dataset_tools.api.raster_stats import band_stats_from_tags
 
@@ -228,7 +228,9 @@ def add_raster_bands(asset: pystac.Asset, path: Path) -> None:
     path = Path(path)
     try:
         bands = _build_raster_bands(path)
-    except RasterioError as err:
+    # RasterioIOError only subclasses RasterioError from rasterio 1.4; on the 1.3.x
+    # that pyproject still permits it is a bare OSError, so name both.
+    except (RasterioError, RasterioIOError) as err:
         raise MaskReadError(
             path,
             f"Could not read raster {path}: {err}. The file is missing or corrupt "

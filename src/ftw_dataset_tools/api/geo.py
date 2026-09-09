@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -89,8 +88,7 @@ def write_geoparquet(
         gdf.to_parquet(out_path)
     else:
         # Write from DuckDB query - COPY exports geometry as WKB
-        escaped = str(out_path).replace("'", "''")
-        conn.execute(f"COPY ({query}) TO '{escaped}' (FORMAT PARQUET)")
+        conn.execute(f"COPY ({query}) TO '{sql_path(out_path)}' (FORMAT PARQUET)")
 
     # Add bbox column using gpio fluent API if not already present
     # Use temp-file + atomic-rename pattern to prevent corruption on partial writes
@@ -100,13 +98,31 @@ def write_geoparquet(
             with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
                 tmp_path = Path(tmp.name)
             gpio.read(str(out_path)).add_bbox().write(str(tmp_path))
-            shutil.move(str(tmp_path), str(out_path))
+            finalize_temp_file(tmp_path, out_path)
         except Exception:
             if tmp_path and tmp_path.exists():
                 tmp_path.unlink()
             raise
 
     return out_path
+
+
+def finalize_temp_file(tmp_path: Path, target: Path) -> None:
+    """Rename a temp file onto ``target``, keeping the mode a published file needs.
+
+    ``tempfile.mkstemp`` and ``NamedTemporaryFile`` create with mode 0600, and a
+    rename carries the *source's* mode across - so a file rewritten through a temp
+    file silently becomes owner-only, while the file it replaced (and anything
+    written directly) is umask-derived. These outputs are published and read by
+    other people, so carry the target's existing mode over, defaulting to 0644 for
+    a file that does not exist yet.
+    """
+    try:
+        mode = target.stat().st_mode & 0o777
+    except FileNotFoundError:
+        mode = 0o644
+    tmp_path.chmod(mode)
+    tmp_path.replace(target)
 
 
 def sql_path(path: str | Path) -> str:
@@ -531,7 +547,7 @@ def reproject(
         gpio.read(str(tmp_path)).add_bbox().write(str(tmp_out_path))
 
         # Atomically replace the output file (same-filesystem rename)
-        tmp_out_path.replace(out_path)
+        finalize_temp_file(tmp_out_path, out_path)
         tmp_out_path = None  # Mark as moved, no cleanup needed
     finally:
         if tmp_path and tmp_path.exists():

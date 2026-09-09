@@ -16,6 +16,7 @@ import rasterio
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+from ftw_dataset_tools.api.geo import finalize_temp_file
 from ftw_dataset_tools.api.imagery.settings import (
     CROP_CAL_SUMMER_END,
     CROP_CAL_SUMMER_START,
@@ -130,7 +131,7 @@ def _download_to_cache(url: str, file_path: Path) -> None:
 
     try:
         urllib.request.urlretrieve(url, str(tmp_path))
-        tmp_path.replace(file_path)
+        finalize_temp_file(tmp_path, file_path)
     finally:
         tmp_path.unlink(missing_ok=True)
 

@@ -20,6 +20,8 @@ from ftw_dataset_tools.api.field_stats import CHIP_ID_COLUMN, detect_bbox_column
 from ftw_dataset_tools.api.geo import (
     detect_geometry_column,
     ensure_spatial_loaded,
+    finalize_temp_file,
+    sql_path,
     write_geoparquet,
 )
 
@@ -50,11 +52,6 @@ class CropStatsResult:
     reason: str | None = None
 
 
-def _sql_path(path: Path | str) -> str:
-    """Escape a path for interpolation into a single-quoted SQL string literal."""
-    return str(path).replace("'", "''")
-
-
 def _write_chips(chips_path: Path, con: duckdb.DuckDBPyConnection, query: str) -> None:
     """Write ``query`` over the chips GeoParquet through a temp file and a rename.
 
@@ -81,7 +78,7 @@ def _write_chips(chips_path: Path, con: duckdb.DuckDBPyConnection, query: str) -
         ) as tmp:
             tmp_path = Path(tmp.name)
         write_geoparquet(tmp_path, conn=con, query=query)
-        tmp_path.replace(chips_path)
+        finalize_temp_file(tmp_path, chips_path)
         tmp_path = None
     finally:
         if tmp_path is not None and tmp_path.exists():
@@ -94,7 +91,7 @@ def _columns(path: Path) -> list[str]:
         return [
             row[0]
             for row in con.execute(
-                f"DESCRIBE SELECT * FROM read_parquet('{_sql_path(path)}')"
+                f"DESCRIBE SELECT * FROM read_parquet('{sql_path(path)}')"
             ).fetchall()
         ]
     finally:
@@ -114,7 +111,7 @@ def _select_without_crop_stats(chips_path: Path) -> str:
     """SELECT over the chips file with any previous composition columns removed."""
     existing = [c for c in _columns(chips_path) if c in OUTPUT_COLUMNS]
     drop = f"EXCLUDE ({', '.join(existing)})" if existing else ""
-    return f"SELECT * {drop} FROM read_parquet('{_sql_path(chips_path)}')"
+    return f"SELECT * {drop} FROM read_parquet('{sql_path(chips_path)}')"
 
 
 def drop_crop_stats(chips_file: Path | str) -> bool:
@@ -382,7 +379,7 @@ def add_crop_stats(
     try:
         con.execute(f"CREATE TABLE chips_table AS {_select_without_crop_stats(chips_path)}")
         con.execute(
-            f"CREATE TABLE fields_table AS SELECT * FROM read_parquet('{_sql_path(fields_path)}')"
+            f"CREATE TABLE fields_table AS SELECT * FROM read_parquet('{sql_path(fields_path)}')"
         )
         coded, castable = _code_value_counts(con, "fields_table", code_col)
         if coded > 0 and castable == 0:
@@ -414,7 +411,7 @@ def _chips_count(chips_path: Path) -> int:
     con = duckdb.connect(":memory:")
     try:
         return con.execute(
-            f"SELECT count(*) FROM read_parquet('{_sql_path(chips_path)}')"
+            f"SELECT count(*) FROM read_parquet('{sql_path(chips_path)}')"
         ).fetchone()[0]
     finally:
         con.close()

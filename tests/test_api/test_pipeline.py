@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import duckdb
 import geopandas as gpd
@@ -1530,3 +1531,37 @@ class TestSharedStageOrder:
 
         with pytest.raises(ValueError, match="Unknown stage"):
             pipeline.run_pipeline(ctx, [], before_stage={"bogus": lambda _ctx: None})
+
+
+class TestDownloadStageResumes:
+    """The pipeline's download stage must resume, not re-attempt every chip.
+
+    A completed download replaces a child item's band assets with the local
+    ``image``, so re-attempting one has no band hrefs left to fetch and fails.
+    Without ``resume=True`` a rebuild of an already-imaged dataset reports a
+    failure for every chip instead of skipping them - which is exactly what a
+    Luxembourg rebuild did: 0 skipped, 1358 failed.
+    """
+
+    def test_stage_passes_resume(self, sample_geoparquet_4326: Path, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        ctx = pipeline.build_context(_config(sample_geoparquet_4326, out, year=2024))
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "collection.json").write_text("{}")
+
+        seen: dict = {}
+
+        def fake_download(**kwargs: object) -> object:
+            seen.update(kwargs)
+            return SimpleNamespace(
+                successful=0, skipped=0, failed=0, failed_details=[], skipped_details=[]
+            )
+
+        monkey = pytest.MonkeyPatch()
+        monkey.setattr(pipeline, "download_imagery_for_catalog", fake_download)
+        try:
+            pipeline.stage_download_images(ctx)
+        finally:
+            monkey.undo()
+
+        assert seen.get("resume") is True, seen
