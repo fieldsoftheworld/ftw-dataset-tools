@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -265,3 +266,111 @@ class TestDownloadAndClipScene:
         )
 
         assert "Resolution must be > 0" not in (result.error or "")
+
+
+class TestWriteCogStats:
+    def test_write_cog_embeds_per_band_stats(self, tmp_path: Path) -> None:
+        import numpy as np
+        from rasterio.transform import from_bounds
+
+        from ftw_dataset_tools.api.imagery.image_download import write_cog
+        from ftw_dataset_tools.api.raster_stats import read_band_stats
+
+        stacked = np.stack(
+            [
+                np.array([[1, 2], [3, 4]], dtype=np.uint16),
+                np.array([[0, 0], [0, 8]], dtype=np.uint16),
+            ]
+        )
+        profile = {
+            "driver": "COG",
+            "dtype": "uint16",
+            "width": 2,
+            "height": 2,
+            "count": 2,
+            "crs": "EPSG:4326",
+            "transform": from_bounds(0, 0, 1, 1, 2, 2),
+            "compress": "deflate",
+        }
+        out = tmp_path / "img.tif"
+
+        assert write_cog(out, stacked, ["red", "nir"], profile) is None
+
+        red = read_band_stats(out, 1)
+        nir = read_band_stats(out, 2)
+        assert red is not None and red.maximum == 4
+        assert nir is not None and nir.maximum == 8
+
+
+class TestProcessDownloadedSceneAssets:
+    def test_image_asset_has_size_and_bands(self, tmp_path: Path) -> None:
+        import numpy as np
+        import pystac
+        from rasterio.transform import from_bounds
+
+        from ftw_dataset_tools.api.imagery.image_download import (
+            process_downloaded_scene,
+            write_cog,
+        )
+
+        chip_dir = tmp_path / "chip"
+        chip_dir.mkdir()
+        parent = pystac.Item(
+            id="chip",
+            geometry={"type": "Point", "coordinates": [0.5, 0.5]},
+            bbox=[0, 0, 1, 1],
+            datetime=None,
+            properties={
+                "start_datetime": "2024-01-01T00:00:00Z",
+                "end_datetime": "2024-12-31T00:00:00Z",
+            },
+        )
+        parent_path = chip_dir / "chip.json"
+        parent.save_object(dest_href=str(parent_path))
+
+        child = pystac.Item(
+            id="chip_planting_s2",
+            geometry=parent.geometry,
+            bbox=parent.bbox,
+            datetime=datetime(2024, 3, 1, tzinfo=UTC),
+            properties={},
+        )
+        child_path = chip_dir / "chip_planting_s2.json"
+        child.set_self_href(str(child_path))
+
+        stacked = np.zeros((4, 2, 2), dtype=np.uint16)
+        profile = {
+            "driver": "COG",
+            "dtype": "uint16",
+            "width": 2,
+            "height": 2,
+            "count": 4,
+            "crs": "EPSG:4326",
+            "transform": from_bounds(0, 0, 1, 1, 2, 2),
+            "compress": "deflate",
+        }
+        image_path = chip_dir / "chip_planting_image_s2.tif"
+        write_cog(image_path, stacked, ["red", "green", "blue", "nir"], profile)
+
+        process_downloaded_scene(
+            item=child,
+            item_path=child_path,
+            output_path=image_path,
+            output_filename=image_path.name,
+            band_list=["red", "green", "blue", "nir"],
+            season="planting",
+            base_id="chip",
+            generate_thumbnails=False,
+        )
+
+        saved_child = pystac.Item.from_file(str(child_path))
+        image = saved_child.assets["image"]
+        assert image.extra_fields["file:size"] == image_path.stat().st_size
+        bands = image.extra_fields["raster:bands"]
+        assert [b["description"] for b in bands] == ["red", "green", "blue", "nir"]
+        assert bands[0]["data_type"] == "uint16"
+
+        saved_parent = pystac.Item.from_file(str(parent_path))
+        parent_image = saved_parent.assets["planting_image"]
+        assert parent_image.extra_fields["file:size"] == image_path.stat().st_size
+        assert len(parent_image.extra_fields["raster:bands"]) == 4

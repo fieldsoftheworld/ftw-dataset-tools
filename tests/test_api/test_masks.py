@@ -1,5 +1,7 @@
 """Tests for the masks API."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -790,3 +792,99 @@ class TestSharedRasterization:
         assert starts == [(1, 1, 2)]
         assert [total for _, total in progress] == [2, 2]
         assert progress[-1][0] == 2
+
+
+class TestMaskCogStatistics:
+    """Masks must carry embedded band statistics inside the COG."""
+
+    def _write_inputs(self, tmp_path: Path) -> tuple[Path, Path]:
+        import geopandas as gpd
+        from shapely.geometry import LineString, box
+
+        fields = gpd.GeoDataFrame(
+            {"id": [1]}, geometry=[box(10.002, 50.002, 10.006, 50.006)], crs="EPSG:4326"
+        )
+        fields_path = tmp_path / "fields.parquet"
+        fields.to_parquet(fields_path)
+
+        lines = gpd.GeoDataFrame(
+            {"id": [1]},
+            geometry=[LineString([(10.002, 50.002), (10.006, 50.002)])],
+            crs="EPSG:4326",
+        )
+        lines_path = tmp_path / "lines.parquet"
+        lines.to_parquet(lines_path)
+        return fields_path, lines_path
+
+    def _write_one_mask(self, tmp_path: Path, mask_type, out: Path) -> None:
+        """Write one mask through the shared-rasterization entry point."""
+        import duckdb
+        from rasterio.crs import CRS
+
+        from ftw_dataset_tools.api.geo import ensure_spatial_loaded
+        from ftw_dataset_tools.api.masks import _create_masks_for_cell, _source_mask_type
+
+        fields_path, lines_path = self._write_inputs(tmp_path)
+        conn = duckdb.connect(":memory:")
+        ensure_spatial_loaded(conn)
+        try:
+            _create_masks_for_cell(
+                conn=conn,
+                grid_id="g1",
+                bounds=(10.0, 50.0, 10.01, 50.01),
+                crs=CRS.from_epsg(4326),
+                boundaries_path=fields_path,
+                boundary_lines_path=lines_path,
+                boundaries_geom_col="geometry",
+                boundary_lines_geom_col="geometry",
+                source_type=_source_mask_type(mask_type),
+                outputs=[(mask_type, out)],
+                resolution=10.0,
+            )
+        finally:
+            conn.close()
+
+    def test_single_mask_has_embedded_stats(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.masks import MaskType
+        from ftw_dataset_tools.api.raster_stats import read_band_stats
+
+        out = tmp_path / "mask.tif"
+        self._write_one_mask(tmp_path, MaskType.SEMANTIC_3_CLASS, out)
+
+        stats = read_band_stats(out, 1)
+        assert stats is not None
+        assert stats.minimum == 0.0
+        assert stats.maximum == 2.0
+        assert 0.0 < stats.mean < 2.0
+        assert stats.valid_percent is None
+        assert not out.with_name(out.name + ".aux.xml").exists()
+        assert not out.with_suffix(".tmp.tif").exists()
+
+    def test_single_mask_is_cog(self, tmp_path: Path) -> None:
+        import rasterio
+
+        from ftw_dataset_tools.api.masks import MaskType
+
+        out = tmp_path / "mask2.tif"
+        self._write_one_mask(tmp_path, MaskType.SEMANTIC_2_CLASS, out)
+
+        with rasterio.open(out) as src:
+            assert src.profile["tiled"] is True
+            assert src.profile["compress"] == "deflate"
+            assert src.dtypes[0] == "uint8"
+
+    def test_decode_distance_keeps_tags_and_stats(self, tmp_path: Path) -> None:
+        import rasterio
+
+        from ftw_dataset_tools.api.masks import MaskType
+        from ftw_dataset_tools.api.raster_stats import read_band_stats
+
+        out = tmp_path / "dist.tif"
+        self._write_one_mask(tmp_path, MaskType.DECODE_DISTANCE, out)
+
+        with rasterio.open(out) as src:
+            assert "decode_distance_max_px" in src.tags()
+            assert src.dtypes[0] == "float32"
+        stats = read_band_stats(out, 1)
+        assert stats is not None
+        assert 0.0 <= stats.minimum <= stats.maximum <= 1.0

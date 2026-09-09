@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
@@ -488,3 +489,47 @@ class TestMasksStage:
         assert paths["semantic_2class"].parent == paths["decode_distance"].parent
         assert paths["semantic_2class"].name == "cell_001_2024_semantic_2_class.tif"
         assert paths["decode_distance"].name == "cell_001_2024_decode_distance.tif"
+
+
+class TestStacStageFlags:
+    def test_stac_stage_passes_checksums_and_background(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        from ftw_dataset_tools.api import pipeline, stac
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        captured: dict = {}
+
+        def fake_generate(**kwargs):
+            captured.update(kwargs)
+            return stac.STACGenerationResult(
+                catalog_path=tmp_path / "catalog.json",
+                source_collection_path=tmp_path / "s.json",
+                chips_collection_path=tmp_path / "c.json",
+                items_parquet_path=tmp_path / "items.parquet",
+                total_items=0,
+                temporal_extent=(
+                    datetime(2024, 1, 1, tzinfo=UTC),
+                    datetime(2024, 12, 31, tzinfo=UTC),
+                ),
+            )
+
+        monkeypatch.setattr(stac, "generate_stac_catalog", fake_generate)
+
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(sample_geoparquet_4326),
+                "output_dir": str(tmp_path / "out"),
+                "year": 2024,
+                "stages": {"stac": {"checksums": True}, "masks": {"presence_only": True}},
+            }
+        )
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir()
+        for name in ("chips", "fields", "boundary_lines"):
+            (ctx.output_dir / f"{ctx.field_dataset}_{name}.parquet").write_bytes(b"")
+
+        pipeline.stage_stac(ctx)
+
+        assert captured["checksums"] is True
+        assert captured["background_class_value"] == 3

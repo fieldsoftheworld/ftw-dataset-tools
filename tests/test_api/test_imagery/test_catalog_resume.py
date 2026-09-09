@@ -38,6 +38,35 @@ ITEM_ID = f"{GRID_ID}_{YEAR}"
 CHIP_BOX = (10.0, 50.0, 10.02, 50.02)
 
 
+def _write_instance_mask(path: Path) -> None:
+    """Write a tiny real instance mask.
+
+    Catalog generation reads every mask asset for its raster metadata, so the
+    file has to be an openable COG rather than an empty placeholder.
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_bounds
+
+    from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
+
+    data = np.array([[0, 1], [1, 0]], dtype="uint32")
+    with rasterio.open(
+        path,
+        "w",
+        driver="COG",
+        width=data.shape[1],
+        height=data.shape[0],
+        count=1,
+        dtype="uint32",
+        crs="EPSG:4326",
+        transform=from_bounds(*CHIP_BOX, data.shape[1], data.shape[0]),
+        compress="deflate",
+    ) as dst:
+        dst.write(data, 1)
+        embed_band_stats(dst, 1, compute_band_stats(data))
+
+
 def _make_item(item_id: str, properties: dict | None = None) -> pystac.Item:
     """Create a bare parent chip item."""
     return pystac.Item(
@@ -204,7 +233,7 @@ def _build_inputs(tmp_path: Path, chips_base_dir: Path | None = None) -> dict[st
         chips_base_dir = output_dir / f"{FIELD_DATASET}-chips"
     chip_dir = chips_base_dir / ITEM_ID
     chip_dir.mkdir(parents=True)
-    (chip_dir / f"{ITEM_ID}_instance.tif").touch()
+    _write_instance_mask(chip_dir / f"{ITEM_ID}_instance.tif")
 
     fields_file = tmp_path / "fields.parquet"
     gpd.GeoDataFrame(
