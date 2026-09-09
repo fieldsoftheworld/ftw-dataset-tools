@@ -26,6 +26,10 @@ from ftw_dataset_tools.api.imagery.image_download import (
     download_and_clip_scene,
     process_downloaded_scene,
 )
+from ftw_dataset_tools.api.imagery.preview_workflow import (
+    preview_imagery_for_catalog,
+    preview_summary_line,
+)
 from ftw_dataset_tools.api.imagery.progress import ImageryProgressBar, SelectionStats
 from ftw_dataset_tools.api.imagery.scene_selection import (
     SceneSelectionResult,
@@ -74,6 +78,8 @@ __all__ = [
     "get_imagery_stats",
     "has_existing_scenes",
     "iter_chip_dirs",
+    "preview_imagery_for_catalog",
+    "preview_summary_line",
     "process_downloaded_scene",
     "select_imagery_for_catalog",
     "select_scenes_for_chip",

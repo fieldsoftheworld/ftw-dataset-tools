@@ -6,9 +6,11 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
+from affine import Affine
 from PIL import Image
 from rasterio.enums import Resampling
 from rasterio.errors import RasterioIOError
+from rasterio.vrt import WarpedVRT
 
 
 class ThumbnailError(Exception):
@@ -119,6 +121,96 @@ def _normalize_for_display(
                 band = np.clip((band - p_low) / (p_high - p_low) * 255, 0, 255)
         result[i] = band
     return result.astype(np.uint8)
+
+
+def generate_scene_thumbnail(
+    visual_href: str,
+    reference_raster: str | Path,
+    output_path: str | Path,
+    max_size: int = 512,
+    quality: int = 85,
+) -> Path:
+    """Write a JPEG preview of one chip read straight from a remote true-colour COG.
+
+    The clipped-image path writes a 4-band GeoTIFF per chip and previews that. A
+    dataset that keeps the scene COG remote has no such file, so read the chip's
+    window out of the scene instead: a windowed, downsampled ``WarpedVRT`` read is a
+    handful of range requests against the COG's overviews, not a whole-scene fetch.
+
+    ``reference_raster`` is a raster already on the chip's own grid - one of its mask
+    COGs - so the preview lands in exactly the same CRS, extent and aspect as the
+    masks. That is what lets ``generate_overlay_thumbnail`` composite a mask over the
+    result without any registration of its own.
+
+    Args:
+        visual_href: URL of the scene's true-colour (8-bit RGB) COG.
+        reference_raster: A raster on the chip grid, used for CRS/extent/aspect.
+        output_path: Output path for the JPEG.
+        max_size: Longest edge of the preview in pixels.
+        quality: JPEG quality (1-100).
+
+    Returns:
+        Path to the generated thumbnail.
+
+    Raises:
+        ThumbnailError: If the scene or reference cannot be read, or the write fails.
+    """
+    reference_raster = Path(reference_raster)
+    output_path = Path(output_path)
+
+    if not reference_raster.exists():
+        raise ThumbnailError(f"Reference raster does not exist: {reference_raster}")
+
+    try:
+        with rasterio.open(reference_raster) as reference:
+            target_crs = reference.crs
+            width, height = reference.width, reference.height
+            base_transform = reference.transform
+
+        scale = max(width, height) / max_size
+        if scale < 1:
+            scale = 1.0
+        out_width = max(1, round(width / scale))
+        out_height = max(1, round(height / scale))
+        out_transform = base_transform * Affine.scale(scale, scale)
+
+        with (
+            rasterio.open(visual_href) as scene,
+            WarpedVRT(
+                scene,
+                crs=target_crs,
+                transform=out_transform,
+                width=out_width,
+                height=out_height,
+                resampling=Resampling.bilinear,
+            ) as warped,
+        ):
+            if warped.count < 3:
+                raise ThumbnailError(
+                    f"Need at least 3 bands for an RGB preview, got {warped.count}"
+                )
+            data = warped.read(indexes=[1, 2, 3], masked=True)
+
+        if np.ma.is_masked(data):
+            data = data.filled(fill_value=0)
+
+        # The visual asset is already display-stretched 8-bit, but a single chip is a
+        # tiny crop of a whole scene and often occupies a narrow slice of that range.
+        # Stretch it the same way the clipped path does, so the two look alike.
+        data = _normalize_for_display(data)
+
+        rgb_array = np.transpose(data, (1, 2, 0)).astype(np.uint8)
+        Image.fromarray(rgb_array, mode="RGB").save(
+            output_path, "JPEG", quality=quality, optimize=True
+        )
+    except RasterioIOError as err:
+        raise ThumbnailError(f"Failed to read {visual_href}: {err}") from err
+    except OSError as err:
+        if output_path.exists():
+            output_path.unlink()
+        raise ThumbnailError(f"Failed to write thumbnail: {err}") from err
+
+    return output_path
 
 
 def generate_overlay_thumbnail(

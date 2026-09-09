@@ -38,6 +38,7 @@ from ftw_dataset_tools.api import (
     tiles,
 )
 from ftw_dataset_tools.api import config as config_module
+from ftw_dataset_tools.api.config import DOWNLOAD_MODE_PREVIEW
 from ftw_dataset_tools.api.geo import (
     detect_crs,
     detect_geometry_column,
@@ -48,6 +49,7 @@ from ftw_dataset_tools.api.imagery import (
     download_imagery_for_catalog,
     select_imagery_for_catalog,
 )
+from ftw_dataset_tools.api.imagery.preview_workflow import preview_imagery_for_catalog
 from ftw_dataset_tools.api.masks import MaskType, get_item_id, get_mgrs_square
 from ftw_dataset_tools.api.source import (
     describe_local_source,
@@ -167,6 +169,7 @@ class PipelineContext:
     stac_result: stac.STACGenerationResult | None = None
     selection_result: Any = None
     download_result: Any = None
+    preview_result: Any = None
     docs_result: DocsStageResult | None = None
 
     # Derived output paths (fixed naming convention).
@@ -786,6 +789,14 @@ def stage_download_images(ctx: PipelineContext) -> None:
         produced_by="stac",
     )
     download_cfg = ctx.config.stages.download_images
+    if download_cfg.mode == DOWNLOAD_MODE_PREVIEW:
+        ctx.log("Rendering chip previews from the remote scenes...")
+        ctx.preview_result = preview_imagery_for_catalog(
+            catalog_dir=ctx.output_dir,
+            resume=download_cfg.resume,
+            workers=download_cfg.workers,
+        )
+        return
     ctx.log("Downloading imagery...")
     ctx.download_result = download_imagery_for_catalog(
         catalog_dir=ctx.output_dir,
