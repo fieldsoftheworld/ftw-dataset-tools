@@ -21,6 +21,7 @@ import yaml
 
 from ftw_dataset_tools import __version__
 from ftw_dataset_tools.api import field_stats, splits
+from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -53,6 +54,10 @@ PMTILES_AUTO = "auto"
 
 # Current config schema version. Bump when the schema changes incompatibly.
 CONFIG_SCHEMA_VERSION = 1
+
+# Concurrent chips for the imagery stages. Both are network-bound, so a handful
+# of threads turns a multi-day run over thousands of chips into hours.
+DEFAULT_IMAGERY_WORKERS = 4
 
 # YAML keys allowed at the top level of a config file. `class_filter` on
 # DatasetConfig is resolved from stages.masks.class_filter, not set via YAML.
@@ -397,6 +402,9 @@ class SelectImagesConfig:
     buffer_days: int = 14
     num_buffer_expansions: int = 3
     buffer_expansion_size: int = 14
+    # Chips are selected in parallel: each one costs several STAC searches that
+    # spend nearly all their time waiting on the network.
+    workers: int = DEFAULT_IMAGERY_WORKERS
 
 
 @dataclass
@@ -406,6 +414,8 @@ class DownloadImagesConfig:
     enabled: bool = False
     bands: list[str] = field(default_factory=lambda: ["red", "green", "blue", "nir"])
     resolution: float = 10.0
+    # Scenes are downloaded in parallel; the STAC item writes stay serialized.
+    workers: int = DEFAULT_IMAGERY_WORKERS
 
 
 @dataclass
@@ -614,6 +624,9 @@ class DatasetConfig:
         if not isinstance(self.stages.masks.skip_existing, bool):
             raise ConfigError("stages.masks.skip_existing must be true or false")
 
+        _validate_workers(self.stages.select_images.workers, "stages.select_images.workers")
+        _validate_workers(self.stages.download_images.workers, "stages.download_images.workers")
+
         pmtiles = self.stages.docs.pmtiles
         if not isinstance(pmtiles, bool) and pmtiles != PMTILES_AUTO:
             raise ConfigError(
@@ -723,6 +736,17 @@ def _reject_unknown(data: dict[str, Any], known: set[str], context: str) -> None
             f"Unknown key(s) in {context}: {', '.join(sorted(unknown))}. "
             f"Allowed keys: {', '.join(sorted(known))}."
         )
+
+
+def _validate_workers(value: Any, key: str) -> None:
+    """Reject anything that is not a worker count (booleans included).
+
+    The bounds match the ``--workers`` options on ``select-images`` and
+    ``download-images``, so a count is accepted or rejected the same way whether
+    it comes from a config file or the command line.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_WORKERS:
+        raise ConfigError(f"{key} must be an integer between 1 and {MAX_WORKERS} (got {value!r}).")
 
 
 def _opt_str(value: Any) -> str | None:

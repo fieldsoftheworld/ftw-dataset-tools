@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +17,8 @@ from ftw_dataset_tools.api.imagery.download_workflow import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 
 class TestFindS2ChildItems:
@@ -620,3 +624,135 @@ class TestUnreadableItemsAreReported:
         assert result.successful == 0
         assert result.failed == 1
         assert result.failed_details[0]["item"] == "broken_planting_s2"
+
+
+def _write_s2_catalog(tmp_path: Path, chip_ids: list[str]) -> Path:
+    """Write a catalog holding planting and harvest S2 child items per chip."""
+    from .conftest import create_mock_s2_assets, create_mock_stac_item
+
+    for chip_id in chip_ids:
+        chip_dir = tmp_path / "chips" / "33UXP" / chip_id
+        chip_dir.mkdir(parents=True)
+        for season in ("planting", "harvest"):
+            child_id = f"{chip_id}_{season}_s2"
+            item = create_mock_stac_item(
+                item_id=child_id,
+                bbox=(10.0, 50.0, 10.01, 50.01),
+                properties={"eo:cloud_cover": 1.5},
+                assets=create_mock_s2_assets(),
+            )
+            item.set_self_href(str(chip_dir / f"{child_id}.json"))
+            item.save_object(dest_href=str(chip_dir / f"{child_id}.json"))
+
+    return tmp_path
+
+
+class TestParallelDownload:
+    """Scenes download concurrently; STAC writes stay on the main thread."""
+
+    def test_all_items_download_concurrently(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        catalog = _write_s2_catalog(tmp_path, [f"chip_{n:03d}" for n in range(4)])
+        lock = threading.Lock()
+        state = {"active": 0, "max_active": 0}
+
+        def fake_download(**_kwargs: object) -> MagicMock:
+            with lock:
+                state["active"] += 1
+                state["max_active"] = max(state["max_active"], state["active"])
+            time.sleep(0.05)
+            with lock:
+                state["active"] -= 1
+            return MagicMock(success=True, error=None)
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            fake_download,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
+            lambda **_kwargs: None,
+        )
+
+        result = download_imagery_for_catalog(
+            catalog_dir=catalog, show_progress_bar=False, workers=4
+        )
+
+        assert result.successful == 8
+        assert result.failed == 0
+        assert state["max_active"] > 1
+
+    def test_item_updates_run_on_the_main_thread(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Two child items share a parent file, so the STAC write cannot race."""
+        catalog = _write_s2_catalog(tmp_path, [f"chip_{n:03d}" for n in range(3)])
+        threads: list[str] = []
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            lambda **_kwargs: MagicMock(success=True, error=None),
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
+            lambda **_kwargs: threads.append(threading.current_thread().name),
+        )
+
+        result = download_imagery_for_catalog(
+            catalog_dir=catalog, show_progress_bar=False, workers=4
+        )
+
+        assert result.successful == 6
+        assert set(threads) == {threading.main_thread().name}
+
+    def test_failures_are_recorded_per_item(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        catalog = _write_s2_catalog(tmp_path, ["chip_000", "chip_001"])
+
+        def fake_download(*, scene: object, **_kwargs: object) -> MagicMock:
+            time.sleep(0.02)
+            if scene.item.id == "chip_001_harvest_s2":  # type: ignore[attr-defined]
+                raise RuntimeError("boom")
+            return MagicMock(success=True, error=None)
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            fake_download,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
+            lambda **_kwargs: None,
+        )
+
+        result = download_imagery_for_catalog(
+            catalog_dir=catalog, show_progress_bar=False, workers=4
+        )
+
+        assert result.successful == 3
+        assert result.failed_details == [{"item": "chip_001_harvest_s2", "error": "boom"}]
+
+    def test_progress_callback_counts_every_item(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        catalog = _write_s2_catalog(tmp_path, ["chip_000", "chip_001"])
+        seen: list[tuple[int, int]] = []
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            lambda **_kwargs: MagicMock(success=True, error=None),
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
+            lambda **_kwargs: None,
+        )
+
+        download_imagery_for_catalog(
+            catalog_dir=catalog,
+            show_progress_bar=False,
+            workers=4,
+            on_progress=lambda current, total: seen.append((current, total)),
+        )
+
+        assert seen == [(1, 4), (2, 4), (3, 4), (4, 4)]

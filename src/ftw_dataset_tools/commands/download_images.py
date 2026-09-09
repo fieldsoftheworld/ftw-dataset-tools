@@ -4,21 +4,34 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING
 
 import click
 import pystac
 from tqdm import tqdm
 
 from ftw_dataset_tools.api.imagery import (
-    download_and_clip_scene,
     find_collection_dir,
     find_s2_child_items,
     process_downloaded_scene,
 )
-from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
+from ftw_dataset_tools.api.imagery.download_workflow import (
+    DownloadTask,
+    build_download_task,
+    download_task_scene,
+    skip_download_reason,
+)
+from ftw_dataset_tools.api.imagery.parallel import (
+    DEFAULT_WORKERS,
+    MAX_WORKERS,
+    ParallelOutcome,
+    run_in_parallel,
+)
 from ftw_dataset_tools.api.imagery.thumbnails import has_rgb_bands
 from ftw_dataset_tools.api.stac_items import STACSaveError, write_item
+
+if TYPE_CHECKING:
+    from ftw_dataset_tools.api.imagery.image_download import DownloadResult
 
 # All valid Sentinel-2 bands from EarthSearch
 VALID_BANDS: tuple[str, ...] = (
@@ -48,6 +61,88 @@ VALID_BANDS: tuple[str, ...] = (
     # Composite
     "visual",  # True color RGB composite
 )
+
+
+def _record_download(
+    outcome: ParallelOutcome[DownloadTask, DownloadResult],
+    *,
+    successful: list[str],
+    failed: list[dict],
+    band_list: list[str],
+    keep_remote_refs: bool,
+    generate_thumbnails: bool,
+) -> None:
+    """Report and record one finished download. Runs on the main thread only.
+
+    A chip's planting and harvest items share a parent item file, so the STAC
+    updates below must never run concurrently with each other.
+    """
+    task = outcome.task
+    for message in task.logs:
+        if message.startswith("Grid:"):
+            tqdm.write(f"  {message}")
+
+    if outcome.error is not None:
+        failed.append({"item": task.item.id, "error": str(outcome.error)})
+        return
+
+    result = outcome.value
+    if result is None or not result.success:
+        failed.append({"item": task.item.id, "error": result.error if result else "Unknown error"})
+        return
+
+    try:
+        _update_stac_items(
+            task,
+            band_list=band_list,
+            keep_remote_refs=keep_remote_refs,
+            generate_thumbnails=generate_thumbnails,
+        )
+    except Exception as e:
+        failed.append({"item": task.item.id, "error": str(e)})
+        return
+
+    successful.append(task.item.id)
+
+
+def _update_stac_items(
+    task: DownloadTask,
+    *,
+    band_list: list[str],
+    keep_remote_refs: bool,
+    generate_thumbnails: bool,
+) -> None:
+    """Point the STAC items at the downloaded file (or add it alongside the remote refs)."""
+    if keep_remote_refs:
+        # Legacy mode: keep remote assets, add local as "clipped"
+        task.item.assets["clipped"] = pystac.Asset(
+            href=f"./{task.output_filename}",
+            media_type="image/tiff; application=geotiff; profile=cloud-optimized",
+            title=f"Clipped {len(band_list)}-band image ({','.join(band_list)})",
+            roles=["data"],
+        )
+        # Not save_object: its first positional argument is include_self_link, and
+        # it resolves the catalog root, which a staged item's published root href
+        # cannot reach. write_item serializes without either.
+        write_item(task.item, task.item_path)
+        return
+
+    try:
+        process_downloaded_scene(
+            item=task.item,
+            item_path=task.item_path,
+            output_path=task.output_path,
+            output_filename=task.output_filename,
+            band_list=band_list,
+            season=task.season,
+            base_id=task.base_id,
+            generate_thumbnails=generate_thumbnails,
+        )
+    except Exception as e:
+        # Clean up downloaded TIF if processing fails
+        if task.output_path.exists():
+            task.output_path.unlink()
+        raise STACSaveError(f"Failed to process {task.item.id}: {e}") from e
 
 
 @click.command("download-images")
@@ -94,6 +189,13 @@ VALID_BANDS: tuple[str, ...] = (
     show_default=True,
     help="Generate JPEG preview thumbnails for downloaded images.",
 )
+@click.option(
+    "--workers",
+    type=click.IntRange(1, MAX_WORKERS),
+    default=DEFAULT_WORKERS,
+    show_default=True,
+    help="Scenes to download concurrently. STAC item writes stay serialized.",
+)
 def download_images_cmd(
     catalog_path: str,
     bands: tuple[str, ...],
@@ -102,6 +204,7 @@ def download_images_cmd(
     output_report: str | None,
     keep_remote_refs: bool,
     preview: bool,
+    workers: int,
 ) -> None:
     """Download and clip satellite imagery for selected scenes.
 
@@ -153,98 +256,37 @@ def download_images_cmd(
     skipped: list[dict] = []
     failed: list[dict] = list(unreadable)
 
-    # Progress callback
-    def on_progress(msg: str) -> None:
-        if msg.startswith("Grid:"):
-            tqdm.write(f"  {msg}")
+    # Download several scenes at once: the reads are network-bound, and each one
+    # writes only its own GeoTIFF. The STAC writes below stay on this thread,
+    # since a chip's two seasons update the same parent item.
+    tasks: list[DownloadTask] = []
+    for item, item_path in child_items:
+        reason = skip_download_reason(item, item_path, resume=resume)
+        if reason is not None:
+            skipped.append({"item": item.id, "reason": reason})
+            continue
+        tasks.append(build_download_task(item, item_path))
 
-    # Process each child item
+    generate_thumbnails = preview and has_rgb_bands(band_list)
+
     with tqdm(total=len(child_items), desc="Downloading imagery", unit="scene") as pbar:
-        for item, item_path in child_items:
-            bbox = tuple(item.bbox) if item.bbox else None
+        pbar.update(len(skipped))
 
-            if bbox is None:
-                skipped.append({"item": item.id, "reason": "No bbox in item"})
-                pbar.update(1)
-                continue
+        def work(task: DownloadTask) -> DownloadResult:
+            return download_task_scene(task, bands=band_list, resolution=resolution)
 
-            # Check if already downloaded (resume mode)
-            if resume and "clipped" in item.assets:
-                clipped_href = item.assets["clipped"].href
-                clipped_path = item_path.parent / clipped_href
-                if clipped_path.exists():
-                    skipped.append({"item": item.id, "reason": "Already downloaded"})
-                    pbar.update(1)
-                    continue
-
-            # Determine season from item ID
-            if item.id.endswith("_planting_s2"):
-                season: Literal["planting", "harvest"] = "planting"
-            else:
-                season = "harvest"
-
-            # Construct output filename
-            # e.g., ftw-34UFF1628_2024_planting_image_s2.tif
-            base_id = item.id.replace("_planting_s2", "").replace("_harvest_s2", "")
-            output_filename = f"{base_id}_{season}_image_s2.tif"
-            output_path = item_path.parent / output_filename
-
-            try:
-                # Create a minimal SelectedScene from the STAC item
-                scene = SelectedScene(
-                    item=item,
-                    season=season,
-                    cloud_cover=item.properties.get("eo:cloud_cover", 0.0),
-                    datetime=item.datetime,
-                    stac_url=item.get_self_href() or "",
-                )
-
-                result = download_and_clip_scene(
-                    scene=scene,
-                    bbox=bbox,
-                    output_path=output_path,
-                    bands=band_list,
-                    resolution=resolution,
-                    on_progress=on_progress,
-                )
-
-                if result.success:
-                    if keep_remote_refs:
-                        # Legacy mode: keep remote assets, add local as "clipped"
-                        item.assets["clipped"] = pystac.Asset(
-                            href=f"./{output_filename}",
-                            media_type="image/tiff; application=geotiff; profile=cloud-optimized",
-                            title=f"Clipped {len(band_list)}-band image ({','.join(band_list)})",
-                            roles=["data"],
-                        )
-                        write_item(item, item_path)
-                    else:
-                        # Use shared processing logic for default workflow
-                        try:
-                            process_downloaded_scene(
-                                item=item,
-                                item_path=item_path,
-                                output_path=output_path,
-                                output_filename=output_filename,
-                                band_list=band_list,
-                                season=season,
-                                base_id=base_id,
-                                generate_thumbnails=preview and has_rgb_bands(band_list),
-                            )
-                        except Exception as e:
-                            # Clean up downloaded TIF if processing fails
-                            if output_path.exists():
-                                output_path.unlink()
-                            raise STACSaveError(f"Failed to process {item.id}: {e}") from e
-
-                    successful.append(item.id)
-                else:
-                    failed.append({"item": item.id, "error": result.error})
-
-            except Exception as e:
-                failed.append({"item": item.id, "error": str(e)})
-
+        def apply(outcome: ParallelOutcome[DownloadTask, DownloadResult]) -> None:
+            _record_download(
+                outcome,
+                successful=successful,
+                failed=failed,
+                band_list=band_list,
+                keep_remote_refs=keep_remote_refs,
+                generate_thumbnails=generate_thumbnails,
+            )
             pbar.update(1)
+
+        run_in_parallel(tasks, work=work, apply=apply, workers=workers)
 
     # Print summary
     click.echo("\n" + "=" * 50)

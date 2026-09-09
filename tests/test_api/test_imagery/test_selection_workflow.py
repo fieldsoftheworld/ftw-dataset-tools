@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import UTC, datetime
+from itertools import groupby
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -596,3 +599,300 @@ class TestUnreadableChipsAreReported:
         assert result.failed_details[0]["chip"] == "invalid_chip"
         # And it reaches the operator rather than only the counter.
         mock_progress.report_failures.assert_called_once_with(result.failed_details)
+
+
+def _write_chip_catalog(tmp_path: Path, chip_ids: list[str]) -> Path:
+    """Write a catalog holding one parent chip item per id."""
+    from .conftest import create_mock_stac_item
+
+    for chip_id in chip_ids:
+        chip_dir = tmp_path / "chips" / "33UXP" / chip_id
+        chip_dir.mkdir(parents=True)
+        item = create_mock_stac_item(item_id=chip_id, bbox=(10.0, 50.0, 10.01, 50.01))
+        item.set_self_href(str(chip_dir / f"{chip_id}.json"))
+        item.save_object(dest_href=str(chip_dir / f"{chip_id}.json"))
+
+    return tmp_path
+
+
+class RecordingProgressBar:
+    """Stand-in for ImageryProgressBar that records the replayed calls."""
+
+    def __init__(self, **_kwargs: object) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.reported_failures: list[dict] | None = None
+
+    def __enter__(self) -> RecordingProgressBar:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def start_chip(self, chip_id: str) -> None:
+        self.calls.append(("start", chip_id))
+
+    def on_progress(self, message: str) -> None:
+        self.calls.append(("log", message))
+
+    def mark_success(self, _result: object) -> None:
+        self.calls.append(("success", ""))
+
+    def mark_skipped(self, reason: str, was_existing: bool = False) -> None:  # noqa: ARG002
+        self.calls.append(("skipped", reason))
+
+    def mark_failed(self, error: str) -> None:
+        self.calls.append(("failed", error))
+
+    def report_failures(self, failed_details: list[dict]) -> None:
+        self.reported_failures = failed_details
+
+
+class TestParallelSelection:
+    """Chips are selected concurrently; the display stays a main-thread affair."""
+
+    def test_all_chips_run_concurrently(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        catalog = _write_chip_catalog(tmp_path, [f"chip_{n:03d}" for n in range(8)])
+        lock = threading.Lock()
+        state = {"active": 0, "max_active": 0}
+
+        def fake_select(**_kwargs: object) -> SceneSelectionResult:
+            with lock:
+                state["active"] += 1
+                state["max_active"] = max(state["max_active"], state["active"])
+            time.sleep(0.05)
+            with lock:
+                state["active"] -= 1
+            return mock_selection_result
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip",
+            fake_select,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar",
+            RecordingProgressBar,
+        )
+
+        result = select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4)
+
+        assert result.successful == 8
+        assert result.skipped == 0
+        assert result.failed == 0
+        assert state["max_active"] > 1
+
+    def test_child_items_written_for_successful_chips(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        chip_ids = [f"chip_{n:03d}" for n in range(4)]
+        catalog = _write_chip_catalog(tmp_path, chip_ids)
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip",
+            lambda **_kwargs: mock_selection_result,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar",
+            RecordingProgressBar,
+        )
+
+        result = select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4)
+
+        assert result.successful == 4
+        for chip_id in chip_ids:
+            chip_dir = catalog / "chips" / "33UXP" / chip_id
+            assert (chip_dir / f"{chip_id}_planting_s2.json").exists()
+            assert (chip_dir / f"{chip_id}_harvest_s2.json").exists()
+
+    def test_failures_are_recorded_per_chip(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        catalog = _write_chip_catalog(tmp_path, ["chip_000", "chip_001", "chip_002"])
+
+        def fake_select(*, chip_id: str, **_kwargs: object) -> SceneSelectionResult:
+            time.sleep(0.02)
+            if chip_id == "chip_001":
+                raise RuntimeError(f"STAC API error for {chip_id}")
+            return mock_selection_result
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip",
+            fake_select,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.create_child_items_from_selection",
+            lambda **_kwargs: None,
+        )
+        recorder = RecordingProgressBar()
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar",
+            lambda **_kwargs: recorder,
+        )
+
+        result = select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4)
+
+        assert result.successful == 2
+        assert result.failed == 1
+        assert result.failed_details == [
+            {"chip": "chip_001", "error": "STAC API error for chip_001"}
+        ]
+        assert recorder.reported_failures == result.failed_details
+
+    def test_on_missing_fail_propagates_the_first_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        catalog = _write_chip_catalog(tmp_path, [f"chip_{n:03d}" for n in range(6)])
+
+        def fake_select(*, chip_id: str, **_kwargs: object) -> SceneSelectionResult:
+            time.sleep(0.02)
+            if chip_id == "chip_000":
+                raise RuntimeError("STAC API error")
+            return mock_selection_result
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip",
+            fake_select,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.create_child_items_from_selection",
+            lambda **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar",
+            RecordingProgressBar,
+        )
+
+        with pytest.raises(RuntimeError, match="STAC API error"):
+            select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4, on_missing="fail")
+
+    def test_on_missing_fail_raises_for_missing_scenes(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        mock_crop_calendar: MagicMock,
+    ) -> None:
+        from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult as SSR
+
+        catalog = _write_chip_catalog(tmp_path, ["chip_000", "chip_001"])
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip",
+            lambda *, chip_id, **_kwargs: SSR(
+                chip_id=chip_id,
+                bbox=(10.0, 50.0, 10.01, 50.01),
+                year=2024,
+                crop_calendar=mock_crop_calendar,
+                planting_scene=None,
+                harvest_scene=None,
+                skipped_reason="No cloud-free scenes found",
+            ),
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar",
+            RecordingProgressBar,
+        )
+
+        with pytest.raises(ValueError, match="No cloud-free scenes"):
+            select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4, on_missing="fail")
+
+    def test_chip_log_lines_are_replayed_contiguously(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        """Two chips searching at once must not interleave their output."""
+        catalog = _write_chip_catalog(tmp_path, [f"chip_{n:03d}" for n in range(4)])
+
+        def fake_select(
+            *, chip_id: str, on_progress: object = None, **_kwargs: object
+        ) -> SceneSelectionResult:
+            for step in range(3):
+                if on_progress is not None:
+                    on_progress(f"{chip_id}|step{step}")  # type: ignore[operator]
+                time.sleep(0.02)
+            return mock_selection_result
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip",
+            fake_select,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.create_child_items_from_selection",
+            lambda **_kwargs: None,
+        )
+        recorder = RecordingProgressBar()
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar",
+            lambda **_kwargs: recorder,
+        )
+
+        select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4)
+
+        logs = [message.split("|")[0] for kind, message in recorder.calls if kind == "log"]
+        assert len(logs) == 12
+        # Each chip's lines form a single contiguous run.
+        runs = [chip for chip, _group in groupby(logs)]
+        assert len(runs) == len(set(runs))
+
+
+class TestCropCalendarWarmup:
+    """The shared crop calendar cache is filled once, before the pool starts.
+
+    Without this the first run on a cold cache has every worker entering the
+    download at the same moment, and a chip that samples a half-written raster
+    is reported as skipped - a run that produces nothing and still exits 0.
+    """
+
+    def test_warmed_once_before_any_chip(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+        crop_calendar_warmup: MagicMock,
+    ) -> None:
+        catalog = _write_chip_catalog(tmp_path, [f"chip_{n:03d}" for n in range(6)])
+        events: list[str] = []
+        events_lock = threading.Lock()
+
+        crop_calendar_warmup.side_effect = lambda *_a, **_k: events.append("warm")
+
+        def fake_select(**_kwargs: object) -> SceneSelectionResult:
+            with events_lock:
+                events.append("chip")
+            return mock_selection_result
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip",
+            fake_select,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar",
+            RecordingProgressBar,
+        )
+
+        select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4)
+
+        assert events.count("warm") == 1
+        assert events[0] == "warm"
+
+    def test_not_warmed_when_nothing_to_do(
+        self, tmp_path: Path, crop_calendar_warmup: MagicMock
+    ) -> None:
+        """An empty catalog does not touch the network."""
+        catalog = _write_chip_catalog(tmp_path, [])
+
+        select_imagery_for_catalog(catalog_dir=catalog, year=2024)
+
+        crop_calendar_warmup.assert_not_called()

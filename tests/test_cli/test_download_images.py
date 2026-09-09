@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pystac
 from click.testing import CliRunner
@@ -15,6 +17,8 @@ from ftw_dataset_tools.cli import cli
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 
 def _write_minimal_collection(path: Path) -> None:
@@ -100,7 +104,7 @@ class TestDownloadImagesKeepRemoteRefs:
         item_path = _write_staged_child_item(dataset_dir)
 
         with patch(
-            "ftw_dataset_tools.commands.download_images.download_and_clip_scene"
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene"
         ) as mock_download:
             mock_download.side_effect = lambda **kwargs: _fake_download(kwargs["output_path"])
 
@@ -133,7 +137,7 @@ class TestDownloadImagesKeepRemoteRefs:
         (broken_dir / "ftw-broken_planting_s2.json").write_text("{ not json")
 
         with patch(
-            "ftw_dataset_tools.commands.download_images.download_and_clip_scene"
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene"
         ) as mock_download:
             mock_download.side_effect = lambda **kwargs: _fake_download(kwargs["output_path"])
 
@@ -145,3 +149,253 @@ class TestDownloadImagesKeepRemoteRefs:
         assert result.exit_code == 0, result.output
         assert "Failed: 1" in result.output
         assert "ftw-broken_planting_s2" in result.output
+
+
+def _write_catalog(tmp_path: Path, chip_ids: list[str]) -> Path:
+    """Write a dataset directory with planting and harvest S2 child items per chip."""
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+    _write_minimal_collection(dataset_dir / "collection.json")
+
+    for chip_id in chip_ids:
+        chip_dir = dataset_dir / "chips" / "33UXP" / chip_id
+        chip_dir.mkdir(parents=True)
+        for season in ("planting", "harvest"):
+            child_id = f"{chip_id}_{season}_s2"
+            item = pystac.Item(
+                id=child_id,
+                geometry={
+                    "type": "Polygon",
+                    "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+                },
+                bbox=(0.0, 0.0, 1.0, 1.0),
+                datetime=datetime(2024, 6, 1, tzinfo=UTC),
+                properties={"eo:cloud_cover": 1.0},
+            )
+            for band in ("red", "green", "blue", "nir"):
+                item.assets[band] = pystac.Asset(href=f"https://example.com/{band}.tif")
+            item_path = chip_dir / f"{child_id}.json"
+            item.set_self_href(str(item_path))
+            item.save_object(dest_href=str(item_path))
+
+    return dataset_dir
+
+
+class TestDownloadImagesWorkers:
+    """`--workers` fetches several scenes at once without racing the STAC writes."""
+
+    def test_downloads_run_concurrently(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dataset_dir = _write_catalog(tmp_path, [f"chip_{n:03d}" for n in range(4)])
+        lock = threading.Lock()
+        state = {"active": 0, "max_active": 0}
+        update_threads: list[str] = []
+
+        def fake_download(**_kwargs: object) -> MagicMock:
+            with lock:
+                state["active"] += 1
+                state["max_active"] = max(state["max_active"], state["active"])
+            time.sleep(0.05)
+            with lock:
+                state["active"] -= 1
+            return MagicMock(success=True, error=None)
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            fake_download,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.commands.download_images.process_downloaded_scene",
+            lambda **_kwargs: update_threads.append(threading.current_thread().name),
+        )
+
+        result = CliRunner().invoke(cli, ["download-images", str(dataset_dir), "--workers", "4"])
+
+        assert result.exit_code == 0, result.output
+        assert "Downloaded: 8" in result.output
+        assert state["max_active"] > 1
+        # A chip's two seasons update the same parent item, so this cannot race.
+        assert set(update_threads) == {threading.main_thread().name}
+
+    def test_failures_are_reported(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+
+        def fake_download(*, scene: object, **_kwargs: object) -> MagicMock:
+            if scene.item.id.endswith("_harvest_s2"):  # type: ignore[attr-defined]
+                raise RuntimeError("network error")
+            return MagicMock(success=True, error=None)
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            fake_download,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.commands.download_images.process_downloaded_scene",
+            lambda **_kwargs: None,
+        )
+
+        result = CliRunner().invoke(cli, ["download-images", str(dataset_dir), "--workers", "2"])
+
+        assert result.exit_code == 0, result.output
+        assert "Downloaded: 1" in result.output
+        assert "Failed: 1" in result.output
+        assert "network error" in result.output
+
+    def test_resume_skips_downloaded_scenes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+        chip_dir = dataset_dir / "chips" / "33UXP" / "chip_000"
+        item_path = chip_dir / "chip_000_planting_s2.json"
+        item = pystac.Item.from_file(str(item_path))
+        item.assets["image"] = pystac.Asset(href="./chip_000_planting_image_s2.tif")
+        item.save_object(dest_href=str(item_path))
+        (chip_dir / "chip_000_planting_image_s2.tif").write_bytes(b"tif")
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            lambda **_kwargs: MagicMock(success=True, error=None),
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.commands.download_images.process_downloaded_scene",
+            lambda **_kwargs: None,
+        )
+
+        result = CliRunner().invoke(cli, ["download-images", str(dataset_dir), "--resume"])
+
+        assert result.exit_code == 0, result.output
+        assert "Downloaded: 1" in result.output
+        assert "Skipped: 1" in result.output
+
+
+class TestDownloadImagesWorkerValidation:
+    """--workers is bounded the same way stages.download_images.workers is."""
+
+    def test_zero_workers_rejected(self, tmp_path: Path) -> None:
+        """Zero used to be silently coerced to one thread here, and rejected in config."""
+        catalog = _write_catalog(tmp_path, ["chip_001"])
+
+        result = CliRunner().invoke(cli, ["download-images", str(catalog), "--workers", "0"])
+
+        assert result.exit_code == 2
+        assert "--workers" in result.output
+
+    def test_negative_workers_rejected(self, tmp_path: Path) -> None:
+        catalog = _write_catalog(tmp_path, ["chip_001"])
+
+        result = CliRunner().invoke(cli, ["download-images", str(catalog), "--workers", "-1"])
+
+        assert result.exit_code == 2
+
+    def test_workers_above_maximum_rejected(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
+
+        catalog = _write_catalog(tmp_path, ["chip_001"])
+
+        result = CliRunner().invoke(
+            cli, ["download-images", str(catalog), "--workers", str(MAX_WORKERS + 1)]
+        )
+
+        assert result.exit_code == 2
+
+
+def _write_staged_catalog(tmp_path: Path, chip_id: str) -> Path:
+    """Write a catalog whose child items carry the *published* root href.
+
+    Mirrors the real staging tree: the items were generated for a catalog that
+    will live at some published URL, so their ``rel: root`` link points at a
+    file that is not on disk here. Anything that resolves the root while saving
+    blows up on it.
+    """
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+    _write_minimal_collection(dataset_dir / "collection.json")
+
+    chip_dir = dataset_dir / "chips" / "33UXP" / chip_id
+    chip_dir.mkdir(parents=True)
+
+    for season in ("planting", "harvest"):
+        child_id = f"{chip_id}_{season}_s2"
+        item = pystac.Item(
+            id=child_id,
+            geometry={
+                "type": "Polygon",
+                "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+            },
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime(2024, 6, 1, tzinfo=UTC),
+            properties={"eo:cloud_cover": 1.0},
+        )
+        for band in ("red", "green", "blue", "nir"):
+            item.assets[band] = pystac.Asset(href=f"https://example.com/{band}.tif")
+        item.add_link(pystac.Link(rel="root", target="../../../missing-root/collection.json"))
+        item.add_link(pystac.Link(rel="parent", target="../catalog.json"))
+
+        item_path = chip_dir / f"{child_id}.json"
+        item_path.write_text(
+            json.dumps(item.to_dict(include_self_link=False, transform_hrefs=False), indent=2)
+            + "\n"
+        )
+
+    return dataset_dir
+
+
+class TestKeepRemoteRefsRootResolution:
+    """--keep-remote-refs adds a local "clipped" asset and keeps the remote bands.
+
+    Writing that item must not resolve the catalog root: the staging tree's items
+    already carry the published root href, so a save that reaches for it fails on
+    every scene - the GeoTIFF lands on disk and the item is never updated.
+    """
+
+    def test_adds_clipped_asset_with_an_unresolvable_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dataset_dir = _write_staged_catalog(tmp_path, "chip_000")
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            lambda **_kwargs: MagicMock(success=True, error=None),
+        )
+
+        result = CliRunner().invoke(
+            cli, ["download-images", str(dataset_dir), "--keep-remote-refs"]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Downloaded: 2" in result.output
+        assert "Failed: 0" in result.output
+
+        chip_dir = dataset_dir / "chips" / "33UXP" / "chip_000"
+        for season in ("planting", "harvest"):
+            written = json.loads((chip_dir / f"chip_000_{season}_s2.json").read_text())
+            assets = written["assets"]
+            assert assets["clipped"]["href"] == f"./chip_000_{season}_image_s2.tif"
+            # The remote band refs are the whole point of --keep-remote-refs.
+            assert assets["red"]["href"] == "https://example.com/red.tif"
+            links = {link["rel"]: link["href"] for link in written["links"]}
+            assert links["root"] == "../../../missing-root/collection.json"
+
+    def test_does_not_resolve_the_root_when_one_is_reachable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The ordinary catalog keeps working, and gains no self link on the way."""
+        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            lambda **_kwargs: MagicMock(success=True, error=None),
+        )
+
+        result = CliRunner().invoke(
+            cli, ["download-images", str(dataset_dir), "--keep-remote-refs"]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Downloaded: 2" in result.output
+
+        chip_dir = dataset_dir / "chips" / "33UXP" / "chip_000"
+        written = json.loads((chip_dir / "chip_000_planting_s2.json").read_text())
+        assert "clipped" in written["assets"]
+        assert [link for link in written["links"] if link["rel"] == "self"] == []

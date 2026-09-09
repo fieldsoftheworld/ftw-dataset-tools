@@ -3,9 +3,14 @@
 This module provides workflow functions for selecting imagery across all chips
 in a catalog. It is used by the `create-dataset` command and the `ftwd run`
 pipeline. The standalone `select-images` command still runs its own loop (it
-supports per-chip year extraction) but shares the same writer
-(`create_child_items_from_selection`) and skip predicate (`has_existing_scenes`),
-so selection output is identical across all three paths.
+supports per-chip year extraction) but shares the per-chip body
+(`run_chip_selection`, which writes via `create_child_items_from_selection`), the
+skip predicate (`has_existing_scenes`) and the thread pool, so selection output
+is identical across all three paths.
+
+Chips are processed concurrently: a chip is several STAC searches' worth of
+network wait, and no two chips touch the same files. Only the calling thread
+reads the results, so the counters and the progress display never race.
 """
 
 from __future__ import annotations
@@ -16,6 +21,12 @@ from typing import TYPE_CHECKING, Literal
 import pystac
 
 from ftw_dataset_tools.api.imagery.catalog_ops import has_existing_scenes, iter_chip_dirs
+from ftw_dataset_tools.api.imagery.crop_calendar import ensure_crop_calendar_exists
+from ftw_dataset_tools.api.imagery.parallel import (
+    DEFAULT_WORKERS,
+    ParallelOutcome,
+    run_in_parallel,
+)
 from ftw_dataset_tools.api.imagery.progress import ImageryProgressBar
 from ftw_dataset_tools.api.imagery.scene_selection import select_scenes_for_chip
 from ftw_dataset_tools.api.imagery.stac_child_items import create_child_items_from_selection
@@ -23,11 +34,71 @@ from ftw_dataset_tools.api.imagery.stac_child_items import create_child_items_fr
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
+
 __all__ = [
+    "ChipSelectionJob",
     "SelectionWorkflowResult",
     "find_chip_items",
+    "run_chip_selection",
     "select_imagery_for_catalog",
 ]
+
+
+@dataclass
+class ChipSelectionJob:
+    """One chip's selection work: its item, where it lives, and the year to select for.
+
+    ``logs`` collects the progress lines the selection produced so the caller can
+    replay them in one block; printing them from the worker would interleave the
+    chips running alongside it.
+    """
+
+    item: pystac.Item
+    item_path: Path
+    year: int
+    logs: list[str] = field(default_factory=list)
+
+
+def run_chip_selection(
+    job: ChipSelectionJob,
+    *,
+    cloud_cover_chip: float,
+    nodata_max: float,
+    buffer_days: int,
+    num_buffer_expansions: int,
+    buffer_expansion_size: int,
+) -> SceneSelectionResult:
+    """Select scenes for one chip and write its child items.
+
+    Safe to run on a worker thread: every chip queries STAC on its own and writes
+    only into its own directory.
+    """
+    selection = select_scenes_for_chip(
+        chip_id=job.item.id,
+        bbox=tuple(job.item.bbox),
+        year=job.year,
+        cloud_cover_chip=cloud_cover_chip,
+        nodata_max=nodata_max,
+        buffer_days=buffer_days,
+        num_buffer_expansions=num_buffer_expansions,
+        buffer_expansion_size=buffer_expansion_size,
+        on_progress=job.logs.append,
+    )
+
+    if selection.success:
+        create_child_items_from_selection(
+            chip_dir=job.item_path.parent,
+            parent_item=job.item,
+            result=selection,
+            year=job.year,
+            cloud_cover_chip=cloud_cover_chip,
+            buffer_days=buffer_days,
+            num_buffer_expansions=num_buffer_expansions,
+            buffer_expansion_size=buffer_expansion_size,
+        )
+
+    return selection
 
 
 @dataclass
@@ -92,6 +163,7 @@ def select_imagery_for_catalog(
     force: bool = False,
     on_missing: Literal["skip", "fail"] = "skip",
     verbose: bool = False,
+    workers: int = DEFAULT_WORKERS,
 ) -> SelectionWorkflowResult:
     """Select imagery for all chips in a catalog.
 
@@ -111,6 +183,7 @@ def select_imagery_for_catalog(
                     - "skip": Skip and record in skipped_details
                     - "fail": Raise exception
         verbose: If True, show detailed STAC query information
+        workers: Number of chips to select for concurrently
 
     Returns:
         SelectionWorkflowResult with success/skipped/failed counts and details
@@ -154,66 +227,114 @@ def select_imagery_for_catalog(
     if not chips_to_process:
         return result
 
-    # Process chips with unified progress display
-    with ImageryProgressBar(total=len(chips_to_process), leave=False, verbose=verbose) as progress:
-        for item, item_path in chips_to_process:
-            progress.start_chip(item.id)
-            bbox = tuple(item.bbox)  # Already validated above
+    # Warm the crop calendar before fanning out. Every chip needs it, and the
+    # first-time download must happen once rather than from every worker at once.
+    ensure_crop_calendar_exists()
 
-            try:
-                selection_result = select_scenes_for_chip(
-                    chip_id=item.id,
-                    bbox=bbox,
-                    year=year,
-                    cloud_cover_chip=cloud_cover_chip,
-                    nodata_max=nodata_max,
-                    buffer_days=buffer_days,
-                    num_buffer_expansions=num_buffer_expansions,
-                    buffer_expansion_size=buffer_expansion_size,
-                    on_progress=progress.on_progress,
-                )
+    _run_selection(
+        chips_to_process,
+        result=result,
+        year=year,
+        cloud_cover_chip=cloud_cover_chip,
+        nodata_max=nodata_max,
+        buffer_days=buffer_days,
+        num_buffer_expansions=num_buffer_expansions,
+        buffer_expansion_size=buffer_expansion_size,
+        on_missing=on_missing,
+        verbose=verbose,
+        workers=workers,
+    )
 
-                if selection_result.success:
-                    # Create child STAC items using shared logic
-                    create_child_items_from_selection(
-                        chip_dir=item_path.parent,
-                        parent_item=item,
-                        result=selection_result,
-                        year=year,
-                        cloud_cover_chip=cloud_cover_chip,
-                        buffer_days=buffer_days,
-                        num_buffer_expansions=num_buffer_expansions,
-                        buffer_expansion_size=buffer_expansion_size,
-                    )
-                    result.successful += 1
-                    progress.mark_success(selection_result)
-                else:
-                    if on_missing == "fail":
-                        raise ValueError(
-                            f"No cloud-free scenes for {item.id}: {selection_result.skipped_reason}"
-                        )
-                    result.skipped += 1
-                    result.skipped_details.append(
-                        {
-                            "chip": item.id,
-                            "reason": selection_result.skipped_reason or "Unknown reason",
-                            "candidates_checked": selection_result.candidates_checked,
-                        }
-                    )
-                    progress.mark_skipped(selection_result.skipped_reason or "No cloud-free scenes")
+    return result
 
-            except ValueError:
-                # Re-raise ValueError from on_missing="fail"
-                raise
-            except Exception as e:
-                if on_missing == "fail":
-                    raise
-                result.failed += 1
-                result.failed_details.append({"chip": item.id, "error": str(e)})
-                progress.mark_failed(str(e))
 
-        # Per-chip exceptions are swallowed above to keep the run going; without
+def _run_selection(
+    chips_to_process: list[tuple[pystac.Item, Path]],
+    *,
+    result: SelectionWorkflowResult,
+    year: int,
+    cloud_cover_chip: float,
+    nodata_max: float,
+    buffer_days: int,
+    num_buffer_expansions: int,
+    buffer_expansion_size: int,
+    on_missing: Literal["skip", "fail"],
+    verbose: bool,
+    workers: int,
+) -> None:
+    """Select scenes for every chip on a thread pool, recording outcomes as they finish.
+
+    Only this function touches the counters and the progress bar, so a chip's log
+    lines stay in one block instead of interleaving with the rest of the pool.
+    """
+    # Submitted in the order the chips were found, so a run stays reproducible up
+    # to the (inherently unordered) completion times.
+    jobs = [
+        ChipSelectionJob(item=item, item_path=item_path, year=year)
+        for item, item_path in chips_to_process
+    ]
+
+    def work(job: ChipSelectionJob) -> SceneSelectionResult:
+        return run_chip_selection(
+            job,
+            cloud_cover_chip=cloud_cover_chip,
+            nodata_max=nodata_max,
+            buffer_days=buffer_days,
+            num_buffer_expansions=num_buffer_expansions,
+            buffer_expansion_size=buffer_expansion_size,
+        )
+
+    with ImageryProgressBar(total=len(jobs), leave=False, verbose=verbose) as progress:
+
+        def apply(outcome: ParallelOutcome[ChipSelectionJob, SceneSelectionResult]) -> None:
+            _record_chip(outcome, result=result, progress=progress, on_missing=on_missing)
+
+        run_in_parallel(jobs, work=work, apply=apply, workers=workers)
+
+        # Per-chip exceptions are swallowed below to keep the run going; without
         # this the operator only ever sees a count.
         progress.report_failures(result.failed_details)
 
-    return result
+
+def _record_chip(
+    outcome: ParallelOutcome[ChipSelectionJob, SceneSelectionResult],
+    *,
+    result: SelectionWorkflowResult,
+    progress: ImageryProgressBar,
+    on_missing: Literal["skip", "fail"],
+) -> None:
+    """Fold one chip's outcome into the counters and the progress bar (calling thread only)."""
+    job = outcome.task
+    progress.start_chip(job.item.id)
+    for message in job.logs:
+        progress.on_progress(message)
+
+    if outcome.error is not None:
+        if on_missing == "fail":
+            raise outcome.error
+        result.failed += 1
+        result.failed_details.append({"chip": job.item.id, "error": str(outcome.error)})
+        progress.mark_failed(str(outcome.error))
+        return
+
+    selection = outcome.value
+    if selection is None:  # pragma: no cover - a worker returns a result or raises
+        return
+
+    if selection.success:
+        result.successful += 1
+        progress.mark_success(selection)
+        return
+
+    if on_missing == "fail":
+        raise ValueError(f"No cloud-free scenes for {job.item.id}: {selection.skipped_reason}")
+
+    result.skipped += 1
+    result.skipped_details.append(
+        {
+            "chip": job.item.id,
+            "reason": selection.skipped_reason or "Unknown reason",
+            "candidates_checked": selection.candidates_checked,
+        }
+    )
+    progress.mark_skipped(selection.skipped_reason or "No cloud-free scenes")

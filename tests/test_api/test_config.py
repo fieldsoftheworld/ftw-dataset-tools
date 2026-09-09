@@ -560,3 +560,87 @@ class TestSourceKeys:
 
         assert prov["source"] is None
         assert prov["ftwd_git_commit"] is None
+
+
+class TestImageryWorkers:
+    """stages.select_images.workers / stages.download_images.workers."""
+
+    def test_defaults_to_four(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+
+        assert config.stages.select_images.workers == 4
+        assert config.stages.download_images.workers == 4
+
+    def test_can_be_overridden(self) -> None:
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "f.parquet",
+                "stages": {
+                    "select_images": {"workers": 8},
+                    "download_images": {"workers": 2},
+                },
+            }
+        )
+
+        assert config.stages.select_images.workers == 8
+        assert config.stages.download_images.workers == 2
+
+    def test_zero_select_workers_raises(self) -> None:
+        with pytest.raises(
+            ConfigError, match=r"stages\.select_images\.workers must be an integer between 1 and"
+        ):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"select_images": {"workers": 0}}}
+            )
+
+    def test_negative_download_workers_raises(self) -> None:
+        with pytest.raises(
+            ConfigError, match=r"stages\.download_images\.workers must be an integer between 1 and"
+        ):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"download_images": {"workers": -1}}}
+            )
+
+    def test_workers_above_maximum_raises(self) -> None:
+        """The ceiling matches the --workers options on the two CLI commands."""
+        from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
+
+        with pytest.raises(ConfigError, match=r"stages\.select_images\.workers"):
+            DatasetConfig.from_dict(
+                {
+                    "fields_file": "f.parquet",
+                    "stages": {"select_images": {"workers": MAX_WORKERS + 1}},
+                }
+            )
+
+    def test_maximum_workers_accepted(self) -> None:
+        from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
+
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"select_images": {"workers": MAX_WORKERS}}}
+        )
+
+        assert config.stages.select_images.workers == MAX_WORKERS
+
+    def test_non_int_workers_raises(self) -> None:
+        with pytest.raises(ConfigError, match=r"stages\.select_images\.workers"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"select_images": {"workers": "four"}}}
+            )
+
+    def test_bool_workers_raises(self) -> None:
+        """A YAML `true` is an int in Python; it is not a worker count."""
+        with pytest.raises(ConfigError, match=r"stages\.download_images\.workers"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"download_images": {"workers": True}}}
+            )
+
+    def test_workers_reach_provenance(self) -> None:
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"select_images": {"workers": 6}}}
+        )
+
+        stages = config.provenance_dict()["config"]["stages"]
+
+        assert stages["select_images"]["workers"] == 6
+        assert stages["download_images"]["workers"] == 4

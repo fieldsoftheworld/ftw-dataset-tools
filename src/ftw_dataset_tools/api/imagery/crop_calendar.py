@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import tempfile
+import threading
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
@@ -23,6 +25,7 @@ from ftw_dataset_tools.api.imagery.settings import (
 
 __all__ = [
     "CropCalendarDates",
+    "download_crop_calendar_files",
     "ensure_crop_calendar_exists",
     "get_crop_calendar_cache_dir",
     "get_crop_calendar_dates",
@@ -74,11 +77,22 @@ def get_crop_calendar_cache_dir() -> Path:
     return cache_base_path / "crop_calendar"
 
 
+# Selection runs on a thread pool, so several chips can reach the first-time
+# download at once. The lock makes one thread fetch while the rest wait, and the
+# atomic rename in ``_download_to_cache`` means a waiter can never open a file
+# that is still being written.
+_DOWNLOAD_LOCK = threading.Lock()
+
+
 def ensure_crop_calendar_exists(
     on_progress: Callable[[str], None] | None = None,
 ) -> Path:
     """
     Ensure crop calendar files exist, downloading if necessary.
+
+    Safe to call from several threads, but callers that are about to fan out
+    should call it once up front: the first-time download is a few hundred
+    megabytes, and warming the cache first keeps every worker off the lock.
 
     Args:
         on_progress: Optional callback for progress messages
@@ -100,12 +114,37 @@ def ensure_crop_calendar_exists(
     return cache_dir
 
 
+def _download_to_cache(url: str, file_path: Path) -> None:
+    """Fetch ``url`` into ``file_path`` so it only ever appears complete.
+
+    The download lands on a unique temporary name in the same directory and is
+    then renamed into place, which is atomic on a single filesystem. A reader
+    therefore sees either the previous file or the finished one, never the
+    partial bytes of a download still in flight.
+    """
+    handle, tmp_name = tempfile.mkstemp(
+        dir=str(file_path.parent), prefix=f".{file_path.name}.", suffix=".part"
+    )
+    os.close(handle)
+    tmp_path = Path(tmp_name)
+
+    try:
+        urllib.request.urlretrieve(url, str(tmp_path))
+        tmp_path.replace(file_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def download_crop_calendar_files(
     force: bool = False,
     on_progress: Callable[[str], None] | None = None,
 ) -> None:
     """
     Download all crop calendar files.
+
+    Concurrent callers serialize on a module-level lock and re-check each file
+    inside it, so the first thread downloads and the others find the finished
+    files rather than racing on the same names.
 
     Args:
         force: If True, re-download even if files exist
@@ -114,21 +153,19 @@ def download_crop_calendar_files(
     cache_dir = get_crop_calendar_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    for filename in CROP_CALENDAR_FILES:
-        file_path = cache_dir / filename
+    with _DOWNLOAD_LOCK:
+        for filename in CROP_CALENDAR_FILES:
+            file_path = cache_dir / filename
 
-        if file_path.exists() and not force:
-            continue
+            # Re-checked under the lock: a thread that waited here while another
+            # downloaded must not download the same file again.
+            if file_path.exists() and not force:
+                continue
 
-        url = CROP_CALENDAR_BASE_URL + filename
-        if on_progress:
-            on_progress(f"Downloading {filename}...")
+            if on_progress:
+                on_progress(f"Downloading {filename}...")
 
-        if file_path.exists():
-            file_path.unlink()
-
-        # Download file
-        urllib.request.urlretrieve(url, str(file_path))
+            _download_to_cache(CROP_CALENDAR_BASE_URL + filename, file_path)
 
     if on_progress:
         on_progress(f"Crop calendar files cached at {cache_dir}")

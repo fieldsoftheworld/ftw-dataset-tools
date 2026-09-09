@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import click
 import pystac
@@ -13,16 +13,27 @@ from tqdm import tqdm
 
 from ftw_dataset_tools.api.imagery import (
     ImageryProgressBar,
-    chip_dir_for_item,
     clear_chip_selections,
-    create_child_items_from_selection,
     find_chip_items,
     find_collection_dir,
     get_imagery_stats,
     has_existing_scenes,
-    select_scenes_for_chip,
+)
+from ftw_dataset_tools.api.imagery.crop_calendar import ensure_crop_calendar_exists
+from ftw_dataset_tools.api.imagery.parallel import (
+    DEFAULT_WORKERS,
+    MAX_WORKERS,
+    ParallelOutcome,
+    run_in_parallel,
+)
+from ftw_dataset_tools.api.imagery.selection_workflow import (
+    ChipSelectionJob,
+    run_chip_selection,
 )
 from ftw_dataset_tools.api.stac_items import copy_catalog
+
+if TYPE_CHECKING:
+    from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
 
 
 def _extract_year_from_chip_id(chip_id: str) -> int | None:
@@ -53,6 +64,58 @@ def _extract_year_from_item(item: pystac.Item) -> int | None:
         return item.datetime.year
 
     return None
+
+
+def _chip_item_path(item: pystac.Item, catalog_dir: Path) -> Path:
+    """Where the chip's own item file lives; its parent is the chip directory."""
+    item_self_href = item.get_self_href()
+    chip_dir = Path(item_self_href).parent if item_self_href else catalog_dir / item.id
+    return chip_dir / f"{item.id}.json"
+
+
+def _record_chip(
+    outcome: ParallelOutcome[ChipSelectionJob, SceneSelectionResult],
+    *,
+    progress: ImageryProgressBar,
+    successful: list[str],
+    skipped: list[dict],
+    failed: list[dict],
+    on_missing: Literal["skip", "fail"],
+) -> None:
+    """Report one finished chip. Runs on the main thread, so the output stays coherent."""
+    job = outcome.task
+    chip_id = job.item.id
+    progress.start_chip(chip_id)
+    for message in job.logs:
+        progress.on_progress(message)
+
+    if outcome.error is not None:
+        if on_missing == "fail":
+            raise outcome.error
+        failed.append({"chip": chip_id, "error": str(outcome.error)})
+        progress.mark_failed(str(outcome.error))
+        return
+
+    result = outcome.value
+    if result is None:  # pragma: no cover - a worker returns a result or raises
+        return
+
+    if result.success:
+        successful.append(chip_id)
+        progress.mark_success(result)
+        return
+
+    if on_missing == "fail":
+        raise click.ClickException(f"No cloud-free scenes for {chip_id}: {result.skipped_reason}")
+
+    skipped.append(
+        {
+            "chip": chip_id,
+            "reason": result.skipped_reason,
+            "candidates_checked": result.candidates_checked,
+        }
+    )
+    progress.mark_skipped(result.skipped_reason or "Unknown reason")
 
 
 @click.command("select-images")
@@ -112,6 +175,13 @@ def _extract_year_from_item(item: pystac.Item) -> int | None:
     help="Overwrite existing imagery selections (by default, chips with scenes are skipped).",
 )
 @click.option(
+    "--workers",
+    type=click.IntRange(1, MAX_WORKERS),
+    default=DEFAULT_WORKERS,
+    show_default=True,
+    help="Chips to select for concurrently. Each chip costs several STAC searches.",
+)
+@click.option(
     "--output-report",
     type=click.Path(),
     default=None,
@@ -153,6 +223,7 @@ def select_images_cmd(
     num_buffer_expansions: int,
     buffer_expansion_size: int,
     force: bool,
+    workers: int,
     output_report: str | None,
     verbose: bool,
     output_dir: Path | None,
@@ -363,62 +434,44 @@ def select_images_cmd(
     successful: list[str] = []
     failed: list[dict] = []
 
-    # Process only the chips that need work
-    with ImageryProgressBar(total=len(chips_to_process), leave=True, verbose=verbose) as progress:
-        for item, chip_year in chips_to_process:
-            chip_id = item.id
-            progress.start_chip(chip_id)
-            bbox = tuple(item.bbox)  # Already validated in pre-scan
+    # Process only the chips that need work, several at a time: a chip is almost
+    # entirely network wait, and chips never touch each other's directories.
+    jobs = [
+        ChipSelectionJob(
+            item=item,
+            item_path=_chip_item_path(item, catalog_dir),
+            year=chip_year,
+        )
+        for item, chip_year in chips_to_process
+    ]
 
-            try:
-                result = select_scenes_for_chip(
-                    chip_id=chip_id,
-                    bbox=bbox,
-                    year=chip_year,
-                    cloud_cover_chip=cloud_cover_chip,
-                    nodata_max=nodata_max,
-                    buffer_days=buffer_days,
-                    num_buffer_expansions=num_buffer_expansions,
-                    buffer_expansion_size=buffer_expansion_size,
-                    on_progress=progress.on_progress,
-                )
+    # Warm the crop calendar before fanning out: every chip needs it, and the
+    # first-time download must not be entered by several workers at once.
+    ensure_crop_calendar_exists(on_progress=lambda msg: click.echo(f"  {msg}"))
 
-                if result.success:
-                    # Create child STAC items for planting and harvest
-                    chip_dir = chip_dir_for_item(item)
-                    create_child_items_from_selection(
-                        chip_dir=chip_dir,
-                        parent_item=item,
-                        result=result,
-                        year=chip_year,
-                        cloud_cover_chip=cloud_cover_chip,
-                        buffer_days=buffer_days,
-                        num_buffer_expansions=num_buffer_expansions,
-                        buffer_expansion_size=buffer_expansion_size,
-                    )
-                    successful.append(chip_id)
-                    progress.mark_success(result)
-                else:
-                    if on_missing == "fail":
-                        raise click.ClickException(
-                            f"No cloud-free scenes for {chip_id}: {result.skipped_reason}"
-                        )
-                    skipped.append(
-                        {
-                            "chip": chip_id,
-                            "reason": result.skipped_reason,
-                            "candidates_checked": result.candidates_checked,
-                        }
-                    )
-                    progress.mark_skipped(result.skipped_reason or "Unknown reason")
+    def work(job: ChipSelectionJob) -> SceneSelectionResult:
+        return run_chip_selection(
+            job,
+            cloud_cover_chip=cloud_cover_chip,
+            nodata_max=nodata_max,
+            buffer_days=buffer_days,
+            num_buffer_expansions=num_buffer_expansions,
+            buffer_expansion_size=buffer_expansion_size,
+        )
 
-            except click.ClickException:
-                raise
-            except Exception as e:
-                if on_missing == "fail":
-                    raise
-                failed.append({"chip": chip_id, "error": str(e)})
-                progress.mark_failed(str(e))
+    with ImageryProgressBar(total=len(jobs), leave=True, verbose=verbose) as progress:
+
+        def apply(outcome: ParallelOutcome[ChipSelectionJob, SceneSelectionResult]) -> None:
+            _record_chip(
+                outcome,
+                progress=progress,
+                successful=successful,
+                skipped=skipped,
+                failed=failed,
+                on_missing=on_missing,
+            )
+
+        run_in_parallel(jobs, work=work, apply=apply, workers=workers)
 
     # Categorize skipped items
     already_has = [s for s in skipped if s["reason"] == "Already has imagery selections"]

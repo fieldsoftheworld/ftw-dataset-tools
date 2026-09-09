@@ -123,12 +123,12 @@ class TestSelectImagesDirectoryMode:
         """A successful selection writes child STAC items under the chip's own directory."""
         from datetime import timedelta
 
+        from ftw_dataset_tools.api.imagery import selection_workflow
         from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
         from ftw_dataset_tools.api.imagery.scene_selection import (
             SceneSelectionResult,
             SelectedScene,
         )
-        from ftw_dataset_tools.commands import select_images as select_images_module
 
         dataset_dir = tmp_path / "dataset"
         dataset_dir.mkdir()
@@ -175,8 +175,9 @@ class TestSelectImagesDirectoryMode:
                 harvest_scene=harvest_scene,
             )
 
+        # The command shares the api's per-chip selection, so patch it there.
         monkeypatch.setattr(
-            select_images_module, "select_scenes_for_chip", _fake_select_scenes_for_chip
+            selection_workflow, "select_scenes_for_chip", _fake_select_scenes_for_chip
         )
 
         result = CliRunner().invoke(
@@ -187,3 +188,114 @@ class TestSelectImagesDirectoryMode:
         assert result.exit_code == 0, result.output
         assert (chip_dir / "ftw-item1_planting_s2.json").exists()
         assert (chip_dir / "ftw-item1_harvest_s2.json").exists()
+
+
+class TestSelectImagesWorkers:
+    """--workers is bounded the same way stages.select_images.workers is."""
+
+    def _dataset(self, tmp_path: Path) -> Path:
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        _write_minimal_collection(dataset_dir / "collection.json")
+        _write_chip_item(dataset_dir / "chips" / "33UXP" / "ftw-item1", "ftw-item1")
+        return dataset_dir
+
+    def test_zero_workers_rejected(self, tmp_path: Path) -> None:
+        """Zero used to be silently coerced to one thread here, and rejected in config."""
+        result = CliRunner().invoke(
+            cli, ["select-images", str(self._dataset(tmp_path)), "--workers", "0"]
+        )
+
+        assert result.exit_code == 2
+        assert "--workers" in result.output
+
+    def test_negative_workers_rejected(self, tmp_path: Path) -> None:
+        result = CliRunner().invoke(
+            cli, ["select-images", str(self._dataset(tmp_path)), "--workers", "-4"]
+        )
+
+        assert result.exit_code == 2
+
+    def test_workers_above_maximum_rejected(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
+
+        result = CliRunner().invoke(
+            cli,
+            ["select-images", str(self._dataset(tmp_path)), "--workers", str(MAX_WORKERS + 1)],
+        )
+
+        assert result.exit_code == 2
+
+    def test_maximum_workers_accepted(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
+
+        result = CliRunner().invoke(
+            cli,
+            [
+                "select-images",
+                str(self._dataset(tmp_path)),
+                "--workers",
+                str(MAX_WORKERS),
+                "--show-stats",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+
+class TestSelectImagesCropCalendarWarmup:
+    """The cache is filled before the pool starts, not from inside it."""
+
+    def test_warms_cache_before_selecting(self, tmp_path: Path, monkeypatch, crop_calendar_warmup):
+        from ftw_dataset_tools.api.imagery import selection_workflow
+        from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
+        from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
+
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        _write_minimal_collection(dataset_dir / "collection.json")
+        _write_chip_item(dataset_dir / "chips" / "33UXP" / "ftw-item1", "ftw-item1")
+
+        events: list[str] = []
+        crop_calendar_warmup.side_effect = lambda *_a, **_k: events.append("warm")
+
+        def _fake_select(*, chip_id: str, bbox, year: int, **_kwargs) -> SceneSelectionResult:
+            events.append("chip")
+            return SceneSelectionResult(
+                chip_id=chip_id,
+                bbox=bbox,
+                year=year,
+                crop_calendar=CropCalendarDates(planting_day=1, harvest_day=180),
+                skipped_reason="No cloud-free scenes",
+            )
+
+        monkeypatch.setattr(selection_workflow, "select_scenes_for_chip", _fake_select)
+
+        result = CliRunner().invoke(cli, ["select-images", str(dataset_dir), "--year", "2024"])
+
+        assert result.exit_code == 0, result.output
+        assert events == ["warm", "chip"]
+
+    def test_no_warmup_when_nothing_to_process(self, tmp_path: Path, crop_calendar_warmup) -> None:
+        """A catalog whose only chip is skipped up front never touches the network."""
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        _write_minimal_collection(dataset_dir / "collection.json")
+
+        chip_dir = dataset_dir / "chips" / "33UXP" / "ftw-nobbox"
+        chip_dir.mkdir(parents=True)
+        item = pystac.Item(
+            id="ftw-nobbox",
+            geometry=None,
+            bbox=None,
+            datetime=datetime(2024, 1, 1, tzinfo=UTC),
+            properties={},
+        )
+        item.set_self_href(str(chip_dir / "ftw-nobbox.json"))
+        item.save_object(dest_href=str(chip_dir / "ftw-nobbox.json"))
+
+        result = CliRunner().invoke(cli, ["select-images", str(dataset_dir), "--year", "2024"])
+
+        assert result.exit_code == 0, result.output
+        assert "No chips need processing" in result.output
+        crop_calendar_warmup.assert_not_called()
