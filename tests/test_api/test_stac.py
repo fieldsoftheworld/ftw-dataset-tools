@@ -633,20 +633,29 @@ class TestCollectionMetadata:
         assert coll["updated"].endswith("Z")
 
     def test_metadata_without_title_keeps_the_default_title(self, tmp_path: Path) -> None:
-        """A license-only metadata block must not blank or rewrite the title.
+        """A metadata block carrying no title must leave the title alone.
 
-        The config carries no title, so the collection keeps the one its
-        constructor gave it. Passing the absent title straight through would
-        leave the collection untitled.
+        Asserted against a run with no metadata at all rather than against the
+        default's current text, so the guard survives a change to what that
+        default is. What must not happen is the absent title being written
+        through, which would leave the collection untitled.
         """
         import json
 
         config = self._config(license="CC-BY-4.0")
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, config=config)
+        licensed_dir = tmp_path / "licensed"
+        bare_dir = tmp_path / "bare"
+        licensed_dir.mkdir()
+        bare_dir.mkdir()
+        with_license = TestCollectionAssetMetadata()._build_catalog(licensed_dir, config=config)
+        without_metadata = TestCollectionAssetMetadata()._build_catalog(bare_dir)
 
-        coll = json.loads(result.collection_path.read_text())
-        assert coll["title"] == "ds"
-        assert coll["license"] == "CC-BY-4.0"
+        titled = json.loads(with_license.collection_path.read_text())
+        default = json.loads(without_metadata.collection_path.read_text())
+
+        assert default["title"]
+        assert titled["title"] == default["title"]
+        assert titled["license"] == "CC-BY-4.0"
 
     def test_license_link_when_other(self, tmp_path: Path) -> None:
         import json
