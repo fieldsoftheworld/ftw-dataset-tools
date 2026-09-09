@@ -536,7 +536,7 @@ class TestSingleCollectionLayout:
         """
         import duckdb
 
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        result = build_catalog(tmp_path)
 
         con = duckdb.connect()
         con.install_extension("spatial")
@@ -673,8 +673,8 @@ class TestCollectionMetadata:
         bare_dir = tmp_path / "bare"
         licensed_dir.mkdir()
         bare_dir.mkdir()
-        with_license = TestCollectionAssetMetadata()._build_catalog(licensed_dir, config=config)
-        without_metadata = TestCollectionAssetMetadata()._build_catalog(bare_dir)
+        with_license = build_catalog(licensed_dir, config=config)
+        without_metadata = build_catalog(bare_dir)
 
         titled = json.loads(with_license.collection_path.read_text())
         default = json.loads(without_metadata.collection_path.read_text())
