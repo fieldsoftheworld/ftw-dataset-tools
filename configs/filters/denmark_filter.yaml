@@ -3,9 +3,10 @@
 # pure grass leys, orchards, fruit & nut trees, berries, vineyards, forest / afforestation / coppice,
 # Christmas trees & woody plants, nurseries, ornamentals & greenhouse / protected cultivation, fallow /
 # set-aside / EFA margins & environmental grass, nature areas, and administrative non-crop codes.
+# Pure grass leys and permanent grass are treated asbackground.
 # Notable inclusions: cereals (incl. wholecrop & green grain), legumes, oilseeds, potatoes, beet, field
 # vegetables, herbs/medicinal, flax, hemp, hops, strawberries, grass grown FOR SEED, and clover/lucerne
-# forage leys (rotation). Pure grass leys and permanent grass are background.
+# forage leys (rotation). 
 # Covers dk years 2010-2026 (2008-2009 have no crop column). Codes are Danish afgroedekoder from the
 # harmonized ftw/harmonized-field-data dk datasets (crop:code); HCAT English names shown where mapped.
 
