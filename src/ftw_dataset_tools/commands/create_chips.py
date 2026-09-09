@@ -68,6 +68,13 @@ from ftw_dataset_tools.api.geo import CRSMismatchError
     default=False,
     help="Remove chips along the outer border of the dataset (where fields may have partial coverage).",
 )
+@click.option(
+    "--batch-size",
+    type=click.IntRange(min=1),
+    default=field_stats.DEFAULT_COVERAGE_BATCH_SIZE,
+    show_default=True,
+    help="Grid cells per coverage batch. Lower it if the coverage step runs out of memory.",
+)
 def create_chips_cmd(
     fields_file: str,
     grid_file: str | None,
@@ -80,6 +87,7 @@ def create_chips_cmd(
     min_coverage: float | None,
     reproject_to_4326: bool,
     drop_border_chips: bool,
+    batch_size: int,
 ) -> None:
     """Create chip definitions with field coverage statistics.
 
@@ -102,6 +110,7 @@ def create_chips_cmd(
         ftwd create-chips fields.parquet --grid-file grid.parquet
         ftwd create-chips fields.parquet -o output.parquet
         ftwd create-chips fields.parquet --reproject
+        ftwd create-chips fields.parquet --batch-size 250
     """
     click.echo(f"Fields file: {fields_file}")
     if grid_file:
@@ -140,6 +149,7 @@ def create_chips_cmd(
                 min_coverage=min_coverage,
                 reproject_to_4326=reproject_to_4326,
                 drop_border_chips=drop_border_chips,
+                batch_size=batch_size,
                 on_progress=on_progress,
             )
 

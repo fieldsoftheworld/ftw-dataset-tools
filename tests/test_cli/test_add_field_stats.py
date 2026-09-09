@@ -90,3 +90,44 @@ class TestCli:
         assert result.exit_code == 0
         assert "FTW Dataset Tools" in result.output
         assert "create-chips" in result.output
+
+    def test_batch_size_option(
+        self, sample_grid_geoparquet: Path, sample_fields_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        """--batch-size reaches the coverage step (the OOM escape hatch users need)."""
+        output_file = tmp_path / "chips_batched.parquet"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "add-field-stats",
+                str(sample_grid_geoparquet),
+                str(sample_fields_geoparquet),
+                "-o",
+                str(output_file),
+                "--batch-size",
+                "1",
+            ],
+        )
+        assert result.exit_code == 0
+        assert output_file.exists()
+        assert "Coverage: 1/2 grid cells" in result.output
+
+    def test_batch_size_must_be_positive(
+        self, sample_grid_geoparquet: Path, sample_fields_geoparquet: Path
+    ) -> None:
+        """An invalid --batch-size is rejected at parse time, before any work."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "add-field-stats",
+                str(sample_grid_geoparquet),
+                str(sample_fields_geoparquet),
+                "--batch-size",
+                "0",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Invalid value for '--batch-size'" in result.output
+        assert "range x>=1" in result.output
