@@ -761,8 +761,8 @@ def generate_stac_catalog(
     )
 
     updated = _updated_stamp(provenance)
-    # No configured title means the collection constructors' titles ("<name> Chips",
-    # "<name> Source Data") stand; overriding with the dataset name would lose them.
+    # No configured title means the title the collection constructor gave it stands;
+    # passing an absent title through would leave the collection untitled.
     base_title = metadata.title if metadata and metadata.title else None
     _apply_collection_metadata(
         collection,

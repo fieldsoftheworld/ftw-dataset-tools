@@ -350,7 +350,6 @@ class TestChipItemAssetMetadata:
         with pytest.raises(MaskReadError) as excinfo:
             _create_chip_item(
                 chip_info=chip_info,
-                field_dataset="ds",
                 temporal_extent=(
                     datetime(2024, 1, 1, tzinfo=UTC),
                     datetime(2024, 12, 31, tzinfo=UTC),
@@ -633,17 +632,21 @@ class TestCollectionMetadata:
         assert all(p["roles"] != ["host"] for p in coll["providers"])
         assert coll["updated"].endswith("Z")
 
-    def test_metadata_without_title_keeps_default_titles(self, tmp_path: Path) -> None:
+    def test_metadata_without_title_keeps_the_default_title(self, tmp_path: Path) -> None:
+        """A license-only metadata block must not blank or rewrite the title.
+
+        The config carries no title, so the collection keeps the one its
+        constructor gave it. Passing the absent title straight through would
+        leave the collection untitled.
+        """
         import json
 
         config = self._config(license="CC-BY-4.0")
         result = TestCollectionAssetMetadata()._build_catalog(tmp_path, config=config)
 
-        chips = json.loads(result.chips_collection_path.read_text())
-        source = json.loads(result.source_collection_path.read_text())
-        assert chips["title"] == "ds Chips"
-        assert source["title"] == "ds Source Data"
-        assert chips["license"] == "CC-BY-4.0"
+        coll = json.loads(result.collection_path.read_text())
+        assert coll["title"] == "ds"
+        assert coll["license"] == "CC-BY-4.0"
 
     def test_license_link_when_other(self, tmp_path: Path) -> None:
         import json
