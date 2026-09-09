@@ -1,0 +1,24 @@
+# Class filter used for Bavaria (de_by) field boundaries.
+# Bavaria publishes only a coarse land-use crop:code (5 categories in the 2026 data; the
+# full source code list is included below for robustness). Codes are the crop:code from the
+# harmonized ftw/harmonized-field-data de_by dataset (code list: fiboa.org/code/de/de_by.csv).
+# This is a land-use-level filter, not a crop-type filter: arable land and the broken-out
+# arable specials (asparagus, hemp, hops, horticulture) are field; grassland, orchards/
+# meadow-orchards, vineyards, nut plantations and Christmas trees are background.
+# Hops is treated as field, consistent with the France filter (crop:code HBL -> field).
+column: ["crop:code", "crop_code"]
+
+include:
+  - 1010  # Ackerland (arable land)
+  - 1012  # Hopfen (hops)
+  - 1013  # Spargel (asparagus)
+  - 1014  # Hanf (hemp)
+  - 1030  # Gartenbauland (horticultural / market-garden land)
+
+exclude:
+  - 1011  # Streuobstacker (orchard on arable)
+  - 1018  # Weihnachtsbaumkultur (Christmas trees)
+  - 1020  # Mahd- und Weideland (grassland: mowing & pasture)
+  - 1021  # Streuobstwiese (orchard-meadow)
+  - 1040  # Rebfläche (vineyard)
+  - 1050  # Obst- und Nussplantage (orchard & nut plantation)

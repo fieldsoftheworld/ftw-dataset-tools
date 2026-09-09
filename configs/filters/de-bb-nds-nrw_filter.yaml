@@ -1,0 +1,380 @@
+# Class filter used for German field boundaries in the states that publish the federal
+# 3-digit Nutzungscode (NC): Brandenburg (de_bb), Niedersachsen (de_nds), and
+# Nordrhein-Westfalen (de_nrw). Codes are the crop:code from the harmonized
+# ftw/harmonized-field-data de_* datasets; German (or English) labels shown as comments.
+# The other German states use coarser or different schemes and have their own filters:
+# de_by, de_mv (crop:code, land-use only), de_sh (hbn), de_th (bnk).
+# 325 distinct NC codes across bb (2026), nds (2025), nrw (2026).
+#
+# Excluded (background): landscape elements (hedges, tree rows, field copses, stone walls,
+# margins) & eco-scheme strips, arable grass leys (Ackergras) and all grassland/pasture/
+# meadow, fallow/set-aside/nature-conservation/buffer & erosion strips/afforestation,
+# turf (Rollrasen) & ornamental plants, energy/biomass crops (Silphie, Miscanthus,
+# switchgrass, reed canary grass), orchards/berries/nuts/vineyards/nurseries/agroforestry/
+# heather/roses/truffle, Christmas trees, forest, storage heaps, and administrative codes.
+# The empty crop:code ("") and non-agricultural areas are background.
+#
+# Notable inclusions: all cereals (incl. silage maize), legumes & pulses, oilseeds, fodder
+# legumes and legume-predominant leys (clover, alfalfa, sainfoin, serradella, mixes),
+# fodder roots, potatoes, sugar beet, all field & market-garden vegetables, culinary/
+# medicinal/aromatic herbs, hemp, tobacco, poppy, strawberries, asparagus, rhubarb,
+# artichoke, Tagetes, Sudan grass, seed-multiplication & trial plots, and mixed cultures.
+
+column: ["crop:code", "crop_code"]
+
+include:
+  # Industrial & specialty crops (hemp, tobacco, strawberry, asparagus, rhubarb, Tagetes, seed phacelia, Sudan grass, ...)
+  - "008"  # Spargel unter Folie
+  # Cereals
+  - 112  # Winterdurum (Hartweizen)
+  - 113  # Sommerdurum (Hartweizen)
+  - 114  # Winter-Dinkel
+  - 115  # Winterweichweizen
+  - 116  # Sommerweichweizen
+  - 118  # Winter-Emmer
+  - 119  # Sommer-Emmer
+  - 120  # Sommer-Dinkel
+  - 121  # Winterroggen, Winter-Waldstaudenroggen
+  - 122  # Sommerroggen, Sommer-Waldstaudenroggen
+  - 125  # Wintermenggetreide
+  - 126  # Winter mixed grain without wheat
+  - 131  # Wintergerste
+  - 132  # Sommergerste
+  - 142  # Winterhafer
+  - 143  # Sommerhafer
+  - 144  # Sommermenggetreide
+  - 145  # Summer mixed grain without wheat
+  - 150  # Gemenge Getreide
+  - 156  # Wintertriticale
+  - 157  # Sommertriticale
+  - 171  # Mais (ohne Silomais NC 411)
+  - 181  # Rispenhirse
+  - 182  # Buchweizen
+  - 183  # Mohren-
+  - 184  # Kolbenhirse
+  - 186  # Amarant, Fuchsschwanz
+  - 187  # Quinoa
+  - 188  # Reis im Trockenanbau
+  - 189  # Chia
+  # Legumes & pulses
+  - 210  # Sommer-Erbsen (Markerbse, Schalerbse, Zuckererbse, Futtererbse, Peluschke)
+  - 211  # Sommer-Gemüseerbse (Markerbse, Schalerbse, Zuckererbse)
+  - 212  # Platterbse
+  - 213  # Winter-Erbsen (Markerbse, Schalerbse, Zuckererbse, Futtererbse, Peluschke)
+  - 220  # Ackerbohne
+  - 221  # Wicken (Pannonische Wicke, Zottelwicke, Saatwicke)
+  - 222  # Linsen
+  - 230  # Lupinen (Süßlupine, weiße Lupine, blaue
+  - 240  # Erbsen
+  - 250  # Gemenge Leguminose
+  # Oilseeds
+  - 311  # Winterraps
+  - 312  # Sommerraps
+  - 315  # Winterrübsen
+  - 316  # Sommerrübsen (Rübsen, Rübsamen, Rübsaat)
+  - 320  # Sonnenblumen
+  - 330  # Sojabohnen
+  - 341  # Lein, Flachs
+  - 393  # Leindotter
+  # Silage maize, fodder legumes/leys, fodder roots
+  - 411  # Silomais (als Hauptfutter)
+  - 413  # Futterrübe
+  - 414  # Kohlrübe, -
+  - 421  # Rot-
+  - 422  # Kleegras
+  - 423  # Luzerne, Hopfenklee
+  - 425  # Klee-Luzerne-Gemisch
+  - 426  # Bockshornklee, Schabziger Klee
+  - 427  # Hornklee, Hornschotenklee
+  - 429  # Esparsette
+  - 430  # Serradella
+  - 431  # Steinklee
+  - 432  # Kleemischung aus NC 421, 427, 431 (stickstoffbindend)
+  - 433  # Luzerne-Gras
+  - 434  # Gras-Leguminosen Gemisch (Leguminosen überwiegt)
+  # Potatoes, sugar beet, root crops
+  - 601  # Stärkekartoffeln
+  - 602  # Kartoffeln (Speise)
+  - 603  # Zuckerrüben
+  - 604  # Topinambur
+  - 605  # Süßkartoffel
+  - 606  # Pflanzkartoffeln
+  # Field & market-garden vegetables
+  - 610  # beetweiser Anbau von Gemüse ab 5 Kulturen
+  - 611  # beetweiser Anbau von Gemüse bis 4 Kulturen
+  - 613  # Gemüsekohl (Kopfkohl, Wirsing, Rot-
+  - 614  # Brauner Senf
+  - 616  # Garten-Senkfrauke-, Rucola
+  - 617  # Gartenkresse
+  - 618  # Gartenrettiche (Weiße
+  - 619  # Weißer Senf, Gelber Senf
+  - 620  # Steckrübe, Kohlrübe (Gemüseanbau)
+  - 622  # Tomaten
+  - 623  # Auberginen
+  - 624  # Paprika, Chilli, Peperoni
+  - 627  # Gurke (Salatgurke, Einlegegurke)
+  - 628  # Zuckermelone
+  - 629  # Riesenkürbis (Riesenkürbis, Hokkaidokürbis)
+  - 630  # Gartenkürbis (Gartenkürbis, Steirischer Kürbis, Zucchini, Spaghettikürbis,
+  - 631  # Melone (Wassermelone)
+  - 632  # Winterlauch (Speise-Zwiebel, Schalotte, Lauch, Knoblauch, Schnittlauch, Bä
+  - 633  # Sommerlauch (Speise-Zwiebel, Schalotte, Lauch, Knoblauch, Schnittlauch, Bä
+  - 634  # Möhre (Möhre
+  - 635  # Gartenbohne (Gartenbohne
+  - 636  # Feldsalate (auch Rapunzel)
+  - 637  # Lattich (Garten-Salat
+  - 638  # Spinat
+  - 639  # Mangold, Rote Beete
+  - 641  # Sellerie (Knollen-Sellerie, Bleich-Sellerie, Stangen-Sellerie)
+  - 642  # Ampfer (Wiesen-Sauerampfer)
+  - 643  # Pastinaken
+  - 644  # Zichorien
+  - 645  # Kichererbsen
+  - 646  # Meerettich
+  - 647  # Schwarzwurzeln
+  - 648  # Fenchel (Gemüsefenchel, Körnerfenchel)
+  - 649  # Gemüserübsen (Stoppelrübe, Weiße Rübe, Bayerische Rübe, Mairübe, Chinakohl
+  # Culinary / medicinal / aromatic herbs
+  - 650  # beetweiser Anbau von Küchenkräuter
+  - 651  # Dill, Gurkenkraut
+  - 652  # Kerbel (auch Wiesenkerbel)
+  - 653  # Bibernellen (Anis)
+  - 654  # Kümmel
+  - 656  # Schwarzkümmel
+  - 657  # Koriander
+  - 658  # Liebstöckel
+  - 659  # Petersilie
+  - 660  # Basilikum
+  - 661  # Rosmarin
+  - 662  # Salbei (Küchen-
+  - 664  # Oregano (Majoran, Dost)
+  - 665  # Bohnenkräuter
+  - 667  # Verbenen (echtes Eisenkraut)
+  - 668  # Lavendel (Echter Lavendel, Speik-Lavendel, Hybrid-Lavendel)
+  - 669  # Thymian
+  - 670  # Melissen (Zitronenmelisse)
+  - 671  # Enziane
+  - 672  # Minzen (Pfefferm., Grüne M.)
+  - 673  # Wermut-, Estragon-, Beifuß
+  - 674  # Ringelblumen
+  - 675  # Sonnenhut (Schmalbl., Purpur)
+  - 676  # Wegerich (Spitzwegerich)
+  - 677  # Kamillen (Echte Kamille)
+  - 678  # Schafgarben (Gelbe Schafgarbe)
+  - 679  # Valerian (real valerian)
+  - 680  # Johanniskräuter (Echtes J.)
+  - 681  # Frauenmantel
+  - 682  # Mariendisteln
+  - 684  # Löwenzahn
+  - 685  # Engelwurzen
+  - 686  # Mallow (Wild Mallow)
+  - 687  # echte Arnika (Arnica montana)
+  - 690  # beetweiser Anbau von Küchenkräuter
+  # Industrial & specialty crops (hemp, tobacco, strawberry, asparagus, rhubarb, Tagetes, seed phacelia, Sudan grass, ...)
+  - 701  # Hanf
+  - 705  # Virginischer Tabak
+  - 706  # Mohn (Schlafmohn, Backmohn)
+  - 707  # Erdbeeren
+  - 708  # Färberdisteln
+  - 709  # Brennnesseln (Große Brennn.)
+  - 710  # Färberkrapp (Rubia tinctorum)
+  - 739  # Tagetes
+  - 777  # Phacelia (als Hauptkultur z.B. Saatgutvermehrung)
+  - 803  # Sudangras
+  - 851  # Rhabarber
+  - 860  # Spargel
+  - 861  # Artischocke
+  - 866  # Plant mixture with hemp
+  # Seed multiplication, trial plots, mixed cultures, other arable
+  - 911  # Rübensamenvermehrung
+  - 912  # Grassamenvermehrung
+  - 913  # Wildsamenvermehrung
+  - 914  # Versuchsflächen mit mehreren beihilfefähigen Kulturarten
+  - 917  # Mischkulturen
+  - 919  # Saatmais (Saatgutvermehrung)
+  - 920  # House and kitchen gardens
+  - 973  # NFF: Ackernutzung
+  - 999  # Ackerkultur einer Gattung
+
+exclude:
+  # Unlabelled / non-agricultural / administrative
+  - ""  # unlabelled
+  # Landscape elements & eco-scheme strips (hedges, margins, agroforestry, set-aside)
+  - "001"  # Hecken oder Knicks (> 20m) CC
+  - "002"  # Baumreihen (> 50m) CC
+  - "003"  # Feldgehölze (100 - 2.000m²) CC
+  - "004"  # Feuchtgebiete (< 2.000m²) CC
+  # Unlabelled / non-agricultural / administrative
+  - "005"  # Keine Nutzung
+  - "006"  # Festwiese
+  # Landscape elements & eco-scheme strips (hedges, margins, agroforestry, set-aside)
+  - "011"  # Naturstein- o. Trockenmauern, Lesesteinwälle
+  - "012"  # Fels- u. Steinriegel, naturversteinte Fl.
+  - "013"  # Feldraine
+  - "014"  # Gewässerschutz-
+  - 81  # Agroforstsystem (Streifen)
+  - "083"  # Agroforststreifen ohne ÖR
+  - "088"  # ÖR 1a ohne Produktion (Selbst-
+  - 88  # ÖR 1a Freiwillige Stilllegung
+  - "089"  # ÖR 1b Blühstreifen auf AL
+  - "090"  # ÖR 1b Blühfläche auf AL
+  - 90  # ÖR 1b Blühfläche auf AL
+  - 92  # ÖR 1c Blühfläche auf DK
+  - "093"  # ÖR 1d Altgrasstreifen
+  - 93  # ÖR 1d Altgrasstreifen DGL
+  - "094"  # ÖR 3 Agroforststreifen
+  # Arable grass leys, grassland, pasture, meadow, orchard-meadow
+  - 424  # Ackergras
+  - 428  # Alternating grassland
+  - 441  # Wiesen (Grünlandneueinsaat im Rahmen von AUKM)
+  - 442  # Mowing pastures
+  - 443  # pastures
+  - 444  # DGL Neueinsaat als Ersatz für genehmigten DGL Umbruch
+  - 451  # Wiesen
+  - 452  # Mähweiden
+  - 453  # Weiden und Almen
+  - 454  # Hutungen
+  - 458  # Streuwiesen
+  - 459  # Grünland
+  - 462  # Grazed sandy heaths
+  - 463  # Grazed bog heaths
+  - 464  # Grazed grasslands
+  - 465  # Grazed montane meadows
+  - 466  # Mowed grasslands
+  - 467  # Mown montane meadows
+  - 480  # Streuobstfläche mit Grünlandnutzung
+  - 481  # Orchards without grassland use
+  - 492  # Dauergrünland unter etablierten lokalen Praktiken (z.B. Heide)
+  - 493  # unlabelled
+  # Fallow, set-aside, nature conservation, buffer/erosion strips, afforestation
+  - 510  # Goldrute
+  - 512  # Iberischer Drachenkopf
+  - 514  # Hauswurz
+  - 516  # Knotweed (Persicaria)
+  - 519  # Köcherblümchen
+  - 559  # Set-aside for nature conservation and landscape management (5-year program
+  - 560  # Brache im Rahmen einer VNS-Maßnahme
+  - 564  # Nicht landwirtschaftliche, aber §11 (1) Nr.3 Bst. c) der GAPDZV förderfähi
+  - 567  # Longterm. o. 20 years old stilll. Permanent grass land
+  - 573  # Uferrandstreifenprogramm (AUM)
+  - 574  # Flower strips (only to be used for areas with AUM-BS 1)
+  - 575  # Flowering area (only to be used for areas with AUM-BS 1)
+  - 576  # Erosionsschutzstreifen (AUM)
+  - 583  # Nicht landwirtschaftliche, aber nach §11 (1) Nr.3 Bst. d der GAPDZV förder
+  - 584  # Nicht landwirtschaftliche, aber nach §11 (1) Nr.3 Bst. a) aa) oder cc) der
+  - 585  # Nicht landwirtschaftliche, aber nach §11 (1) Nr.3 Bst. a) bb) der GAPDZV f
+  - 587  # Hedge planting bird protection
+  - 590  # Brache (einj. Blühmisch.)
+  - 591  # Ackerland aus der Erzeugung genommen
+  - 592  # Dauergrünland aus der Erzeugung genommen
+  - 593  # Dauerkulturen aus der Erzeugung genommen
+  # Turf/sod & ornamental plants
+  - 702  # Rollrasen, Vegetationsmatten für Dachbegrünung
+  - 704  # Glanzgräser
+  - 718  # beetweiser Anbau Zierpflanzen bis 4 Kulturen
+  - 720  # beetweiser Anbau Zierpflanzen ab 5 Kulturen
+  - 726  # Lilien (Türkenbund)
+  - 727  # Daffodils
+  - 730  # Seidenpflanzen
+  - 733  # Astern (Sommeraster)
+  - 734  # Chrysantheme, Winteraster
+  - 735  # Strohblumen (Garten)
+  - 737  # Daisies
+  - 740  # Wucherblumen (Mutterkraut)
+  - 741  # Strandflieder (Geflügelter S.)
+  - 744  # Taubnesseln (Weiße Taubnessel)
+  - 745  # Gladiolen (Gartengladiole)
+  - 746  # Tulpen (Garten-Tulpe)
+  - 747  # Trauben-Silberkerze
+  - 748  # Rittersporne
+  - 750  # Dahlien (Garten-Dahlie)
+  - 751  # Rhodiola (Rosenwurz)
+  - 756  # Löwenmäulchen
+  - 765  # Kapuzinerkresse
+  - 766  # Pfingstrosen (auch Strauch)
+  - 768  # Wiesenknopf (Kl. W., Pimpine.)
+  - 772  # Nelken (Bartn., Land
+  - 776  # Veilchen und Stiefmütterchen
+  - 778  # Alpendistel
+  - 782  # Glockenblumen (Campanula)
+  - 784  # Korischer Nieswurz, Rosen
+  - 785  # Eukalyptus
+  - 786  # Fingerhut
+  - 789  # Veronica
+  - 790  # Anemonen
+  - 792  # Kornrade
+  - 796  # Fetthenne, Mauerpfeffer
+  # Energy / biomass crops
+  - 802  # Silphium (Durchwachsene Silphie, Becherpflanze)
+  - 804  # Virginiamalve
+  - 805  # Knotweed
+  - 806  # Rutenhirse
+  # Orchards, berries, nuts, vineyards, nurseries, agroforestry, heather, roses, truffle
+  - 821  # Pome and stone fruit
+  - 822  # Streuobst (ohne Wiesennutzung)
+  - 823  # Birnen (Ertragsanlagen)
+  - 824  # sonst. Obstanlagen in Vollanbau (ohne Äpfel, Birnen, Pfirsiche)
+  - 825  # Kernobst z.B. Äpfel, Birnen
+  - 826  # Steinobst, z. B. Kirschen, Pflaumen
+  - 827  # Beerenobst, z.B. Johannis-, Stachel-, Himbeeren
+  - 828  # Sanddorn
+  - 829  # Sonstige Obstanlagen
+  - 830  # Pfirsiche in Vollanbau
+  - 831  # Kirschen (Ertragsanlagen)
+  - 832  # Pflaumen (Ertragsanlagen)
+  - 833  # Haselnüsse
+  - 834  # Walnüsse
+  - 835  # other nuts
+  - 836  # Äpfel in Vollanbau
+  - 837  # sonst. Steinobst (ohne Kirschen, Pflaumen)
+  - 838  # Baumschulen, nicht für Beerenobst
+  - 839  # Beerenobst zur Vermehrung
+  - 840  # Korbweiden
+  - 841  # KUP lt. GAPDZV
+  - 842  # Rebland
+  - 843  # Planted vineyards (underplanting)
+  - 847  # Steep slope viticulture
+  - 850  # Sonstige Dauerkulturen
+  # Energy / biomass crops
+  - 852  # Chinaschilf
+  - 853  # Riesenweizengras
+  - 854  # Rohrglanzgras
+  # Orchards, berries, nuts, vineyards, nurseries, agroforestry, heather, roses, truffle
+  - 862  # Heidekraut
+  - 863  # Rosen, Schnittrosen
+  - 864  # rhododendron
+  - 865  # Trüffel
+  - 871  # Wildpflanzenmischung (AUM)
+  # Unlabelled / non-agricultural / administrative
+  - 880  # unlabelled
+  - 881  # unlabelled
+  - 882  # unlabelled
+  - 883  # unlabelled
+  - 886  # Schonfläche unterjährig
+  - 909  # unlabelled
+  # Christmas trees, forest, storage heaps, other non-crop / admin
+  - 910  # Wildacker auf lw. Fläche
+  - 915  # Randstreifen (Acker
+  - 918  # Mehrjährige Buntbrachen (AUM)
+  - 924  # Vertragsnaturs. ohne DZ
+  - 925  # Biotopes with agricultural use
+  - 941  # Gründüngung im Hauptfruchtanbau
+  - 956  # Aufforstung
+  - 966  # Unkultivierte Heidefläche
+  - 972  # NFF: Dauergrünlandnutzung
+  # Unlabelled / non-agricultural / administrative
+  - 974  # unlabelled
+  # Christmas trees, forest, storage heaps, other non-crop / admin
+  - 982  # Sonstige KUP
+  - 983  # Weihnachtsbäume
+  # Unlabelled / non-agricultural / administrative
+  - 990  # Alle anderen Flächen (keine LF)
+  - 991  # Not farmer. Areas within the control of the applicant that have been desig
+  - 992  # Nicht landwirt. Flächen in folge Genehmigung DGL Umwandlung
+  # Christmas trees, forest, storage heaps, other non-crop / admin
+  - 994  # Vorübergehende, unbefestigte Mieten, Stroh-, Futter- oder Dunglagerplätze 
+  - 995  # Forstflächen
+  - 996  # Vorübergehende, unbefestigte Mieten, Stroh-, Futter oder Dunglagerplätze a
+  # Unlabelled / non-agricultural / administrative
+  - 997  # unlabelled
+  - 998  # Mining

@@ -1,0 +1,17 @@
+# Class filter used for Schleswig-Holstein (de_sh) field boundaries.
+# SH has no crop:code; it publishes only a coarse land-use category in the German-text column
+# `hbn` (Hauptbodennutzung). This is a land-use-level filter, not a crop-type filter: only
+# arable land (Ackerland) is field; permanent grassland, permanent crops and non-agricultural
+# areas are background. Covers de_sh years 2023-2026 (the 2023 edition uses an "Art. 32"
+# wording for the non-agricultural category; both spellings are listed).
+column: ["hbn"]
+
+include:
+  - Ackerland  # arable land
+
+exclude:
+  - Dauergrünland                                  # permanent grassland
+  - Dauerkulturen                                  # permanent crops
+  - Nicht landwirtschaftliche förderfähige Flächen  # non-agricultural eligible areas (2024-2026)
+  - Sonstige Art. 32-Flächen                       # other Article-32 areas (2023 edition)
+  - Sonstige nicht ldw. genutzte Flächen           # other non-agriculturally used areas

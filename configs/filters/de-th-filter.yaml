@@ -1,0 +1,15 @@
+# Class filter used for Thuringia (de_th) field boundaries.
+# TH has no crop:code; it publishes only a coarse main-land-use category in the short-code
+# column `bnk` (Bodennutzungskategorie). This is a land-use-level filter, not a crop-type
+# filter: only arable land (AL) is field; grassland, permanent crops and woody/other
+# categories are background. Covers de_th year 2026 (the only published edition).
+column: ["bnk"]
+
+include:
+  - AL  # Ackerland (arable land)
+
+exclude:
+  - GL  # Grünland (grassland)
+  - DK  # Dauerkultur (permanent crop)
+  - AF  # non-arable land-use category (afforestation/agroforestry)
+  - GF  # Gehölzfläche (woody area)
