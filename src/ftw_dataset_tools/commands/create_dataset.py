@@ -10,7 +10,7 @@ import click
 import pystac
 from tqdm import tqdm
 
-from ftw_dataset_tools.api import crop_stats, dataset, splits
+from ftw_dataset_tools.api import crop_stats, dataset, masks, splits
 from ftw_dataset_tools.api.assets import MaskReadError
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
@@ -442,6 +442,11 @@ def create_dataset_cmd(
             )
 
         click.echo(f"  Total masks created: {result.total_masks_created:,}")
+        skipped_total = sum(r.total_skipped for r in result.masks_results.values())
+        if skipped_total > 0:
+            click.echo(f"  Masks skipped: {skipped_total:,} (see log for reasons)")
+        for line in masks.mask_run_summary_lines(result.masks_results.values()):
+            click.echo(line)
 
         click.echo("")
         click.echo("Output files:")

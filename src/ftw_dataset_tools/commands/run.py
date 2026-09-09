@@ -6,7 +6,7 @@ import sys
 
 import click
 
-from ftw_dataset_tools.api import assets, crop_stats, pipeline, source
+from ftw_dataset_tools.api import assets, crop_stats, masks, pipeline, source
 from ftw_dataset_tools.api import config as config_module
 
 
@@ -196,6 +196,11 @@ def _print_summary(ctx: pipeline.PipelineContext) -> None:
     if ctx.masks_results:
         total = sum(r.total_created for r in ctx.masks_results.values())
         click.echo(f"  Masks created: {total:,}")
+        skipped_total = sum(r.total_skipped for r in ctx.masks_results.values())
+        if skipped_total > 0:
+            click.echo(f"  Masks skipped: {skipped_total:,} (see log for reasons)")
+        for line in masks.mask_run_summary_lines(ctx.masks_results.values()):
+            click.echo(line)
     if ctx.chips_result:
         click.echo(f"  {crop_stats.crop_stats_summary(ctx.crop_stats_result)}")
     if ctx.stac_result:
