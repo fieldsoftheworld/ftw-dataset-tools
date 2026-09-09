@@ -544,23 +544,24 @@ class TestAtomicWrite:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The rename must stay on one filesystem, so the temp file lives alongside."""
-        import tempfile as tempfile_module
-
+        from ftw_dataset_tools.api import crop_stats as crop_stats_module
         from ftw_dataset_tools.api.crop_stats import add_crop_stats
 
         chips = _chips(tmp_path)
-        dirs: list[object] = []
-        real = tempfile_module.NamedTemporaryFile
+        created: list[Path] = []
+        real = crop_stats_module.create_temp_file
 
-        def spy(*args: object, **kwargs: object):
-            dirs.append(kwargs.get("dir"))
-            return real(*args, **kwargs)
+        def spy(target: Path, suffix: str = "") -> Path:
+            path = real(target, suffix=suffix)
+            created.append(path)
+            return path
 
-        monkeypatch.setattr(tempfile_module, "NamedTemporaryFile", spy)
+        monkeypatch.setattr(crop_stats_module, "create_temp_file", spy)
 
         add_crop_stats(chips, _fields(tmp_path))
 
-        assert chips.parent in dirs
+        assert created
+        assert all(path.parent == chips.parent for path in created)
 
 
 class TestWriteOrdering:

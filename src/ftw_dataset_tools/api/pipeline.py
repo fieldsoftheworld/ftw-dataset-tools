@@ -792,6 +792,13 @@ def stage_download_images(ctx: PipelineContext) -> None:
         bands=download_cfg.bands,
         resolution=download_cfg.resolution,
         workers=download_cfg.workers,
+        # Defaults to True: a pipeline run is resumable by definition, every other
+        # stage reuses what is already on disk. Without it a rerun re-attempts every
+        # chip - and fails on all of them, because a completed download replaces the
+        # child's band assets with the local `image`, so there are no band hrefs left
+        # to fetch. Set stages.download_images.resume false to force a re-download,
+        # which is what a changed `bands` or `resolution` needs.
+        resume=download_cfg.resume,
     )
 
 

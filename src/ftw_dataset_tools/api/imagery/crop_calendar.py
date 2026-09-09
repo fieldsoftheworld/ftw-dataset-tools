@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 import threading
 import urllib.request
 from dataclasses import dataclass
@@ -16,6 +15,7 @@ import rasterio
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+from ftw_dataset_tools.api.fs import create_temp_file, finalize_temp_file
 from ftw_dataset_tools.api.imagery.settings import (
     CROP_CAL_SUMMER_END,
     CROP_CAL_SUMMER_START,
@@ -122,15 +122,11 @@ def _download_to_cache(url: str, file_path: Path) -> None:
     therefore sees either the previous file or the finished one, never the
     partial bytes of a download still in flight.
     """
-    handle, tmp_name = tempfile.mkstemp(
-        dir=str(file_path.parent), prefix=f".{file_path.name}.", suffix=".part"
-    )
-    os.close(handle)
-    tmp_path = Path(tmp_name)
+    tmp_path = create_temp_file(file_path, suffix=".part")
 
     try:
         urllib.request.urlretrieve(url, str(tmp_path))
-        tmp_path.replace(file_path)
+        finalize_temp_file(tmp_path, file_path)
     finally:
         tmp_path.unlink(missing_ok=True)
 

@@ -219,6 +219,26 @@ class TestFromDict:
                 {"fields_file": "f.parquet", "stages": {"masks": {"skip_existing": "yes"}}}
             )
 
+    def test_download_resume_defaults_true(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+
+        assert config.stages.download_images.resume is True
+
+    def test_download_resume_can_be_disabled(self) -> None:
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"download_images": {"resume": False}}}
+        )
+
+        assert config.stages.download_images.resume is False
+
+    def test_download_resume_non_bool_raises(self) -> None:
+        with pytest.raises(
+            ConfigError, match=r"stages\.download_images\.resume must be true or false"
+        ):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"download_images": {"resume": "yes"}}}
+            )
+
     def test_docs_defaults(self) -> None:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
 

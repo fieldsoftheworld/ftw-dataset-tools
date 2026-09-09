@@ -14,7 +14,12 @@ from typing import TYPE_CHECKING
 
 import duckdb
 
-from ftw_dataset_tools.api.geo import detect_crs, detect_geometry_column, ensure_spatial_loaded
+from ftw_dataset_tools.api.geo import (
+    detect_crs,
+    detect_geometry_column,
+    ensure_spatial_loaded,
+    sql_path,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -22,11 +27,6 @@ if TYPE_CHECKING:
     from ftw_dataset_tools.api.geo import CRSInfo
 
 _NAN_SAFE_TYPES = {"DOUBLE", "FLOAT", "REAL"}
-
-
-def _sql_path(path: Path | str) -> str:
-    """Escape a path for interpolation into a single-quoted SQL string literal."""
-    return str(path).replace("'", "''")
 
 
 @dataclass(frozen=True)
@@ -72,7 +72,7 @@ def tippecanoe_available() -> bool:
 
 
 def _column_types(con: duckdb.DuckDBPyConnection, path: Path) -> dict[str, str]:
-    rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{_sql_path(path)}')").fetchall()
+    rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{sql_path(path)}')").fetchall()
     return {row[0]: row[1] for row in rows}
 
 
@@ -109,11 +109,9 @@ def export_geojsonseq(parquet: Path, out: Path, attributes: tuple[str, ...]) -> 
         present = [a for a in attributes if a in column_types]
         attr_exprs = [_attribute_expr(a, column_types[a]) for a in present]
         select_cols = ", ".join([*attr_exprs, _geometry_expr(geom_col, crs)])
-        select = f"SELECT {select_cols} FROM read_parquet('{_sql_path(parquet)}')"
+        select = f"SELECT {select_cols} FROM read_parquet('{sql_path(parquet)}')"
         out.parent.mkdir(parents=True, exist_ok=True)
-        con.execute(
-            f"COPY ({select}) TO '{_sql_path(out)}' WITH (FORMAT GDAL, DRIVER 'GeoJSONSeq')"
-        )
+        con.execute(f"COPY ({select}) TO '{sql_path(out)}' WITH (FORMAT GDAL, DRIVER 'GeoJSONSeq')")
     finally:
         con.close()
     return present

@@ -521,3 +521,66 @@ class TestConfigureSourceCoopS3:
         conn.close()
 
         assert settings == {"s3_region": "us-west-2", "s3_url_style": "path"}
+
+
+class TestWriteGeoparquetTempFile:
+    """write_geoparquet's bbox rewrite must build its temp file beside the output.
+
+    The rewrite ends in a rename, and os.rename raises EXDEV across devices, so a
+    temp file in the system temp directory breaks every write whenever the system
+    temp directory is its own mount - a tmpfs /tmp, a container bind mount, an
+    output on an external or network disk. CI has one filesystem and cannot see
+    that, so this stands in for a second mount by rejecting any rename whose
+    source is not in the target's directory.
+    """
+
+    def _write(self, out: Path) -> None:
+        con = duckdb.connect(":memory:")
+        try:
+            from ftw_dataset_tools.api.geo import ensure_spatial_loaded
+
+            ensure_spatial_loaded(con)
+            write_geoparquet(out, conn=con, query="SELECT 1 AS id, ST_Point(1, 2) AS geometry")
+        finally:
+            con.close()
+
+    def test_bbox_rewrite_never_renames_across_devices(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import errno
+
+        real_replace = Path.replace
+
+        def strict_replace(self: Path, target: "str | Path") -> Path:
+            if self.parent != Path(target).parent:
+                raise OSError(errno.EXDEV, "Cross-device link", str(self), None, str(target))
+            return real_replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", strict_replace)
+
+        out = tmp_path / "fields.parquet"
+        self._write(out)
+
+        assert out.exists()
+        assert "bbox" in pq.read_schema(out).names
+
+    def test_temp_file_lives_in_the_output_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api import geo
+
+        created: list[Path] = []
+        real_create = geo.create_temp_file
+
+        def spy(target: Path, suffix: str = "") -> Path:
+            path = real_create(target, suffix=suffix)
+            created.append(path)
+            return path
+
+        monkeypatch.setattr(geo, "create_temp_file", spy)
+
+        out = tmp_path / "fields.parquet"
+        self._write(out)
+
+        assert created, "the bbox rewrite did not run"
+        assert all(path.parent == out.parent for path in created)

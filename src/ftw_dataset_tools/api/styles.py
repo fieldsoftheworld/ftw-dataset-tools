@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 
 import duckdb
 
-from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded
+from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.tiles import CHIPS_TILES, FIELDS_TILES
 
 if TYPE_CHECKING:
@@ -125,11 +125,6 @@ def distinct_color(preferred: str | None, used: set[str]) -> str:
     return OTHER_COLOR
 
 
-def _sql_path(path: Path | str) -> str:
-    """Escape a path for interpolation into a single-quoted SQL string literal."""
-    return str(path).replace("'", "''")
-
-
 def _connect() -> duckdb.DuckDBPyConnection:
     con = duckdb.connect(":memory:")
     ensure_spatial_loaded(con)
@@ -137,7 +132,7 @@ def _connect() -> duckdb.DuckDBPyConnection:
 
 
 def _columns(con: duckdb.DuckDBPyConnection, path: Path) -> set[str]:
-    rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{_sql_path(path)}')").fetchall()
+    rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{sql_path(path)}')").fetchall()
     return {row[0] for row in rows}
 
 
@@ -149,7 +144,7 @@ def split_counts(chips: Path | str) -> dict[str, int]:
         if "split" not in _columns(con, chips):
             return {}
         rows = con.execute(
-            f"SELECT split, COUNT(*) FROM read_parquet('{_sql_path(chips)}') "
+            f"SELECT split, COUNT(*) FROM read_parquet('{sql_path(chips)}') "
             "WHERE split IS NOT NULL GROUP BY split"
         ).fetchall()
     finally:
@@ -187,7 +182,7 @@ def coverage_quantiles(chips: Path | str) -> list[float]:
             return []
         row = con.execute(
             "SELECT quantile_cont(field_coverage_pct, [0.2, 0.4, 0.6, 0.8]) "
-            f"FROM read_parquet('{_sql_path(chips)}') WHERE field_coverage_pct IS NOT NULL"
+            f"FROM read_parquet('{sql_path(chips)}') WHERE field_coverage_pct IS NOT NULL"
         ).fetchone()
     finally:
         con.close()
@@ -222,7 +217,7 @@ def top_codes(
         rows = con.execute(
             f'SELECT TRY_CAST("{code_col}" AS BIGINT) AS code, {name_expr} AS name_en, '
             f"{weight_expr} AS weight "
-            f"FROM read_parquet('{_sql_path(parquet)}') "
+            f"FROM read_parquet('{sql_path(parquet)}') "
             f'WHERE "{code_col}" IS NOT NULL '
             "GROUP BY code HAVING code IS NOT NULL "
             f"ORDER BY weight DESC, code LIMIT {int(limit)}"

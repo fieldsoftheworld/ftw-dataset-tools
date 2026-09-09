@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -12,6 +10,8 @@ from typing import TYPE_CHECKING
 import duckdb
 import geopandas as gpd  # noqa: TC002 - used at runtime for GeoDataFrame methods
 import geoparquet_io as gpio
+
+from ftw_dataset_tools.api.fs import create_temp_file, finalize_temp_file
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -89,18 +89,18 @@ def write_geoparquet(
         gdf.to_parquet(out_path)
     else:
         # Write from DuckDB query - COPY exports geometry as WKB
-        escaped = str(out_path).replace("'", "''")
-        conn.execute(f"COPY ({query}) TO '{escaped}' (FORMAT PARQUET)")
+        conn.execute(f"COPY ({query}) TO '{sql_path(out_path)}' (FORMAT PARQUET)")
 
-    # Add bbox column using gpio fluent API if not already present
-    # Use temp-file + atomic-rename pattern to prevent corruption on partial writes
+    # Add bbox column using gpio fluent API if not already present. Use the
+    # temp-file + atomic-rename pattern to prevent corruption on partial writes;
+    # the temp file is a sibling of the target so the rename stays on one
+    # filesystem.
     if not has_bbox_column(out_path):
         tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
+            tmp_path = create_temp_file(out_path, suffix=".parquet")
             gpio.read(str(out_path)).add_bbox().write(str(tmp_path))
-            shutil.move(str(tmp_path), str(out_path))
+            finalize_temp_file(tmp_path, out_path)
         except Exception:
             if tmp_path and tmp_path.exists():
                 tmp_path.unlink()
@@ -515,23 +515,21 @@ def reproject(
     # when out_path equals the input file (in-place reprojection)
     tmp_path = None
     tmp_out_path = None
-    # Create temp files in the output directory so the final rename is on the
-    # same filesystem (Path.replace/os.rename fails across devices, e.g. when
-    # the output lives on a different mount than the system temp dir).
-    tmp_dir = out_path.parent
+    # create_temp_file puts both temp files in the output directory, so the final
+    # rename is on the same filesystem (Path.replace/os.rename fails across
+    # devices, e.g. when the output lives on a different mount than the system
+    # temp dir).
     try:
-        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False, dir=tmp_dir) as tmp:
-            tmp_path = Path(tmp.name)
+        tmp_path = create_temp_file(out_path, suffix=".parquet")
         # Write reprojected data to temp file
         table.reproject(target_crs).write(str(tmp_path))
 
         # Read back and add bbox, write to a second temp file for atomic replacement
-        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False, dir=tmp_dir) as tmp_out:
-            tmp_out_path = Path(tmp_out.name)
+        tmp_out_path = create_temp_file(out_path, suffix=".parquet")
         gpio.read(str(tmp_path)).add_bbox().write(str(tmp_out_path))
 
         # Atomically replace the output file (same-filesystem rename)
-        tmp_out_path.replace(out_path)
+        finalize_temp_file(tmp_out_path, out_path)
         tmp_out_path = None  # Mark as moved, no cleanup needed
     finally:
         if tmp_path and tmp_path.exists():
