@@ -34,6 +34,7 @@ from ftw_dataset_tools.api.assets import (
     add_raster_bands,
     add_table_columns,
 )
+from ftw_dataset_tools.api.crop_stats import _sql_path
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded
 from ftw_dataset_tools.api.masks import MaskType, get_mgrs_square
 
@@ -324,9 +325,10 @@ def _extract_chips_info(
     """
     conn = duckdb.connect(":memory:")
     ensure_spatial_loaded(conn)
+    chips_sql = _sql_path(chips_file)
     try:
         existing_cols = {
-            row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM '{chips_file}'").fetchall()
+            row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM '{chips_sql}'").fetchall()
         }
         optional_cols = [col for col in OPTIONAL_CHIP_COLUMNS if col in existing_cols]
         optional_select = "".join(f", {_optional_column_select(col)}" for col in optional_cols)
@@ -341,7 +343,7 @@ def _extract_chips_info(
                 ST_XMax("{geom_col}") as xmax,
                 ST_YMax("{geom_col}") as ymax
                 {optional_select}
-            FROM '{chips_file}'
+            FROM '{chips_sql}'
         """).fetchall()
 
         chips = []

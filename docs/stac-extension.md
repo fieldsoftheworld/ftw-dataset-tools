@@ -53,8 +53,10 @@ The `ftw:hcat_*` properties are only present when the field polygons carry the f
 HCAT extension (an `hcat:code` column); otherwise crop composition is skipped and these
 properties are omitted from the item. The name falls back to the `hcat:name` column when
 `hcat:name_en` is absent. The percentages are shares of the chip's total field-covered
-area, the same basis as `ftw:field_coverage_pct`, so they sum below 100 when some of the
-fields in the chip carry no HCAT code.
+area, so they sum below 100 when some of the fields in the chip carry no HCAT code. This
+is a different denominator from `ftw:field_coverage_pct`, which is a share of the chip's
+own area: a chip that is 20% fields, all of them wheat, has
+`ftw:field_coverage_pct: 20` and `ftw:hcat_dominant_pct: 100`.
 
 ### Child S2 Item Properties
 

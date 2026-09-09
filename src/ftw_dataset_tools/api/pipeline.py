@@ -614,6 +614,13 @@ def stage_stac(ctx: PipelineContext) -> None:
     if ctx.config.class_filter is not None:
         _require(ctx.field_polygons_path, stage="stac", produced_by="filter")
 
+    # The chips stage drops the composition columns when the step is off, but a run
+    # starting at or after splits never reaches it, so a chips file left by an earlier
+    # run would republish that run's composition onto every item. Dropping here, at the
+    # only stage that publishes them, is a no-op when they are absent.
+    if not ctx.config.stages.chips.crop_stats and crop_stats.drop_crop_stats(ctx.chips_path):
+        ctx.log("Dropped stale crop composition columns from the chips file")
+
     ctx.log("Generating STAC catalog...")
     ctx.stac_result = stac.generate_stac_catalog(
         output_dir=ctx.output_dir,

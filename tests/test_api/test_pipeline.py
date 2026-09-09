@@ -958,3 +958,77 @@ class TestChipsStageCropStats:
         assert codes == [(1,), (None,)]  # the NULL is what makes pandas widen the column
         assert types["hcat_dominant_code"] == "BIGINT"
         assert types["split"] == "VARCHAR"
+
+
+class TestStacStageStaleCropStats:
+    """``crop_stats: false`` must mean the same thing however the run is resumed.
+
+    The chips stage drops the composition columns, but a run started at or after
+    ``splits`` never reaches it, so the stac stage guards the publication point too.
+    """
+
+    def _ctx(self, tmp_path: Path, monkeypatch, *, crop_stats_on: bool):
+        from ftw_dataset_tools.api import stac
+
+        fields = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1, 2], "hcat:code": [1, 2], "hcat:name_en": ["Wheat", "Pasture"]},
+            geometry=[box(0, 0, 0.5, 1), box(0.5, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(fields)
+        config = _config(
+            fields,
+            tmp_path / "out",
+            year=2024,
+            stages={"chips": {"crop_stats": crop_stats_on}},
+        )
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir()
+
+        # A chips file left by an earlier run that had the step turned on.
+        gpd.GeoDataFrame(
+            {"id": ["ftw-33UXP0001"], "field_coverage_pct": [50.0]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(ctx.chips_path)
+        crop_stats.add_crop_stats(ctx.chips_path, fields)
+        assert "hcat_dominant_code" in gpd.read_parquet(ctx.chips_path).columns
+
+        ctx.output_fields_path.write_bytes(b"")
+        ctx.boundary_lines_path.write_bytes(b"")
+
+        def fake_generate(**_kwargs):
+            return stac.STACGenerationResult(
+                collection_path=tmp_path / "collection.json",
+                items_parquet_path=tmp_path / "items.parquet",
+                subcatalog_paths={},
+                total_items=0,
+                temporal_extent=(
+                    datetime(2024, 1, 1, tzinfo=UTC),
+                    datetime(2024, 12, 31, tzinfo=UTC),
+                ),
+            )
+
+        monkeypatch.setattr(stac, "generate_stac_catalog", fake_generate)
+        return ctx
+
+    def test_disabled_drops_stale_columns_before_publishing(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        messages: list[str] = []
+        ctx = self._ctx(tmp_path, monkeypatch, crop_stats_on=False)
+        ctx.on_progress = messages.append
+
+        pipeline.stage_stac(ctx)
+
+        chips = gpd.read_parquet(ctx.chips_path)
+        assert not [col for col in chips.columns if col.startswith("hcat_")]
+        assert len(chips) == 1
+        assert any("stale crop composition" in m for m in messages)
+
+    def test_enabled_leaves_the_columns_alone(self, tmp_path: Path, monkeypatch) -> None:
+        ctx = self._ctx(tmp_path, monkeypatch, crop_stats_on=True)
+
+        pipeline.stage_stac(ctx)
+
+        assert "hcat_dominant_code" in gpd.read_parquet(ctx.chips_path).columns

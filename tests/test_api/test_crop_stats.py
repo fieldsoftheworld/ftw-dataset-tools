@@ -427,3 +427,137 @@ class TestCropStatsSummary:
         result = CropStatsResult(10, 7, 3, skipped=False)
 
         assert crop_stats_summary(result) == "Crop composition: 7/10 chips, 3 HCAT codes"
+
+
+class TestChunking:
+    """The statistics must not depend on how the intersection work is chunked."""
+
+    def _many_chips(self, tmp_path: Path) -> tuple[Path, Path]:
+        # Seven 1x1 chips in a row, each holding two fields of differing area so the
+        # dominant code, its share and the top list are all non-trivial per chip.
+        chip_ids = [f"ftw-33UXP000{i}" for i in range(7)]
+        chips = _write(
+            tmp_path / "chips.parquet",
+            {"id": chip_ids},
+            [box(i, 0, i + 1, 1) for i in range(7)],
+        )
+        codes: list[int] = []
+        geoms = []
+        for i in range(7):
+            codes += [i % 3, (i + 1) % 3]
+            geoms += [box(i, 0, i + 0.6, 1), box(i + 0.6, 0, i + 1, 1)]
+        fields = _write(tmp_path / "fields.parquet", {"hcat:code": codes}, geoms)
+        return chips, fields
+
+    @pytest.mark.parametrize("batch_size", [1, 2, 3, 7, 1000])
+    def test_batch_size_does_not_change_the_statistics(
+        self, tmp_path: Path, batch_size: int
+    ) -> None:
+        from ftw_dataset_tools.api.crop_stats import add_crop_stats
+
+        whole = tmp_path / "whole"
+        chunked = tmp_path / "chunked"
+        whole.mkdir()
+        chunked.mkdir()
+        whole_chips, whole_fields = self._many_chips(whole)
+        chunked_chips, chunked_fields = self._many_chips(chunked)
+
+        reference = add_crop_stats(whole_chips, whole_fields, chip_batch_size=10_000)
+        result = add_crop_stats(chunked_chips, chunked_fields, chip_batch_size=batch_size)
+
+        assert result == reference
+        assert result.chips_total == 7
+        assert result.chips_with_crops == 7
+        assert _read(chunked_chips) == _read(whole_chips)
+
+    def test_batch_size_below_one_is_clamped(self, tmp_path: Path) -> None:
+        """A nonsense batch size must not loop forever or lose chips."""
+        from ftw_dataset_tools.api.crop_stats import add_crop_stats
+
+        chips, fields = self._many_chips(tmp_path)
+
+        result = add_crop_stats(chips, fields, chip_batch_size=0)
+
+        assert result.chips_total == 7
+        assert result.chips_with_crops == 7
+
+    def test_empty_chips_file_is_handled(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.crop_stats import add_crop_stats
+
+        chips = _write(tmp_path / "chips.parquet", {"id": []}, [])
+        fields = _write(
+            tmp_path / "fields.parquet",
+            {"hcat:code": [1]},
+            [box(0, 0, 1, 1)],
+        )
+
+        result = add_crop_stats(chips, fields, chip_batch_size=2)
+
+        assert result.chips_total == 0
+        assert result.chips_with_crops == 0
+        assert _read(chips) == []
+
+
+class TestAtomicWrite:
+    """The chips file is its own input and the only copy, so it is never truncated."""
+
+    def _fail_on_write(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from ftw_dataset_tools.api import crop_stats
+
+        def boom(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("interrupted mid-write")
+
+        monkeypatch.setattr(crop_stats, "write_geoparquet", boom)
+
+    def test_add_leaves_the_original_intact(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api.crop_stats import add_crop_stats
+
+        chips = _chips(tmp_path)
+        before = chips.read_bytes()
+        self._fail_on_write(monkeypatch)
+
+        with pytest.raises(RuntimeError):
+            add_crop_stats(chips, _fields(tmp_path))
+
+        assert chips.read_bytes() == before
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["chips.parquet", "fields.parquet"]
+
+    def test_drop_leaves_the_original_intact(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api.crop_stats import add_crop_stats, drop_crop_stats
+
+        chips = _chips(tmp_path)
+        add_crop_stats(chips, _fields(tmp_path))
+        before = chips.read_bytes()
+        self._fail_on_write(monkeypatch)
+
+        with pytest.raises(RuntimeError):
+            drop_crop_stats(chips)
+
+        assert chips.read_bytes() == before
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["chips.parquet", "fields.parquet"]
+
+    def test_temp_file_is_a_sibling_of_the_target(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The rename must stay on one filesystem, so the temp file lives alongside."""
+        import tempfile as tempfile_module
+
+        from ftw_dataset_tools.api.crop_stats import add_crop_stats
+
+        chips = _chips(tmp_path)
+        dirs: list[object] = []
+        real = tempfile_module.NamedTemporaryFile
+
+        def spy(*args: object, **kwargs: object):
+            dirs.append(kwargs.get("dir"))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(tempfile_module, "NamedTemporaryFile", spy)
+
+        add_crop_stats(chips, _fields(tmp_path))
+
+        assert chips.parent in dirs

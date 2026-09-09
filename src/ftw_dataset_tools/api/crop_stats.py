@@ -9,6 +9,7 @@ fields.
 
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,6 +30,11 @@ CODE_COLUMN = "hcat:code"
 NAME_COLUMNS = ("hcat:name_en", "hcat:name")
 OUTPUT_COLUMNS = ("hcat_dominant_code", "hcat_dominant_name_en", "hcat_dominant_pct", "hcat_top")
 
+# Chips per intersection window. The per-field intersections for one window are
+# held together, so this caps the geometry resident at any moment; the ranked rows
+# they collapse into carry no geometry, so accumulating them costs almost nothing.
+CHIP_BATCH_SIZE = 2000
+
 NO_CODE_COLUMN_REASON = "fields carry no hcat:code column"
 NO_NUMERIC_CODES_REASON = "hcat:code has no numeric values"
 
@@ -47,6 +53,28 @@ class CropStatsResult:
 def _sql_path(path: Path | str) -> str:
     """Escape a path for interpolation into a single-quoted SQL string literal."""
     return str(path).replace("'", "''")
+
+
+def _write_chips(chips_path: Path, con: duckdb.DuckDBPyConnection, query: str) -> None:
+    """Write ``query`` over the chips GeoParquet through a temp file and a rename.
+
+    The chips file is both the input and the output of this module, and it is the
+    only copy: a partial write would leave a truncated file that a later resume from
+    the splits stage cannot read. The temp file is a sibling of the target so the
+    rename stays on one filesystem.
+    """
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            suffix=".parquet", delete=False, dir=chips_path.parent
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+        write_geoparquet(tmp_path, conn=con, query=query)
+        tmp_path.replace(chips_path)
+        tmp_path = None
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink()
 
 
 def _columns(path: Path) -> list[str]:
@@ -92,7 +120,7 @@ def drop_crop_stats(chips_file: Path | str) -> bool:
     ensure_spatial_loaded(con)
     try:
         con.execute(f"CREATE TABLE chips_table AS {_select_without_crop_stats(chips_path)}")
-        write_geoparquet(chips_path, conn=con, query="SELECT * FROM chips_table")
+        _write_chips(chips_path, con, "SELECT * FROM chips_table")
     finally:
         con.close()
     return True
@@ -130,8 +158,10 @@ def build_ranked_query(
 ) -> str:
     """SQL ranking every (chip, HCAT code) pair by its share of the chip's field area.
 
-    Areas come from ``ST_Union_Agg`` of the per-field intersections, so overlapping
-    or duplicated field rows are not double counted, matching ``field_coverage_pct``.
+    ``chips_table`` is any table expression, so callers can pass a rowid window over
+    the chips rather than the whole table. Areas come from ``ST_Union_Agg`` of the
+    per-field intersections, so overlapping or duplicated field rows are not double
+    counted, matching ``field_coverage_pct``.
     ``pct`` is a share of *all* field area intersecting the chip, coded or not, so it
     sums below 100 when some fields carry no HCAT code.
     """
@@ -225,6 +255,53 @@ def _code_value_counts(
     ).fetchone()
 
 
+def _fill_ranked(
+    con: duckdb.DuckDBPyConnection,
+    chips_path: Path,
+    fields_path: Path,
+    *,
+    chips_id_col: str,
+    code_col: str,
+    name_col: str | None,
+    batch_size: int,
+) -> None:
+    """Build the ``ranked`` table one window of chip rowids at a time.
+
+    Ranking every chip in one statement holds an intersection geometry for every
+    (chip, field) pair in the country at once, which is what runs a large country out
+    of memory. Windowing by ``chips_table.rowid`` caps that at ``batch_size`` chips'
+    worth of pairs; the ranked rows are scalars, so the accumulated table is cheap.
+    Chunking changes nothing about the result: every chip's codes are ranked against
+    that chip's own field area, so no window depends on any other.
+    """
+    chips_geom = detect_geometry_column(chips_path) or "geometry"
+    fields_geom = detect_geometry_column(fields_path) or "geometry"
+    chips_bbox = detect_bbox_column(con, chips_path, chips_geom)
+    fields_bbox = detect_bbox_column(con, fields_path, fields_geom)
+
+    total = con.execute("SELECT count(*) FROM chips_table").fetchone()[0]
+    # An empty chips file still needs one pass, to create ``ranked`` with its schema.
+    for offset in range(0, max(total, 1), batch_size):
+        window = (
+            f"(SELECT * FROM chips_table WHERE rowid >= {offset} AND rowid < {offset + batch_size})"
+        )
+        query = build_ranked_query(
+            window,
+            "fields_table",
+            chips_geom_col=chips_geom,
+            fields_geom_col=fields_geom,
+            chips_id_col=chips_id_col,
+            code_col=code_col,
+            name_col=name_col,
+            chips_bbox_col=chips_bbox,
+            fields_bbox_col=fields_bbox,
+        )
+        if offset == 0:
+            con.execute(f"CREATE TABLE ranked AS {query}")
+        else:
+            con.execute(f"INSERT INTO ranked {query}")
+
+
 def _compose(
     con: duckdb.DuckDBPyConnection,
     chips_path: Path,
@@ -234,22 +311,18 @@ def _compose(
     code_col: str,
     name_col: str | None,
     top_n: int,
+    batch_size: int,
 ) -> tuple[int, int, int]:
     """Build the ``composed`` table; returns (chips, chips with crops, distinct codes)."""
-    chips_geom = detect_geometry_column(chips_path) or "geometry"
-    fields_geom = detect_geometry_column(fields_path) or "geometry"
-    ranked_query = build_ranked_query(
-        "chips_table",
-        "fields_table",
-        chips_geom_col=chips_geom,
-        fields_geom_col=fields_geom,
+    _fill_ranked(
+        con,
+        chips_path,
+        fields_path,
         chips_id_col=chips_id_col,
         code_col=code_col,
         name_col=name_col,
-        chips_bbox_col=detect_bbox_column(con, chips_path, chips_geom),
-        fields_bbox_col=detect_bbox_column(con, fields_path, fields_geom),
+        batch_size=batch_size,
     )
-    con.execute(f"CREATE TABLE ranked AS {ranked_query}")
     composition_query = build_composition_query(
         "chips_table", "ranked", chips_id_col=chips_id_col, top_n=top_n
     )
@@ -268,9 +341,15 @@ def add_crop_stats(
     *,
     chips_id_col: str = "id",
     top_n: int = 5,
+    chip_batch_size: int = CHIP_BATCH_SIZE,
     on_progress: Callable[[str], None] | None = None,
 ) -> CropStatsResult:
-    """Append the crop composition columns to the chips GeoParquet, in place."""
+    """Append the crop composition columns to the chips GeoParquet, in place.
+
+    ``chip_batch_size`` is how many chips are intersected against the fields at a
+    time; it bounds peak memory and does not affect the statistics.
+    """
+    batch_size = max(1, chip_batch_size)
     chips_path = Path(chips_file).resolve()
     fields_path = Path(fields_file).resolve()
 
@@ -307,8 +386,9 @@ def add_crop_stats(
             code_col=code_col,
             name_col=name_col,
             top_n=top_n,
+            batch_size=batch_size,
         )
-        write_geoparquet(chips_path, conn=con, query="SELECT * FROM composed")
+        _write_chips(chips_path, con, "SELECT * FROM composed")
     finally:
         con.close()
 

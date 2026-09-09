@@ -851,3 +851,26 @@ class TestChipProperties:
         props = json.loads(item_path.read_text())["properties"]
         assert "ftw:hcat_dominant_code" not in props
         assert "ftw:split" not in props  # the default fixture has no split column
+
+
+class TestChipsPathEscaping:
+    def test_path_containing_a_single_quote(self, tmp_path: Path) -> None:
+        """A quote in the output path must not break out of the SQL string literal."""
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.stac import _extract_chips_info
+
+        odd_dir = tmp_path / "o'brien"
+        odd_dir.mkdir()
+        chips_path = odd_dir / "ds_chips.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["ftw-33UXP0410"], "field_coverage_pct": [66.67], "split": ["test"]},
+            geometry=[box(0, 0, 2, 2)],
+            crs="EPSG:4326",
+        ).to_parquet(chips_path)
+
+        chips = _extract_chips_info(chips_path, year=2024)
+
+        assert [chip.grid_id for chip in chips] == ["ftw-33UXP0410"]
+        assert chips[0].properties["ftw:split"] == "test"
