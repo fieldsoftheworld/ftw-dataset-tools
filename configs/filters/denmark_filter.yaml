@@ -1,0 +1,424 @@
+# Class filter used for Denmark (DK) field boundaries.
+# Excluded classes are those that are not open arable fields: permanent grassland/pasture/meadow and
+# pure grass leys, orchards, fruit & nut trees, berries, vineyards, forest / afforestation / coppice,
+# Christmas trees & woody plants, nurseries, ornamentals & greenhouse / protected cultivation, fallow /
+# set-aside / EFA margins & environmental grass, nature areas, and administrative non-crop codes.
+# Notable inclusions: cereals (incl. wholecrop & green grain), legumes, oilseeds, potatoes, beet, field
+# vegetables, herbs/medicinal, flax, hemp, hops, strawberries, grass grown FOR SEED, and clover/lucerne
+# forage leys (rotation). Pure grass leys and permanent grass are background.
+# Covers dk years 2010-2026 (2008-2009 have no crop column). Codes are Danish afgroedekoder from the
+# harmonized ftw/harmonized-field-data dk datasets (crop:code); HCAT English names shown where mapped.
+
+column: ["crop:code", "crop_code"]
+
+include:
+  - 1  # Spring barley
+  - 2  # Spring wheat
+  - 3  # Spring oats
+  - 4  # Mixture of spring-sown species
+  - 5  # Maize for maturity
+  - 6  # Spring wheat bread wheat
+  - 7  # Cereals + legumes below 50% legumes
+  - 8  # Spring spelt
+  - 9  # Winter spelt
+  - 10  # Winter barley
+  - 11  # Winter wheat
+  - 13  # Winter wheat bread wheat
+  - 14  # Winter rye
+  - 15  # Winter hybrid rye
+  - 16  # Winter triticale
+  - 17  # Mixture of autumn sown species
+  - 18  # Korn og bælgsæd (over 50 % bælgsæd)
+  - 19  # Majs til modenhed med græsudlæg
+  - 21  # Spring rape
+  - 22  # Winter rape
+  - 23  # Rybs
+  - 24  # Sunflower
+  - 25  # Soybeans
+  - 26  # Linser
+  - 27  # Kikærter
+  - 30  # Peas
+  - 31  # Broad bean
+  - 32  # Sweet lupine
+  - 35  # Legumes perennial mixture
+  - 36  # Legumes other types for maturity mixing
+  - 40  # Oil flax
+  - 41  # Spindhør
+  - 42  # Hemp
+  - 50  # Anden bredbladet afg
+  - 51  # Mix broadleaf crop seed / core
+  - 52  # Quinoa
+  - 53  # Buckwheat
+  - 54  # Legume mixture
+  - 55  # Spring rye
+  - 56  # Spring triticale
+  - 57  # Winter oats
+  - 58  # Sorghum
+  - 70  # Vårbyg, efterårssået
+  - 71  # Vårhvede, efterårssået
+  - 72  # Vårhavre, efterårssået
+  - 101  # Ryegrass seeds regular
+  - 102  # Ryegrass seeds regular 1st year autumn undersown
+  - 103  # Ryegrass seeds italian
+  - 104  # Ryegrass seeds Italian 1 year autumn undersown
+  - 105  # Timothy seeds
+  - 106  # Cocksfoot seeds
+  - 107  # Meadow fescue seeds
+  - 108  # Red fescue seeds
+  - 109  # Rice fescue seeds
+  - 110  # Hard fescue seeds
+  - 111  # Tall fescue seeds
+  - 112  # Kentucky bluegrass seed (ley type)
+  - 113  # Kentucky bluegrass seed (turfgrass type)
+  - 114  # Rough bluegrass
+  - 115  # Browntop and creeping bent
+  - 116  # Ryegrass hybrid
+  - 117  # Ryegrass autumn undersown hybrid
+  - 118  # X Festulolium seeds autumn undersown
+  - 120  # Clover seeds
+  - 121  # Ley legumes
+  - 122  # Caraway seeds
+  - 123  # Poppy seeds
+  - 124  # Spinach seeds
+  - 125  # Beetroot seeds
+  - 126  # Mix of seeds for seed corn
+  - 127  # Lucernefrø
+  - 149  # Seed Potatoes (certified)
+  - 150  # Seed potatoes (own propagation)
+  - 151  # Potatoes starchy
+  - 152  # Potatoes consumption
+  - 153  # Potatoes others
+  - 154  # Kartofler, spise- (proces, skrællet kogte)
+  - 155  # Kartofler, pulver/granules-
+  - 156  # Kartofler, friteret/chips/pommes frites
+  - 157  # Kartofler, spise- tidligt høstede med efterafgrøder
+  - 160  # Sugar beet for factory
+  - 161  # Chicory roots
+  - 162  # Mixture other industrial crops
+  - 171  # Lucerne mowing
+  - 172  # Lucerne grass over 25% grass for mowing incl. own feed
+  - 173  # Clover for mowing
+  - 174  # Clover grass for factory
+  - 180  # White mustard
+  - 181  # Anden oliefrøart
+  - 182  # Mixture of oil species
+  - 210  # Spring barley wholecrop
+  - 211  # Spring wheat wholecrop
+  - 212  # Spring oats wholecrop
+  - 213  # Mixed cereal spring sown wholecrop
+  - 214  # Cereals and legumes whole grains less than 50% legumes
+  - 215  # Peas wholecrop
+  - 216  # Silo maize
+  - 217  # Korn og bælgsæd, helsæd (over 50 % bælgsæd)
+  - 218  # Majshelsæd med græsudlæg
+  - 220  # Winter barley wholecrop
+  - 221  # Winter wheat wholecrop
+  - 222  # Winter rye wholecrop
+  - 223  # Winter triticale wholecrop
+  - 224  # Blandkorn, efterårss
+  - 230  # Mixture of spring cereals green grains
+  - 234  # Cereals and pulses green grains less than 50% pulses
+  - 235  # Mixture of winter grains green grains
+  - 236  # Græs med kløver/lucerne, under 50 % bælgpl. (omdrift) efterårsudlagt i vinterkorn til grønkorn
+  - 237  # Græs med kløver/lucerne, over 50 % bælgpl. (omdrift) efterårsudlagt i vinterkorn til grønkorn
+  - 260  # Grass with clover / alfalfa less than 50% legumes rotation
+  - 261  # Clover grass over 50% clover (rotation)
+  - 262  # Lucerne grass over 50% alfalfa (rotation)
+  - 263  # Grass without clover grass (rotation)
+  - 264  # Grass and clover grass without norm below 50% clover (rotation)
+  - 265  # Græs og kl. græs slæt før vårsåede afg.
+  - 266  # Grass below 50% clover / alfalfa extremely low yield (rotation)
+  - 267  # Grass below 50% clover / alfalfa very low yield (rotation)
+  - 268  # Grass below 50% clover / alfalfa low yield (rotation)
+  - 273  # Lucerne to factory
+  - 277  # Kløver til fabrik
+  - 280  # Sugar beet for fodder
+  - 281  # Swedes
+  - 282  # Marrow stem kale
+  - 283  # Fodder carrots
+  - 284  # Grass with vetches and other legumes less than 50% legumes
+  - 285  # Grass and clover grass without norm over 50% clover (rotation)
+  - 401  # Asparagus
+  - 402  # Celery leaves
+  - 403  # Cauliflower
+  - 404  # Broccoli
+  - 405  # Courgette squash
+  - 406  # Kale
+  - 407  # Carrot
+  - 408  # White cabbage
+  - 409  # Chinese cabbage
+  - 410  # Celeriac
+  - 411  # Onion
+  - 412  # Parsnip
+  - 413  # Parsley root
+  - 415  # Leek
+  - 416  # Brussel sprouts
+  - 417  # Beetroot
+  - 418  # Red cabbage
+  - 420  # Salad (outdoor)
+  - 421  # Savoy cabbage oxheart cabbag
+  - 422  # Spinach
+  - 423  # Sweet corn
+  - 424  # Peas consumption
+  - 425  # Sukkermajs med græsudlæg
+  - 426  # Bønner, andre
+  - 427  # Babyleaves
+  - 428  # Spidskål
+  - 429  # Jerusalem artichokes comsumption
+  - 430  # Parsley
+  - 431  # Chives
+  - 432  # Herbs (excluding parsley and chives)
+  - 433  # Krydderurter, andre
+  - 434  # Vegetables other (outdoor)
+  - 440  # Solhat
+  - 448  # Medicinal plants annual and biennial
+  - 449  # Medicinal plants perennials
+  - 450  # Vegetables mixtures
+  - 511  # Græskar
+  - 512  # Rhubarb
+  - 513  # Strawberry
+  - 551  # Pumpkins
+  - 552  # Garden pumpkin
+  - 553  # Giant pumpkin
+  - 570  # Hops
+  - 579  # African marigold
+  - 598  # Sorrel
+  - 651  # Dill seeds
+  - 652  # Chinese cabbage seeds
+  - 653  # Cress seeds
+  - 654  # Rocket Arugula seeds
+  - 655  # Radish seeds (including oil radish seeds)
+  - 656  # Beetroot seeds beetroot seeds
+  - 657  # Curly Kale seeds
+  - 658  # Gulerodsfrø
+  - 659  # Cabbage seeds (white and red cabbage)
+  - 660  # Parsley seeds
+  - 661  # Chervil seeds
+  - 662  # Turnip seeds
+  - 663  # Parsnip seeds
+  - 664  # Scorzonera/Scorzonera seeds
+  - 665  # Havrerodfrø
+  - 666  # Chives seeds
+  - 667  # Thyme seeds
+  - 669  # Andet havefrø
+  - 701  # Green grain of spring barley
+  - 702  # Green grain of spring wheat
+  - 703  # Green grain of spring oats
+  - 704  # Green grain of spring rye
+  - 705  # Grønkorn af vårtriticale
+  - 706  # Green grain of winter barley
+  - 707  # Green grain of winter wheat
+  - 708  # Green grains of winter oats
+  - 709  # Green grains of winter rye
+  - 710  # Green grains of hybrid rye
+  - 711  # Green grains of winter triticale
+  - 900  # Other crops
+  - 963  # Kløvergræs, udlæg/eftersl.efter grønkorn
+  - 964  # Kløvergræs, udlæg/efterslæt efter helsæd
+  - 965  # Kløvergræs, udlæg/efterslæt efter korn
+
+exclude:
+  - 0  # (blank)
+  - 44  # (blank)
+  - 95  # (blank)
+  - 130  # (blank)
+  - 170  # Grass for factory (rotation)
+  - 200  # Fragået mark
+  - 201  # Sammenlagt mark
+  - 202  # fragået mark, prod.skifte
+  - 225  # (blank)
+  - 247  # Environmental grass AECM scheme 2 rotation
+  - 248  # Permanent grass by water borehole
+  - 249  # Utilized grass next to water borehole
+  - 250  # Permanent grass very low yield
+  - 251  # Permanent grass low yield
+  - 252  # Permanent grass standard yield
+  - 253  # Environmental grass MVJ commitment (80 N) rotation
+  - 254  # Environmental grass MVJ commitment (0 N) permanent
+  - 255  # Permanent grass less than 50% clover / alfalfa
+  - 256  # Permanent clover grass over 50% clover / alfalfa0
+  - 257  # Permanent grass without clover
+  - 258  # Perm. græs, ø-støtte
+  - 259  # Permanent grass factory over 6 tons
+  - 269  # Grass rolled sod
+  - 270  # Grass for freerange pigs rotation
+  - 271  # Recreative purpose
+  - 272  # Permanent grass for factory
+  - 274  # Permanent alfalfa grass over 25% grass for factory
+  - 275  # Permanent rullegræs
+  - 276  # Permanent grass and clover grass without norm below 50% clover
+  - 278  # Permanent alfalfa and alfalfa grass over 50% alfalfa
+  - 279  # Permanent clover grass for factory
+  - 286  # Permanent grass and clover grass without norm over 50% clover
+  - 287  # Grass for outdoor pigs permanent
+  - 300  # (blank)
+  - 305  # Permanent grass without payment of ecological subsidies
+  - 306  # Grass in rotation without payment of organic subsidies
+  - 308  # EFA-Fallow with summer mowing
+  - 309  # Uncultivated area next to water boreholes
+  - 310  # Fallow with summer mowing
+  - 311  # Forest establisment on formerly farmland 1
+  - 312  # 20-year set aside
+  - 313  # 20-year set-aside of arable land with voluntary afforestation
+  - 314  # 20-year set aside with scheme of forest establiment from NST
+  - 315  # Miljøgræs brugt som udtagning
+  - 316  # 20-årig Udtagning med fastholdelse, ej landbrugsareal
+  - 317  # Wetlands with set aside
+  - 318  # AECM no set aside not farmland area
+  - 319  # EFA Wetlands or shallow soils with set aside
+  - 320  # Braklagte randzoner
+  - 321  # Environmental measures not agricultural land
+  - 322  # Mini-wetlands with project scheme
+  - 323  # EFA-Uncultivated area next to water boreholes
+  - 324  # Fallow with flowers
+  - 325  # EFA-fallow with flowers
+  - 326  # Environmental sensitive permanent grassland converted into non-agricultural area
+  - 327  # EFA-field margins mowing/grazing
+  - 328  # EFA-field margins with flower mix
+  - 329  # EFA-field margins with environmental scheme
+  - 334  # EFA brim spring mowing
+  - 335  # EFA edge permanent grass spring mowing
+  - 336  # EFA edge permanent grass summer mowing
+  - 337  # MFO-bræmme, permanent græs, miljøtilsagn
+  - 338  # Fallow spring mowing
+  - 339  # EFA fallow spring mowing
+  - 340  # Randzoneordning uden udtagning
+  - 341  # Randzoneordning  med udtagning
+  - 342  # Pollen fallow
+  - 343  # EFA-fallow for melliferous plants
+  - 344  # Brak langs vandløb og søer, forårsslåning (alternativ til efterafgrøder)
+  - 345  # Brak langs vandløb og søer, slåning (alternativ til efterafgrøder)
+  - 346  # Brak, sommerslåning (til målrettet kvælstofregulering)
+  - 347  # Brak, forårsslåning (til målrettet kvælstofregulering)
+  - 348  # Brak langs vandløb og søer, forårsslåning (til målrettet kvælstofregulering)
+  - 349  # Brak langs vandløb og søer, sommerslåning (til målrettet kvælstofregulering)
+  - 350  # Miljøgræs med N-kvote
+  - 360  # Vildtafgrøder
+  - 361  # Farmland not warranted for subsidies
+  - 363  # Paludikultur, permanent græs
+  - 400  # Gherkin
+  - 452  # (blank)
+  - 482  # Skovlandbrug med permanent græs
+  - 483  # Skovlandbrug med græs i omdrift
+  - 484  # Skovlandbrug med omdriftsafgrøder
+  - 485  # Skovlandbrug med permanente afgrøder
+  - 486  # Henyard with bare soil
+  - 487  # Agroforestry
+  - 488  # Henyard permanent grass
+  - 489  # Sea buckthorn
+  - 490  # Hassel, træ (Corylus avellana)
+  - 491  # Storfrugtet tranebær
+  - 493  # Black chokeberry
+  - 494  # Japan quince
+  - 495  # Morbær
+  - 496  # Medicinpl., vedplanter
+  - 497  # Nursery cultivation arboreal plants for sale
+  - 498  # Containerplads 4, vedplanter
+  - 499  # Closed system
+  - 500  # 0
+  - 501  # Perennial
+  - 502  # Flower bulbs
+  - 503  # Annual and biennial plants
+  - 504  # Blackcurrant multiplication by cutting
+  - 505  # Ribs, stiklingeopformering
+  - 506  # Gooseberries multiplication by cutting
+  - 507  # Raspberries multiplication by cutting
+  - 508  # Andre af slægten Vaccinium
+  - 509  # Quince
+  - 510  # Melon
+  - 514  # Blackcurrant
+  - 515  # Red currant
+  - 516  # Gooseberry
+  - 517  # Blackberry
+  - 518  # Raspberry
+  - 519  # Blueberry
+  - 520  # Sour cherry without undergrowth of grass
+  - 521  # Sour cherry with undergrowth of grass
+  - 522  # Plum without undergrowth of grass
+  - 523  # Plum with undergrowth of grass
+  - 524  # Sweet cherry without undergrowth of grass
+  - 525  # Sweet cherry with undergrowth of grass
+  - 526  # Elder
+  - 527  # Hazel
+  - 528  # Apples
+  - 529  # Pear
+  - 530  # Grape
+  - 531  # Other tree fruit
+  - 532  # Other shrub fruit
+  - 533  # Rowanberries
+  - 534  # Rose hip
+  - 535  # Bærmispel
+  - 536  # Food grape
+  - 537  # Walnut common
+  - 538  # Chestnut sweet
+  - 539  # Mixed fruit
+  - 540  # Tomatoes
+  - 541  # Cucumbers
+  - 542  # Lettuce (greenhouse)
+  - 543  # Vegetables other (greenhouse)
+  - 544  # Cut flowers and foliage
+  - 545  # Houseplants
+  - 547  # Nursery cultivation perennials
+  - 548  # Seedlings annuals
+  - 549  # Lukket system 1 (en-
+  - 550  # Lukket system 2 (sta
+  - 559  # (blank)
+  - 560  # Containerplads 1 (fr
+  - 561  # Containerplads 2 (en
+  - 562  # Containerplads 3 (st
+  - 563  # Mushrooms champignon
+  - 564  # Container area
+  - 565  # Skovrejsning, direktivimplementerende uden tilsagn
+  - 566  # Klimaskovrejsning, national ordning
+  - 567  # Klima-lavbundsprojekt, national ordning
+  - 575  # Skovrejsning (privat) - kulstofbinding og grundvandsbeskyttelse
+  - 576  # Afforestation - the improvement of aquatic environment and groundwater protection
+  - 577  # Forest for biodiversity purposes
+  - 578  # Afforestation (private) - improvement of aquatic environment and groundwater protection
+  - 580  # Forestry common
+  - 581  # Afforestation with treehight below 3 m
+  - 582  # Ornamental green branches organic farming
+  - 583  # Christmas trees and ornamental greenery on agricultural land
+  - 584  # Juletræer i fredsskov
+  - 585  # Forest establisment in project areas not included by a scheme
+  - 586  # Public forest establisment
+  - 587  # Forest establisment on former farmland 3
+  - 588  # Statslig skovrejsnin
+  - 589  # Sustainable forestry
+  - 590  # Sustainable forestry in Natura 2000 area
+  - 591  # Coppice forest
+  - 592  # Willow
+  - 593  # Poplar
+  - 594  # Alder
+  - 596  # Elephant grass
+  - 597  # Reed canary grass
+  - 599  # Poppel (100-400 andre træer pr. ha)
+  - 602  # EFA - Willow
+  - 603  # EFA - Poplar
+  - 604  # MFO - El
+  - 605  # EFA - Coppice forest
+  - 606  # EFA - Poplar (100-400 other trees per hectare)
+  - 650  # Chrysanthemum Garland seeds
+  - 668  # Flower seeds
+  - 777  # Ex-non-food brak
+  - 800  # Andre arealer i skovblokke
+  - 801  # Skov i IKKE skovblok
+  - 901  # Naturarealer efter driftsloven
+  - 902  # Naturlignende arealer
+  - 903  # Light and open areas in wood
+  - 904  # ]bne arealer i skov
+  - 905  # Anden anvendelse på
+  - 906  # Afmeldte arealer
+  - 907  # Nature areas organic farming
+  - 908  # Naturarealer, ansøgn
+  - 910  # Ikke anmeldt mark
+  - 920  # Økologisk sommerbrak
+  - 921  # Internal code: Bare soil
+  - 960  # Græs, udlæg/eftersl. efter grønkorn o.l
+  - 961  # Græs, udlæg/eftersl. eft.helsæd/tidl.frø
+  - 962  # Græs, udlæg/eftersl. eft.korn/sildig frø
+  - 968  # Pligtige efterafgrøder
+  - 995  # Slettet mark
+  - 997  # Ikke kontrolleret afgrøde (kontrollørkode)
+  - 998  # Ukendt afgrøde
+  - 999  # Ugyldig afgrødekode
