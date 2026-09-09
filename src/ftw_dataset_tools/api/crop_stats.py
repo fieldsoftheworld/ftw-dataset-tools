@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 import duckdb
 
-from ftw_dataset_tools.api.field_stats import detect_bbox_column
+from ftw_dataset_tools.api.field_stats import CHIP_ID_COLUMN, detect_bbox_column
 from ftw_dataset_tools.api.geo import (
     detect_geometry_column,
     ensure_spatial_loaded,
@@ -62,7 +62,18 @@ def _write_chips(chips_path: Path, con: duckdb.DuckDBPyConnection, query: str) -
     only copy: a partial write would leave a truncated file that a later resume from
     the splits stage cannot read. The temp file is a sibling of the target so the
     rename stays on one filesystem.
+
+    The write is ordered by chip id. ``assign_splits`` maps a shuffled label array
+    onto the rows by position, so any writer that leaves row order to the engine
+    breaks split reproducibility at a fixed seed. ``add_field_stats`` orders its own
+    write, but this module rewrites the same file afterwards through a LEFT JOIN,
+    which does not preserve the probe side's order - so the ordering has to be
+    re-applied here rather than inherited. Ordering inside this helper rather than at
+    the call sites keeps a future writer from silently dropping it.
     """
+    columns = [row[0] for row in con.execute(f"DESCRIBE {query}").fetchall()]
+    if CHIP_ID_COLUMN in columns:
+        query = f'SELECT * FROM ({query}) ORDER BY "{CHIP_ID_COLUMN}"'
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(

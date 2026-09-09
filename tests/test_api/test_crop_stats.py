@@ -561,3 +561,68 @@ class TestAtomicWrite:
         add_crop_stats(chips, _fields(tmp_path))
 
         assert chips.parent in dirs
+
+
+class TestWriteOrdering:
+    """The chips write is ordered by chip id, so the splits stage is reproducible.
+
+    ``assign_splits`` maps a shuffled label array onto chip rows *by position*, so
+    the row order of the written chips file decides which chip lands in train, val
+    or test at a fixed seed. ``add_field_stats`` orders its own write, but this
+    module rewrites the same file afterwards through a LEFT JOIN, which does not
+    preserve the probe side's order - so ordering has to be re-applied here.
+    """
+
+    def _shuffled_chips(self, tmp_path: Path) -> Path:
+        """Chips written in descending id order, so an unordered write stays descending."""
+        gdf = gpd.GeoDataFrame(
+            {
+                "id": [f"ftw-33UXP{n:04d}" for n in (4, 3, 2, 1)],
+                "field_coverage_pct": [75.0, 75.0, 75.0, 0.0],
+            },
+            geometry=[box(0, 0, 2, 2), box(0, 0, 2, 2), box(0, 0, 2, 2), box(5, 5, 6, 6)],
+            crs="EPSG:4326",
+        )
+        path = tmp_path / "chips.parquet"
+        gdf.to_parquet(path)
+        return path
+
+    def test_add_writes_rows_in_chip_id_order(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.crop_stats import add_crop_stats
+
+        chips = self._shuffled_chips(tmp_path)
+        add_crop_stats(chips, _fields(tmp_path))
+
+        ids = [row[0] for row in duckdb.sql(f"SELECT id FROM '{chips}'").fetchall()]
+        assert ids == sorted(ids), "crop stats rewrote the chips file out of id order"
+
+    def test_drop_writes_rows_in_chip_id_order(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.crop_stats import add_crop_stats, drop_crop_stats
+
+        chips = self._shuffled_chips(tmp_path)
+        add_crop_stats(chips, _fields(tmp_path))
+        assert drop_crop_stats(chips) is True
+
+        ids = [row[0] for row in duckdb.sql(f"SELECT id FROM '{chips}'").fetchall()]
+        assert ids == sorted(ids)
+
+    def test_the_written_query_orders_by_id(self, tmp_path: Path) -> None:
+        """Pins the ORDER BY itself, since small fixtures can come out sorted by luck."""
+        from ftw_dataset_tools.api import crop_stats
+
+        seen: list[str] = []
+        real = crop_stats.write_geoparquet
+
+        def capture(path: Path, **kwargs: object) -> None:
+            seen.append(str(kwargs.get("query")))
+            real(path, **kwargs)
+
+        monkey = pytest.MonkeyPatch()
+        monkey.setattr(crop_stats, "write_geoparquet", capture)
+        try:
+            crop_stats.add_crop_stats(self._shuffled_chips(tmp_path), _fields(tmp_path))
+        finally:
+            monkey.undo()
+
+        assert seen, "write_geoparquet was never called"
+        assert all('ORDER BY "id"' in query for query in seen), seen
