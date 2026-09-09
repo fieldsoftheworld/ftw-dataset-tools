@@ -121,6 +121,9 @@ def _update_stac_items(
             title=f"Clipped {len(band_list)}-band image ({','.join(band_list)})",
             roles=["data"],
         )
+        # Not save_object: its first positional argument is include_self_link, and
+        # it resolves the catalog root, which a staged item's published root href
+        # cannot reach. write_item serializes without either.
         write_item(task.item, task.item_path)
         return
 

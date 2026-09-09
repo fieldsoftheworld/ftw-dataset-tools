@@ -298,3 +298,104 @@ class TestDownloadImagesWorkerValidation:
         )
 
         assert result.exit_code == 2
+
+
+def _write_staged_catalog(tmp_path: Path, chip_id: str) -> Path:
+    """Write a catalog whose child items carry the *published* root href.
+
+    Mirrors the real staging tree: the items were generated for a catalog that
+    will live at some published URL, so their ``rel: root`` link points at a
+    file that is not on disk here. Anything that resolves the root while saving
+    blows up on it.
+    """
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+    _write_minimal_collection(dataset_dir / "collection.json")
+
+    chip_dir = dataset_dir / "chips" / "33UXP" / chip_id
+    chip_dir.mkdir(parents=True)
+
+    for season in ("planting", "harvest"):
+        child_id = f"{chip_id}_{season}_s2"
+        item = pystac.Item(
+            id=child_id,
+            geometry={
+                "type": "Polygon",
+                "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+            },
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime(2024, 6, 1, tzinfo=UTC),
+            properties={"eo:cloud_cover": 1.0},
+        )
+        for band in ("red", "green", "blue", "nir"):
+            item.assets[band] = pystac.Asset(href=f"https://example.com/{band}.tif")
+        item.add_link(pystac.Link(rel="root", target="../../../missing-root/collection.json"))
+        item.add_link(pystac.Link(rel="parent", target="../catalog.json"))
+
+        item_path = chip_dir / f"{child_id}.json"
+        item_path.write_text(
+            json.dumps(item.to_dict(include_self_link=False, transform_hrefs=False), indent=2)
+            + "\n"
+        )
+
+    return dataset_dir
+
+
+class TestKeepRemoteRefsRootResolution:
+    """--keep-remote-refs adds a local "clipped" asset and keeps the remote bands.
+
+    Writing that item must not resolve the catalog root: the staging tree's items
+    already carry the published root href, so a save that reaches for it fails on
+    every scene - the GeoTIFF lands on disk and the item is never updated.
+    """
+
+    def test_adds_clipped_asset_with_an_unresolvable_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dataset_dir = _write_staged_catalog(tmp_path, "chip_000")
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            lambda **_kwargs: MagicMock(success=True, error=None),
+        )
+
+        result = CliRunner().invoke(
+            cli, ["download-images", str(dataset_dir), "--keep-remote-refs"]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Downloaded: 2" in result.output
+        assert "Failed: 0" in result.output
+
+        chip_dir = dataset_dir / "chips" / "33UXP" / "chip_000"
+        for season in ("planting", "harvest"):
+            written = json.loads((chip_dir / f"chip_000_{season}_s2.json").read_text())
+            assets = written["assets"]
+            assert assets["clipped"]["href"] == f"./chip_000_{season}_image_s2.tif"
+            # The remote band refs are the whole point of --keep-remote-refs.
+            assert assets["red"]["href"] == "https://example.com/red.tif"
+            links = {link["rel"]: link["href"] for link in written["links"]}
+            assert links["root"] == "../../../missing-root/collection.json"
+
+    def test_does_not_resolve_the_root_when_one_is_reachable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The ordinary catalog keeps working, and gains no self link on the way."""
+        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            lambda **_kwargs: MagicMock(success=True, error=None),
+        )
+
+        result = CliRunner().invoke(
+            cli, ["download-images", str(dataset_dir), "--keep-remote-refs"]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Downloaded: 2" in result.output
+
+        chip_dir = dataset_dir / "chips" / "33UXP" / "chip_000"
+        written = json.loads((chip_dir / "chip_000_planting_s2.json").read_text())
+        assert "clipped" in written["assets"]
+        assert [link for link in written["links"] if link["rel"] == "self"] == []
