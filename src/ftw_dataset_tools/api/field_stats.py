@@ -28,8 +28,22 @@ DEFAULT_FTW_GRID_SOURCE = (
     "s3://us-west-2.opendata.source.coop/ftw/ftw-grid/v0.1/partitioned/by_gzd/gzd=*/*.parquet"
 )
 
+# Column holding the chip id. The written row order is pinned to it so that the
+# downstream split assignment, which maps shuffled labels onto rows positionally,
+# never depends on the order DuckDB happens to emit rows in.
+CHIP_ID_COLUMN = "id"
+
+# Grid cells per coverage batch (see _compute_coverage_in_batches).
+DEFAULT_COVERAGE_BATCH_SIZE = 2000
+
 # Re-export for convenience
-__all__ = ["DEFAULT_FTW_GRID_SOURCE", "CRSMismatchError", "FieldStatsResult", "add_field_stats"]
+__all__ = [
+    "DEFAULT_COVERAGE_BATCH_SIZE",
+    "DEFAULT_FTW_GRID_SOURCE",
+    "CRSMismatchError",
+    "FieldStatsResult",
+    "add_field_stats",
+]
 
 
 @dataclass
@@ -173,6 +187,23 @@ def _build_result_query(grid_geom_col: str, coverage_col: str) -> str:
     """
 
 
+def _rowid_batches(conn: duckdb.DuckDBPyConnection, batch_size: int) -> list[tuple[int, int, int]]:
+    """Cut the grid rowids into windows of at most ``batch_size`` cells.
+
+    Returns ``(rowid_lo, rowid_hi, cell_count)`` per window. Windows are cut from
+    the rowids that actually exist rather than from the min/max span: dropping
+    border chips deletes rows without renumbering, so the span is wider than the
+    table and walking it would both under-fill batches and overstate progress.
+    """
+    rowids = [
+        row[0] for row in conn.execute("SELECT rowid FROM grid_table ORDER BY rowid").fetchall()
+    ]
+    return [
+        (window[0], window[-1], len(window))
+        for window in (rowids[i : i + batch_size] for i in range(0, len(rowids), batch_size))
+    ]
+
+
 def _compute_coverage_in_batches(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -185,23 +216,44 @@ def _compute_coverage_in_batches(
     log: Callable[[str], None],
 ) -> None:
     """Fill ``result`` with every grid cell and its coverage, ``batch_size`` cells at a time."""
-    lo, hi = conn.execute("SELECT min(rowid), max(rowid) FROM grid_table").fetchone()
+    batches = _rowid_batches(conn, batch_size)
+    total = sum(count for _, _, count in batches)
     conn.execute("CREATE TABLE coverage (grid_rowid BIGINT, total_coverage GEOMETRY)")
-    if lo is not None:
-        total = hi - lo + 1
-        done = 0
-        for start in range(lo, hi + 1, batch_size):
-            end = min(start + batch_size - 1, hi)
-            conn.execute(
-                "INSERT INTO coverage "
-                + _build_coverage_batch_query(
-                    grid_geom_col, fields_geom_col, grid_bbox_col, fields_bbox_col, start, end
-                )
+    done = 0
+    for rowid_lo, rowid_hi, count in batches:
+        conn.execute(
+            "INSERT INTO coverage "
+            + _build_coverage_batch_query(
+                grid_geom_col, fields_geom_col, grid_bbox_col, fields_bbox_col, rowid_lo, rowid_hi
             )
-            done = min(done + batch_size, total)
-            log(f"  Coverage: {done:,}/{total:,} grid cells")
+        )
+        done += count
+        log(f"  Coverage: {done:,}/{total:,} grid cells")
     conn.execute(f"CREATE TABLE result AS {_build_result_query(grid_geom_col, coverage_col)}")
     conn.execute("DROP TABLE coverage")
+
+
+def _chip_order_by(conn: duckdb.DuckDBPyConnection, log: Callable[[str], None]) -> str:
+    """ORDER BY clause pinning the written row order to the chip id.
+
+    ``assign_splits`` maps a shuffled label array onto the chip rows by position,
+    so an output whose row order comes from engine internals (join strategy,
+    parallelism, DuckDB version) is not reproducible at a fixed seed. Ordering
+    once, here at the write, makes the order a property of the data instead.
+
+    This clause is not sufficient on its own: with ``preserve_insertion_order``
+    set to false DuckDB is free to ignore an ORDER BY when materialising a COPY,
+    so that pragma must stay unset. Re-introducing it for speed silently
+    un-does this ordering and with it the reproducibility of the splits.
+    """
+    columns = [row[0] for row in conn.execute("DESCRIBE result").fetchall()]
+    if CHIP_ID_COLUMN in columns:
+        return f' ORDER BY "{CHIP_ID_COLUMN}"'
+    log(
+        f"Warning: grid has no '{CHIP_ID_COLUMN}' column, so output row order "
+        f"follows the grid file's own order"
+    )
+    return ""
 
 
 def add_field_stats(
@@ -218,7 +270,7 @@ def add_field_stats(
     drop_border_chips: bool = False,
     grid_source: str = DEFAULT_FTW_GRID_SOURCE,
     on_progress: Callable[[str], None] | None = None,
-    batch_size: int = 2000,
+    batch_size: int = DEFAULT_COVERAGE_BATCH_SIZE,
 ) -> FieldStatsResult:
     """
     Calculate field coverage percentage for each grid cell.
@@ -256,10 +308,14 @@ def add_field_stats(
         FieldStatsResult with statistics about the calculation
 
     Raises:
+        ValueError: If batch_size is less than 1
         FileNotFoundError: If input files don't exist
         CRSMismatchError: If input files have different CRS and reproject_to_4326 is False
         duckdb.Error: If there are issues with the spatial queries
     """
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be at least 1, got {batch_size}")
+
     fields_path = Path(fields_file).resolve()
 
     if not fields_path.exists():
@@ -485,9 +541,6 @@ def add_field_stats(
 
         # Build and execute coverage query
         log("Calculating coverage...")
-        if batch_size < 1:
-            raise ValueError("batch_size must be at least 1")
-        conn.execute("SET preserve_insertion_order = false")
         _compute_coverage_in_batches(
             conn,
             grid_geom_col=grid_geom_col,
@@ -530,7 +583,9 @@ def add_field_stats(
 
         # Write output with proper GeoParquet metadata
         log(f"Writing output to: {out_path}")
-        write_geoparquet(out_path, conn=conn, query="SELECT * FROM result")
+        write_geoparquet(
+            out_path, conn=conn, query=f"SELECT * FROM result{_chip_order_by(conn, log)}"
+        )
 
         conn.close()
 

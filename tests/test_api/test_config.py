@@ -25,6 +25,7 @@ class TestFromDict:
         assert config.skip_reproject is False
         # Stage defaults
         assert config.stages.chips.min_coverage == 0.01
+        assert config.stages.chips.coverage_batch_size == 2000
         assert config.stages.splits.split_percents == (80, 10, 10)
         assert config.stages.masks.mask_types == [
             "instance",
@@ -44,7 +45,11 @@ class TestFromDict:
                 "year": 2023,
                 "skip_reproject": True,
                 "stages": {
-                    "chips": {"min_coverage": 0.5, "drop_border_chips": True},
+                    "chips": {
+                        "min_coverage": 0.5,
+                        "drop_border_chips": True,
+                        "coverage_batch_size": 500,
+                    },
                     "splits": {"split_type": "block3x3", "split_percents": [70, 20, 10]},
                     "masks": {"mask_types": ["semantic_2_class"], "resolution": 5.0},
                     "select_images": {"enabled": False, "buffer_days": 30},
@@ -56,6 +61,7 @@ class TestFromDict:
         assert config.year == 2023
         assert config.skip_reproject is True
         assert config.stages.chips.min_coverage == 0.5
+        assert config.stages.chips.coverage_batch_size == 500
         assert config.stages.splits.split_type == "block3x3"
         assert config.stages.splits.split_percents == (70, 20, 10)
         assert config.stages.masks.mask_types == ["semantic_2_class"]
@@ -63,6 +69,13 @@ class TestFromDict:
         assert config.stages.select_images.enabled is False
         assert config.stages.select_images.buffer_days == 30
         assert config.stages.download_images.bands == ["red", "green"]
+
+    @pytest.mark.parametrize("bad", [0, -1, "many", 2.5, True])
+    def test_invalid_coverage_batch_size_raises(self, bad: object) -> None:
+        with pytest.raises(ConfigError, match="coverage_batch_size"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"chips": {"coverage_batch_size": bad}}}
+            )
 
     def test_missing_fields_file_raises(self) -> None:
         with pytest.raises(ConfigError, match="must specify 'fields_file'"):

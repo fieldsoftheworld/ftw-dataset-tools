@@ -837,6 +837,45 @@ def _fake_field_stats_writing_crop_columns(field_stats_module):
     return fake
 
 
+class TestChipsStageBatchSize:
+    """stages.chips.coverage_batch_size is the only reachable OOM escape hatch."""
+
+    def test_config_batch_size_reaches_add_field_stats(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        config = _config(
+            sample_geoparquet_4326,
+            tmp_path / "out",
+            year=2024,
+            stages={"chips": {"coverage_batch_size": 37, "crop_stats": False}},
+        )
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        gpd.read_parquet(sample_geoparquet_4326).to_parquet(ctx.field_polygons_path)
+        seen: dict = {}
+
+        def fake_field_stats(**kwargs):
+            seen.update(kwargs)
+            gpd.GeoDataFrame(
+                {"id": ["ftw-33UXP0001"], "field_coverage_pct": [50.0]},
+                geometry=[box(0, 0, 1, 1)],
+                crs="EPSG:4326",
+            ).to_parquet(kwargs["output_file"])
+            return field_stats.FieldStatsResult(
+                output_path=Path(kwargs["output_file"]),
+                total_cells=1,
+                cells_with_coverage=1,
+                average_coverage=50.0,
+                max_coverage=50.0,
+            )
+
+        monkeypatch.setattr(field_stats, "add_field_stats", fake_field_stats)
+
+        pipeline.stage_chips(ctx)
+
+        assert seen["batch_size"] == 37
+
+
 class TestChipsStageCropStats:
     def _ctx(
         self, tmp_path: Path, monkeypatch, *, crop_stats: bool, empty_chip: bool = False

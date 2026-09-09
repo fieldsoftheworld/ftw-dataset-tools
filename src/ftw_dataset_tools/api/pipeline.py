@@ -538,6 +538,7 @@ def stage_chips(ctx: PipelineContext) -> None:
         output_file=str(ctx.chips_path),
         min_coverage=ctx.config.stages.chips.min_coverage,
         drop_border_chips=ctx.config.stages.chips.drop_border_chips,
+        batch_size=chips_cfg.coverage_batch_size,
         on_progress=ctx.log,
     )
     ctx.log(

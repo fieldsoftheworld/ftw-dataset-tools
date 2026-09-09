@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from ftw_dataset_tools import __version__
-from ftw_dataset_tools.api import splits
+from ftw_dataset_tools.api import field_stats, splits
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -233,6 +233,9 @@ class ChipsConfig:
     grid_source: str | None = None
     # Per-chip HCAT crop composition (skipped automatically when the fields lack hcat:code).
     crop_stats: bool = True
+    # Grid cells per coverage batch. Lower it when the coverage step runs the
+    # machine out of memory on a dense, country-sized input.
+    coverage_batch_size: int = field_stats.DEFAULT_COVERAGE_BATCH_SIZE
 
 
 @dataclass
@@ -599,6 +602,12 @@ class DatasetConfig:
 
         if not isinstance(self.stages.chips.crop_stats, bool):
             raise ConfigError("stages.chips.crop_stats must be true or false")
+
+        batch_size = self.stages.chips.coverage_batch_size
+        if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+            raise ConfigError(
+                f"stages.chips.coverage_batch_size must be a positive integer (got {batch_size!r})"
+            )
 
         pmtiles = self.stages.docs.pmtiles
         if not isinstance(pmtiles, bool) and pmtiles != PMTILES_AUTO:

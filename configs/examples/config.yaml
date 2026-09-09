@@ -66,6 +66,8 @@ stages:
     drop_border_chips: false
     # Per-chip HCAT crop composition (skipped automatically when the fields lack hcat:code).
     crop_stats: true
+    # Grid cells per coverage batch. Lower it if the coverage step runs out of memory.
+    coverage_batch_size: 2000
 
   splits:
     # One of: block3x3, predefined, random-uniform.

@@ -211,10 +211,21 @@ class TestAddFieldStatsWithLocalGrid:
     ) -> None:
         from ftw_dataset_tools.api.field_stats import add_field_stats
 
-        with pytest.raises(ValueError, match="batch_size"):
+        with pytest.raises(ValueError, match="batch_size must be at least 1, got 0"):
             add_field_stats(
                 grid_file=sample_grid_geoparquet,
                 fields_file=sample_fields_geoparquet,
+                output_file=tmp_path / "x.parquet",
+                batch_size=0,
+            )
+
+    def test_batch_size_validated_before_any_input_is_read(self, tmp_path: Path) -> None:
+        """An invalid batch size must not cost a grid download (or any file read) first."""
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        with pytest.raises(ValueError, match="batch_size"):
+            add_field_stats(
+                fields_file=tmp_path / "does-not-exist.parquet",
                 output_file=tmp_path / "x.parquet",
                 batch_size=0,
             )
@@ -336,3 +347,183 @@ class TestFieldStatsResultProperties:
         assert result.average_coverage == 45.5
         assert result.max_coverage == 95.0
         assert result.coverage_percentage == 50.0
+
+
+def _unsorted_grid(path: Path, side: int = 6, size: float = 0.02) -> Path:
+    """Write a ``side`` x ``side`` grid whose rows are deliberately not in id order.
+
+    Row order in the file must not leak into the output: the chips writer sorts by
+    chip id, so a shuffled input still yields one canonical output order.
+    """
+    cells, ids = [], []
+    for i in range(side):
+        for j in range(side):
+            x0, y0 = 10.0 + i * size, 50.0 + j * size
+            cells.append(box(x0, y0, x0 + size, y0 + size))
+            ids.append(f"ftw-{i:02d}{j:02d}")
+    gdf = gpd.GeoDataFrame({"id": ids}, geometry=cells, crs="EPSG:4326")
+    # Reverse, then interleave, so neither the original nor the sorted order survives.
+    shuffled = gdf.iloc[::-1].iloc[[*range(1, len(gdf), 2), *range(0, len(gdf), 2)]]
+    shuffled.reset_index(drop=True).to_parquet(path)
+    return path
+
+
+def _covering_fields(path: Path, lo: int = 1, hi: int = 5, size: float = 0.02) -> Path:
+    """Fields filling the grid cells in the [lo, hi) index range on both axes."""
+    polys = [
+        box(10.0 + i * size, 50.0 + j * size, 10.0 + (i + 1) * size, 50.0 + (j + 1) * size)
+        for i in range(lo, hi)
+        for j in range(lo, hi)
+    ]
+    gpd.GeoDataFrame({"fid": range(len(polys))}, geometry=polys, crs="EPSG:4326").to_parquet(path)
+    return path
+
+
+def _chip_ids(chips_file: Path) -> list[str]:
+    """Row order of the written chips, as stored in the file."""
+    con = duckdb.connect()
+    try:
+        return [row[0] for row in con.execute(f"SELECT id FROM '{chips_file}'").fetchall()]
+    finally:
+        con.close()
+
+
+class TestChipRowOrderIsReproducible:
+    """Row order decides split assignment, so it must be identical run to run.
+
+    ``splits._assign_random_uniform`` shuffles a label array with the seeded RNG and
+    assigns it to rows *positionally*, and the block strategy maps blocks in
+    first-appearance order. A chips file whose row order comes from engine internals
+    therefore puts a chip in train one run and test the next at the same seed.
+    """
+
+    def test_rows_are_written_in_chip_id_order(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        grid = _unsorted_grid(tmp_path / "grid.parquet")
+        fields = _covering_fields(tmp_path / "fields.parquet")
+        out = tmp_path / "chips.parquet"
+
+        add_field_stats(grid_file=grid, fields_file=fields, output_file=out)
+
+        ids = _chip_ids(out)
+        assert ids == sorted(ids)
+        assert ids != _chip_ids(grid)  # the input order was not simply passed through
+
+    def test_row_order_identical_across_runs_and_batch_sizes(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        grid = _unsorted_grid(tmp_path / "grid.parquet")
+        fields = _covering_fields(tmp_path / "fields.parquet")
+
+        orders = []
+        for run, batch_size in enumerate((1, 7, 1000, 1, 7)):
+            out = tmp_path / f"chips_{run}.parquet"
+            add_field_stats(
+                grid_file=grid, fields_file=fields, output_file=out, batch_size=batch_size
+            )
+            orders.append(_chip_ids(out))
+
+        assert all(order == orders[0] for order in orders)
+
+    def test_split_assignment_identical_across_runs(self, tmp_path: Path) -> None:
+        """The end the reproducibility guarantee is actually about."""
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+        from ftw_dataset_tools.api.splits import assign_splits
+
+        grid = _unsorted_grid(tmp_path / "grid.parquet")
+        fields = _covering_fields(tmp_path / "fields.parquet")
+
+        assignments = []
+        for run in range(3):
+            out = tmp_path / f"chips_{run}.parquet"
+            add_field_stats(grid_file=grid, fields_file=fields, output_file=out)
+            assign_splits(
+                chips_file=out,
+                split_type="random-uniform",
+                split_percents=(80, 10, 10),
+                random_seed=42,
+            )
+            con = duckdb.connect()
+            assignments.append(dict(con.execute(f"SELECT id, split FROM '{out}'").fetchall()))
+            con.close()
+
+        assert all(a == assignments[0] for a in assignments)
+        assert len(set(assignments[0].values())) > 1  # the split is not degenerate
+
+
+class TestSparseRowids:
+    """Dropping border chips deletes rows without renumbering, leaving rowid gaps."""
+
+    def test_border_chips_leave_sparse_rowids(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        grid = _unsorted_grid(tmp_path / "grid.parquet")
+        fields = _covering_fields(tmp_path / "fields.parquet")
+
+        messages: list[str] = []
+        result = add_field_stats(
+            grid_file=grid,
+            fields_file=fields,
+            output_file=tmp_path / "chips.parquet",
+            drop_border_chips=True,
+            batch_size=2,
+            on_progress=messages.append,
+        )
+
+        assert any("Removed" in msg and "border chips" in msg for msg in messages)
+        assert result.total_cells == 16  # the inner 4x4 block survives the convex hull
+        assert result.cells_with_coverage == 16
+
+        # Progress counts the cells that exist, not the rowid span they are spread over.
+        coverage_msgs = [m for m in messages if m.strip().startswith("Coverage:")]
+        assert coverage_msgs[-1].strip() == f"Coverage: {result.total_cells:,}/16 grid cells"
+        assert len(coverage_msgs) == 8  # 16 cells at 2 per batch
+
+    def test_sparse_rowids_give_the_same_coverage_at_every_batch_size(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        grid = _unsorted_grid(tmp_path / "grid.parquet")
+        fields = _covering_fields(tmp_path / "fields.parquet")
+
+        rows = []
+        for batch_size in (1, 3, 1000):
+            out = tmp_path / f"chips_{batch_size}.parquet"
+            add_field_stats(
+                grid_file=grid,
+                fields_file=fields,
+                output_file=out,
+                drop_border_chips=True,
+                batch_size=batch_size,
+            )
+            con = duckdb.connect()
+            rows.append(con.execute(f"SELECT id, field_coverage_pct FROM '{out}'").fetchall())
+            con.close()
+
+        assert all(r == rows[0] for r in rows)
+        assert len(rows[0]) == 16
+
+
+class TestChipOrderByFallback:
+    """Grids without an id column still work; they just cannot be ordered by chip id."""
+
+    def test_warns_and_skips_ordering_without_id_column(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        cells = [box(10.0 + i * 0.02, 50.0, 10.0 + (i + 1) * 0.02, 50.02) for i in range(3)]
+        grid = tmp_path / "grid_no_id.parquet"
+        gpd.GeoDataFrame({"name": ["a", "b", "c"]}, geometry=cells, crs="EPSG:4326").to_parquet(
+            grid
+        )
+        fields = _covering_fields(tmp_path / "fields.parquet", lo=0, hi=1)
+
+        messages: list[str] = []
+        result = add_field_stats(
+            grid_file=grid,
+            fields_file=fields,
+            output_file=tmp_path / "chips.parquet",
+            on_progress=messages.append,
+        )
+
+        assert result.total_cells == 3
+        assert any("no 'id' column" in msg for msg in messages)
