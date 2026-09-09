@@ -20,7 +20,7 @@ from pystac.extensions.file import FileExtension
 from pystac.extensions.raster import DataType, RasterBand, RasterExtension, Statistics
 from rasterio.errors import RasterioError
 
-from ftw_dataset_tools.api.raster_stats import read_band_stats
+from ftw_dataset_tools.api.raster_stats import band_stats_from_tags
 
 if TYPE_CHECKING:
     import pystac
@@ -93,6 +93,49 @@ def add_file_info(asset: pystac.Asset, path: Path, *, checksum: bool = False) ->
         ext.checksum = multihash_sha256(path)
 
 
+def _top_level_type(dtype: str) -> str:
+    """Return the top-level DuckDB type name, dropping any nested declaration.
+
+    DuckDB reports nested types in full (``STRUCT(a INTEGER, b VARCHAR, ...)``),
+    which would embed kilobytes of type declaration in the collection JSON.
+    """
+    return str(dtype).split("(", 1)[0].strip().lower()
+
+
+def add_table_columns(asset: pystac.Asset, path: Path, geometry_column: str | None = None) -> None:
+    """Set ``table:columns`` (name, type) and ``table:row_count`` from a parquet file.
+
+    Types are DuckDB's, lowercased. The geometry column is typed ``geometry``
+    (DuckDB reports the WKB blob). Descriptions are added by the docs stage.
+    """
+    # Imported here: api.geo pulls geopandas and geoparquet-io into every assets import otherwise.
+    import duckdb
+    from pystac.extensions.table import Column, TableExtension
+
+    from ftw_dataset_tools.api.geo import detect_geometry_column, sql_path
+
+    path = Path(path)
+    geometry_column = geometry_column or detect_geometry_column(path)
+    # DESCRIBE does not accept a query parameter for read_parquet's argument, so
+    # the path is escaped rather than bound.
+    source = f"read_parquet('{sql_path(path)}')"
+    con = duckdb.connect(":memory:")
+    try:
+        rows = con.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()
+        row_count = con.execute(f"SELECT count(*) FROM {source}").fetchone()[0]
+    finally:
+        con.close()
+
+    columns = []
+    for name, dtype, *_ in rows:
+        column_type = "geometry" if name == geometry_column else _top_level_type(dtype)
+        columns.append(Column({"name": name, "type": column_type}))
+
+    table = TableExtension.ext(asset, add_if_missing=True)
+    table.columns = columns
+    table.row_count = int(row_count)
+
+
 def _spatial_resolution(transform: rasterio.Affine, crs: rasterio.crs.CRS | None) -> float:
     """Return the pixel size in metres, per the raster extension's ``spatial_resolution``.
 
@@ -133,10 +176,11 @@ def _build_raster_bands(path: Path) -> list[RasterBand]:
         nodatas = list(src.nodatavals)
         resolution = _spatial_resolution(src.transform, src.crs)
         descriptions = list(src.descriptions)
+        tags = [src.tags(i) for i in range(1, src.count + 1)]
 
     bands: list[RasterBand] = []
     for index, dtype in enumerate(dtypes, start=1):
-        stats = read_band_stats(path, index)
+        stats = band_stats_from_tags(tags[index - 1])
         statistics = None
         if stats is not None:
             statistics = Statistics.create(

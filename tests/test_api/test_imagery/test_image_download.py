@@ -374,3 +374,89 @@ class TestProcessDownloadedSceneAssets:
         parent_image = saved_parent.assets["planting_image"]
         assert parent_image.extra_fields["file:size"] == image_path.stat().st_size
         assert len(parent_image.extra_fields["raster:bands"]) == 4
+
+
+class TestImageryNodata:
+    def test_reflectance_only_stack_declares_zero_nodata(self) -> None:
+        from ftw_dataset_tools.api.imagery.image_download import stack_nodata
+
+        assert stack_nodata(["red", "green", "blue", "nir"]) == 0
+        assert stack_nodata(["coastal", "swir16", "nir08"]) == 0
+
+    def test_mixed_reflectance_and_cloud_stack_declares_no_nodata(self) -> None:
+        from ftw_dataset_tools.api.imagery.image_download import stack_nodata
+
+        # GeoTIFF nodata is per-dataset: 0 is a real cloud probability, so
+        # declaring it would drop those pixels from the band statistics.
+        assert stack_nodata(["red", "green", "blue", "nir", "cloud"]) is None
+        assert stack_nodata(["red", "snow"]) is None
+        assert stack_nodata(["red", "aot"]) is None
+        assert stack_nodata(["red", "wvp"]) is None
+        assert stack_nodata(["scl"]) is None
+        assert stack_nodata([]) is None
+
+    def test_mixed_stack_keeps_zero_valued_cloud_pixels_in_statistics(self, tmp_path: Path) -> None:
+        import numpy as np
+        import rasterio
+        from rasterio.transform import from_bounds
+
+        from ftw_dataset_tools.api.imagery.image_download import stack_nodata, write_cog
+        from ftw_dataset_tools.api.raster_stats import read_band_stats
+
+        found_bands = ["red", "cloud"]
+        stacked = np.array(
+            [[[0, 5], [7, 0]], [[0, 0], [0, 100]]],
+            dtype=np.uint16,
+        )
+        nodata = stack_nodata(found_bands)
+        profile = {
+            "driver": "COG",
+            "dtype": "uint16",
+            "width": 2,
+            "height": 2,
+            "count": 2,
+            "crs": "EPSG:4326",
+            "transform": from_bounds(0, 0, 1, 1, 2, 2),
+            "compress": "deflate",
+            "nodata": nodata,
+        }
+        out = tmp_path / "mixed.tif"
+
+        assert write_cog(out, stacked, found_bands, profile, nodata=nodata) is None
+
+        cloud_stats = read_band_stats(out, 2)
+        assert cloud_stats is not None
+        assert cloud_stats.minimum == 0
+        assert cloud_stats.maximum == 100
+        # No nodata declared, so nothing is excluded and valid_percent is undefined.
+        assert cloud_stats.valid_percent is None
+        with rasterio.open(out) as src:
+            assert src.nodata is None
+
+    def test_write_cog_with_zero_nodata_reports_valid_percent(self, tmp_path: Path) -> None:
+        import numpy as np
+        from rasterio.transform import from_bounds
+
+        from ftw_dataset_tools.api.imagery.image_download import write_cog
+        from ftw_dataset_tools.api.raster_stats import read_band_stats
+
+        stacked = np.array([[[0, 5], [7, 0]]], dtype=np.uint16)
+        profile = {
+            "driver": "COG",
+            "dtype": "uint16",
+            "width": 2,
+            "height": 2,
+            "count": 1,
+            "crs": "EPSG:4326",
+            "transform": from_bounds(0, 0, 1, 1, 2, 2),
+            "compress": "deflate",
+            "nodata": 0,
+        }
+        out = tmp_path / "img.tif"
+
+        assert write_cog(out, stacked, ["red"], profile, nodata=profile["nodata"]) is None
+
+        stats = read_band_stats(out, 1)
+        assert stats is not None
+        assert stats.minimum == 5
+        assert stats.valid_percent == 50.0

@@ -85,6 +85,16 @@ def write_geoparquet(
     return out_path
 
 
+def sql_path(path: str | Path) -> str:
+    """Escape a filesystem path for safe interpolation into a DuckDB SQL literal.
+
+    Single quotes are doubled, as SQL string literals require. The caller supplies
+    the surrounding quotes, e.g. ``f"read_parquet('{sql_path(path)}')"``. Prefer a
+    query parameter where DuckDB accepts one; use this only where it does not.
+    """
+    return str(path).replace("'", "''")
+
+
 def detect_geometry_column(
     file_path: str | Path,
     conn: duckdb.DuckDBPyConnection | None = None,

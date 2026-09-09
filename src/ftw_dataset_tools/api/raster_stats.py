@@ -81,10 +81,8 @@ def embed_band_stats(dataset: DatasetWriter, band_index: int, stats: BandStats) 
     dataset.update_tags(band_index, **tags)
 
 
-def read_band_stats(path: Path | str, band_index: int) -> BandStats | None:
-    """Read embedded statistics for a band, or None if any required tag is missing."""
-    with rasterio.open(path) as src:
-        tags = src.tags(band_index)
+def band_stats_from_tags(tags: dict[str, str]) -> BandStats | None:
+    """Parse embedded ``STATISTICS_*`` tags, or None if a required tag is missing."""
     try:
         return BandStats(
             minimum=float(tags[TAG_MIN]),
@@ -95,3 +93,9 @@ def read_band_stats(path: Path | str, band_index: int) -> BandStats | None:
         )
     except KeyError:
         return None
+
+
+def read_band_stats(path: Path | str, band_index: int) -> BandStats | None:
+    """Read embedded statistics for a band, or None if any required tag is missing."""
+    with rasterio.open(path) as src:
+        return band_stats_from_tags(src.tags(band_index))

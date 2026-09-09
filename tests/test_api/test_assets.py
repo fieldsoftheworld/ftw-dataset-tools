@@ -294,3 +294,133 @@ class TestMaskKindRegistry:
 
         assert set(_MASK_TYPE_BY_ASSET_NAME) == set(MASK_CLASSES) | set(MASK_DESCRIPTIONS)
         assert not set(MASK_CLASSES) & set(MASK_DESCRIPTIONS)
+
+
+class TestAddTableColumns:
+    def _parquet(self, tmp_path: Path) -> Path:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        gdf = gpd.GeoDataFrame(
+            {"id": [1, 2], "crop:code": ["105", "106"], "area": [1.5, 2.5]},
+            geometry=[box(0, 0, 1, 1), box(1, 1, 2, 2)],
+            crs="EPSG:4326",
+        )
+        path = tmp_path / "fields.parquet"
+        gdf.to_parquet(path)
+        return path
+
+    def test_columns_and_row_count(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import add_table_columns
+
+        path = self._parquet(tmp_path)
+        item, asset = _item_with_asset(path, ["data"])
+
+        add_table_columns(asset, path, geometry_column="geometry")
+
+        columns = {c["name"]: c["type"] for c in asset.extra_fields["table:columns"]}
+        assert columns["id"] == "bigint"
+        assert columns["crop:code"] == "varchar"
+        assert columns["area"] == "double"
+        assert columns["geometry"] == "geometry"
+        assert asset.extra_fields["table:row_count"] == 2
+        assert "https://stac-extensions.github.io/table/v1.2.0/schema.json" in item.stac_extensions
+
+    def test_geometry_column_detected_when_not_given(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import add_table_columns
+
+        path = self._parquet(tmp_path)
+        _, asset = _item_with_asset(path, ["data"])
+
+        add_table_columns(asset, path)
+
+        columns = {c["name"]: c["type"] for c in asset.extra_fields["table:columns"]}
+        assert columns["geometry"] == "geometry"
+
+    def test_zero_row_parquet(self, tmp_path: Path) -> None:
+        import geopandas as gpd
+
+        from ftw_dataset_tools.api.assets import add_table_columns
+
+        gdf = gpd.GeoDataFrame({"id": []}, geometry=[], crs="EPSG:4326")
+        path = tmp_path / "empty.parquet"
+        gdf.to_parquet(path)
+        _, asset = _item_with_asset(path, ["data"])
+
+        add_table_columns(asset, path, geometry_column="geometry")
+
+        columns = {c["name"] for c in asset.extra_fields["table:columns"]}
+        assert "id" in columns
+        assert asset.extra_fields["table:row_count"] == 0
+
+
+class TestAddRasterBandsOpensOnce:
+    def test_single_open(self, tmp_path: Path, monkeypatch) -> None:
+        import rasterio
+
+        from ftw_dataset_tools.api import assets
+
+        p = tmp_path / "r.tif"
+        _write_cog(p, np.array([[0, 1], [2, 0]], dtype=np.uint8))
+        _, asset = _item_with_asset(p, ["labels"])
+
+        opens = []
+        real_open = rasterio.open
+
+        def counting_open(*args, **kwargs):
+            opens.append(args[0])
+            return real_open(*args, **kwargs)
+
+        monkeypatch.setattr(assets.rasterio, "open", counting_open)
+
+        assets.add_raster_bands(asset, p)
+
+        assert len(opens) == 1
+        assert asset.extra_fields["raster:bands"][0]["statistics"]["maximum"] == 2
+
+
+class TestTableColumnTypes:
+    """Nested DuckDB types are truncated and paths are escaped, not interpolated raw."""
+
+    def _nested_parquet(self, path: Path) -> None:
+        import duckdb
+
+        con = duckdb.connect(":memory:")
+        try:
+            con.execute(
+                "COPY (SELECT 1 AS id, {'href': 'a.tif', 'type': 'image/tiff'} AS asset) "
+                f"TO '{path!s}' (FORMAT PARQUET)"
+            )
+        finally:
+            con.close()
+
+    def test_nested_type_truncated_to_top_level_name(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import add_table_columns
+
+        path = tmp_path / "nested.parquet"
+        self._nested_parquet(path)
+        _, asset = _item_with_asset(path, ["data"])
+
+        add_table_columns(asset, path)
+
+        columns = {c["name"]: c["type"] for c in asset.extra_fields["table:columns"]}
+        assert columns["asset"] == "struct"
+        assert all("(" not in c["type"] for c in asset.extra_fields["table:columns"])
+
+    def test_path_with_single_quote(self, tmp_path: Path) -> None:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.assets import add_table_columns
+
+        quoted_dir = tmp_path / "o'brien"
+        quoted_dir.mkdir()
+        path = quoted_dir / "fields.parquet"
+        gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(path)
+        _, asset = _item_with_asset(path, ["data"])
+
+        add_table_columns(asset, path, geometry_column="geometry")
+
+        columns = {c["name"] for c in asset.extra_fields["table:columns"]}
+        assert columns == {"id", "geometry"}
+        assert asset.extra_fields["table:row_count"] == 1
