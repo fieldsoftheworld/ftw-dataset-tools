@@ -376,73 +376,76 @@ class TestChipItemAssetMetadata:
         assert "decode_distance_max_px" in distance["description"]
 
 
-class TestCollectionAssetMetadata:
-    def _build_catalog(
-        self,
-        tmp_path: Path,
-        checksums: bool = False,
-        config=None,
-        provenance=None,
-        on_progress=None,
-        filtered: bool = False,
-        with_masks: bool = True,
-        grid_id: str = "ftw-33UXP0410",
-        chips_path: Path | None = None,
-        fields_path: Path | None = None,
-    ):
-        import geopandas as gpd
-        from shapely.geometry import box
+def build_catalog(
+    tmp_path: Path,
+    checksums: bool = False,
+    config=None,
+    provenance=None,
+    on_progress=None,
+    filtered: bool = False,
+    with_masks: bool = True,
+    grid_id: str = "ftw-33UXP0410",
+    chips_path: Path | None = None,
+    fields_path: Path | None = None,
+    background_class_value: int = 0,
+):
+    """Build a one-chip STAC catalog in ``tmp_path``; safe to call again on the same tree."""
+    import geopandas as gpd
+    from shapely.geometry import box
 
-        from ftw_dataset_tools.api.masks import get_mgrs_square
-        from ftw_dataset_tools.api.stac import generate_stac_catalog
+    from ftw_dataset_tools.api.masks import get_mgrs_square
+    from ftw_dataset_tools.api.stac import generate_stac_catalog
 
-        fields = gpd.GeoDataFrame(
-            {"id": [1]},
+    fields = gpd.GeoDataFrame(
+        {"id": [1]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+    if fields_path is None:
+        fields_path = tmp_path / "ds_fields.parquet"
+        fields.to_parquet(fields_path)
+    lines_path = tmp_path / "ds_boundary_lines.parquet"
+    fields.to_parquet(lines_path)
+    if chips_path is None:
+        chips = gpd.GeoDataFrame(
+            {"id": [grid_id], "field_coverage_pct": [50.0]},
             geometry=[box(0, 0, 1, 1)],
             crs="EPSG:4326",
         )
-        if fields_path is None:
-            fields_path = tmp_path / "ds_fields.parquet"
-            fields.to_parquet(fields_path)
-        lines_path = tmp_path / "ds_boundary_lines.parquet"
-        fields.to_parquet(lines_path)
-        if chips_path is None:
-            chips = gpd.GeoDataFrame(
-                {"id": [grid_id], "field_coverage_pct": [50.0]},
-                geometry=[box(0, 0, 1, 1)],
-                crs="EPSG:4326",
-            )
-            chips_path = tmp_path / "ds_chips.parquet"
-            chips.to_parquet(chips_path)
+        chips_path = tmp_path / "ds_chips.parquet"
+        chips.to_parquet(chips_path)
 
-        filtered_fields_path = None
-        if filtered:
-            filtered_fields_path = tmp_path / "ds_fields_filtered.parquet"
-            fields.to_parquet(filtered_fields_path)
+    filtered_fields_path = None
+    if filtered:
+        filtered_fields_path = tmp_path / "ds_fields_filtered.parquet"
+        fields.to_parquet(filtered_fields_path)
 
-        chips_base = tmp_path / "chips"
-        square = get_mgrs_square(grid_id)
-        chip_dir = chips_base / square / f"{grid_id}_2024"
-        chip_dir.mkdir(parents=True)
-        if with_masks:
-            _write_mask(chip_dir / f"{grid_id}_2024_semantic_2_class.tif", [[0, 1], [1, 0]])
+    chips_base = tmp_path / "chips"
+    square = get_mgrs_square(grid_id)
+    chip_dir = chips_base / square / f"{grid_id}_2024"
+    chip_dir.mkdir(parents=True, exist_ok=True)
+    if with_masks:
+        _write_mask(chip_dir / f"{grid_id}_2024_semantic_2_class.tif", [[0, 1], [1, 0]])
 
-        return generate_stac_catalog(
-            output_dir=tmp_path,
-            field_dataset="ds",
-            fields_file=fields_path,
-            chips_file=chips_path,
-            boundary_lines_file=lines_path,
-            filtered_fields_file=filtered_fields_path,
-            year=2024,
-            checksums=checksums,
-            config=config,
-            provenance=provenance,
-            on_progress=on_progress,
-        )
+    return generate_stac_catalog(
+        output_dir=tmp_path,
+        field_dataset="ds",
+        fields_file=fields_path,
+        chips_file=chips_path,
+        boundary_lines_file=lines_path,
+        filtered_fields_file=filtered_fields_path,
+        year=2024,
+        checksums=checksums,
+        config=config,
+        provenance=provenance,
+        on_progress=on_progress,
+        background_class_value=background_class_value,
+    )
 
+
+class TestCollectionAssetMetadata:
     def test_parquet_and_items_assets(self, tmp_path: Path) -> None:
-        result = self._build_catalog(tmp_path)
+        result = build_catalog(tmp_path)
         fields_path = tmp_path / "ds_fields.parquet"
         chips_path = tmp_path / "ds_chips.parquet"
 
@@ -461,14 +464,14 @@ class TestCollectionAssetMetadata:
     def test_collections_have_no_self_link(self, tmp_path: Path) -> None:
         import json
 
-        result = self._build_catalog(tmp_path)
+        result = build_catalog(tmp_path)
         rels = [link["rel"] for link in json.loads(result.collection_path.read_text())["links"]]
         assert "self" not in rels
 
     def test_checksums_on_collection_and_items_assets(self, tmp_path: Path) -> None:
         import pystac
 
-        result = self._build_catalog(tmp_path, checksums=True)
+        result = build_catalog(tmp_path, checksums=True)
 
         coll = pystac.Collection.from_file(str(result.collection_path))
         assert coll.assets["fields"].extra_fields["file:checksum"].startswith("1220")
@@ -481,7 +484,7 @@ class TestSingleCollectionLayout:
     def test_tree_and_links(self, tmp_path: Path) -> None:
         import json
 
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        result = build_catalog(tmp_path)
 
         assert result.collection_path == tmp_path / "collection.json"
         assert not (tmp_path / "catalog.json").exists()
@@ -533,7 +536,7 @@ class TestSingleCollectionLayout:
         """
         import duckdb
 
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        result = build_catalog(tmp_path)
 
         con = duckdb.connect()
         con.install_extension("spatial")
@@ -551,7 +554,7 @@ class TestSingleCollectionLayout:
     def test_filtered_fields_asset(self, tmp_path: Path) -> None:
         import json
 
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, filtered=True)
+        result = build_catalog(tmp_path, filtered=True)
 
         coll = json.loads(result.collection_path.read_text())
         assert coll["assets"]["fields_filtered"]["href"] == "./ds_fields_filtered.parquet"
@@ -560,7 +563,7 @@ class TestSingleCollectionLayout:
     def test_no_items_means_no_mirror(self, tmp_path: Path) -> None:
         import json
 
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, with_masks=False)
+        result = build_catalog(tmp_path, with_masks=False)
 
         assert result.items_parquet_path is None
         assert result.subcatalog_paths == {}
@@ -570,7 +573,7 @@ class TestSingleCollectionLayout:
     def test_item_assets_on_collection(self, tmp_path: Path) -> None:
         import json
 
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        result = build_catalog(tmp_path)
 
         coll = json.loads(result.collection_path.read_text())
         ia = coll["item_assets"]
@@ -586,7 +589,7 @@ class TestSingleCollectionLayout:
         assert "item-assets" not in " ".join(coll.get("stac_extensions", []))
 
     def test_custom_grid_ids_go_under_other(self, tmp_path: Path) -> None:
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, grid_id="grid_001")
+        result = build_catalog(tmp_path, grid_id="grid_001")
 
         assert list(result.subcatalog_paths) == ["other"]
         assert (tmp_path / "chips" / "other" / "grid_001_2024" / "grid_001_2024.json").exists()
@@ -596,7 +599,7 @@ class TestSingleCollectionLayout:
 
         from ftw_dataset_tools.api.stac import PORTOLAN_SCHEMA_URI
 
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        result = build_catalog(tmp_path)
 
         docs = [
             result.collection_path,
@@ -638,7 +641,7 @@ class TestCollectionMetadata:
                 }
             ],
         )
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, config=config)
+        result = build_catalog(tmp_path, config=config)
 
         coll = json.loads(result.collection_path.read_text())
         assert coll["title"] == "Austria"
@@ -670,8 +673,8 @@ class TestCollectionMetadata:
         bare_dir = tmp_path / "bare"
         licensed_dir.mkdir()
         bare_dir.mkdir()
-        with_license = TestCollectionAssetMetadata()._build_catalog(licensed_dir, config=config)
-        without_metadata = TestCollectionAssetMetadata()._build_catalog(bare_dir)
+        with_license = build_catalog(licensed_dir, config=config)
+        without_metadata = build_catalog(bare_dir)
 
         titled = json.loads(with_license.collection_path.read_text())
         default = json.loads(without_metadata.collection_path.read_text())
@@ -684,7 +687,7 @@ class TestCollectionMetadata:
         import json
 
         config = self._config(license="other", license_url="https://rkg.gov.si/vstop/")
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, config=config)
+        result = build_catalog(tmp_path, config=config)
 
         coll = json.loads(result.collection_path.read_text())
         assert coll["license"] == "other"
@@ -696,9 +699,7 @@ class TestCollectionMetadata:
 
         config = self._config(license="CC0-1.0")
         provenance = config.provenance_dict()
-        result = TestCollectionAssetMetadata()._build_catalog(
-            tmp_path, config=config, provenance=provenance
-        )
+        result = build_catalog(tmp_path, config=config, provenance=provenance)
 
         coll = json.loads(result.collection_path.read_text())
         assert coll["ftw:split_type"] == "block3x3"
@@ -713,7 +714,7 @@ class TestCollectionMetadata:
     def test_table_columns_on_parquet_assets(self, tmp_path: Path) -> None:
         import json
 
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        result = build_catalog(tmp_path)
 
         coll = json.loads(result.collection_path.read_text())
         chip_cols = {c["name"]: c["type"] for c in coll["assets"]["chips"]["table:columns"]}
@@ -737,14 +738,14 @@ class TestCollectionMetadata:
         from ftw_dataset_tools.api.config import DatasetConfig
 
         config = DatasetConfig.from_dict({"fields_file": "unused.parquet"})
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, config=config)
+        result = build_catalog(tmp_path, config=config)
 
         coll = json.loads(result.collection_path.read_text())
         assert "ftw:split_type" not in coll
 
     def test_warns_without_license(self, tmp_path: Path) -> None:
         messages: list[str] = []
-        TestCollectionAssetMetadata()._build_catalog(tmp_path, on_progress=messages.append)
+        build_catalog(tmp_path, on_progress=messages.append)
 
         assert any("not Portolan-publishable" in m for m in messages)
 
@@ -760,7 +761,7 @@ class TestCollectionMetadata:
                 "metadata": {"license": "CC0-1.0"},
             }
         )
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path, config=config)
+        result = build_catalog(tmp_path, config=config)
 
         coll = json.loads(result.collection_path.read_text())
         via = [link for link in coll["links"] if link["rel"] == "via"]
@@ -804,9 +805,7 @@ class TestChipProperties:
         fields.to_parquet(fields_path)
         add_crop_stats(chips_path, fields_path)
 
-        result = TestCollectionAssetMetadata()._build_catalog(
-            tmp_path, chips_path=chips_path, fields_path=fields_path
-        )
+        result = build_catalog(tmp_path, chips_path=chips_path, fields_path=fields_path)
 
         item_path = tmp_path / "chips" / "33UXP" / "ftw-33UXP0410_2024" / "ftw-33UXP0410_2024.json"
         props = json.loads(item_path.read_text())["properties"]
@@ -853,7 +852,7 @@ class TestChipProperties:
         write_geoparquet(chips_path, conn=con, query="SELECT * FROM chips")
         con.close()
 
-        TestCollectionAssetMetadata()._build_catalog(tmp_path, chips_path=chips_path)
+        build_catalog(tmp_path, chips_path=chips_path)
 
         item_path = tmp_path / "chips" / "33UXP" / "ftw-33UXP0410_2024" / "ftw-33UXP0410_2024.json"
         props = json.loads(item_path.read_text())["properties"]
@@ -862,7 +861,7 @@ class TestChipProperties:
     def test_absent_columns_produce_no_properties(self, tmp_path: Path) -> None:
         import json
 
-        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        build_catalog(tmp_path)
 
         item_path = next((tmp_path / "chips").glob("*/*/*.json"))
         props = json.loads(item_path.read_text())["properties"]
@@ -891,3 +890,219 @@ class TestChipsPathEscaping:
 
         assert [chip.grid_id for chip in chips] == ["ftw-33UXP0410"]
         assert chips[0].properties["ftw:split"] == "test"
+
+
+RENDER_SCHEMA_URI = "https://stac-extensions.github.io/render/v2.0.0/schema.json"
+MEDIA_TYPE_COG = "image/tiff; application=geotiff; profile=cloud-optimized"
+CHIP_ID = "ftw-33UXP0410_2024"
+
+
+def _write_season_child(
+    chip_dir: Path, chip_id: str, season: str, with_image: bool = False
+) -> None:
+    """Write a season child item of the kind the imagery stages leave on disk."""
+    import json
+
+    scene_id = f"S2B_T33UXP_2024{season[0].upper()}_L2A"
+    child = {
+        "type": "Feature",
+        "stac_version": "1.1.0",
+        "id": f"{chip_id}_{season}_s2",
+        "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+        "bbox": [0.0, 0.0, 1.0, 1.0],
+        "properties": {"ftw:season": season, "datetime": "2024-06-15T10:00:00Z"},
+        "links": [
+            {
+                "rel": "via",
+                "href": f"https://earth-search.aws.element84.com/v1/items/{scene_id}",
+                "type": "application/json",
+            }
+        ],
+        "assets": {
+            "visual": {
+                "href": f"https://example.com/{scene_id}/TCI.tif",
+                "type": MEDIA_TYPE_COG,
+                "roles": ["visual"],
+            }
+        },
+    }
+    if with_image:
+        child["assets"]["image"] = {
+            "href": f"./{chip_id}_{season}_image_s2.tif",
+            "type": MEDIA_TYPE_COG,
+            "roles": ["data"],
+        }
+    (chip_dir / f"{chip_id}_{season}_s2.json").write_text(json.dumps(child))
+
+
+class TestRendersOnCatalog:
+    """Render definitions and the visual item-asset declarations."""
+
+    def test_item_carries_renders_once(self, tmp_path: Path) -> None:
+        import json
+
+        result = build_catalog(tmp_path)
+        item_path = tmp_path / "chips" / "33UXP" / CHIP_ID / f"{CHIP_ID}.json"
+
+        item = json.loads(item_path.read_text())
+        renders = item["properties"]["renders"]
+        assert set(renders) == {"semantic_2class"}
+        assert renders["semantic_2class"]["assets"] == ["semantic_2class_mask"]
+        assert renders["semantic_2class"]["nodata"] == 0
+        assert "colormap" not in renders["semantic_2class"]
+        assert item["stac_extensions"].count(RENDER_SCHEMA_URI) == 1
+        assert result.total_items == 1
+
+    def test_item_renders_live_under_properties_per_the_schema(self, tmp_path: Path) -> None:
+        """render v2.0.0 requires ``properties.renders`` on a Feature, not a top-level key."""
+        import json
+
+        build_catalog(tmp_path)
+        item_path = tmp_path / "chips" / "33UXP" / CHIP_ID / f"{CHIP_ID}.json"
+
+        item = json.loads(item_path.read_text())
+        assert "renders" in item["properties"]
+        assert "renders" not in item
+
+    def test_collection_renders_stay_top_level(self, tmp_path: Path) -> None:
+        """The same schema requires a top-level ``renders`` on a Collection."""
+        import json
+
+        result = build_catalog(tmp_path)
+
+        assert "renders" in json.loads(result.collection_path.read_text())
+
+    def test_presence_only_background_reaches_the_renders(self, tmp_path: Path) -> None:
+        import json
+
+        result = build_catalog(tmp_path, background_class_value=3)
+        item_path = tmp_path / "chips" / "33UXP" / CHIP_ID / f"{CHIP_ID}.json"
+
+        item = json.loads(item_path.read_text())
+        assert item["properties"]["renders"]["semantic_2class"]["nodata"] == 3
+        coll = json.loads(result.collection_path.read_text())
+        assert coll["renders"]["semantic_2class_mask"]["nodata"] == 3
+
+    def test_collection_renders_keyed_by_asset_name(self, tmp_path: Path) -> None:
+        import json
+
+        result = build_catalog(tmp_path)
+
+        coll = json.loads(result.collection_path.read_text())
+        assert "semantic_2class_mask" in coll["renders"]
+        assert coll["renders"]["instance_mask"]["colormap_name"] == "viridis"
+        assert coll["stac_extensions"].count(RENDER_SCHEMA_URI) == 1
+
+    def test_visual_season_item_assets_declared(self, tmp_path: Path) -> None:
+        import json
+
+        result = build_catalog(tmp_path)
+
+        ia = json.loads(result.collection_path.read_text())["item_assets"]
+        assert ia["planting_visual"]["roles"] == ["visual"]
+        assert ia["harvest_visual"]["type"] == MEDIA_TYPE_COG
+        assert ia["planting_image"]["roles"] == ["data"]
+
+
+class TestImageryReattachedOnStacRerun:
+    """A STAC rerun must not drop imagery that earlier stages attached."""
+
+    def test_links_and_assets_come_back(self, tmp_path: Path) -> None:
+        import json
+
+        build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        item_path = chip_dir / f"{CHIP_ID}.json"
+        assert "planting_visual" not in json.loads(item_path.read_text())["assets"]
+
+        _write_season_child(chip_dir, CHIP_ID, "planting", with_image=True)
+        _write_season_child(chip_dir, CHIP_ID, "harvest")
+        _write_mask(chip_dir / f"{CHIP_ID}_planting_image_s2.tif", [[1, 2], [3, 4]], dtype="uint16")
+
+        build_catalog(tmp_path)
+
+        item = json.loads(item_path.read_text())
+        rels = {link["rel"]: link["href"] for link in item["links"]}
+        assert rels["ftw:planting"] == f"./{CHIP_ID}_planting_s2.json"
+        assert rels["ftw:harvest"] == f"./{CHIP_ID}_harvest_s2.json"
+
+        assets = item["assets"]
+        assert assets["planting_visual"]["href"].startswith("https://")
+        assert assets["planting_visual"]["roles"] == ["visual"]
+        assert assets["harvest_visual"]["href"].startswith("https://")
+        assert assets["planting_visual"]["ftw:scene"] == "S2B_T33UXP_2024P_L2A"
+        assert assets["planting_image"]["href"] == f"./{CHIP_ID}_planting_image_s2.tif"
+        assert assets["planting_image"]["roles"] == ["data"]
+        assert assets["planting_image"]["file:size"] > 0
+        assert assets["planting_image"]["raster:bands"][0]["data_type"] == "uint16"
+        assert "harvest_image" not in assets
+
+    def test_overlay_thumbnail_comes_back(self, tmp_path: Path) -> None:
+        import json
+
+        build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        _write_season_child(chip_dir, CHIP_ID, "planting")
+        (chip_dir / f"{CHIP_ID}_overlay.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+        build_catalog(tmp_path)
+
+        thumbnail = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())["assets"]["thumbnail"]
+        assert thumbnail["href"] == f"./{CHIP_ID}_overlay.jpg"
+        assert thumbnail["roles"] == ["thumbnail"]
+        assert thumbnail["type"] == "image/jpeg"
+        assert thumbnail["file:size"] == 4
+
+    def test_plain_season_thumbnail_is_the_fallback(self, tmp_path: Path) -> None:
+        import json
+
+        build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        _write_season_child(chip_dir, CHIP_ID, "planting")
+        (chip_dir / f"{CHIP_ID}_planting_image_s2.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+        build_catalog(tmp_path)
+
+        item = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())
+        assert item["assets"]["thumbnail"]["href"] == f"./{CHIP_ID}_planting_image_s2.jpg"
+
+    def test_no_thumbnail_file_means_no_thumbnail_asset(self, tmp_path: Path) -> None:
+        import json
+
+        build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        _write_season_child(chip_dir, CHIP_ID, "planting")
+
+        build_catalog(tmp_path)
+
+        item = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())
+        assert "thumbnail" not in item["assets"]
+
+    def test_checksums_reach_the_reattached_assets(self, tmp_path: Path) -> None:
+        import json
+
+        build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        _write_season_child(chip_dir, CHIP_ID, "planting", with_image=True)
+        _write_mask(chip_dir / f"{CHIP_ID}_planting_image_s2.tif", [[1, 2], [3, 4]], dtype="uint16")
+        (chip_dir / f"{CHIP_ID}_overlay.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+        build_catalog(tmp_path, checksums=True)
+
+        assets = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())["assets"]
+        assert assets["planting_image"]["file:checksum"].startswith("1220")
+        assert assets["thumbnail"]["file:checksum"].startswith("1220")
+
+    def test_rerun_does_not_duplicate_links(self, tmp_path: Path) -> None:
+        import json
+
+        build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        _write_season_child(chip_dir, CHIP_ID, "planting")
+
+        build_catalog(tmp_path)
+        build_catalog(tmp_path)
+
+        item = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())
+        rels = [link["rel"] for link in item["links"]]
+        assert rels.count("ftw:planting") == 1

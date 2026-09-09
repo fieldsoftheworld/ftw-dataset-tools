@@ -460,6 +460,8 @@ def _write_mask_raster(
     crs: CRS,
     transform: Affine,
     tags: dict[str, str] | None = None,
+    nodata: int | None = None,
+    stats_nodata: int | None = None,
 ) -> None:
     """Write a label array to disk as a Cloud Optimized GeoTIFF with embedded band statistics.
 
@@ -468,9 +470,16 @@ def _write_mask_raster(
     chips: a distance transform is mostly exact zeros and holds only a few
     dozen distinct values, so deflate is already compressing long byte runs
     that the predictor would shuffle apart.
+
+    ``stats_nodata``, when given, is excluded from the statistics, so the embedded
+    minimum/maximum describe the labelled pixels only. ``nodata`` additionally
+    declares that value on the band, and is deliberately separate: a value can be
+    worth excluding from statistics while still being a legal pixel value that no
+    reader should treat as missing. The class-valued masks pass neither -- their
+    background is a class.
     """
     height, width = mask.shape
-    stats = compute_band_stats(mask)
+    stats = compute_band_stats(mask, nodata=stats_nodata if stats_nodata is not None else nodata)
 
     # Build the file somewhere else and rename it into place. The destination is
     # created the moment it is opened for writing, so a worker killed mid-write
@@ -493,6 +502,7 @@ def _write_mask_raster(
             dtype=mask.dtype,
             crs=crs,
             transform=transform,
+            nodata=nodata,
             compress="deflate",
             blocksize=512,
         ) as dst:
@@ -555,7 +565,26 @@ def _create_masks_for_cell(
             else:
                 mask = source
 
-            _write_mask_raster(mask, output_path, crs, transform, tags=tags)
+            # Instance ids are arbitrary and often global, so a viewer needs the chip's own
+            # id range to stretch over: keeping the background out of the embedded statistics
+            # makes the render's rescale start at the smallest field id.
+            #
+            # Declaring it as the band's nodata is only safe when it cannot collide with a
+            # real id. Presence-only datasets use 3, and _instance_ids_for_shapes hands out
+            # sequential ids 1..n whenever a raw id is unusable, so a genuine field with id 3
+            # would vanish for every nodata-respecting reader. Exclude it from the stats
+            # there, but leave the band's nodata unset.
+            stats_nodata = background_class_value if mask_type == MaskType.INSTANCE else None
+            band_nodata = stats_nodata if stats_nodata == 0 else None
+            _write_mask_raster(
+                mask,
+                output_path,
+                crs,
+                transform,
+                tags=tags,
+                nodata=band_nodata,
+                stats_nodata=stats_nodata,
+            )
         except Exception as e:
             # The earlier outputs are on disk; hand them back with the error.
             raise _PartialCellFailure(results, f"{mask_type.value}: {e}") from e

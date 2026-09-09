@@ -115,6 +115,15 @@ def preserve_imagery_selection(item: pystac.Item, existing_item_path: Path) -> b
     The child ``_planting_s2``/``_harvest_s2`` items are not regenerated, so only
     the parent bookkeeping needs preserving.
 
+    Anything the rebuild already restored is left alone. ``_create_chip_item``
+    runs :func:`~ftw_dataset_tools.api.imagery.stac_child_items.attach_existing_seasons`
+    first, which re-derives the season links and imagery assets from the child
+    items and GeoTIFFs actually on disk; re-adding them here would duplicate the
+    ``ftw:<season>`` links and would replace freshly measured ``file:size`` and
+    ``raster:bands`` with a stale clone. This stays as the fallback for what the
+    rebuild could not reproduce -- most of all the ``ftw:`` bookkeeping
+    properties, which live only on the parent.
+
     Args:
         item: Freshly generated parent chip item, modified in place
         existing_item_path: Path to this chip's item JSON from a previous run
@@ -140,8 +149,11 @@ def preserve_imagery_selection(item: pystac.Item, existing_item_path: Path) -> b
     # whose children were deleted re-selects instead of keeping a dangling link
     # that would make it look selected forever.
     chip_dir = existing_item_path.parent
+    rebuilt_rels = {link.rel for link in item.links}
     for link in existing.links:
-        if link.rel in IMAGERY_LINK_RELS and (chip_dir / Path(link.href).name).exists():
+        if link.rel not in IMAGERY_LINK_RELS or link.rel in rebuilt_rels:
+            continue
+        if (chip_dir / Path(link.href).name).exists():
             item.add_link(link.clone())
 
     for key in (*IMAGERY_PROPERTIES, *IMAGERY_TEMPORAL_PROPERTIES):
@@ -151,6 +163,8 @@ def preserve_imagery_selection(item: pystac.Item, existing_item_path: Path) -> b
     # Downloaded imagery outlives the catalog, but only advertise assets whose
     # files are still on disk.
     for key in IMAGERY_ASSET_KEYS:
+        if key in item.assets:
+            continue
         asset = existing.assets.get(key)
         if asset is not None and (chip_dir / Path(asset.href).name).exists():
             item.add_asset(key, asset.clone())

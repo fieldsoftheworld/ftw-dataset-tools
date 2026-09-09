@@ -1281,9 +1281,9 @@ class TestDocsStage:
         import json
 
         from ftw_dataset_tools.api import tiles
-        from tests.test_api.test_stac import TestCollectionAssetMetadata
+        from tests.test_api.test_stac import build_catalog
 
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        result = build_catalog(tmp_path)
         fields = tmp_path / "ds_fields.parquet"
         config = DatasetConfig.from_dict(
             {
@@ -1313,9 +1313,9 @@ class TestDocsStage:
         self, tmp_path: Path, monkeypatch
     ) -> None:
         from ftw_dataset_tools.api import tiles
-        from tests.test_api.test_stac import TestCollectionAssetMetadata
+        from tests.test_api.test_stac import build_catalog
 
-        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        build_catalog(tmp_path)
         config = DatasetConfig.from_dict(
             {
                 "fields_file": str(tmp_path / "ds_fields.parquet"),
@@ -1337,9 +1337,9 @@ class TestDocsStage:
         import json
 
         from ftw_dataset_tools.api import tiles
-        from tests.test_api.test_stac import TestCollectionAssetMetadata
+        from tests.test_api.test_stac import build_catalog
 
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        result = build_catalog(tmp_path)
         config = DatasetConfig.from_dict(
             {
                 "fields_file": str(tmp_path / "ds_fields.parquet"),
@@ -1380,9 +1380,9 @@ class TestDocsStage:
         self, tmp_path: Path, monkeypatch
     ) -> None:
         from ftw_dataset_tools.api import tiles
-        from tests.test_api.test_stac import TestCollectionAssetMetadata
+        from tests.test_api.test_stac import build_catalog
 
-        TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        build_catalog(tmp_path)
         config = DatasetConfig.from_dict(
             {
                 "fields_file": str(tmp_path / "ds_fields.parquet"),
@@ -1409,9 +1409,9 @@ class TestDocsStage:
         import json
 
         from ftw_dataset_tools.api import tiles
-        from tests.test_api.test_stac import TestCollectionAssetMetadata
+        from tests.test_api.test_stac import build_catalog
 
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        result = build_catalog(tmp_path)
         monkeypatch.setattr(tiles, "tippecanoe_available", lambda: False)
 
         def run(**docs_stage: object) -> None:
@@ -1454,9 +1454,9 @@ class TestDocsStage:
     def test_stage_docs_with_tippecanoe_registers_tiles_and_styles(self, tmp_path: Path) -> None:
         import json
 
-        from tests.test_api.test_stac import TestCollectionAssetMetadata
+        from tests.test_api.test_stac import build_catalog
 
-        result = TestCollectionAssetMetadata()._build_catalog(tmp_path)
+        result = build_catalog(tmp_path)
         config = DatasetConfig.from_dict(
             {
                 "fields_file": str(tmp_path / "ds_fields.parquet"),

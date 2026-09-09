@@ -75,6 +75,11 @@ checksum, because `select_images` and `download_images` run after `stac` and add
 assets later. Checksums are off by default because hashing tens of thousands of COGs is
 slow.
 
+Chip items are written to render straight out of the box: each season's true-colour
+source scene is mirrored onto the item as a `visual` asset, mask classes carry
+`color_hint` colours, and `renders` supplies the nodata and the continuous colour ramps
+(see [docs/stac-extension.md](docs/stac-extension.md#rendering)).
+
 **docs stage.** The final stage turns what was measured about the collection into
 ready-to-browse outputs. With [tippecanoe](https://github.com/felt/tippecanoe) on
 `PATH` it tiles the chips and fields into `chips.pmtiles` / `fields.pmtiles`, then

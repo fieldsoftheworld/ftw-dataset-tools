@@ -201,7 +201,10 @@ Checksums are off by default because they are slow on large datasets.
 Raster assets (masks and clipped imagery) carry `raster:bands`
 ([raster extension](https://github.com/stac-extensions/raster)) with `data_type`,
 `nodata` when set, `spatial_resolution`, and `statistics` (minimum, maximum, mean,
-stddev, and valid_percent when nodata is set). The same statistics are embedded in the
+stddev, and valid_percent whenever a value was excluded from them). A presence-only
+instance mask is the case where those come apart: its background is excluded from the
+statistics, so `valid_percent` is present, while the band declares no `nodata` at all.
+The same statistics are embedded in the
 COG as GDAL `STATISTICS_*` band tags, never in an `.aux.xml` sidecar.
 
 Semantic mask assets add `classification:classes`
@@ -211,7 +214,7 @@ Semantic mask assets add `classification:classes`
 |------|---------|
 | `semantic_2class_mask` | 0 background, 1 field (background is 3 when `presence_only` is set) |
 | `semantic_3class_mask` | 0 background, 1 field, 2 boundary |
-| `instance_mask` | no class list; background (0, or 3 for presence-only) marks non-field pixels, other values are instance ids |
+| `instance_mask` | no class list; background (0, or 3 for presence-only) marks non-field pixels and is excluded from the band statistics — declared as the band's `nodata` only when it is 0 — other values are instance ids |
 | | Field ids that are float-like (e.g. `'111205887.0'`) or otherwise non-numeric are coerced to integers, or replaced with sequential ids (1..n) for that chip when any id in it can't be coerced. |
 | `decode_boundary_mask` | 0 background, 1 boundary |
 | `decode_distance_mask` | no class list; float32 normalized distance in [0, 1], with a `decode_distance_max_px` dataset tag |
@@ -236,6 +239,67 @@ The docs stage adds two more asset shapes to the collection when it runs (see
 replaces these assets and the `describedby`/`agents` links in place (matched by key, or
 by `rel` + `href`) rather than duplicating them, and drops any tile, style or document
 entry a previous run wrote that this run did not produce.
+
+## Rendering
+
+A chip item's own COGs are label masks and a 16-bit four-band scene stack, so a browser
+that picks one to draw unaided shows a near-black square. Three pieces of metadata make a
+chip item render meaningfully.
+
+**Visual season assets.** Once imagery has been selected, the parent chip item carries
+`planting_visual` and `harvest_visual`: the selected Sentinel-2 scene's true-colour COG
+(Earth Search's `visual` asset), by absolute `https` href, with role `visual`, plus
+`ftw:scene` (the source scene id) and the scene's `datetime`. They are the natural default
+for a client that scores candidate assets by role. The downloaded, chip-clipped
+`planting_image` / `harvest_image` assets keep role `data` and are unchanged.
+
+**Colour hints.** Colours for the categorical masks come from
+`classification:classes[].color_hint` (6-digit hex, no `#`) — this is the primary
+rendering mechanism for those rasters. Field interiors are `009E73` and boundaries
+`D55E00` (Okabe-Ito, colour-blind safe); background carries no hint, because it is meant
+to be transparent rather than coloured.
+
+**Renders.** Items carry `renders` under `properties` and the collection carries it at the
+top level, as the [render extension](https://github.com/stac-extensions/render) v2.0.0
+schema requires for each type. The categorical masks get an entry with only `assets`,
+`title` and `nodata`, so a viewer that ignores `classification:classes` still hides the
+background — deliberately no `colormap`, so the class hints stay the single source of
+colour. Only the continuous rasters get a ramp:
+
+| Render | Assets | Definition |
+|--------|--------|------------|
+| `semantic_2class` | `semantic_2class_mask` | `nodata`: the background value |
+| `semantic_3class` | `semantic_3class_mask` | `nodata`: the background value |
+| `decode_boundary` | `decode_boundary_mask` | `nodata: 0` |
+| `decode_distance` | `decode_distance_mask` | `rescale: [[0, 1]]`, `nodata` from the band, else 0 |
+| `instance` | `instance_mask` | `rescale: [[band minimum, band maximum]]`, `nodata`: the background value, `colormap_name: viridis` |
+
+`nodata` is the dataset's background pixel value — 0 normally, **3** when
+`presence_only` is set — for the three class-valued masks (`semantic_2class`,
+`semantic_3class`, `instance`). The DECODE layers always fold their background into 0, so
+they always use 0.
+
+Instance ids are global rather than per-chip, so the instance mask's background is excluded
+from its embedded statistics: the render then stretches from the chip's smallest field id
+to its largest instead of from zero, and a chip whose ids all sit in the hundreds of
+thousands still shows its fields apart. Where those statistics are missing or degenerate
+the render falls back to `[[0, 1]]`.
+
+Two caveats on that:
+
+- The instance band declares `nodata` **only when the background is 0**. A presence-only
+  background of 3 is also a legal instance id (ids are renumbered `1..n` for a chip whose
+  raw ids cannot be coerced), so declaring it would make a real field vanish for any
+  nodata-respecting reader. Presence-only instance masks therefore exclude 3 from their
+  statistics but leave the band's `nodata` unset.
+- Masks written before this behaviour existed carry statistics that include the background
+  and so still yield a `[[0, maximum]]` stretch. Re-run the `masks` stage (then `stac`) to
+  pick up the tighter range.
+
+Item renders are keyed by mask kind and only cover the masks that chip actually has; the
+collection mirrors the same definitions keyed by asset name, as a default for clients that
+read the collection first. The collection's instance render carries no `rescale` at all —
+there is no meaningful collection-wide id range — so use the item's.
 
 ## Output Layout
 
@@ -308,6 +372,7 @@ sub-catalog and every item — declares the
 | `scl` | Scene Classification Layer |
 | `cloud_probability` | Cloud probability mask |
 | `clipped` | Local clipped multi-band image (after download) |
+| `planting_visual` / `harvest_visual` | The season's source scene as a true-colour COG (role `visual`, remote href) |
 
 ## File Naming Convention
 

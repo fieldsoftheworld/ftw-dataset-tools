@@ -1133,3 +1133,299 @@ class TestWritesWithoutResolvingTheRoot:
             for rel, href in HIERARCHICAL_HREFS.items():
                 assert child[rel] == href, f"{season} child link {rel}"
             assert child["ftw:parent_chip"] == "./chip_001.json"
+
+
+MEDIA_TYPE_COG = "image/tiff; application=geotiff; profile=cloud-optimized"
+
+
+class TestVisualSeasonAssets:
+    """The parent chip item carries the true-colour scene COG for each season."""
+
+    def _parent(self) -> pystac.Item:
+        return pystac.Item(
+            id="chip_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime.now(UTC),
+            properties={},
+        )
+
+    def _run(self, chip_dir: Path, parent_item: pystac.Item, result) -> None:
+        chip_dir.mkdir(exist_ok=True)
+        create_child_items_from_selection(
+            chip_dir=chip_dir,
+            parent_item=parent_item,
+            result=result,
+            year=2024,
+            cloud_cover_chip=2.0,
+            buffer_days=14,
+        )
+
+    def test_both_seasons_get_a_visual_asset(
+        self, tmp_path: Path, mock_selection_result: SceneSelectionResult
+    ) -> None:
+        parent_item = self._parent()
+
+        self._run(tmp_path / "chip_001", parent_item, mock_selection_result)
+
+        for season in ("planting", "harvest"):
+            asset = parent_item.assets[f"{season}_visual"]
+            assert asset.href == "https://example.com/data/visual.tif"
+            assert asset.media_type == MEDIA_TYPE_COG
+            assert asset.roles == ["visual"]
+            assert asset.title == f"{season.capitalize()} season scene (true colour)"
+
+    def test_visual_asset_records_scene_and_datetime(
+        self, tmp_path: Path, mock_selection_result: SceneSelectionResult
+    ) -> None:
+        parent_item = self._parent()
+
+        self._run(tmp_path / "chip_001", parent_item, mock_selection_result)
+
+        planting = parent_item.assets["planting_visual"].extra_fields
+        assert planting["ftw:scene"] == "S2A_TILE_20240615_test"
+        assert planting["datetime"].startswith("2024-06-15T10:00:00")
+        harvest = parent_item.assets["harvest_visual"].extra_fields
+        assert harvest["ftw:scene"] == "S2A_TILE_20240915_test"
+
+    def test_visual_assets_are_written_to_disk(
+        self, tmp_path: Path, mock_selection_result: SceneSelectionResult
+    ) -> None:
+        import json
+
+        chip_dir = tmp_path / "chip_001"
+        parent_item = self._parent()
+
+        self._run(chip_dir, parent_item, mock_selection_result)
+
+        saved = json.loads((chip_dir / "chip_001.json").read_text())
+        assert saved["assets"]["planting_visual"]["href"] == "https://example.com/data/visual.tif"
+        assert saved["assets"]["harvest_visual"]["roles"] == ["visual"]
+
+    def test_missing_season_gets_no_visual_asset(
+        self, tmp_path: Path, mock_selection_result_planting_only: SceneSelectionResult
+    ) -> None:
+        parent_item = self._parent()
+
+        self._run(tmp_path / "chip_001", parent_item, mock_selection_result_planting_only)
+
+        assert "planting_visual" in parent_item.assets
+        assert "harvest_visual" not in parent_item.assets
+
+    def test_rerun_replaces_rather_than_duplicates(
+        self,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+        mock_selection_result_planting_only: SceneSelectionResult,
+    ) -> None:
+        chip_dir = tmp_path / "chip_001"
+        parent_item = self._parent()
+
+        self._run(chip_dir, parent_item, mock_selection_result)
+        self._run(chip_dir, parent_item, mock_selection_result_planting_only)
+
+        assert "harvest_visual" not in parent_item.assets
+        assert parent_item.assets["planting_visual"].href == "https://example.com/data/visual.tif"
+        rels = [link.rel for link in parent_item.links]
+        assert rels.count("ftw:planting") == 1
+
+    def test_reselection_drops_the_replaced_scenes_local_image(
+        self, tmp_path: Path, mock_selection_result: SceneSelectionResult
+    ) -> None:
+        """A new selection stops advertising the previous scene's clipped image.
+
+        The GeoTIFF on disk was clipped from the scene that has just been
+        replaced, so the parent must not keep describing it as this chip's
+        imagery. The file itself is left alone: the next download overwrites it
+        and ``attach_season_to_parent`` re-derives the asset from it.
+        """
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+        image_path = chip_dir / "chip_001_planting_image_s2.tif"
+        image_path.write_bytes(b"not really a geotiff")
+
+        parent_item = self._parent()
+        parent_item.add_asset(
+            "planting_image",
+            pystac.Asset(href="./chip_001_planting_image_s2.tif", roles=["data"]),
+        )
+
+        self._run(chip_dir, parent_item, mock_selection_result)
+
+        assert "planting_image" not in parent_item.assets
+        assert image_path.exists()
+
+
+class TestAttachSeasonToParent:
+    """The shared helper used by selection and by a STAC rebuild."""
+
+    def test_reattaches_link_visual_and_local_image(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api.imagery.stac_child_items import attach_existing_seasons
+
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+        _write_child(chip_dir, "chip_001", "planting")
+
+        parent_item = pystac.Item(
+            id="chip_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime.now(UTC),
+            properties={},
+        )
+
+        attached = attach_existing_seasons(parent_item, chip_dir)
+
+        assert attached == ["planting"]
+        assert parent_item.get_single_link("ftw:planting").href == "./chip_001_planting_s2.json"
+        assert parent_item.assets["planting_visual"].href.startswith("https://")
+        assert "harvest_visual" not in parent_item.assets
+        assert json.loads(json.dumps(parent_item.to_dict(include_self_link=False)))
+
+    def test_no_children_on_disk_is_a_no_op(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.imagery.stac_child_items import attach_existing_seasons
+
+        parent_item = pystac.Item(
+            id="chip_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime.now(UTC),
+            properties={},
+        )
+
+        assert attach_existing_seasons(parent_item, tmp_path) == []
+        assert parent_item.assets == {}
+
+
+def _write_child(chip_dir: Path, chip_id: str, season: str, image: bool = False) -> None:
+    """Write a minimal season child item next to its parent chip."""
+    import json
+
+    scene_id = "S2B_T31UFR_20250406T104557_L2A"
+    child = {
+        "type": "Feature",
+        "stac_version": "1.1.0",
+        "id": f"{chip_id}_{season}_s2",
+        "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+        "bbox": [0.0, 0.0, 1.0, 1.0],
+        "properties": {
+            "ftw:season": season,
+            "datetime": "2025-04-06T10:47:09.925000Z",
+        },
+        "links": [
+            {
+                "rel": "via",
+                "href": f"https://earth-search.aws.element84.com/v1/collections/s2/items/{scene_id}",
+                "type": "application/json",
+            }
+        ],
+        "assets": {
+            "visual": {
+                "href": f"https://example.com/{scene_id}/TCI.tif",
+                "type": MEDIA_TYPE_COG,
+                "roles": ["visual"],
+            }
+        },
+    }
+    if image:
+        child["assets"]["image"] = {
+            "href": f"./{chip_id}_{season}_image_s2.tif",
+            "type": MEDIA_TYPE_COG,
+            "roles": ["data"],
+        }
+    (chip_dir / f"{chip_id}_{season}_s2.json").write_text(json.dumps(child))
+
+
+class TestSeasonImageTitleFallback:
+    """A GeoTIFF without band descriptions must not lose the band list in the title."""
+
+    def test_falls_back_to_the_childs_own_image_title(self, tmp_path: Path) -> None:
+        import json
+
+        import numpy as np
+        import rasterio
+        from rasterio.transform import from_bounds
+
+        from ftw_dataset_tools.api.imagery.stac_child_items import attach_existing_seasons
+
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+        _write_child(chip_dir, "chip_001", "planting", image=True)
+
+        # A one-band COG with no band descriptions at all.
+        image_path = chip_dir / "chip_001_planting_image_s2.tif"
+        data = np.array([[1, 2], [3, 4]], dtype="uint16")
+        with rasterio.open(
+            image_path,
+            "w",
+            driver="COG",
+            width=2,
+            height=2,
+            count=1,
+            dtype="uint16",
+            crs="EPSG:4326",
+            transform=from_bounds(0, 0, 1, 1, 2, 2),
+        ) as dst:
+            dst.write(data, 1)
+
+        child = json.loads((chip_dir / "chip_001_planting_s2.json").read_text())
+        child["assets"]["image"]["title"] = "Clipped 4-band image (red,green,blue,nir)"
+        (chip_dir / "chip_001_planting_s2.json").write_text(json.dumps(child))
+
+        parent_item = pystac.Item(
+            id="chip_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime.now(UTC),
+            properties={},
+        )
+
+        attach_existing_seasons(parent_item, chip_dir)
+
+        assert parent_item.assets["planting_image"].title == (
+            "Planting season imagery (red,green,blue,nir)"
+        )
+
+
+class TestParentSurvivesAChildFailure:
+    """A raise inside the season loop must not lose the selection properties."""
+
+    def test_parent_is_written_even_when_a_child_fails(
+        self, tmp_path: Path, mock_selection_result: SceneSelectionResult
+    ) -> None:
+        import json
+        from unittest.mock import patch
+
+        import pytest
+
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+        parent_item = pystac.Item(
+            id="chip_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime.now(UTC),
+            properties={},
+        )
+
+        with (
+            patch(
+                "ftw_dataset_tools.api.imagery.stac_child_items._create_season_child_item",
+                side_effect=OSError("disk full"),
+            ),
+            pytest.raises(OSError, match="disk full"),
+        ):
+            create_child_items_from_selection(
+                chip_dir=chip_dir,
+                parent_item=parent_item,
+                result=mock_selection_result,
+                year=2024,
+                cloud_cover_chip=2.0,
+                buffer_days=14,
+            )
+
+        saved = json.loads((chip_dir / "chip_001.json").read_text())
+        assert saved["properties"]["ftw:calendar_year"] == 2024
+        assert saved["properties"]["ftw:planting_day"] == 150
