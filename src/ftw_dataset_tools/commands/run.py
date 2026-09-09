@@ -6,7 +6,7 @@ import sys
 
 import click
 
-from ftw_dataset_tools.api import assets, crop_stats, pipeline, source
+from ftw_dataset_tools.api import assets, crop_stats, masks, pipeline, source
 from ftw_dataset_tools.api import config as config_module
 
 
@@ -199,13 +199,8 @@ def _print_summary(ctx: pipeline.PipelineContext) -> None:
         skipped_total = sum(r.total_skipped for r in ctx.masks_results.values())
         if skipped_total > 0:
             click.echo(f"  Masks skipped: {skipped_total:,} (see log for reasons)")
-        existing_total = sum(r.masks_existing for r in ctx.masks_results.values())
-        if existing_total > 0:
-            click.echo(f"  Masks reused: {existing_total:,}")
-        # Every mask type shares one worker pool, so take the count, not the sum.
-        restarts_total = max((r.pool_restarts for r in ctx.masks_results.values()), default=0)
-        if restarts_total > 0:
-            click.echo(f"  Worker pool restarts: {restarts_total}")
+        for line in masks.mask_run_summary_lines(ctx.masks_results.values()):
+            click.echo(line)
     if ctx.chips_result:
         click.echo(f"  {crop_stats.crop_stats_summary(ctx.crop_stats_result)}")
     if ctx.stac_result:

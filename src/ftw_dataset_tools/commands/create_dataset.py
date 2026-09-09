@@ -10,7 +10,7 @@ import click
 import pystac
 from tqdm import tqdm
 
-from ftw_dataset_tools.api import crop_stats, dataset, splits
+from ftw_dataset_tools.api import crop_stats, dataset, masks, splits
 from ftw_dataset_tools.api.assets import MaskReadError
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
@@ -445,13 +445,8 @@ def create_dataset_cmd(
         skipped_total = sum(r.total_skipped for r in result.masks_results.values())
         if skipped_total > 0:
             click.echo(f"  Masks skipped: {skipped_total:,} (see log for reasons)")
-        existing_total = sum(r.masks_existing for r in result.masks_results.values())
-        if existing_total > 0:
-            click.echo(f"  Masks reused: {existing_total:,}")
-        # Every mask type shares one worker pool, so take the count, not the sum.
-        restarts_total = max((r.pool_restarts for r in result.masks_results.values()), default=0)
-        if restarts_total > 0:
-            click.echo(f"  Worker pool restarts: {restarts_total}")
+        for line in masks.mask_run_summary_lines(result.masks_results.values()):
+            click.echo(line)
 
         click.echo("")
         click.echo("Output files:")

@@ -24,7 +24,8 @@ from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loa
 from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
+    from concurrent.futures import Future
 
     from affine import Affine
 
@@ -163,6 +164,29 @@ class CreateMasksResult:
         return len(self.masks_skipped)
 
 
+def mask_run_summary_lines(results: Iterable[CreateMasksResult]) -> list[str]:
+    """Report lines for outputs reused and worker-pool restarts, if any.
+
+    Shared by every entry point that drives ``create_masks`` - the standalone
+    ``create-masks`` command and the pipeline - so a run degraded by repeated
+    worker deaths never looks clean from one of them and not the other. Callers
+    print their own created/skipped counts, which they phrase differently.
+    """
+    results = list(results)
+    lines: list[str] = []
+
+    existing = sum(r.masks_existing for r in results)
+    if existing > 0:
+        lines.append(f"  Masks reused: {existing:,}")
+
+    # Every mask type shares one worker pool, so take the count, not the sum.
+    restarts = max((r.pool_restarts for r in results), default=0)
+    if restarts > 0:
+        lines.append(f"  Worker pool restarts: {restarts}")
+
+    return lines
+
+
 def _get_geometries_in_bounds(
     conn: duckdb.DuckDBPyConnection,
     file_path: Path,
@@ -222,18 +246,40 @@ def _instance_value(raw: object) -> int | None:
     return None
 
 
-def _instance_ids_for_shapes(boundaries: list[tuple]) -> list[int]:
+def _fallback_instance_ids(count: int, background_class_value: int) -> list[int]:
+    """Sequential ids 1, 2, 3, ... with ``background_class_value`` left out.
+
+    Presence-only labels use 3 as background and pre-fill the instance array
+    with it, so a plain 1..n range would burn the third polygon as 3 and make
+    it indistinguishable from background - it would vanish with no skip and no
+    warning. Skipping the value yields 1, 2, 4, 5, ... instead.
+    """
+    ids: list[int] = []
+    candidate = 1
+    while len(ids) < count:
+        if candidate != background_class_value:
+            ids.append(candidate)
+        candidate += 1
+    return ids
+
+
+def _instance_ids_for_shapes(boundaries: list[tuple], background_class_value: int) -> list[int]:
     """Return uint32-safe instance ids, one per boundary row.
 
-    Falls back to stable sequential ids (1..n, in the order rows come back)
-    for the *entire* cell when any raw id is missing, non-numeric,
-    non-positive, or too large for uint32 - a partial fallback could collide
-    with valid ids already present in the same cell.
+    Falls back to stable sequential ids (in the order rows come back) for the
+    *entire* cell when any raw id is missing, non-numeric, non-positive, or too
+    large for uint32 - a partial fallback could collide with valid ids already
+    present in the same cell. Generated ids skip ``background_class_value``.
+
+    Only the *generated* ids avoid the background value. A genuine field id
+    that happens to equal it still collides, because a presence-only instance
+    mask carries both the background sentinel and real ids in one unsigned
+    band; that is a data-model problem tracked separately as issue #67.
     """
     values = [_instance_value(id_val) for id_val, _wkt in boundaries]
     needs_fallback = any(v is None or v <= 0 or v > _UINT32_MAX for v in values)
     if needs_fallback:
-        return list(range(1, len(boundaries) + 1))
+        return _fallback_instance_ids(len(boundaries), background_class_value)
     return values
 
 
@@ -357,7 +403,7 @@ def _rasterize_mask(
         )
         # Rasterize with ID values
         if boundaries:
-            ids = _instance_ids_for_shapes(boundaries)
+            ids = _instance_ids_for_shapes(boundaries, background_class_value)
             shapes = [
                 (_wkt_to_geometry(wkt), value)
                 for (_id_val, wkt), value in zip(boundaries, ids, strict=True)
@@ -426,25 +472,38 @@ def _write_mask_raster(
     height, width = mask.shape
     stats = compute_band_stats(mask)
 
-    # Overviews are left to the COG driver default (OVERVIEWS=AUTO): none for
-    # single-tile chips, built automatically for larger rasters.
-    with rasterio.open(
-        output_path,
-        "w",
-        driver="COG",
-        height=height,
-        width=width,
-        count=1,
-        dtype=mask.dtype,
-        crs=crs,
-        transform=transform,
-        compress="deflate",
-        blocksize=512,
-    ) as dst:
-        dst.write(mask, 1)
-        if tags:
-            dst.update_tags(**tags)
-        embed_band_stats(dst, 1, stats)
+    # Build the file somewhere else and rename it into place. The destination is
+    # created the moment it is opened for writing, so a worker killed mid-write
+    # (an OOM kill is the failure this module exists to survive) would otherwise
+    # leave a non-empty but truncated file that a later skip_existing rerun
+    # counts as finished. A rename within the directory is atomic, so the
+    # destination only ever exists complete.
+    tmp_path = output_path.with_name(f".{output_path.name}.{os.getpid()}.tmp")
+
+    try:
+        # Overviews are left to the COG driver default (OVERVIEWS=AUTO): none for
+        # single-tile chips, built automatically for larger rasters.
+        with rasterio.open(
+            tmp_path,
+            "w",
+            driver="COG",
+            height=height,
+            width=width,
+            count=1,
+            dtype=mask.dtype,
+            crs=crs,
+            transform=transform,
+            compress="deflate",
+            blocksize=512,
+        ) as dst:
+            dst.write(mask, 1)
+            if tags:
+                dst.update_tags(**tags)
+            embed_band_stats(dst, 1, stats)
+        tmp_path.replace(output_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def _create_masks_for_cell(
@@ -681,6 +740,12 @@ def _run_work_items(
     chips in a real build. Instead, resubmit whatever didn't finish to a
     fresh pool, up to a few times, before giving up on the remainder.
 
+    Submission is inside the handled region too: a pool that breaks while work
+    is still being fed to it makes ``submit`` itself raise, and that must be a
+    restart rather than an aborted stage. Each restart also halves the worker
+    count, since the usual cause is a memory shortfall that coming back at the
+    same width would just hit again.
+
     Returns:
         Tuple of (created (mask type, result) pairs, failures, pool restarts).
         A failure carries the task, the (grid id, reason) pair, and the mask
@@ -692,14 +757,24 @@ def _run_work_items(
     completed = 0
     pool_restarts = 0
     pending = list(work_items)
+    workers = num_workers or _default_num_workers()
 
     while pending:
         broke = False
         finished: set[_MaskTask] = set()
-        executor = ProcessPoolExecutor(max_workers=num_workers)
+        executor = ProcessPoolExecutor(max_workers=workers)
 
         try:
-            futures = {executor.submit(_process_single_grid_cell, item): item for item in pending}
+            futures: dict[Future, _MaskTask] = {}
+            for item in pending:
+                try:
+                    futures[executor.submit(_process_single_grid_cell, item)] = item
+                except BrokenProcessPool:
+                    # The pool died mid-submission. Drain whatever did get
+                    # submitted; the rest stays in `pending` for the restart.
+                    broke = True
+                    break
+
             for future in as_completed(futures):
                 item = futures[future]
                 try:
@@ -743,6 +818,11 @@ def _run_work_items(
             pending = []
             break
         pool_restarts += 1
+        # Come back narrower. A broken pool almost always means a worker was
+        # OOM-killed, and restarting at the same width burns the restart budget
+        # on the same shortfall; fewer concurrent workers (each keeping its
+        # original DuckDB budget) lets a memory-bound run converge.
+        workers = max(1, workers // 2)
 
     return created, failures, pool_restarts
 
@@ -792,8 +872,9 @@ def create_masks(
                        size are not recreated (counted in the result's masks_existing).
         on_progress: Optional callback (current, total) for progress updates
         on_start: Optional callback (total_grids, filtered_grids, total_tasks) called before
-                  processing. total_tasks is filtered_grids x rasterization groups, which is
-                  what on_progress counts up to.
+                  processing. total_tasks is the number of rasterizations actually queued
+                  (filtered_grids x rasterization groups, less anything skip_existing
+                  filtered out), which is what on_progress counts up to.
 
     Returns:
         A CreateMasksResult per requested mask type, keyed by that type.
@@ -866,14 +947,8 @@ def create_masks(
 
     total_cells = len(grid_cells)
 
-    # One task per (grid cell, group of mask types sharing a rasterization), so the
-    # total the progress bar runs to is the total on_start announces.
+    # One task per (grid cell, group of mask types sharing a rasterization).
     groups = _group_by_source(mask_types)
-    total_tasks = total_cells * len(groups)
-
-    # Call on_start callback with grid counts and the task total
-    if on_start:
-        on_start(total_grids, total_cells, total_tasks)
 
     # Get CRS from GeoParquet metadata
     geo_meta_result = conn.execute(
@@ -977,6 +1052,13 @@ def create_masks(
                     memory_limit_mb=memory_limit_mb,
                 )
             )
+
+    # Announce (and count progress against) the work that is actually queued:
+    # taking the total before the skip_existing filter would leave a gap-filling
+    # rerun showing a progress bar that stops a few percent in.
+    total_tasks = len(work_items)
+    if on_start:
+        on_start(total_grids, total_cells, total_tasks)
 
     results, failures, pool_restarts = _run_work_items(
         work_items, num_workers, total_tasks, on_progress

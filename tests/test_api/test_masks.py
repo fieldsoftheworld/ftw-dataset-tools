@@ -1448,7 +1448,7 @@ class TestRasterizeMaskInstanceIds:
         )
         return fields_path, lines_path
 
-    def _rasterize(self, tmp_path, ids):
+    def _rasterize(self, tmp_path, ids, background_class_value: int = 0):
         import duckdb
         from rasterio.crs import CRS
 
@@ -1474,7 +1474,7 @@ class TestRasterizeMaskInstanceIds:
             height=height,
             mask_type=MaskType.INSTANCE,
             id_col="id",
-            background_class_value=0,
+            background_class_value=background_class_value,
         )
 
     def test_valid_ids_are_preserved(self, tmp_path) -> None:
@@ -1492,6 +1492,41 @@ class TestRasterizeMaskInstanceIds:
         unique_nonzero = set(np.unique(mask).tolist()) - {0}
         assert unique_nonzero == {1, 2, 3}
 
+    def test_fallback_ids_skip_a_presence_only_background(self, tmp_path) -> None:
+        """With background 3, a plain 1..n fallback would burn the third field as
+
+        background and make it vanish. The fallback has to step over 3.
+        """
+        mask = self._rasterize(tmp_path, ["abc", "abc", "abc"], background_class_value=3)
+        burned = set(np.unique(mask).tolist()) - {3}
+        assert burned == {1, 2, 4}
+
+
+class TestFallbackInstanceIds:
+    """The fallback id generator must never hand out the background value."""
+
+    def test_default_background_is_a_plain_range(self) -> None:
+        from ftw_dataset_tools.api.masks import _fallback_instance_ids
+
+        assert _fallback_instance_ids(4, background_class_value=0) == [1, 2, 3, 4]
+
+    def test_presence_only_background_is_skipped(self) -> None:
+        from ftw_dataset_tools.api.masks import _fallback_instance_ids
+
+        assert _fallback_instance_ids(5, background_class_value=3) == [1, 2, 4, 5, 6]
+
+    def test_no_shapes_needs_no_ids(self) -> None:
+        from ftw_dataset_tools.api.masks import _fallback_instance_ids
+
+        assert _fallback_instance_ids(0, background_class_value=3) == []
+
+    def test_ids_stay_unique(self) -> None:
+        from ftw_dataset_tools.api.masks import _fallback_instance_ids
+
+        ids = _fallback_instance_ids(20, background_class_value=7)
+        assert len(set(ids)) == len(ids)
+        assert 7 not in ids
+
 
 class TestMgrsSquare:
     def test_ftw_grid_id(self) -> None:
@@ -1505,3 +1540,241 @@ class TestMgrsSquare:
 
         assert get_mgrs_square("grid_001") == "other"
         assert get_mgrs_square("ftw-abc") == "other"
+
+
+class TestMaskWriteIsAtomic:
+    """A mask must never be visible at its destination path until it is complete.
+
+    ``skip_existing`` treats any non-empty file as finished, and the writer
+    creates the destination the moment it opens it, so a worker killed mid-write
+    would otherwise leave a truncated file that a gap-filling rerun reuses.
+    """
+
+    @staticmethod
+    def _write_args():
+        from affine import Affine
+        from rasterio.crs import CRS
+
+        mask = np.ones((8, 8), dtype=np.uint8)
+        return mask, CRS.from_epsg(4326), Affine.translation(0, 1) * Affine.scale(0.1, -0.1)
+
+    def test_successful_write_leaves_only_the_destination(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import _write_mask_raster
+
+        mask, crs, transform = self._write_args()
+        output_path = tmp_path / "mask.tif"
+
+        _write_mask_raster(mask, output_path, crs, transform)
+
+        assert output_path.exists()
+        assert [p.name for p in tmp_path.iterdir()] == ["mask.tif"]
+
+    def test_failed_write_leaves_no_destination_file(self, tmp_path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import masks
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("killed mid-write")
+
+        monkeypatch.setattr(masks, "embed_band_stats", boom)
+
+        mask, crs, transform = self._write_args()
+        output_path = tmp_path / "mask.tif"
+
+        with pytest.raises(RuntimeError):
+            masks._write_mask_raster(mask, output_path, crs, transform)
+
+        assert not output_path.exists()
+        assert list(tmp_path.iterdir()) == []
+
+    def test_a_crashed_run_does_not_leave_a_reusable_file(self, tmp_path, monkeypatch) -> None:
+        """End to end: a run that dies while writing leaves nothing skip_existing
+
+        could mistake for a finished mask.
+        """
+        from ftw_dataset_tools.api import masks
+
+        chips_path, fields_path, lines_path = TestCreateMasksSkipExisting._build_inputs(tmp_path)
+        output_dir = tmp_path / "masks"
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("killed mid-write")
+
+        monkeypatch.setattr(masks, "embed_band_stats", boom)
+        monkeypatch.setattr(masks, "ProcessPoolExecutor", _FakeExecutor)
+        _FakeExecutor.instances.clear()
+
+        results = masks.create_masks(
+            chips_file=chips_path,
+            boundaries_file=fields_path,
+            boundary_lines_file=lines_path,
+            output_dir=output_dir,
+            field_dataset="test",
+            mask_types=[masks.MaskType.SEMANTIC_2_CLASS],
+            num_workers=1,
+        )
+
+        assert results[masks.MaskType.SEMANTIC_2_CLASS].total_created == 0
+        assert list(output_dir.iterdir()) == []
+
+
+class TestOnStartCountsQueuedTasks:
+    """The progress total has to be taken after the skip_existing filter."""
+
+    def test_total_tasks_excludes_masks_already_on_disk(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import MaskType, create_masks, get_mask_output_path
+
+        chips_path, fields_path, lines_path = TestCreateMasksSkipExisting._build_inputs(tmp_path)
+        output_dir = tmp_path / "masks"
+
+        common = {
+            "chips_file": chips_path,
+            "boundaries_file": fields_path,
+            "boundary_lines_file": lines_path,
+            "output_dir": output_dir,
+            "field_dataset": "test",
+            "mask_types": [MaskType.SEMANTIC_2_CLASS],
+            "num_workers": 1,
+        }
+        create_masks(**common)
+
+        # Drop one of the two masks; only that one should be queued on the rerun.
+        get_mask_output_path(
+            grid_id="c2",
+            mask_type=MaskType.SEMANTIC_2_CLASS,
+            chip_dirs=None,
+            output_dir=output_dir,
+            field_dataset="test",
+        ).unlink()
+
+        seen: list[tuple[int, int, int]] = []
+        progress: list[tuple[int, int]] = []
+        results = create_masks(
+            **common,
+            skip_existing=True,
+            on_start=lambda total, filtered, tasks: seen.append((total, filtered, tasks)),
+            on_progress=lambda current, total: progress.append((current, total)),
+        )
+
+        assert seen == [(2, 2, 1)]
+        assert progress[-1] == (1, 1)
+        assert results[MaskType.SEMANTIC_2_CLASS].masks_existing == 1
+        assert results[MaskType.SEMANTIC_2_CLASS].total_created == 1
+
+
+class _SubmitBreaksExecutor(_FakeExecutor):
+    """Dies inside submit() on the first pool created; later pools behave normally."""
+
+    def submit(self, fn, item):
+        if _FakeExecutor.instances.index(self) == 0:
+            raise BrokenProcessPool("died while submitting")
+        return super().submit(fn, item)
+
+
+class TestRunWorkItemsSubmissionBreaks:
+    """A pool that breaks while work is being submitted must restart, not abort."""
+
+    def test_recovers_when_submit_raises(self, tmp_path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import masks
+
+        def fake_worker(task):
+            return (
+                [
+                    (
+                        mask_type,
+                        masks.MaskResult(
+                            grid_id=task.grid_id, output_path=Path(path), width=1, height=1
+                        ),
+                    )
+                    for mask_type, path in task.outputs
+                ],
+                None,
+            )
+
+        monkeypatch.setattr(masks, "_process_single_grid_cell", fake_worker)
+        monkeypatch.setattr(masks, "ProcessPoolExecutor", _SubmitBreaksExecutor)
+        _FakeExecutor.instances.clear()
+
+        work_items = [_mask_task(tmp_path, grid_id=g) for g in ("g1", "g2")]
+        created, failures, pool_restarts = masks._run_work_items(
+            work_items, num_workers=2, total_tasks=2, on_progress=None
+        )
+
+        assert {result.grid_id for _mask_type, result in created} == {"g1", "g2"}
+        assert failures == []
+        assert pool_restarts == 1
+
+
+class TestRunWorkItemsHalvesWorkers:
+    """A broken pool usually means a memory shortfall, so each restart narrows it."""
+
+    def test_worker_count_halves_on_every_restart(self, tmp_path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import masks
+
+        def always_broken(_task):
+            raise BrokenProcessPool("boom")
+
+        monkeypatch.setattr(masks, "_process_single_grid_cell", always_broken)
+        monkeypatch.setattr(masks, "ProcessPoolExecutor", _FakeExecutor)
+        _FakeExecutor.instances.clear()
+
+        _created, failures, pool_restarts = masks._run_work_items(
+            [_mask_task(tmp_path, grid_id="g1")], num_workers=8, total_tasks=1, on_progress=None
+        )
+
+        assert pool_restarts == masks._MAX_POOL_RESTARTS
+        assert len(failures) == 1
+        assert [e.max_workers for e in _FakeExecutor.instances] == [8, 4, 2, 1]
+
+    def test_never_narrows_below_one_worker(self, tmp_path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import masks
+
+        def always_broken(_task):
+            raise BrokenProcessPool("boom")
+
+        monkeypatch.setattr(masks, "_process_single_grid_cell", always_broken)
+        monkeypatch.setattr(masks, "ProcessPoolExecutor", _FakeExecutor)
+        _FakeExecutor.instances.clear()
+
+        masks._run_work_items(
+            [_mask_task(tmp_path, grid_id="g1")], num_workers=1, total_tasks=1, on_progress=None
+        )
+
+        assert [e.max_workers for e in _FakeExecutor.instances] == [1, 1, 1, 1]
+
+
+class TestMaskRunSummaryLines:
+    """Lines shared by the standalone command and the pipeline."""
+
+    @staticmethod
+    def _result(existing: int = 0, restarts: int = 0):
+        from ftw_dataset_tools.api.masks import CreateMasksResult
+
+        return CreateMasksResult(
+            masks_created=[],
+            masks_skipped=[],
+            field_dataset="test",
+            masks_existing=existing,
+            pool_restarts=restarts,
+        )
+
+    def test_clean_run_reports_nothing(self) -> None:
+        from ftw_dataset_tools.api.masks import mask_run_summary_lines
+
+        assert mask_run_summary_lines([self._result()]) == []
+
+    def test_reused_masks_are_summed_across_types(self) -> None:
+        from ftw_dataset_tools.api.masks import mask_run_summary_lines
+
+        lines = mask_run_summary_lines([self._result(existing=2), self._result(existing=3)])
+        assert lines == ["  Masks reused: 5"]
+
+    def test_restarts_are_counted_once_not_summed(self) -> None:
+        from ftw_dataset_tools.api.masks import mask_run_summary_lines
+
+        lines = mask_run_summary_lines([self._result(restarts=2), self._result(restarts=2)])
+        assert lines == ["  Worker pool restarts: 2"]
+
+    def test_no_results_is_empty(self) -> None:
+        from ftw_dataset_tools.api.masks import mask_run_summary_lines
+
+        assert mask_run_summary_lines([]) == []

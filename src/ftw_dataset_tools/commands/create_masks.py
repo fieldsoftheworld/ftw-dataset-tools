@@ -64,7 +64,13 @@ from ftw_dataset_tools.api.masks import MaskType
     "num_workers",
     type=int,
     default=None,
-    help="Number of parallel workers (default: half of CPUs, minimum 1).",
+    help="Number of parallel workers (default: CPU count, capped at 8).",
+)
+@click.option(
+    "--skip-existing",
+    is_flag=True,
+    default=False,
+    help="Reuse masks that are already on disk instead of recreating them.",
 )
 def create_masks_cmd(
     chips_file: str,
@@ -78,6 +84,7 @@ def create_masks_cmd(
     min_coverage: float,
     resolution: float,
     num_workers: int | None,
+    skip_existing: bool,
 ) -> None:
     """Create raster masks from vector boundaries for each grid cell.
 
@@ -108,8 +115,8 @@ def create_masks_cmd(
     def on_start(total_grids: int, filtered_grids: int, total_tasks: int) -> None:
         click.echo(f"Total grids in chips file: {total_grids:,}")
         skipped = total_grids - filtered_grids
-        # total_tasks is what the progress bar counts to. This command asks for one
-        # mask type, so it matches the grid count unless that ever changes.
+        # total_tasks is what the progress bar counts to: one rasterization per
+        # grid, less any that --skip-existing found already on disk.
         tasks = f" -> {total_tasks:,} rasterization tasks" if total_tasks != filtered_grids else ""
         if skipped > 0:
             click.echo(
@@ -141,6 +148,7 @@ def create_masks_cmd(
             min_coverage=min_coverage,
             resolution=resolution,
             num_workers=num_workers,
+            skip_existing=skip_existing,
             on_progress=on_progress,
             on_start=on_start,
         )
@@ -156,6 +164,10 @@ def create_masks_cmd(
         click.echo(f"  Field dataset: {result.field_dataset}")
         click.echo(f"  Masks created: {result.total_created}")
         click.echo(f"  Masks skipped: {result.total_skipped}")
+        # Shared with the pipeline so both report reused outputs and a pool that
+        # had to be restarted the same way.
+        for line in masks.mask_run_summary_lines([result]):
+            click.echo(line)
 
         if result.masks_skipped:
             click.echo("\nSkipped grids:")
