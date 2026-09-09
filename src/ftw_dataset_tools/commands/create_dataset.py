@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from ftw_dataset_tools.api import crop_stats, dataset, splits
 from ftw_dataset_tools.api.assets import MaskReadError
-from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, VALID_MASK_TYPES
+from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
     download_and_clip_scene,
     iter_chip_dirs,
@@ -21,6 +21,7 @@ from ftw_dataset_tools.api.imagery import (
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 from ftw_dataset_tools.api.imagery.thumbnails import has_rgb_bands
+from ftw_dataset_tools.api.pipeline import docs_summary_line
 from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_datetime_column
 
 
@@ -326,6 +327,75 @@ def create_dataset_cmd(
                     param_hint="mask-types",
                 )
 
+        # Image selection (by default enabled, unless --skip-images is set)
+        should_select_images = not skip_images or download_images
+
+        def select_and_download(catalog_dir: Path) -> None:
+            """Select (and optionally download) imagery for the written collection.
+
+            Passed to create_dataset as its ``on_imagery`` hook so this runs at the
+            imagery stages' position in the pipeline, ahead of the docs stage. The
+            README and AGENTS.md the docs stage writes then describe a collection
+            that already has its imagery.
+            """
+            # Try to extract year from determination_datetime if not provided
+            effective_year = year
+            if effective_year is None:
+                datetime_col = detect_datetime_column(fields_file)
+                if datetime_col:
+                    effective_year = get_year_from_datetime_column(fields_file, datetime_col)
+                    if effective_year:
+                        click.echo(f"  Year: {effective_year} (from {datetime_col})")
+
+            if effective_year is None:
+                raise click.ClickException(
+                    "--year is required for image selection "
+                    "(no determination_datetime column found). "
+                    "Use --skip-images to skip image selection."
+                )
+
+            click.echo("")
+            click.echo(click.style("Selecting imagery...", fg="cyan", bold=True))
+
+            # Shared workflow, also used by `ftwd run`. It records
+            # ftw:planting/ftw:harvest links on each parent chip, and catalog
+            # generation carries those links across a rebuild, so re-running
+            # create-dataset resumes instead of starting over unless
+            # --force-image-selection is passed.
+            selection = select_imagery_for_catalog(
+                catalog_dir=catalog_dir,
+                year=effective_year,
+                cloud_cover_chip=cloud_cover_chip,
+                nodata_max=nodata_max,
+                buffer_days=buffer_days,
+                num_buffer_expansions=num_buffer_expansions,
+                buffer_expansion_size=buffer_expansion_size,
+                force=force_image_selection,
+            )
+
+            click.echo(f"  Selected: {selection.successful}")
+            click.echo(f"  Skipped: {selection.skipped}")
+            if selection.failed:
+                click.echo(click.style(f"  Failed: {selection.failed}", fg="yellow"))
+
+            if not download_images:
+                return
+
+            click.echo("")
+            click.echo(click.style("Downloading imagery...", fg="cyan", bold=True))
+
+            download_stats = _run_image_download(
+                catalog_dir=catalog_dir,
+                bands=["red", "green", "blue", "nir"],
+                resolution=resolution,
+            )
+
+            click.echo(f"  Downloaded: {download_stats['successful']}")
+            if download_stats["skipped"]:
+                click.echo(f"  Skipped: {download_stats['skipped']}")
+            if download_stats["failed"]:
+                click.echo(click.style(f"  Failed: {download_stats['failed']}", fg="yellow"))
+
         result = dataset.create_dataset(
             fields_file=fields_file,
             output_dir=output_dir,
@@ -342,6 +412,7 @@ def create_dataset_cmd(
             drop_border_chips=drop_border_chips,
             class_filter=class_filter,
             checksums=checksums,
+            on_imagery=select_and_download if should_select_images else None,
             on_progress=on_progress,
             on_mask_progress=on_mask_progress,
             on_mask_start=on_mask_start,
@@ -391,77 +462,18 @@ def create_dataset_cmd(
             click.echo(f"  Items: {result.stac_result.total_items:,}")
             click.echo(f"  Items parquet: {result.stac_result.items_parquet_path}")
 
-        # Image selection (by default enabled, unless --skip-images is set)
-        should_select_images = not skip_images or download_images
-        if should_select_images:
-            # Try to extract year from determination_datetime if not provided
-            effective_year = year
-            if effective_year is None:
-                datetime_col = detect_datetime_column(fields_file)
-                if datetime_col:
-                    effective_year = get_year_from_datetime_column(fields_file, datetime_col)
-                    if effective_year:
-                        click.echo(f"  Year: {effective_year} (from {datetime_col})")
-
-            if effective_year is None:
-                raise click.ClickException(
-                    "--year is required for image selection "
-                    "(no determination_datetime column found). "
-                    "Use --skip-images to skip image selection."
-                )
-
+        if result.docs_result is not None:
             click.echo("")
-            click.echo(click.style("Selecting imagery...", fg="cyan", bold=True))
-
-            # The imagery workflow walks the collection directory's chip sub-catalogs.
-            catalog_dir = Path(result.stac_result.collection_path).parent
-
-            # Shared workflow, also used by `ftwd run`. It records
-            # ftw:planting/ftw:harvest links on each parent chip, and catalog
-            # generation carries those links across a rebuild, so re-running
-            # create-dataset resumes instead of starting over unless
-            # --force-image-selection is passed.
-            selection = select_imagery_for_catalog(
-                catalog_dir=catalog_dir,
-                year=effective_year,
-                cloud_cover_chip=cloud_cover_chip,
-                nodata_max=nodata_max,
-                buffer_days=buffer_days,
-                num_buffer_expansions=num_buffer_expansions,
-                buffer_expansion_size=buffer_expansion_size,
-                force=force_image_selection,
-            )
-
-            click.echo(f"  Selected: {selection.successful}")
-            click.echo(f"  Skipped: {selection.skipped}")
-            if selection.failed:
-                click.echo(click.style(f"  Failed: {selection.failed}", fg="yellow"))
-
-            # Download if requested
-            if download_images:
-                click.echo("")
-                click.echo(click.style("Downloading imagery...", fg="cyan", bold=True))
-
-                download_stats = _run_image_download(
-                    catalog_dir=catalog_dir,
-                    bands=["red", "green", "blue", "nir"],
-                    resolution=resolution,
-                )
-
-                click.echo(f"  Downloaded: {download_stats['successful']}")
-                if download_stats["skipped"]:
-                    click.echo(f"  Skipped: {download_stats['skipped']}")
-                if download_stats["failed"]:
-                    click.echo(click.style(f"  Failed: {download_stats['failed']}", fg="yellow"))
+            # create-dataset has no flag to change stages.docs.pmtiles, so it always
+            # runs in "auto" mode: tiles/styles when tippecanoe is available, skipped
+            # (not an error) otherwise.
+            click.echo(docs_summary_line(result.docs_result, PMTILES_AUTO))
 
     except KeyboardInterrupt:
         sys.stdout.write("\n")
         click.echo(click.style("Interrupted by user.", fg="yellow"))
         raise SystemExit(130) from None
-    except FileNotFoundError as e:
-        click.echo(click.style(f"\nError: {e}", fg="red"))
-        raise SystemExit(1) from e
-    except (ValueError, MaskReadError) as e:
+    except (FileNotFoundError, ValueError, RuntimeError, MaskReadError) as e:
         click.echo(click.style(f"\nError: {e}", fg="red"))
         raise SystemExit(1) from e
 

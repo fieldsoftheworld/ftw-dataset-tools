@@ -175,7 +175,7 @@ class TestCreateDatasetChecksumsFlag:
 
         captured: dict = {}
 
-        def fake_run_pipeline(ctx, _stages):
+        def fake_run_pipeline(ctx, _stages, **_kwargs):
             captured["checksums"] = ctx.config.stages.stac.checksums
             return ctx
 
@@ -197,3 +197,64 @@ class TestCreateDatasetChecksumsFlag:
         )
 
         assert captured["checksums"] is True
+
+
+class TestCreateDatasetStageOrder:
+    """create-dataset must document the collection after its imagery, like ``ftwd run``.
+
+    It runs image selection and download through the ``on_imagery`` hook rather than
+    through the imagery stages, so the only thing keeping the two entry points in
+    step is STAGE_ORDER. This fails if either ordering is hand-written again.
+    """
+
+    def test_docs_run_after_the_imagery_hook(self, monkeypatch, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api import dataset as dataset_module
+        from ftw_dataset_tools.api import pipeline
+
+        fields = gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326")
+        fields_path = tmp_path / "f.parquet"
+        fields.to_parquet(fields_path)
+
+        seen: list[str] = []
+        for name in pipeline.STAGE_ORDER:
+            monkeypatch.setitem(
+                pipeline._STAGE_FUNCS, name, lambda _ctx, name=name: seen.append(name)
+            )
+
+        dataset_module.create_dataset(
+            fields_file=fields_path,
+            output_dir=tmp_path / "out",
+            split_type="random-uniform",
+            year=2024,
+            on_imagery=lambda _collection_dir: seen.append("imagery"),
+        )
+
+        # The stages themselves keep STAGE_ORDER; from_kwargs disables filter and the
+        # imagery stages, which the hook stands in for.
+        assert [s for s in seen if s != "imagery"] == [
+            s for s in pipeline.STAGE_ORDER if s != "filter" and s not in pipeline.IMAGERY_STAGES
+        ]
+        assert seen.index("stac") < seen.index("imagery") < seen.index("docs")
+
+    def test_no_hook_means_no_imagery_step(self, monkeypatch, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api import dataset as dataset_module
+        from ftw_dataset_tools.api import pipeline
+
+        fields = gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326")
+        fields_path = tmp_path / "f.parquet"
+        fields.to_parquet(fields_path)
+
+        seen: list[str] = []
+        for name in pipeline.STAGE_ORDER:
+            monkeypatch.setitem(
+                pipeline._STAGE_FUNCS, name, lambda _ctx, name=name: seen.append(name)
+            )
+
+        dataset_module.create_dataset(
+            fields_file=fields_path,
+            output_dir=tmp_path / "out",
+            split_type="random-uniform",
+            year=2024,
+        )
+
+        assert "docs" in seen and "imagery" not in seen

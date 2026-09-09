@@ -168,6 +168,7 @@ def run_cmd(
     except (
         FileNotFoundError,
         ValueError,
+        RuntimeError,
         pipeline.StageInputError,
         assets.MaskReadError,
         source.SourceFetchError,
@@ -203,6 +204,8 @@ def _print_summary(ctx: pipeline.PipelineContext) -> None:
         click.echo(f"  Imagery selected: {ctx.selection_result.successful}")
     if ctx.download_result is not None:
         click.echo(f"  Imagery downloaded: {ctx.download_result.successful}")
+    if ctx.docs_result is not None:
+        click.echo(pipeline.docs_summary_line(ctx.docs_result, ctx.config.stages.docs.pmtiles))
 
 
 # Alias for registration
