@@ -1255,3 +1255,47 @@ class TestDocsStage:
         assert chip_style["sources"]["data"]["url"] == "pmtiles://../chips.pmtiles"
         field_style = json.loads((tmp_path / "styles" / "outline.json").read_text())
         assert field_style["sources"]["data"]["url"] == "pmtiles://../fields.pmtiles"
+
+
+class TestSharedStageOrder:
+    """``create-dataset`` and ``ftwd run`` must order their work from STAGE_ORDER alone.
+
+    ``create-dataset`` selects and downloads imagery itself rather than through the
+    imagery stages, so it hooks that work in with ``before_stage``. These guard that
+    the hook lands where STAGE_ORDER puts imagery, and that docs stay downstream of
+    it -- otherwise create-dataset documents a collection with no imagery in it.
+    """
+
+    def test_docs_come_after_imagery_in_stage_order(self) -> None:
+        docs_at = pipeline.STAGE_ORDER.index("docs")
+        assert pipeline.IMAGERY_STAGES
+        for stage in pipeline.IMAGERY_STAGES:
+            assert pipeline.STAGE_ORDER.index(stage) < docs_at
+
+    def test_hook_runs_at_its_stage_position(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = _config(sample_geoparquet_4326, tmp_path / "out", year=2023)
+        ctx = pipeline.build_context(config)
+        seen: list[str] = []
+        for name in pipeline.STAGE_ORDER:
+            monkeypatch.setitem(
+                pipeline._STAGE_FUNCS, name, lambda _ctx, name=name: seen.append(name)
+            )
+
+        pipeline.run_pipeline(
+            ctx,
+            ["stac", "docs"],
+            before_stage={pipeline.IMAGERY_STAGES[0]: lambda _ctx: seen.append("imagery")},
+        )
+
+        assert seen == ["stac", "imagery", "docs"]
+
+    def test_hook_on_an_unknown_stage_is_rejected(
+        self, sample_geoparquet_4326: Path, tmp_path: Path
+    ) -> None:
+        config = _config(sample_geoparquet_4326, tmp_path / "out", year=2023)
+        ctx = pipeline.build_context(config)
+
+        with pytest.raises(ValueError, match="Unknown stage"):
+            pipeline.run_pipeline(ctx, [], before_stage={"bogus": lambda _ctx: None})

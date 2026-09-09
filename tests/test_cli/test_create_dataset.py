@@ -160,7 +160,12 @@ def stub_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SelectionS
     chips_base_dir = output_dir / "chips"
     chips_base_dir.mkdir(parents=True)
 
-    def fake_create_dataset(**_kwargs: Any) -> CreateDatasetResult:
+    def fake_create_dataset(**kwargs: Any) -> CreateDatasetResult:
+        # The real pipeline calls on_imagery at the imagery stages' position, before
+        # the docs stage; the stub stands in for that.
+        on_imagery = kwargs.get("on_imagery")
+        if on_imagery is not None:
+            on_imagery(output_dir)
         return CreateDatasetResult(
             output_dir=output_dir,
             field_dataset="fields",

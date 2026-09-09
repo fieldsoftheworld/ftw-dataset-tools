@@ -76,9 +76,15 @@ STAGE_ORDER = [
     "docs",
 ]
 
+# The stages that reach out to an imagery API. ``ftwd create-dataset`` does that
+# work itself rather than through these stages, so it hooks it in at the position
+# they occupy here (see ``run_pipeline``'s ``before_stage``) instead of running the
+# imagery work after a pipeline that has already documented the collection.
+IMAGERY_STAGES = ("select_images", "download_images")
+
 # Stages that require a resolvable calendar year (for chip naming, temporal
 # extent, or imagery search).
-_YEAR_STAGES = {"masks", "stac", "select_images", "download_images"}
+_YEAR_STAGES = {"masks", "stac", *IMAGERY_STAGES}
 
 # Stages that read the original source input. Every other stage works from files
 # already in the output directory, so a run that selects none of these must not
@@ -358,9 +364,25 @@ def _stage_enabled(stage: str, config: DatasetConfig) -> bool:
     return True
 
 
-def run_pipeline(ctx: PipelineContext, stages_to_run: list[str]) -> PipelineContext:
-    """Validate and execute the requested stages in order, mutating ``ctx``."""
+def run_pipeline(
+    ctx: PipelineContext,
+    stages_to_run: list[str],
+    *,
+    before_stage: dict[str, Callable[[PipelineContext], None]] | None = None,
+) -> PipelineContext:
+    """Validate and execute the requested stages in order, mutating ``ctx``.
+
+    ``before_stage`` maps a stage name to work that runs at that stage's position in
+    :data:`STAGE_ORDER`, whether or not the stage itself was selected. It is how
+    ``create-dataset`` slots its own imagery selection and download into the run:
+    both entry points then take their ordering from ``STAGE_ORDER`` alone, so the
+    docs stage stays downstream of imagery in either one.
+    """
     _validate_stage_selection(ctx, stages_to_run)
+    hooks = dict(before_stage or {})
+    for name in hooks:
+        if name not in STAGE_ORDER:
+            raise ValueError(f"Unknown stage '{name}'. Valid stages: {', '.join(STAGE_ORDER)}.")
 
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
     ctx.chips_base_dir.mkdir(exist_ok=True)
@@ -368,6 +390,9 @@ def run_pipeline(ctx: PipelineContext, stages_to_run: list[str]) -> PipelineCont
         config_module.write_provenance_file(ctx.provenance, ctx.output_dir)
 
     for stage in STAGE_ORDER:
+        hook = hooks.get(stage)
+        if hook is not None:
+            hook(ctx)
         if stage in stages_to_run:
             _STAGE_FUNCS[stage](ctx)
 

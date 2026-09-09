@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import geopandas as gpd
 from shapely.geometry import box
@@ -145,7 +146,7 @@ class TestBuilders:
         assert legend[-1]["label"] == "Other"
 
         _, crops, _ = crops_style(rows, tiles_href="../fields.pmtiles", layer="fields")
-        assert _fill_match_values(crops)[1][1] == ["get", "hcat:code"]
+        assert _fill_match_values(crops)[1][1] == ["to-string", ["get", "hcat:code"]]
 
     def test_outline_style_has_no_fill_legend(self) -> None:
         from ftw_dataset_tools.api.styles import outline_style
@@ -195,3 +196,40 @@ class TestWriteStyles:
         )
 
         assert [r.style_id for r in results] == ["split", "field-coverage"]
+
+
+class TestCropCodeTypes:
+    """A MapLibre ``match`` compares by type, so the labels must match the property.
+
+    fiboa types ``hcat:code`` as a string; crop_stats writes ``hcat_dominant_code``
+    as a BIGINT. Matching integers against the string property paints every field
+    grey behind a full legend, which reads as a rendering bug rather than a type
+    mismatch, so both styles are pinned here.
+    """
+
+    ROWS: ClassVar[list] = [(3301010101, "Winter wheat", 2.0), (3302000000, "Pasture", 1.0)]
+
+    def _inner(self, style: dict) -> list:
+        return _fill_match_values(style)[1]
+
+    def test_crops_style_matches_string_codes(self) -> None:
+        from ftw_dataset_tools.api.styles import crops_style
+
+        _, style, _ = crops_style(self.ROWS, tiles_href="../fields.pmtiles", layer="fields")
+
+        inner = self._inner(style)
+        assert inner[1] == ["to-string", ["get", "hcat:code"]]
+        labels = inner[2:-1:2]
+        assert labels == ["3301010101", "3302000000"]
+        assert all(isinstance(label, str) for label in labels)
+
+    def test_dominant_crop_style_matches_integer_codes(self) -> None:
+        from ftw_dataset_tools.api.styles import dominant_crop_style
+
+        _, style, _ = dominant_crop_style(self.ROWS, tiles_href="../chips.pmtiles", layer="chips")
+
+        inner = self._inner(style)
+        assert inner[1] == ["get", "hcat_dominant_code"]
+        labels = inner[2:-1:2]
+        assert labels == [3301010101, 3302000000]
+        assert all(isinstance(label, int) for label in labels)

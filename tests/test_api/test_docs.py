@@ -747,3 +747,87 @@ class TestGrammar:
         _, style, _ = dominant_crop_style(rows, tiles_href="../chips.pmtiles", layer="chips")
 
         assert "covering the most of" not in style["metadata"]["description"]
+
+
+class TestQueriesResolveAgainstTheCollection:
+    """The published results have to describe the collection being documented.
+
+    AGENTS.md claims every query was run against this collection, so the queries
+    must not pick up a same-named file from whatever directory the process happens
+    to have been started in.
+    """
+
+    def _decoy(self, decoy_dir: Path) -> None:
+        """Another collection's files, under the same names, in another directory."""
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        decoy_dir.mkdir(parents=True, exist_ok=True)
+        frame = gpd.GeoDataFrame(
+            {
+                "id": [f"decoy-{i}" for i in range(5)],
+                "ftw:split": ["val"] * 5,
+                "split": ["val"] * 5,
+                "field_coverage_pct": [99.0] * 5,
+            },
+            geometry=[box(i, 0, i + 1, 1) for i in range(5)],
+            crs="EPSG:4326",
+        )
+        for name in ("items.parquet", "ds_chips.parquet", "ds_fields.parquet"):
+            frame.to_parquet(decoy_dir / name)
+
+    def test_results_come_from_the_documented_collection(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api.docs import run_agents_queries
+
+        collection_dir = tmp_path / "collection"
+        collection_dir.mkdir()
+        coll_path, _, _ = _collection_dir(collection_dir)
+        collection = json.loads(coll_path.read_text())
+        self._decoy(tmp_path / "decoy")
+
+        monkeypatch.chdir(tmp_path / "decoy")
+        results = {
+            title: rows for title, _sql, rows in run_agents_queries(collection_dir, collection)
+        }
+
+        assert sorted(results["Chips per split"]) == [("test", 1), ("train", 1)]
+        assert [row[0] for row in results["Chips with the highest field coverage"]] == [
+            "ftw-33UXP0002",
+            "ftw-33UXP0001",
+        ]
+        assert results["Dominant crops across chips"]  # the decoy carries no crop columns
+
+    def test_published_sql_stays_relative_to_the_collection(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import run_agents_queries
+
+        coll_path, _, _ = _collection_dir(tmp_path)
+        collection = json.loads(coll_path.read_text())
+
+        published = [sql for _title, sql, _rows in run_agents_queries(tmp_path, collection)]
+
+        assert "read_parquet('items.parquet')" in published[0]
+        assert str(tmp_path) not in "\n".join(published)
+
+    def test_missing_items_parquet_drops_its_query(self, tmp_path: Path) -> None:
+        """A missing input degrades the same way an absent column already does."""
+        from ftw_dataset_tools.api.docs import run_agents_queries
+
+        coll_path, _, _ = _collection_dir(tmp_path)
+        collection = json.loads(coll_path.read_text())
+        (tmp_path / "items.parquet").unlink()
+
+        titles = [title for title, _sql, _rows in run_agents_queries(tmp_path, collection)]
+
+        assert "Chips per split" not in titles
+        assert "Chips with the highest field coverage" in titles
+
+    def test_write_docs_survives_a_missing_items_parquet(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import write_docs
+
+        coll_path, chips, fields = _collection_dir(tmp_path)
+        (tmp_path / "items.parquet").unlink()
+
+        written = write_docs(tmp_path, coll_path, chips, fields, [], {})
+
+        assert [path.name for path in written] == ["README.md", "AGENTS.md"]
+        assert "Chips per split" not in (tmp_path / "AGENTS.md").read_text()

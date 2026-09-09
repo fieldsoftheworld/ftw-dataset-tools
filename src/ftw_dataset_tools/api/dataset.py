@@ -63,6 +63,7 @@ def create_dataset(
     drop_border_chips: bool = False,
     checksums: bool = False,
     class_filter: str | Path | None = None,
+    on_imagery: Callable[[Path], None] | None = None,
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int, int], None] | None = None,
@@ -77,10 +78,11 @@ def create_dataset(
     4. Create boundary lines from polygons
     5. Create all three mask types (instance, semantic_2class, semantic_3class)
     6. Generate STAC static catalog
-    7. Document the collection: PMTiles and MapLibre styles when tippecanoe is
+    7. Select and download imagery, when the caller passes ``on_imagery``
+    8. Document the collection: PMTiles and MapLibre styles when tippecanoe is
        installed, README.md and AGENTS.md, all registered on the collection
 
-    Step 7 has no keyword argument here; configure or disable it through
+    Step 8 has no keyword argument here; configure or disable it through
     ``stages.docs`` in a config file with ``ftwd run``, or stop the run earlier
     with ``ftwd run --through stac``.
 
@@ -101,6 +103,10 @@ def create_dataset(
         checksums: Compute file:checksum for every asset (slow; default False).
         class_filter: Optional path to a class filter YAML (column + include/exclude
             lists). Include classes count as field; all others become background.
+        on_imagery: Optional callback given the collection directory, invoked at the
+            imagery stages' position in the pipeline. ``create-dataset`` selects and
+            downloads imagery itself through this hook, so the documents it writes
+            afterwards describe the collection's imagery too.
         on_progress: Optional callback for progress messages
         on_mask_progress: Optional callback (current, total) for mask creation progress
         on_mask_start: Optional callback (total_grids, filtered_grids, total_tasks) for mask start
@@ -137,6 +143,8 @@ def create_dataset(
     provenance = config.provenance_dict()
 
     # Imagery stages are disabled in from_kwargs(), so this runs reproject..stac, docs.
+    # ``on_imagery`` takes their place, at the position STAGE_ORDER gives them, which
+    # keeps this ordering identical to the one ``ftwd run`` executes.
     stages = pipeline.resolve_stages(config=config)
     ctx = pipeline.build_context(
         config,
@@ -146,7 +154,10 @@ def create_dataset(
         on_mask_start=on_mask_start,
         provenance=provenance,
     )
-    pipeline.run_pipeline(ctx, stages)
+    hooks = None
+    if on_imagery is not None:
+        hooks = {pipeline.IMAGERY_STAGES[0]: lambda run_ctx: on_imagery(run_ctx.output_dir)}
+    pipeline.run_pipeline(ctx, stages, before_stage=hooks)
 
     return CreateDatasetResult(
         output_dir=ctx.output_dir,

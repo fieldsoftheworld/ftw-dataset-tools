@@ -40,7 +40,7 @@ _MISSING_COLUMN = "not found in FROM clause"
 AGENTS_QUERIES: list[tuple[str, str]] = [
     (
         "Chips per split",
-        "SELECT \"ftw:split\" AS split, count(*) AS chips FROM read_parquet('items.parquet') "
+        "SELECT \"ftw:split\" AS split, count(*) AS chips FROM read_parquet('{items}') "
         "GROUP BY 1 ORDER BY 1",
     ),
     (
@@ -363,24 +363,43 @@ def _asset_href(collection: dict, key: str, default: str) -> str:
     return str(asset.get("href") or default).removeprefix("./")
 
 
+def _resolve_href(output_dir: Path, href: str) -> str:
+    """An asset href as a path that resolves from anywhere, not just from ``output_dir``."""
+    if "://" in href or Path(href).is_absolute():
+        return href
+    return str(output_dir / href)
+
+
 def run_agents_queries(
     output_dir: Path | str, collection: dict
 ) -> list[tuple[str, str, list[tuple]]]:
-    """Execute every documented query, dropping the ones whose columns are absent."""
-    chips = _asset_href(collection, "chips", "chips.parquet")
-    fields = _asset_href(collection, "fields", "fields.parquet")
+    """Execute every documented query, dropping the ones whose inputs are absent.
+
+    The SQL kept for the document names the assets relatively, the way a reader
+    standing in the collection directory will run it. The SQL actually executed
+    names them absolutely, so the published results measure this collection no
+    matter which directory the process was started from.
+    """
+    output_dir = Path(output_dir)
+    relative = {
+        key: _asset_href(collection, key, f"{key}.parquet") for key in ("items", "chips", "fields")
+    }
+    absolute = {k: _sql_path(_resolve_href(output_dir, v)) for k, v in relative.items()}
     executed: list[tuple[str, str, list[tuple]]] = []
-    con = _connect(Path(output_dir))
+    con = _connect(output_dir)
     try:
         for title, template in AGENTS_QUERIES:
-            sql = template.format(chips=chips, fields=fields)
             try:
-                rows = con.execute(sql).fetchall()
+                rows = con.execute(template.format(**absolute)).fetchall()
+            except duckdb.IOException:
+                # A file the query reads was never written; drop the query the same
+                # way a query naming an absent column is dropped.
+                continue
             except duckdb.BinderException as exc:
                 if _MISSING_COLUMN in str(exc):
                     continue
                 raise
-            executed.append((title, sql, rows))
+            executed.append((title, template.format(**relative), rows))
     finally:
         con.close()
     return executed

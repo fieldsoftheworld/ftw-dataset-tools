@@ -334,14 +334,25 @@ def _crop_style(
     name: str,
     description: str,
     code_property: str,
+    code_is_text: bool,
     layer_id: str,
     tiles_href: str,
     layer: str,
 ) -> tuple[str, dict, list[dict]]:
-    """Outer ``match`` on crop labels carrying the legend, inner ``match`` on the code."""
+    """Outer ``match`` on crop labels carrying the legend, inner ``match`` on the code.
+
+    A MapLibre ``match`` compares by type, so the inner labels have to be the same
+    type as the tile property. fiboa types ``hcat:code`` as a string while the chips
+    table carries its dominant code as an integer; ``code_is_text`` picks between the
+    two, and coerces the property with ``to-string`` so a source that stored the code
+    as a number still matches.
+    """
     palette = load_palette()
     total = sum(w for _, _, w in rows) or 1.0
-    inner: list = ["match", ["get", code_property]]
+    code_expr: list = ["get", code_property]
+    if code_is_text:
+        code_expr = ["to-string", code_expr]
+    inner: list = ["match", code_expr]
     outer: list = ["match", inner]
     legend: list[dict] = []
     used: set[str] = set()
@@ -352,7 +363,7 @@ def _crop_style(
         labels.add(label)
         color = distinct_color(entry.get("color") if entry else None, used)
         used.add(color.lower())
-        inner.extend([int(code), label])
+        inner.extend([str(code) if code_is_text else int(code), label])
         outer.extend([label, color])
         legend.append({"label": label, "code": int(code), "color": color, "share": weight / total})
     inner.append("Other")
@@ -386,7 +397,9 @@ def dominant_crop_style(
             "the chip's field area. The most common crops are named, everything else is grey. "
             "Colours follow the fiboa.org crop map palette."
         ),
+        # crop_stats writes hcat_dominant_code as a BIGINT, so this one matches numbers.
         code_property="hcat_dominant_code",
+        code_is_text=False,
         layer_id="chips-by-dominant-crop",
         tiles_href=tiles_href,
         layer=layer,
@@ -406,7 +419,10 @@ def crops_style(
             "covering the most area are named, everything else is grey. Colours follow the "
             "fiboa.org crop map palette."
         ),
+        # fiboa types hcat:code as a string, and the field values are carried through
+        # from the source file unchanged, so this one matches strings.
         code_property="hcat:code",
+        code_is_text=True,
         layer_id="fields-by-crop",
         tiles_href=tiles_href,
         layer=layer,
