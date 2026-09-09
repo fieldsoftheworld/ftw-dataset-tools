@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Literal
 import pystac
 from tqdm import tqdm
 
+from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
 from ftw_dataset_tools.api.imagery.image_download import (
     download_and_clip_scene,
     process_downloaded_scene,
@@ -49,8 +50,9 @@ def find_s2_child_items(catalog_dir: Path) -> list[tuple[pystac.Item, Path]]:
     _planting_s2 or _harvest_s2.
 
     Args:
-        catalog_dir: Path to the chips collection directory containing subdirectories
-                     with STAC item files
+        catalog_dir: Path to the collection directory (holding collection.json),
+                     whose ``chips/<square>/<item_id>/`` subdirectories hold STAC
+                     item files
 
     Returns:
         List of (pystac.Item, item_path) tuples for each S2 child item found.
@@ -58,17 +60,16 @@ def find_s2_child_items(catalog_dir: Path) -> list[tuple[pystac.Item, Path]]:
     """
     child_items = []
 
-    for subdir in catalog_dir.iterdir():
-        if subdir.is_dir() and not subdir.name.startswith("."):
-            for json_file in subdir.glob("*_s2.json"):
-                try:
-                    item = pystac.Item.from_file(str(json_file))
-                    # Only include child items (they have _planting_s2 or _harvest_s2 suffix)
-                    if item.id.endswith("_planting_s2") or item.id.endswith("_harvest_s2"):
-                        child_items.append((item, json_file))
-                except Exception:
-                    # Skip invalid JSON files
-                    pass
+    for subdir in iter_chip_dirs(catalog_dir):
+        for json_file in subdir.glob("*_s2.json"):
+            try:
+                item = pystac.Item.from_file(str(json_file))
+                # Only include child items (they have _planting_s2 or _harvest_s2 suffix)
+                if item.id.endswith("_planting_s2") or item.id.endswith("_harvest_s2"):
+                    child_items.append((item, json_file))
+            except Exception:
+                # Skip invalid JSON files
+                pass
 
     return child_items
 

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Literal
 
 import pystac
 
-from ftw_dataset_tools.api.imagery.catalog_ops import has_existing_scenes
+from ftw_dataset_tools.api.imagery.catalog_ops import has_existing_scenes, iter_chip_dirs
 from ftw_dataset_tools.api.imagery.progress import ImageryProgressBar
 from ftw_dataset_tools.api.imagery.scene_selection import select_scenes_for_chip
 from ftw_dataset_tools.api.imagery.stac_child_items import create_child_items_from_selection
@@ -48,8 +48,9 @@ def find_chip_items(catalog_dir: Path) -> list[tuple[pystac.Item, Path]]:
     (those ending in _planting_s2 or _harvest_s2).
 
     Args:
-        catalog_dir: Path to the chips collection directory containing subdirectories
-                     with STAC item files
+        catalog_dir: Path to the collection directory (holding collection.json),
+                     whose ``chips/<square>/<item_id>/`` subdirectories hold STAC
+                     item files
 
     Returns:
         List of (pystac.Item, item_path) tuples for each parent chip item found.
@@ -57,18 +58,17 @@ def find_chip_items(catalog_dir: Path) -> list[tuple[pystac.Item, Path]]:
     """
     chip_items = []
 
-    for subdir in catalog_dir.iterdir():
-        if subdir.is_dir() and not subdir.name.startswith("."):
-            for json_file in subdir.glob("*.json"):
-                # Skip child items (they have _planting_s2 or _harvest_s2 suffix)
-                if "_planting_s2" in json_file.name or "_harvest_s2" in json_file.name:
-                    continue
-                try:
-                    item = pystac.Item.from_file(str(json_file))
-                    chip_items.append((item, json_file))
-                except Exception:
-                    # Skip invalid JSON files
-                    pass
+    for subdir in iter_chip_dirs(catalog_dir):
+        for json_file in subdir.glob("*.json"):
+            # Skip child items (they have _planting_s2 or _harvest_s2 suffix)
+            if "_planting_s2" in json_file.name or "_harvest_s2" in json_file.name:
+                continue
+            try:
+                item = pystac.Item.from_file(str(json_file))
+                chip_items.append((item, json_file))
+            except Exception:
+                # Skip invalid JSON files
+                pass
 
     return chip_items
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import Enum
@@ -71,6 +72,19 @@ def get_item_id(grid_id: str, year: int | None = None) -> str:
     if year is not None:
         return f"{grid_id}_{year}"
     return grid_id
+
+
+_FTW_GRID_ID = re.compile(r"^ftw-(?P<square>.+?)\d{4}$")
+
+
+def get_mgrs_square(grid_id: str) -> str:
+    """MGRS 100 km square of an FTW grid id ('ftw-33UXP0410' -> '33UXP').
+
+    Ids that are not FTW grid ids (custom grids) return 'other' so they still
+    get a sub-catalog.
+    """
+    match = _FTW_GRID_ID.match(grid_id)
+    return match.group("square") if match else "other"
 
 
 def get_mask_output_path(

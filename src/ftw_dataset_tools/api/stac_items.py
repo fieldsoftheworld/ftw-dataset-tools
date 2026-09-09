@@ -64,7 +64,8 @@ def update_parent_item(
 ) -> None:
     """Update parent item with reference to downloaded image.
 
-    Rolls back the in-memory asset if save fails.
+    Rolls back the in-memory asset if save fails. file:checksum is not
+    computed for imagery assets.
 
     Args:
         parent_item: Parent STAC item to update
@@ -113,10 +114,10 @@ def update_parent_item(
                     roles=["thumbnail"],
                 ),
             )
+            added_thumbnail = True
             thumbnail_path = parent_path.parent / thumbnail_filename
             if thumbnail_path.exists():
                 add_file_info(parent_item.assets["thumbnail"], thumbnail_path)
-            added_thumbnail = True
 
         parent_item.save_object(str(parent_path))
     except Exception as e:

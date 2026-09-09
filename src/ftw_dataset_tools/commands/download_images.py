@@ -12,6 +12,8 @@ from tqdm import tqdm
 
 from ftw_dataset_tools.api.imagery import (
     download_and_clip_scene,
+    find_collection_dir,
+    find_s2_child_items,
     process_downloaded_scene,
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
@@ -114,36 +116,19 @@ def download_images_cmd(
     "clipped" asset for the local file.
 
     \b
-    CATALOG_PATH: Path to the chips collection or dataset directory
+    CATALOG_PATH: Path to the dataset directory (containing collection.json)
 
     \b
     Examples:
-        ftwd download-images ./my-dataset-chips
-        ftwd download-images ./my-dataset              # Also works with dataset dir
-        ftwd download-images ./chips --bands red,green,blue,nir,scl
-        ftwd download-images ./chips --keep-remote-refs  # Keep remote asset refs
+        ftwd download-images ./my-dataset
+        ftwd download-images ./my-dataset --bands red,green,blue,nir,scl
+        ftwd download-images ./my-dataset --keep-remote-refs  # Keep remote asset refs
     """
     input_path = Path(catalog_path)
-    collection_file = input_path / "collection.json"
-
-    if collection_file.exists():
-        catalog_dir = input_path
-    else:
-        # Look for *-chips subdirectory with collection.json (dataset directory)
-        chips_dirs = list(input_path.glob("*-chips"))
-        chips_dir_with_collection = None
-        for chips_dir in chips_dirs:
-            if (chips_dir / "collection.json").exists():
-                chips_dir_with_collection = chips_dir
-                break
-
-        if chips_dir_with_collection:
-            catalog_dir = chips_dir_with_collection
-            collection_file = catalog_dir / "collection.json"
-        else:
-            raise click.ClickException(
-                f"No collection.json found in {catalog_path} or in any *-chips subdirectory"
-            )
+    try:
+        catalog_dir = find_collection_dir(input_path)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e)) from e
 
     band_list = list(bands)
 
@@ -151,31 +136,8 @@ def download_images_cmd(
     click.echo(f"Bands: {band_list}")
     click.echo(f"Resolution: {resolution}m")
 
-    # Load collection to find items
-    collection = pystac.Collection.from_file(str(collection_file))
-
     # Find all child S2 items (planting and harvest)
-    child_items = []
-    for item_link in collection.get_item_links():
-        item_path = catalog_dir / item_link.href
-        if item_path.exists():
-            item = pystac.Item.from_file(str(item_path))
-            # Only process child items (they have _planting_s2 or _harvest_s2 suffix)
-            if item.id.endswith("_planting_s2") or item.id.endswith("_harvest_s2"):
-                child_items.append((item, item_path))
-
-    # Also search in subdirectories for child items
-    for subdir in catalog_dir.iterdir():
-        if subdir.is_dir() and not subdir.name.startswith("."):
-            for json_file in subdir.glob("*_s2.json"):
-                try:
-                    item = pystac.Item.from_file(str(json_file))
-                    is_s2_item = item.id.endswith("_planting_s2") or item.id.endswith("_harvest_s2")
-                    not_duplicate = not any(i.id == item.id for i, _ in child_items)
-                    if is_s2_item and not_duplicate:
-                        child_items.append((item, json_file))
-                except Exception:
-                    pass  # Skip invalid JSON files
+    child_items = find_s2_child_items(catalog_dir)
 
     if not child_items:
         raise click.ClickException(

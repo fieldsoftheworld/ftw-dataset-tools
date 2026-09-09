@@ -204,23 +204,32 @@ ftwd create-dataset fields.parquet --split-type block3x3 --min-coverage 1.0 --re
   Imagery and thumbnails are written after the stac stage and do not get checksums.
 
 **Output structure:**
+
+The output directory is a self-contained STAC collection with chip items grouped into sub-catalogs by MGRS 100 km square:
+
 ```
-{name}-dataset/
-├── {dataset}_fields.parquet          # Field boundaries in EPSG:4326
-├── {dataset}_chips.parquet           # Grid cells with coverage stats and split assignments
-├── {dataset}_boundary_lines.parquet  # Polygon boundaries as lines
-├── catalog.json                      # STAC catalog
-├── source/
-│   └── collection.json              # STAC collection for source data
-├── chips/
-│   ├── collection.json              # STAC collection for chips
-│   ├── items.parquet                # STAC items as parquet
-│   └── {grid_id}/                   # Individual STAC item JSON files
-└── label_masks/
-    ├── instance/                    # Instance segmentation masks
-    ├── semantic_2class/            # 2-class semantic masks (field/boundary)
-    └── semantic_3class/            # 3-class semantic masks (field/boundary/background)
+{name}/
+├── collection.json                   # STAC collection root
+├── {name}_fields.parquet             # Field boundaries in EPSG:4326
+├── {name}_fields_filtered.parquet    # Filtered fields (if class filter applied)
+├── {name}_chips.parquet              # Chip definitions with field coverage stats
+├── {name}_boundary_lines.parquet     # Boundary lines from vector data
+├── items.parquet                     # Collection mirror (STAC items as Parquet; only if any chip has masks)
+└── chips/
+    ├── {mgrs100k}/
+    │   ├── catalog.json              # Sub-catalog for MGRS 100 km square
+    │   └── {item_id}/                # Item JSON and its assets, flat, side by side
+    │       ├── {item_id}.json                   # Chip item
+    │       ├── {item_id}_{mask_type}.tif        # Masks (if masks generated)
+    │       ├── {item_id}_{season}_s2.json       # Scene items (if imagery selected)
+    │       ├── {item_id}_{season}_image_s2.tif  # Clipped imagery (if downloaded)
+    │       └── {item_id}_{season}_image_s2.jpg  # Thumbnails (if downloaded)
+    └── other/                        # For non-FTW grid ids
+        ├── catalog.json
+        └── {item_id}/...
 ```
+
+The MGRS square (e.g., `33UXP`) is extracted from FTW grid ids like `ftw-33UXP0410`; custom grid ids are placed under `other`.
 
 ### create-chips
 
