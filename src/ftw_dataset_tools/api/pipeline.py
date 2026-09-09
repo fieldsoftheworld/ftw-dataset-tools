@@ -21,6 +21,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import duckdb
 
@@ -37,11 +38,18 @@ from ftw_dataset_tools.api.imagery import (
     select_imagery_for_catalog,
 )
 from ftw_dataset_tools.api.masks import MaskType, get_item_id, get_mgrs_square
+from ftw_dataset_tools.api.source import (
+    describe_local_source,
+    fetch_source,
+    installed_git_commit,
+    is_url,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ftw_dataset_tools.api.config import DatasetConfig
+    from ftw_dataset_tools.api.source import SourceRecord
 
 # Ordered list of all pipeline stages.
 STAGE_ORDER = [
@@ -60,6 +68,11 @@ STAGE_ORDER = [
 # extent, or imagery search).
 _YEAR_STAGES = {"masks", "stac", "select_images", "download_images"}
 
+# Stages that read the original source input. Every other stage works from files
+# already in the output directory, so a run that selects none of these must not
+# download or re-hash the source.
+_SOURCE_STAGES = {"reproject"}
+
 
 class StageInputError(ValueError):
     """Raised when a stage is run without its required input files present."""
@@ -70,12 +83,14 @@ class PipelineContext:
     """Mutable state threaded through pipeline stages."""
 
     config: DatasetConfig
-    fields_input: Path
+    # None when no selected stage reads the source input (see build_context).
+    fields_input: Path | None
     output_dir: Path
     field_dataset: str
-    effective_year: int | None
-    has_temporal: bool
+    effective_year: int | None = None
+    has_temporal: bool = False
     provenance: dict[str, Any] | None = None
+    source: SourceRecord | None = None
     on_progress: Callable[[str], None] | None = None
     on_mask_progress: Callable[[int, int], None] | None = None
     on_mask_start: Callable[[int, int, int], None] | None = None
@@ -122,9 +137,97 @@ class PipelineContext:
             self.on_progress(msg)
 
 
+def _input_name_stem(config: DatasetConfig) -> str:
+    """Default dataset name stem, from the URL path or the local filename.
+
+    A pure string derivation: it never touches the network or the filesystem, so
+    it works even when the source is never resolved.
+    """
+    if is_url(config.fields_file):
+        return Path(urlsplit(config.fields_file).path).stem or "source"
+    return Path(config.fields_file).stem
+
+
+def _resolve_input(
+    config: DatasetConfig, *, log: Callable[[str], None]
+) -> tuple[Path, SourceRecord]:
+    """Resolve ``config.fields_file`` to a local path, fetching URLs into the cache.
+
+    Returns the local fields path and the source record describing where the
+    bytes came from.
+
+    Raises:
+        FileNotFoundError: If a local input fields file does not exist.
+    """
+    if is_url(config.fields_file):
+        fetch_cfg = config.stages.fetch
+        log(f"Fetching source {config.fields_file}...")
+        record = fetch_source(
+            config.fields_file,
+            Path(fetch_cfg.cache_dir).expanduser(),
+            refresh=fetch_cfg.refresh,
+        )
+        log("Using cached copy" if record.fetched_at is None else f"Fetched {record.size:,} bytes")
+        return record.local_path, record
+
+    fields_path = Path(config.fields_file).resolve()
+    if not fields_path.exists():
+        raise FileNotFoundError(f"Fields file not found: {fields_path}")
+    return fields_path, describe_local_source(fields_path)
+
+
+def _record_source_provenance(ctx: PipelineContext, source: SourceRecord | None) -> None:
+    """Fill in the provenance ``source`` block and the ftwd commit.
+
+    When this run never resolved the source, the record written by an earlier run
+    into the output directory is carried forward, so re-running a single stage
+    does not drop provenance from the catalog.
+    """
+    provenance = ctx.provenance
+    if provenance is None:
+        return
+    if source is not None:
+        provenance["source"] = source.to_dict(ctx.config.source_via)
+    else:
+        prior = config_module.read_provenance_file(ctx.output_dir)
+        if prior is not None and prior.get("source"):
+            provenance["source"] = prior["source"]
+    if provenance.get("ftwd_git_commit") is None:
+        provenance["ftwd_git_commit"] = installed_git_commit()
+
+
+def _detect_temporal(ctx: PipelineContext, *, log: Callable[[str], None]) -> None:
+    """Set ``effective_year`` / ``has_temporal`` from the best available fields file.
+
+    Prefers the resolved source input; falls back to the reprojected fields file
+    from an earlier run so a source-free run (e.g. ``--only stac``) can still find
+    a datetime column without fetching the source.
+    """
+    ctx.effective_year = ctx.config.year
+    fields_path = ctx.fields_input
+    if fields_path is None and ctx.output_fields_path.exists():
+        fields_path = ctx.output_fields_path
+    if fields_path is None:
+        ctx.has_temporal = ctx.config.year is not None
+        return
+
+    log("Checking temporal extent availability...")
+    datetime_col = stac.detect_datetime_column(fields_path)
+    if datetime_col:
+        log(f"Found '{datetime_col}' column for temporal extent")
+        if ctx.effective_year is None:
+            ctx.effective_year = stac.get_year_from_datetime_column(fields_path, datetime_col)
+            if ctx.effective_year:
+                log(f"Using year {ctx.effective_year} from {datetime_col} for chip naming")
+    elif ctx.config.year is not None:
+        log(f"Using year {ctx.config.year} for temporal extent")
+    ctx.has_temporal = datetime_col is not None or ctx.config.year is not None
+
+
 def build_context(
     config: DatasetConfig,
     *,
+    stages: list[str] | None = None,
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int, int], None] | None = None,
@@ -132,51 +235,47 @@ def build_context(
 ) -> PipelineContext:
     """Resolve paths, detect temporal extent, and prepare the output directory.
 
-    Raises:
-        FileNotFoundError: If the input fields file does not exist.
-    """
-    fields_path = Path(config.fields_file).resolve()
-    if not fields_path.exists():
-        raise FileNotFoundError(f"Fields file not found: {fields_path}")
+    A URL ``fields_file`` is fetched into ``config.stages.fetch.cache_dir`` (or
+    reused from a prior fetch); a local path is hashed for provenance instead.
+    Pass ``stages`` (the stages about to run) to skip that work entirely when no
+    selected stage reads the source input; omitting it resolves the source, as a
+    full run does.
 
-    field_dataset = config.name or fields_path.stem
-    out_dir = (
-        Path(config.output_dir).resolve()
-        if config.output_dir is not None
-        else Path(f"{fields_path.stem}-dataset").resolve()
-    )
+    Raises:
+        FileNotFoundError: If a local input fields file does not exist.
+    """
 
     def log(msg: str) -> None:
         if on_progress:
             on_progress(msg)
 
-    # Resolve the calendar year (year arg wins; else derive from datetime column).
-    log("Checking temporal extent availability...")
-    datetime_col = stac.detect_datetime_column(fields_path)
-    effective_year = config.year
-    if datetime_col:
-        log(f"Found '{datetime_col}' column for temporal extent")
-        if effective_year is None:
-            effective_year = stac.get_year_from_datetime_column(fields_path, datetime_col)
-            if effective_year:
-                log(f"Using year {effective_year} from {datetime_col} for chip naming")
-    elif config.year is not None:
-        log(f"Using year {config.year} for temporal extent")
+    name_stem = _input_name_stem(config)
+    field_dataset = config.name or name_stem
+    out_dir = (
+        Path(config.output_dir).resolve()
+        if config.output_dir is not None
+        else Path(f"{name_stem}-dataset").resolve()
+    )
 
-    has_temporal = datetime_col is not None or config.year is not None
+    if stages is None or any(stage in _SOURCE_STAGES for stage in stages):
+        fields_path, source = _resolve_input(config, log=log)
+    else:
+        log("No selected stage reads the source input; skipping source resolution.")
+        fields_path, source = None, None
 
     ctx = PipelineContext(
         config=config,
         fields_input=fields_path,
         output_dir=out_dir,
         field_dataset=field_dataset,
-        effective_year=effective_year,
-        has_temporal=has_temporal,
         provenance=provenance,
+        source=source,
         on_progress=on_progress,
         on_mask_progress=on_mask_progress,
         on_mask_start=on_mask_start,
     )
+    _record_source_provenance(ctx, source)
+    _detect_temporal(ctx, log=log)
     return ctx
 
 
@@ -266,6 +365,11 @@ def _require(path: Path, *, stage: str, produced_by: str) -> None:
 
 def stage_reproject(ctx: PipelineContext) -> None:
     """Reproject the input to EPSG:4326 if needed, else copy it into the output."""
+    if ctx.fields_input is None:
+        raise StageInputError(
+            "Stage 'reproject' needs the source input, but this context was built "
+            "without resolving it. Rebuild the context including the reproject stage."
+        )
     ctx.log("Checking CRS...")
     geom_col = detect_geometry_column(ctx.fields_input) or "geometry"
     crs_info = detect_crs(ctx.fields_input, geom_col)

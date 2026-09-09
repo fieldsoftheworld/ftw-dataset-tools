@@ -6,7 +6,7 @@ import sys
 
 import click
 
-from ftw_dataset_tools.api import assets, pipeline
+from ftw_dataset_tools.api import assets, pipeline, source
 from ftw_dataset_tools.api import config as config_module
 
 
@@ -135,6 +135,9 @@ def run_cmd(
     if dry_run:
         import yaml
 
+        click.echo(f"Source: {config.fields_file}")
+        if config.source_via:
+            click.echo(f"  via: {config.source_via}")
         click.echo(click.style("Config (resolved):", fg="cyan", bold=True))
         click.echo(yaml.safe_dump(provenance["config"], sort_keys=False))
         click.echo(click.style("Stages that would run:", fg="cyan", bold=True))
@@ -149,6 +152,7 @@ def run_cmd(
     try:
         ctx = pipeline.build_context(
             config,
+            stages=stages,
             on_progress=_on_progress,
             on_mask_progress=_on_mask_progress,
             on_mask_start=_on_mask_start,
@@ -166,6 +170,7 @@ def run_cmd(
         ValueError,
         pipeline.StageInputError,
         assets.MaskReadError,
+        source.SourceFetchError,
     ) as err:
         click.echo(click.style(f"\nError: {err}", fg="red"))
         raise SystemExit(1) from err
