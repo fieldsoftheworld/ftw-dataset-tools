@@ -298,7 +298,8 @@ def _band_list_from(asset: pystac.Asset, fallback_title: str | None) -> str | No
 
     Prefers the GeoTIFF's own band descriptions; a file written without them falls
     back to the parenthesised list in the child's ``image`` asset title, which is
-    where ``stac_items.update_parent_item`` originally put it.
+    where the download stage writes it (``imagery.image_download`` on the pipeline
+    path, ``commands.download_images`` on the standalone one).
     """
     bands = [band.get("description") for band in asset.extra_fields.get("raster:bands", [])]
     named = [band for band in bands if band]

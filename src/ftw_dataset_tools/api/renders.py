@@ -104,7 +104,9 @@ def _instance_rescale(band: dict) -> list[list[float]]:
 
     Instance ids are global rather than per-chip, so a chip whose ids all sit in
     the millions needs its own minimum, not zero, as the low end of the ramp. The
-    mask declares its background as nodata, so these statistics already exclude it.
+    background is excluded when the mask's statistics are computed, whether or not
+    the band declares it as nodata: a presence-only mask leaves the band's nodata
+    unset, because its background value can collide with a real instance id.
     """
     statistics = band.get("statistics") or {}
     minimum = statistics.get("minimum")

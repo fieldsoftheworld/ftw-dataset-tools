@@ -201,7 +201,10 @@ Checksums are off by default because they are slow on large datasets.
 Raster assets (masks and clipped imagery) carry `raster:bands`
 ([raster extension](https://github.com/stac-extensions/raster)) with `data_type`,
 `nodata` when set, `spatial_resolution`, and `statistics` (minimum, maximum, mean,
-stddev, and valid_percent when nodata is set). The same statistics are embedded in the
+stddev, and valid_percent whenever a value was excluded from them). A presence-only
+instance mask is the case where those come apart: its background is excluded from the
+statistics, so `valid_percent` is present, while the band declares no `nodata` at all.
+The same statistics are embedded in the
 COG as GDAL `STATISTICS_*` band tags, never in an `.aux.xml` sidecar.
 
 Semantic mask assets add `classification:classes`
