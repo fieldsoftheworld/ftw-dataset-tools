@@ -1,0 +1,202 @@
+# Class filter used for Finland (FI) field boundaries.
+# Excluded classes are those that are not open arable fields: grassland/pasture/meadow, forage grass, turf,
+# reed canary grass, orchards, fruit & nut trees, berries, vineyards, ornamentals, nurseries, ornamental
+# willow, energy trees/wood, fallow (open/stump/uncultivated), protection zones/strips, environmental-
+# agreement & natural-pasture areas, biodiversity/pollinator/green-cover & green-manure/soil-improvement
+# plantings, greenhouse veg (melon), and administrative non-crop codes.
+# Pure/forage grass and permanent grass are background.
+# Notable inclusions: cereals (incl. green fodder), legumes (incl. clover/lucerne/galega/melilot leys),
+# oilseeds, potatoes, beet, field vegetables, herbs/medicinal, flax, hemp, hops, strawberries, and grass
+# grown for seed. 
+# Covers fi year 2023 (only year published). Codes are the Finnish crop:code from the harmonized
+# ftw/harmonized-field-data fi dataset; HCAT English names shown as comments.
+
+column: ["crop:code", "crop_code"]
+
+include:
+  - 1110  # Winter wheat
+  - 1120  # Spring wheat
+  - 1141  # Autumn Spelt
+  - 1142  # Spring Spelt
+  - 1210  # Winter Triticale
+  - 1211  # Spring Triticale
+  - 1220  # Spring rye
+  - 1230  # Autumn rye
+  - 1310  # Feed Barley
+  - 1320  # Malt (barley)
+  - 1330  # Winter barley
+  - 1400  # Oats
+  - 1410  # Autumn oats
+  - 1545  # Mixed crops (cereals)
+  - 1555  # Mixed crops (cereals+oil crops)
+  - 1601  # Green fodder crops (barley)
+  - 1602  # Green fodder grain (oats)
+  - 1603  # Green fodder grain (wheat)
+  - 1604  # Green fodder grain (Rye)
+  - 1605  # Green fodder grain (mixed cereals)
+  - 1700  # Buckwheat
+  - 1710  # Millet
+  - 1750  # Quinoa (quinoa)
+  - 1800  # Corn
+  - 1810  # Sweet corn
+  - 2110  # Field Pea
+  - 2120  # Fodder pea
+  - 2170  # Mixed crops (protein crops+oil crops)
+  - 2176  # Seos (herne/härkäpapu/makea lupiini/linssi/öljyk.)
+  - 2181  # Mixture (pea/broad bean/sweet lupine/lentil/cereal)
+  - 2185  # Mixed crops (protein crops + cereals)
+  - 2195  # Mixed crops (protein crops)
+  - 2200  # Broad bean
+  - 2300  # Soybean
+  - 2400  # Vetch
+  - 2410  # sweet yellow clover
+  - 2420  # Lucerne
+  - 2430  # Clover
+  - 2440  # galega
+  - 2450  # Lentil
+  - 2500  # Sweet lupin
+  - 2510  # Other lupins
+  - 3110  # Potatoes
+  - 3120  # Industrial potatoes
+  - 3130  # Starch potato
+  - 3150  # Early potato (under cover)
+  - 3160  # Seed potatoes
+  - 3190  # Seed potatoes 
+  - 3210  # Sugar beet for sugar production
+  - 3330  # Fodder root vegetables
+  - 3340  # Fodder cabbage
+  - 4010  # Tobacco
+  - 4020  # Stinging nettle
+  - 4030  # Camelina
+  - 4110  # Spring rape
+  - 4120  # Winter Rape
+  - 4210  # Spring rape
+  - 4220  # Winter Rape
+  - 4300  # Sunflower
+  - 4390  # Mixed cropping (oil crops)
+  - 4400  # Hops
+  - 4525  # Hemp
+  - 4530  # Oil hemp
+  - 4610  # Oil flax
+  - 4620  # Flax
+  - 4810  # Seed spices and medicinal plants (not caraway/mustard)
+  - 5102  # Bush bean
+  - 5103  # White cabbage/head cabbage
+  - 5104  # Chinese cabbage
+  - 5105  # Cauliflower
+  - 5106  # Carrot
+  - 5108  # Rutabaga Swede
+  - 5109  # Turnip
+  - 5110  # Celeriac
+  - 5111  # Parsnip
+  - 5113  # Onion seedlings
+  - 5114  # Leeks
+  - 5115  # Open field cucumber
+  - 5116  # Pumpkin
+  - 5117  # Spinach
+  - 5119  # Rhubarb
+  - 5120  # Beetroot and yellow beetroot
+  - 5121  # Onion (incl. red onion and giant onion)
+  - 5122  # Pea, fresh production
+  - 5123  # Pea, cultivation production
+  - 5124  # Red cabbage
+  - 5125  # Savoy cabbage
+  - 5127  # Brussels sprouts
+  - 5128  # Broccoli
+  - 5129  # Kohlrabi
+  - 5131  # Leaf celery
+  - 5134  # Radish
+  - 5140  # Lettuce
+  - 5141  # Radicchio
+  - 5142  # Fennel
+  - 5143  # Zucchini
+  - 5148  # Kale
+  - 5149  # Dill
+  - 5150  # Parsley
+  - 5157  # Garlic
+  - 5158  # Horseradish
+  - 5165  # Jerusalem artichoke
+  - 5176  # Artichoke
+  - 5198  # Other vegetables
+  - 5311  # Strawberry
+  - 5806  # Caraway
+  - 5816  # Asparagus
+  - 5824  # Mustard
+  - 5831  # Coriander
+  - 5838  # Vesperma
+  - 5846  # Herbs less than 5 years old (no dill or parsley)
+  - 5847  # Herbs at least 5 years
+  - 5855  # Oil nettle
+  - 5856  # Velvet flower
+  - 5858  # Morsinko
+  - 5859  # Chicory
+  - 5860  # Small adjacent fields
+  - 6150  # Seed grass
+  - 6151  # Seed grass, single species
+  - 6401  # Other fodder plants
+  - 6545  # English ryegrass  seed
+  - 6546  # Ryegrass
+  - 6550  # Tall fescue seed
+  - 6561  # Clover seed, controlled production
+  - 6562  # Timothy seed, controlled production
+  - 6565  # Meadow fescue seed
+  - 9061  # Lacy phacelia
+  - 9630  # Garden plot
+
+exclude:
+  - 4904  # reed canary grass (feed)
+  - 4905  # reed canary grass (energy)
+  - 4913  # Energy wood, short rotation (aspen and willow)
+  - 4914  # Energy trees, short cycle time (hybrid aspen and poplar)
+  - 5173  # Melon
+  - 5210  # Apple
+  - 5212  # Rowan (berry production)
+  - 5213  # Pear
+  - 5220  # Other fruits
+  - 5221  # Plum
+  - 5222  # Grapevine
+  - 5301  # Blackcurrant
+  - 5302  # Redcurrants
+  - 5303  # White currant
+  - 5305  # Gooseberry
+  - 5310  # Raspberries and field raspberries
+  - 5312  # Arctic raspberries
+  - 5313  # Bush blueberry
+  - 5314  # Aronia berry
+  - 5318  # Serviceberry
+  - 5319  # Other berry plants
+  - 5410  # Ornamental plants, under 5 years
+  - 5420  # Ornamentals, 5 years -, continuous outdoor harvest
+  - 5442  # Ornamental willow for braiding, under 5 years
+  - 5443  # Ornamental willow for braiding, 5 - 20 years
+  - 5451  # Sea buckthorn
+  - 5452  # Cherry
+  - 5512  # Nursery (berries, fruits, ornamental plants under 5 years)
+  - 5537  # Nursery (berries, fruits, ornamental plants at least 5 years old)
+  - 5854  # Land improvement and renovation plant mixture
+  - 6050  # Green manure lawn
+  - 6060  # Turf
+  - 6130  # Forage grass
+  - 6140  # Pasture grass
+  - 6300  # Natural pasture and meadow
+  - 6304  # Natural pasture with targeted interventions (Åland)
+  - 6308  # Natural pasture agreement area (Åland)
+  - 9062  # Melliferous plants (Åland)
+  - 9403  # Stump fallow
+  - 9404  # Open fallow
+  - 9409  # Natural management grass
+  - 9412  # Grassland (grassland and meadow)
+  - 9415  # Green cover (game, landscape and pollinator)
+  - 9425  # Diversity plants, meadow
+  - 9426  # Diversity plants, field bird
+  - 9427  # Diversity plants, game
+  - 9428  # Diversity plants, pollinator and landscape
+  - 9651  # Other organic control area (not agricultural land)
+  - 9652  # Agricultural land conservation (permanent crops)
+  - 9710  # Uncultivated
+  - 9805  # Environmental agreement area, permanent grassland
+  - 9809  # Protection zone
+  - 9813  # Environmental agreement area, woody or other area
+  - 9814  # Environmental agreement area, wetland
+  - 9820  # Protective strip
+  - 9999  # Support cancellation
