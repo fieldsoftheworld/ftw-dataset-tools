@@ -196,7 +196,7 @@ class TestClearChipSelectionsWithoutAResolvableRoot:
         (chip_dir / "chip1_planting_s2.json").write_text("{}")
 
         staged = pystac.Item.from_file(str(parent_path))
-        result = clear_chip_selections(tmp_path, staged)
+        result = clear_chip_selections(staged)
 
         assert result.stac_items_deleted == 1
         written = json.loads(parent_path.read_text())
