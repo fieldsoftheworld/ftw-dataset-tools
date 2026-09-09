@@ -25,7 +25,15 @@ from urllib.parse import urlsplit
 
 import duckdb
 
-from ftw_dataset_tools.api import boundaries, class_filter, field_stats, masks, splits, stac
+from ftw_dataset_tools.api import (
+    boundaries,
+    class_filter,
+    crop_stats,
+    field_stats,
+    masks,
+    splits,
+    stac,
+)
 from ftw_dataset_tools.api import config as config_module
 from ftw_dataset_tools.api.geo import (
     detect_crs,
@@ -99,6 +107,7 @@ class PipelineContext:
     was_reprojected: bool = False
     source_crs: str | None = None
     chips_result: field_stats.FieldStatsResult | None = None
+    crop_stats_result: crop_stats.CropStatsResult | None = None
     splits_result: splits.CreateSplitsResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
@@ -478,6 +487,15 @@ def stage_chips(ctx: PipelineContext) -> None:
         f"Created chips: {ctx.chips_result.total_cells:,} cells, "
         f"{ctx.chips_result.cells_with_coverage:,} with coverage"
     )
+    if ctx.config.stages.chips.crop_stats:
+        # chips and field_polygons_path share a CRS: chips derive from the same
+        # (reprojected, class-filtered) fields used here, so no reprojection is needed.
+        ctx.crop_stats_result = crop_stats.add_crop_stats(
+            ctx.chips_path, ctx.field_polygons_path, on_progress=ctx.log
+        )
+    else:
+        # Never publish a previous run's composition when the step is turned off.
+        crop_stats.drop_crop_stats(ctx.chips_path)
 
 
 def stage_splits(ctx: PipelineContext) -> None:
@@ -595,6 +613,13 @@ def stage_stac(ctx: PipelineContext) -> None:
     _require(ctx.boundary_lines_path, stage="stac", produced_by="boundaries")
     if ctx.config.class_filter is not None:
         _require(ctx.field_polygons_path, stage="stac", produced_by="filter")
+
+    # The chips stage drops the composition columns when the step is off, but a run
+    # starting at or after splits never reaches it, so a chips file left by an earlier
+    # run would republish that run's composition onto every item. Dropping here, at the
+    # only stage that publishes them, is a no-op when they are absent.
+    if not ctx.config.stages.chips.crop_stats and crop_stats.drop_crop_stats(ctx.chips_path):
+        ctx.log("Dropped stale crop composition columns from the chips file")
 
     ctx.log("Generating STAC catalog...")
     ctx.stac_result = stac.generate_stac_catalog(

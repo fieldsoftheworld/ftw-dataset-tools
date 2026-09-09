@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,6 +34,7 @@ from ftw_dataset_tools.api.assets import (
     add_raster_bands,
     add_table_columns,
 )
+from ftw_dataset_tools.api.crop_stats import _sql_path
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded
 from ftw_dataset_tools.api.masks import MaskType, get_mgrs_square
 
@@ -264,6 +266,45 @@ def _get_dataset_bounds(file_path: Path, geom_col: str = "geometry") -> list[flo
         conn.close()
 
 
+#: Chips columns that, when present, are copied onto item properties (NULLs omitted).
+OPTIONAL_CHIP_COLUMNS = {
+    "split": "ftw:split",
+    "field_coverage_pct": "ftw:field_coverage_pct",
+    "hcat_dominant_code": "ftw:hcat_dominant_code",
+    "hcat_dominant_name_en": "ftw:hcat_dominant_name_en",
+    "hcat_dominant_pct": "ftw:hcat_dominant_pct",
+    "hcat_top": "ftw:hcat_top",
+}
+
+#: Columns that need an explicit cast (test fixtures built with geopandas can store
+#: integer/float columns containing None as float64; DuckDB otherwise returns those
+#: as-is, which would make item JSON carry a float instead of an int).
+_OPTIONAL_COLUMN_CASTS = {
+    "hcat_dominant_code": "BIGINT",
+    "hcat_dominant_pct": "DOUBLE",
+    "field_coverage_pct": "DOUBLE",
+}
+
+
+def _is_publishable(value: object) -> bool:
+    """Whether an optional chip column value belongs on the item.
+
+    NULLs are omitted, and so are NaN floats: JSON has no NaN, so publishing one
+    would produce an item that no strict JSON parser can read back.
+    """
+    if value is None:
+        return False
+    return not (isinstance(value, float) and math.isnan(value))
+
+
+def _optional_column_select(col: str) -> str:
+    """SQL select expression for one optional chip column, casting where needed."""
+    cast = _OPTIONAL_COLUMN_CASTS.get(col)
+    if cast:
+        return f'CAST("{col}" AS {cast}) AS "{col}"'
+    return f'"{col}"'
+
+
 def _extract_chips_info(
     chips_file: Path,
     grid_id_col: str = "id",
@@ -284,7 +325,14 @@ def _extract_chips_info(
     """
     conn = duckdb.connect(":memory:")
     ensure_spatial_loaded(conn)
+    chips_sql = _sql_path(chips_file)
     try:
+        existing_cols = {
+            row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM '{chips_sql}'").fetchall()
+        }
+        optional_cols = [col for col in OPTIONAL_CHIP_COLUMNS if col in existing_cols]
+        optional_select = "".join(f", {_optional_column_select(col)}" for col in optional_cols)
+
         # Get chip info with geometry as GeoJSON
         results = conn.execute(f"""
             SELECT
@@ -294,19 +342,26 @@ def _extract_chips_info(
                 ST_YMin("{geom_col}") as ymin,
                 ST_XMax("{geom_col}") as xmax,
                 ST_YMax("{geom_col}") as ymax
-            FROM '{chips_file}'
+                {optional_select}
+            FROM '{chips_sql}'
         """).fetchall()
 
         chips = []
         for row in results:
-            grid_id, geojson, xmin, ymin, xmax, ymax = row
+            grid_id, geojson, xmin, ymin, xmax, ymax, *optional_values = row
             geometry = json.loads(geojson)
+            properties = {
+                OPTIONAL_CHIP_COLUMNS[col]: value
+                for col, value in zip(optional_cols, optional_values, strict=True)
+                if _is_publishable(value)
+            }
             chips.append(
                 ChipInfo(
                     grid_id=str(grid_id),
                     geometry=geometry,
                     bbox=(xmin, ymin, xmax, ymax),
                     year=year,
+                    properties=properties,
                 )
             )
         return chips
@@ -567,6 +622,9 @@ def _create_chip_item(
     # Add FTW extension properties if year is set
     if year is not None:
         properties["ftw:calendar_year"] = year
+
+    # Merge in split, coverage and crop composition properties, if the chips file had them
+    properties.update(chip_info.properties)
 
     # Create item with datetime range
     item = Item(

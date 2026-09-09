@@ -92,6 +92,28 @@ downloads it. Set `source_via` to the URL of the upstream collection to record i
 `href` is just the filename, so the build machine's directory layout is not published — plus
 `ftwd_git_commit` when `ftwd` itself was installed from a git checkout.
 
+**Crop composition.** When the fields file carries the fiboa HCAT extension
+(an `hcat:code` column, plus optionally `hcat:name_en`), the chips stage computes each
+chip's area-weighted crop composition from the same class-filtered field polygons the
+masks are burned from: the dominant HCAT code, its English name and share, and the top
+five codes by area, written to the chips GeoParquet as `hcat_dominant_code`,
+`hcat_dominant_name_en`, `hcat_dominant_pct` and `hcat_top`. These carry through to the
+STAC chip items as `ftw:hcat_dominant_code`, `ftw:hcat_dominant_name_en`,
+`ftw:hcat_dominant_pct` and `ftw:hcat_top` (see [docs/stac-extension.md](docs/stac-extension.md)).
+The name falls back to the `hcat:name` column when `hcat:name_en` is absent. The
+percentages are shares of the chip's total field-covered area, so they sum below 100 when
+some of the fields in the chip carry no HCAT code. Note that this is a different
+denominator from `field_coverage_pct`, which is a share of the chip's own area.
+Datasets whose fields lack `hcat:code` skip this step with a note in the run output; set
+`stages.chips.crop_stats: false` to disable it even when the column is present.
+
+**Resuming past the chips stage.** The chips GeoParquet is written by the chips stage and
+reused as-is by every later stage, so a run started with `--from` or `--stage` after
+`chips` publishes whatever that file already holds. Turning `stages.chips.crop_stats` off
+is handled: the stac stage drops any stale composition columns before publishing. Other
+chips settings are not — change `min_coverage`, `drop_border_chips`, `grid_file` or the
+class filter and you must re-run the `chips` stage for the change to reach the output.
+
 #### Class filter (optional)
 
 If your fields file has a crop-type / class column, you can restrict which
