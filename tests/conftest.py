@@ -195,3 +195,24 @@ def sample_boundary_lines_geoparquet(tmp_path: Path) -> Path:
     path = tmp_path / "boundary_lines.parquet"
     gdf.to_parquet(path)
     return path
+
+
+@pytest.fixture(autouse=True)
+def crop_calendar_warmup(monkeypatch: pytest.MonkeyPatch):
+    """Stub the crop calendar warm-up that runs before imagery selection fans out.
+
+    Selection warms the shared cache once on the calling thread so the workers
+    never race the first-time download. That download is a few hundred megabytes,
+    so every test gets a recording stub instead; tests that care assert on the
+    returned mock, and the cache's own tests patch the download directly and are
+    untouched by this.
+    """
+    from unittest.mock import MagicMock
+
+    from ftw_dataset_tools.api.imagery import selection_workflow
+    from ftw_dataset_tools.commands import select_images
+
+    warmup = MagicMock(name="ensure_crop_calendar_exists")
+    monkeypatch.setattr(selection_workflow, "ensure_crop_calendar_exists", warmup)
+    monkeypatch.setattr(select_images, "ensure_crop_calendar_exists", warmup)
+    return warmup

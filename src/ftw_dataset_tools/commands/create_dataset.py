@@ -4,22 +4,17 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Literal
 
 import click
-from tqdm import tqdm
 
 from ftw_dataset_tools.api import crop_stats, dataset, masks, splits
 from ftw_dataset_tools.api.assets import MaskReadError
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
-    download_and_clip_scene,
-    find_s2_child_items,
-    process_downloaded_scene,
+    download_imagery_for_catalog,
     select_imagery_for_catalog,
 )
-from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
-from ftw_dataset_tools.api.imagery.thumbnails import has_rgb_bands
+from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
 from ftw_dataset_tools.api.pipeline import docs_summary_line
 from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_datetime_column
 
@@ -82,6 +77,16 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     type=int,
     default=None,
     help="Number of parallel workers for mask creation (default: half of CPUs).",
+)
+@click.option(
+    "--image-workers",
+    type=click.IntRange(1, MAX_WORKERS),
+    default=DEFAULT_WORKERS,
+    show_default=True,
+    help=(
+        "Chips to select imagery for, and scenes to download, concurrently. "
+        "Both stages are network-bound; --workers covers mask creation instead."
+    ),
 )
 @click.option(
     "--skip-reproject",
@@ -202,6 +207,7 @@ def create_dataset_cmd(
     min_coverage: float,
     resolution: float,
     num_workers: int | None,
+    image_workers: int,
     skip_reproject: bool,
     year: int | None,
     skip_images: bool,
@@ -370,6 +376,7 @@ def create_dataset_cmd(
                 num_buffer_expansions=num_buffer_expansions,
                 buffer_expansion_size=buffer_expansion_size,
                 force=force_image_selection,
+                workers=image_workers,
             )
 
             click.echo(f"  Selected: {selection.successful}")
@@ -383,17 +390,23 @@ def create_dataset_cmd(
             click.echo("")
             click.echo(click.style("Downloading imagery...", fg="cyan", bold=True))
 
-            download_stats = _run_image_download(
+            # Same workflow the standalone download-images command and
+            # `ftwd run` use, so all three download in parallel and write STAC
+            # identically. resume=True keeps the pipeline's behaviour of leaving
+            # already-downloaded scenes alone on a re-run.
+            download_stats = download_imagery_for_catalog(
                 catalog_dir=catalog_dir,
                 bands=["red", "green", "blue", "nir"],
                 resolution=resolution,
+                resume=True,
+                workers=image_workers,
             )
 
-            click.echo(f"  Downloaded: {download_stats['successful']}")
-            if download_stats["skipped"]:
-                click.echo(f"  Skipped: {download_stats['skipped']}")
-            if download_stats["failed"]:
-                click.echo(click.style(f"  Failed: {download_stats['failed']}", fg="red"))
+            click.echo(f"  Downloaded: {download_stats.successful}")
+            if download_stats.skipped:
+                click.echo(f"  Skipped: {download_stats.skipped}")
+            if download_stats.failed:
+                click.echo(click.style(f"  Failed: {download_stats.failed}", fg="red"))
 
         result = dataset.create_dataset(
             fields_file=fields_file,
@@ -480,99 +493,6 @@ def create_dataset_cmd(
     except (FileNotFoundError, ValueError, RuntimeError, MaskReadError) as e:
         click.echo(click.style(f"\nError: {e}", fg="red"))
         raise SystemExit(1) from e
-
-
-def _run_image_download(
-    catalog_dir: Path,
-    bands: list[str],
-    resolution: float,
-) -> dict:
-    """Run image download for all S2 child items in a catalog.
-
-    Downloads imagery, generates thumbnails, and creates overlay thumbnails
-    when semantic masks are available. Updates both child and parent STAC items.
-
-    Uses shared process_downloaded_scene() for consistent behavior with
-    the standalone download-images command.
-    """
-    # Find all child S2 items via the shared finder so this pipeline stage and the
-    # standalone download-images command agree. Items whose JSON cannot be read are
-    # counted as failures rather than silently dropped from the run.
-    unreadable: list[dict] = []
-    child_items = find_s2_child_items(catalog_dir, unreadable=unreadable)
-
-    successful = 0
-    skipped = 0
-    failed = len(unreadable)
-    band_list = list(bands)
-    can_generate_thumbnail = has_rgb_bands(band_list)
-
-    def on_download_progress(msg: str) -> None:
-        if msg.startswith("Grid:"):
-            tqdm.write(f"  {msg}")
-
-    with tqdm(
-        total=len(child_items), desc="Downloading imagery", unit="scene", leave=False
-    ) as pbar:
-        for item, item_path in child_items:
-            bbox = tuple(item.bbox) if item.bbox else None
-
-            if bbox is None or "clipped" in item.assets or "image" in item.assets:
-                skipped += 1
-                pbar.update(1)
-                continue
-
-            # Determine season from item ID
-            if item.id.endswith("_planting_s2"):
-                season: Literal["planting", "harvest"] = "planting"
-            else:
-                season = "harvest"
-
-            # Construct output filename
-            base_id = item.id.replace("_planting_s2", "").replace("_harvest_s2", "")
-            output_filename = f"{base_id}_{season}_image_s2.tif"
-            output_path = item_path.parent / output_filename
-
-            try:
-                scene = SelectedScene(
-                    item=item,
-                    season=season,
-                    cloud_cover=item.properties.get("eo:cloud_cover", 0.0),
-                    datetime=item.datetime,
-                    stac_url=item.get_self_href() or "",
-                )
-
-                result = download_and_clip_scene(
-                    scene=scene,
-                    bbox=bbox,
-                    output_path=output_path,
-                    bands=band_list,
-                    resolution=resolution,
-                    on_progress=on_download_progress,
-                )
-
-                if result.success:
-                    # Use shared processing logic
-                    process_downloaded_scene(
-                        item=item,
-                        item_path=item_path,
-                        output_path=output_path,
-                        output_filename=output_filename,
-                        band_list=band_list,
-                        season=season,
-                        base_id=base_id,
-                        generate_thumbnails=can_generate_thumbnail,
-                    )
-                    successful += 1
-                else:
-                    failed += 1
-
-            except Exception:
-                failed += 1
-
-            pbar.update(1)
-
-    return {"successful": successful, "skipped": skipped, "failed": failed}
 
 
 # Alias for registration

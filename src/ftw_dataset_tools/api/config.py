@@ -21,6 +21,7 @@ import yaml
 
 from ftw_dataset_tools import __version__
 from ftw_dataset_tools.api import field_stats, splits
+from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -738,9 +739,14 @@ def _reject_unknown(data: dict[str, Any], known: set[str], context: str) -> None
 
 
 def _validate_workers(value: Any, key: str) -> None:
-    """Reject anything that is not a worker count (booleans included)."""
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ConfigError(f"{key} must be a positive integer (got {value!r}).")
+    """Reject anything that is not a worker count (booleans included).
+
+    The bounds match the ``--workers`` options on ``select-images`` and
+    ``download-images``, so a count is accepted or rejected the same way whether
+    it comes from a config file or the command line.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_WORKERS:
+        raise ConfigError(f"{key} must be an integer between 1 and {MAX_WORKERS} (got {value!r}).")
 
 
 def _opt_str(value: Any) -> str | None:

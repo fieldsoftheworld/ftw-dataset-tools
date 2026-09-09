@@ -17,10 +17,15 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-__all__ = ["DEFAULT_WORKERS", "ParallelOutcome", "run_in_parallel"]
+__all__ = ["DEFAULT_WORKERS", "MAX_WORKERS", "ParallelOutcome", "run_in_parallel"]
 
 # Enough threads to hide the network latency without hammering the STAC API.
 DEFAULT_WORKERS = 4
+
+# Past this the STAC API and the COG hosts, not the client, are the bottleneck,
+# and a run that asks for hundreds of threads is a typo. Shared by the CLI
+# options and the config validation so both paths reject the same values.
+MAX_WORKERS = 32
 
 T = TypeVar("T")
 R = TypeVar("R")

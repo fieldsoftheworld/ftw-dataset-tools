@@ -587,7 +587,7 @@ class TestImageryWorkers:
 
     def test_zero_select_workers_raises(self) -> None:
         with pytest.raises(
-            ConfigError, match=r"stages\.select_images\.workers must be a positive integer"
+            ConfigError, match=r"stages\.select_images\.workers must be an integer between 1 and"
         ):
             DatasetConfig.from_dict(
                 {"fields_file": "f.parquet", "stages": {"select_images": {"workers": 0}}}
@@ -595,11 +595,32 @@ class TestImageryWorkers:
 
     def test_negative_download_workers_raises(self) -> None:
         with pytest.raises(
-            ConfigError, match=r"stages\.download_images\.workers must be a positive integer"
+            ConfigError, match=r"stages\.download_images\.workers must be an integer between 1 and"
         ):
             DatasetConfig.from_dict(
                 {"fields_file": "f.parquet", "stages": {"download_images": {"workers": -1}}}
             )
+
+    def test_workers_above_maximum_raises(self) -> None:
+        """The ceiling matches the --workers options on the two CLI commands."""
+        from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
+
+        with pytest.raises(ConfigError, match=r"stages\.select_images\.workers"):
+            DatasetConfig.from_dict(
+                {
+                    "fields_file": "f.parquet",
+                    "stages": {"select_images": {"workers": MAX_WORKERS + 1}},
+                }
+            )
+
+    def test_maximum_workers_accepted(self) -> None:
+        from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
+
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"select_images": {"workers": MAX_WORKERS}}}
+        )
+
+        assert config.stages.select_images.workers == MAX_WORKERS
 
     def test_non_int_workers_raises(self) -> None:
         with pytest.raises(ConfigError, match=r"stages\.select_images\.workers"):

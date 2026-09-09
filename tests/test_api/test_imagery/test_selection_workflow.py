@@ -845,3 +845,54 @@ class TestParallelSelection:
         # Each chip's lines form a single contiguous run.
         runs = [chip for chip, _group in groupby(logs)]
         assert len(runs) == len(set(runs))
+
+
+class TestCropCalendarWarmup:
+    """The shared crop calendar cache is filled once, before the pool starts.
+
+    Without this the first run on a cold cache has every worker entering the
+    download at the same moment, and a chip that samples a half-written raster
+    is reported as skipped - a run that produces nothing and still exits 0.
+    """
+
+    def test_warmed_once_before_any_chip(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+        crop_calendar_warmup: MagicMock,
+    ) -> None:
+        catalog = _write_chip_catalog(tmp_path, [f"chip_{n:03d}" for n in range(6)])
+        events: list[str] = []
+        events_lock = threading.Lock()
+
+        crop_calendar_warmup.side_effect = lambda *_a, **_k: events.append("warm")
+
+        def fake_select(**_kwargs: object) -> SceneSelectionResult:
+            with events_lock:
+                events.append("chip")
+            return mock_selection_result
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip",
+            fake_select,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar",
+            RecordingProgressBar,
+        )
+
+        select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4)
+
+        assert events.count("warm") == 1
+        assert events[0] == "warm"
+
+    def test_not_warmed_when_nothing_to_do(
+        self, tmp_path: Path, crop_calendar_warmup: MagicMock
+    ) -> None:
+        """An empty catalog does not touch the network."""
+        catalog = _write_chip_catalog(tmp_path, [])
+
+        select_imagery_for_catalog(catalog_dir=catalog, year=2024)
+
+        crop_calendar_warmup.assert_not_called()

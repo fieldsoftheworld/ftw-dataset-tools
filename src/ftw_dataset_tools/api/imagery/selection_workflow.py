@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Literal
 import pystac
 
 from ftw_dataset_tools.api.imagery.catalog_ops import has_existing_scenes, iter_chip_dirs
+from ftw_dataset_tools.api.imagery.crop_calendar import ensure_crop_calendar_exists
 from ftw_dataset_tools.api.imagery.parallel import (
     DEFAULT_WORKERS,
     ParallelOutcome,
@@ -225,6 +226,10 @@ def select_imagery_for_catalog(
 
     if not chips_to_process:
         return result
+
+    # Warm the crop calendar before fanning out. Every chip needs it, and the
+    # first-time download must happen once rather than from every worker at once.
+    ensure_crop_calendar_exists()
 
     _run_selection(
         chips_to_process,

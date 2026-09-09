@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import threading
 import time
 import urllib.error
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
 from typing import TYPE_CHECKING, Literal
 
 import pystac_client
@@ -111,10 +111,26 @@ def _validate_date_not_future(center_date: datetime, buffer_days: int) -> None:
         )
 
 
-@lru_cache(maxsize=4)
+# One client per thread. A client owns an HTTP session and a plain dict of
+# resolved STAC objects, neither of which is built for concurrent use, and
+# selection runs several chips at once - so caching per thread keeps the reuse
+# without the sharing.
+_CLIENTS = threading.local()
+
+
 def _get_stac_client(catalog_url: str) -> pystac_client.Client:
-    """Get cached STAC client for a catalog URL."""
-    return pystac_client.Client.open(catalog_url)
+    """Get this thread's STAC client for a catalog URL, opening it on first use."""
+    clients: dict[str, pystac_client.Client] | None = getattr(_CLIENTS, "by_url", None)
+    if clients is None:
+        clients = {}
+        _CLIENTS.by_url = clients
+
+    client = clients.get(catalog_url)
+    if client is None:
+        client = pystac_client.Client.open(catalog_url)
+        clients[catalog_url] = client
+
+    return client
 
 
 @dataclass

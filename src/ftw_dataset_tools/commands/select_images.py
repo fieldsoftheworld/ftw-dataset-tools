@@ -19,8 +19,10 @@ from ftw_dataset_tools.api.imagery import (
     get_imagery_stats,
     has_existing_scenes,
 )
+from ftw_dataset_tools.api.imagery.crop_calendar import ensure_crop_calendar_exists
 from ftw_dataset_tools.api.imagery.parallel import (
     DEFAULT_WORKERS,
+    MAX_WORKERS,
     ParallelOutcome,
     run_in_parallel,
 )
@@ -174,7 +176,7 @@ def _record_chip(
 )
 @click.option(
     "--workers",
-    type=int,
+    type=click.IntRange(1, MAX_WORKERS),
     default=DEFAULT_WORKERS,
     show_default=True,
     help="Chips to select for concurrently. Each chip costs several STAC searches.",
@@ -442,6 +444,10 @@ def select_images_cmd(
         )
         for item, chip_year in chips_to_process
     ]
+
+    # Warm the crop calendar before fanning out: every chip needs it, and the
+    # first-time download must not be entered by several workers at once.
+    ensure_crop_calendar_exists(on_progress=lambda msg: click.echo(f"  {msg}"))
 
     def work(job: ChipSelectionJob) -> SceneSelectionResult:
         return run_chip_selection(

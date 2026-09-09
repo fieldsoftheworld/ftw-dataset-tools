@@ -23,6 +23,7 @@ from ftw_dataset_tools.api.imagery.download_workflow import (
 )
 from ftw_dataset_tools.api.imagery.parallel import (
     DEFAULT_WORKERS,
+    MAX_WORKERS,
     ParallelOutcome,
     run_in_parallel,
 )
@@ -187,7 +188,7 @@ def _update_stac_items(
 )
 @click.option(
     "--workers",
-    type=int,
+    type=click.IntRange(1, MAX_WORKERS),
     default=DEFAULT_WORKERS,
     show_default=True,
     help="Scenes to download concurrently. STAC item writes stay serialized.",

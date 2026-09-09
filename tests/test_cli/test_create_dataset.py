@@ -12,6 +12,8 @@ from click.testing import CliRunner, Result
 from shapely.geometry import box
 
 from ftw_dataset_tools.api.dataset import CreateDatasetResult
+from ftw_dataset_tools.api.imagery.download_workflow import DownloadWorkflowResult
+from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS
 from ftw_dataset_tools.api.imagery.selection_workflow import SelectionWorkflowResult
 from ftw_dataset_tools.api.stac import STACGenerationResult
 from ftw_dataset_tools.cli import cli
@@ -555,3 +557,76 @@ class TestCreateDatasetRuntimeError:
         assert result.exit_code != 0
         assert "tippecanoe is not installed" in result.output
         assert "Traceback" not in result.output
+
+
+class TestCreateDatasetImageDownload:
+    """--download-images uses the same parallel workflow as the other two paths.
+
+    It used to run its own serial loop, so a pipeline download took roughly four
+    times as long as `ftwd download-images` over the same catalog.
+    """
+
+    @pytest.fixture
+    def download_calls(self, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+        calls: list[dict[str, Any]] = []
+
+        def fake_download(**kwargs: Any) -> DownloadWorkflowResult:
+            calls.append(kwargs)
+            return DownloadWorkflowResult(successful=4, skipped=1, failed=2)
+
+        monkeypatch.setattr(create_dataset_module, "download_imagery_for_catalog", fake_download)
+        return calls
+
+    @pytest.mark.usefixtures("stub_pipeline")
+    def test_delegates_to_shared_workflow(
+        self, download_calls: list[dict[str, Any]], sample_fields_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        result = _invoke(sample_fields_geoparquet, "--download-images")
+
+        assert result.exit_code == 0, result.output
+        assert len(download_calls) == 1
+        kwargs = download_calls[0]
+        assert kwargs["catalog_dir"] == tmp_path / "out"
+        assert kwargs["bands"] == ["red", "green", "blue", "nir"]
+        assert kwargs["resume"] is True
+        assert kwargs["workers"] == DEFAULT_WORKERS
+
+    @pytest.mark.usefixtures("stub_pipeline")
+    def test_image_workers_passed_through(
+        self, download_calls: list[dict[str, Any]], sample_fields_geoparquet: Path
+    ) -> None:
+        result = _invoke(sample_fields_geoparquet, "--download-images", "--image-workers", "8")
+
+        assert result.exit_code == 0, result.output
+        assert download_calls[0]["workers"] == 8
+
+    def test_image_workers_reaches_selection(
+        self, stub_pipeline: SelectionStub, sample_fields_geoparquet: Path
+    ) -> None:
+        result = _invoke(sample_fields_geoparquet, "--image-workers", "6")
+
+        assert result.exit_code == 0, result.output
+        assert stub_pipeline.calls[0]["workers"] == 6
+
+    @pytest.mark.usefixtures("stub_pipeline", "download_calls")
+    def test_reports_download_counts(self, sample_fields_geoparquet: Path) -> None:
+        result = _invoke(sample_fields_geoparquet, "--download-images")
+
+        assert result.exit_code == 0, result.output
+        assert "Downloaded: 4" in result.output
+        assert "Skipped: 1" in result.output
+        assert "Failed: 2" in result.output
+
+    @pytest.mark.usefixtures("stub_pipeline")
+    def test_resolution_passed_through(
+        self, download_calls: list[dict[str, Any]], sample_fields_geoparquet: Path
+    ) -> None:
+        result = _invoke(sample_fields_geoparquet, "--download-images", "--resolution", "20")
+
+        assert result.exit_code == 0, result.output
+        assert download_calls[0]["resolution"] == 20.0
+
+    def test_invalid_image_workers_rejected(self, sample_fields_geoparquet: Path) -> None:
+        result = _invoke(sample_fields_geoparquet, "--image-workers", "0")
+
+        assert result.exit_code == 2

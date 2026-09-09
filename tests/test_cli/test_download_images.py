@@ -267,3 +267,34 @@ class TestDownloadImagesWorkers:
         assert result.exit_code == 0, result.output
         assert "Downloaded: 1" in result.output
         assert "Skipped: 1" in result.output
+
+
+class TestDownloadImagesWorkerValidation:
+    """--workers is bounded the same way stages.download_images.workers is."""
+
+    def test_zero_workers_rejected(self, tmp_path: Path) -> None:
+        """Zero used to be silently coerced to one thread here, and rejected in config."""
+        catalog = _write_catalog(tmp_path, ["chip_001"])
+
+        result = CliRunner().invoke(cli, ["download-images", str(catalog), "--workers", "0"])
+
+        assert result.exit_code == 2
+        assert "--workers" in result.output
+
+    def test_negative_workers_rejected(self, tmp_path: Path) -> None:
+        catalog = _write_catalog(tmp_path, ["chip_001"])
+
+        result = CliRunner().invoke(cli, ["download-images", str(catalog), "--workers", "-1"])
+
+        assert result.exit_code == 2
+
+    def test_workers_above_maximum_rejected(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
+
+        catalog = _write_catalog(tmp_path, ["chip_001"])
+
+        result = CliRunner().invoke(
+            cli, ["download-images", str(catalog), "--workers", str(MAX_WORKERS + 1)]
+        )
+
+        assert result.exit_code == 2
