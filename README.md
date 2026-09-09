@@ -442,6 +442,21 @@ uv run ruff check .
 uv run ruff format .
 ```
 
+### Changing dependencies
+
+After editing `pyproject.toml`, run `uv lock` and stage `uv.lock` in the **same**
+commit:
+
+```bash
+uv lock
+git add pyproject.toml uv.lock
+```
+
+The pre-commit `pytest` hook and CI both run with `--locked`, so a `pyproject.toml`
+change without a matching `uv.lock` fails with `error: The lockfile at uv.lock needs
+to be updated`. Staging only `pyproject.toml` fails the same way even after running
+`uv lock`, because pre-commit stashes the unstaged lockfile before running the hook.
+
 ## License
 
 Apache-2.0

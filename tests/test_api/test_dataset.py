@@ -59,12 +59,12 @@ class TestCreateDatasetResult:
 class TestCreateDatasetInputValidation:
     """Tests for create_dataset input validation."""
 
-    def test_fields_file_not_found(self) -> None:
+    def test_fields_file_not_found(self, tmp_path: Path) -> None:
         """Test FileNotFoundError for missing fields file."""
         from ftw_dataset_tools.api.dataset import create_dataset
 
         with pytest.raises(FileNotFoundError, match="Fields file not found"):
-            create_dataset("/nonexistent/fields.parquet")
+            create_dataset("/nonexistent/fields.parquet", output_dir=tmp_path / "out")
 
     def test_year_required_without_datetime_column(self, tmp_path: Path) -> None:
         """Test ValueError when year not provided and no datetime column."""
@@ -76,7 +76,9 @@ class TestCreateDatasetInputValidation:
         gdf.to_parquet(fields_file)
 
         with pytest.raises(ValueError, match="Cannot determine temporal extent"):
-            create_dataset(fields_file, year=None, split_type="random-uniform")
+            create_dataset(
+                fields_file, output_dir=tmp_path / "out", year=None, split_type="random-uniform"
+            )
 
     def test_skip_reproject_error_non_4326(self, tmp_path: Path) -> None:
         """Test ValueError when skip_reproject=True with non-4326 input."""
@@ -92,7 +94,13 @@ class TestCreateDatasetInputValidation:
         gdf.to_parquet(fields_file)
 
         with pytest.raises(ValueError, match="EPSG:4326 is required"):
-            create_dataset(fields_file, year=2023, skip_reproject=True, split_type="random-uniform")
+            create_dataset(
+                fields_file,
+                output_dir=tmp_path / "out",
+                year=2023,
+                skip_reproject=True,
+                split_type="random-uniform",
+            )
 
 
 class TestCreateDatasetResultProperties:

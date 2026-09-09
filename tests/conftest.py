@@ -1,10 +1,53 @@
 """Shared test fixtures for ftw-dataset-tools tests."""
 
+import shutil
+from collections.abc import Iterator
 from pathlib import Path
 
 import geopandas as gpd
 import pytest
 from shapely.geometry import Polygon, box
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Entries the tooling itself drops in the repo root during a run.
+IGNORED_ROOT_ENTRIES = {"__pycache__", ".pytest_cache", ".ruff_cache", ".coverage"}
+
+
+def _repo_root_entries() -> set[str]:
+    """Names directly under the repo root, excluding tooling artifacts."""
+    return {entry.name for entry in REPO_ROOT.iterdir()} - IGNORED_ROOT_ENTRIES
+
+
+@pytest.fixture(autouse=True)
+def repo_root_stays_clean() -> Iterator[None]:
+    """Fail any test that writes into the repository root.
+
+    Several API entry points default ``output_dir`` to a path relative to the
+    working directory (``api.dataset.create_dataset`` uses ``"./dataset"``), so a
+    test that omits ``output_dir`` silently litters the checkout - and
+    ``.gitignore`` hides the result from ``git status``. Pass an ``output_dir``
+    under ``tmp_path`` instead.
+
+    Anything the test created is removed before failing, so a stale directory
+    cannot mask the next run.
+    """
+    before = _repo_root_entries()
+    yield
+    created = sorted(_repo_root_entries() - before)
+    if not created:
+        return
+    for name in created:
+        path = REPO_ROOT / name
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
+    pytest.fail(
+        "Test wrote into the repository root: "
+        + ", ".join(created)
+        + ". Pass an output path under tmp_path instead."
+    )
 
 
 @pytest.fixture

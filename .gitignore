@@ -71,6 +71,9 @@ Thumbs.db
 
 # Project specific
 *.parquet
+# Library default output_dir for api.dataset.create_dataset
+# (CLI runs write <stem>-dataset/ instead)
+/dataset/
 
 # Worktrees
 .worktrees/
