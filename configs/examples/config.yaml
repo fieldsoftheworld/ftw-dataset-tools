@@ -127,6 +127,11 @@ stages:
     resolution: 10.0
     # Scenes downloaded at once. The STAC item writes stay serialized.
     workers: 4
+    # Leave chips that already have imagery on disk alone, so a rerun picks up
+    # where it stopped. Set false to fetch every chip again - the only way to
+    # apply a changed `bands` or `resolution`, since resuming skips on the local
+    # file existing and never checks what is inside it.
+    resume: true
 
   docs:
     # PMTiles and the MapLibre styles that read them. "auto" builds them when the

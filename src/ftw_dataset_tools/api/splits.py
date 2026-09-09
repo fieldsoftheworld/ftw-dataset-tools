@@ -12,7 +12,7 @@ import geoparquet_io as gpio
 import numpy as np
 import pandas as pd
 
-from ftw_dataset_tools.api.geo import write_geoparquet
+from ftw_dataset_tools.api.geo import sql_path, write_geoparquet
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -45,8 +45,9 @@ def _integer_columns(chips_path: Path) -> set[str]:
     """Columns the chips file stores as integers."""
     con = duckdb.connect(":memory:")
     try:
-        escaped = str(chips_path).replace("'", "''")
-        rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{escaped}')").fetchall()
+        rows = con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{sql_path(chips_path)}')"
+        ).fetchall()
     finally:
         con.close()
     return {name for name, dtype, *_ in rows if dtype.upper() in _INTEGER_TYPES}

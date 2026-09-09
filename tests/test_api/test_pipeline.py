@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -1543,9 +1544,65 @@ class TestDownloadStageResumes:
     Luxembourg rebuild did: 0 skipped, 1358 failed.
     """
 
-    def test_stage_passes_resume(self, sample_geoparquet_4326: Path, tmp_path: Path) -> None:
+    def _catalog_with_a_downloaded_chip(self, out: Path) -> None:
+        """A collection whose one child item already has its local image on disk."""
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "collection.json").write_text("{}")
+        chip_dir = out / "chips" / "33UXP" / "chip_001"
+        chip_dir.mkdir(parents=True)
+        item = {
+            "type": "Feature",
+            "stac_version": "1.0.0",
+            "id": "chip_001_planting_s2",
+            "bbox": [10.0, 50.0, 10.01, 50.01],
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [[10.0, 50.0], [10.01, 50.0], [10.01, 50.01], [10.0, 50.01], [10.0, 50.0]]
+                ],
+            },
+            "properties": {"datetime": "2024-05-01T00:00:00Z"},
+            "links": [],
+            "assets": {
+                # A completed download leaves the local image in place of the
+                # remote band hrefs, so re-attempting this chip could only fail.
+                "image": {"href": "./chip_001_planting_image_s2.tif", "type": "image/tiff"}
+            },
+        }
+        (chip_dir / "chip_001_planting_s2.json").write_text(json.dumps(item))
+        (chip_dir / "chip_001_planting_image_s2.tif").write_bytes(b"fake image data")
+
+    def test_an_already_downloaded_chip_is_skipped_not_failed(
+        self, sample_geoparquet_4326: Path, tmp_path: Path
+    ) -> None:
+        """The real stage, against a real catalog: 1 skipped, 0 failed, no network."""
         out = tmp_path / "out"
         ctx = pipeline.build_context(_config(sample_geoparquet_4326, out, year=2024))
+        self._catalog_with_a_downloaded_chip(out)
+
+        pipeline.stage_download_images(ctx)
+
+        result = ctx.download_result
+        assert (result.skipped, result.failed, result.successful) == (1, 0, 0)
+        assert result.skipped_details[0]["reason"] == "Already downloaded"
+
+    @pytest.mark.parametrize("configured", [True, False])
+    def test_stage_honours_the_configured_resume(
+        self,
+        sample_geoparquet_4326: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        configured: bool,
+    ) -> None:
+        """resume defaults to True but stays overridable, e.g. to re-fetch new bands."""
+        out = tmp_path / "out"
+        config = _config(
+            sample_geoparquet_4326,
+            out,
+            year=2024,
+            stages={"download_images": {"resume": configured}},
+        )
+        ctx = pipeline.build_context(config)
         out.mkdir(parents=True, exist_ok=True)
         (out / "collection.json").write_text("{}")
 
@@ -1557,11 +1614,8 @@ class TestDownloadStageResumes:
                 successful=0, skipped=0, failed=0, failed_details=[], skipped_details=[]
             )
 
-        monkey = pytest.MonkeyPatch()
-        monkey.setattr(pipeline, "download_imagery_for_catalog", fake_download)
-        try:
-            pipeline.stage_download_images(ctx)
-        finally:
-            monkey.undo()
+        monkeypatch.setattr(pipeline, "download_imagery_for_catalog", fake_download)
 
-        assert seen.get("resume") is True, seen
+        pipeline.stage_download_images(ctx)
+
+        assert seen.get("resume") is configured, seen

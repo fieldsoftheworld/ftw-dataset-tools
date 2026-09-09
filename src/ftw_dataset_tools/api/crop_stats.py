@@ -9,7 +9,6 @@ fields.
 
 from __future__ import annotations
 
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -17,10 +16,10 @@ from typing import TYPE_CHECKING
 import duckdb
 
 from ftw_dataset_tools.api.field_stats import CHIP_ID_COLUMN, detect_bbox_column
+from ftw_dataset_tools.api.fs import create_temp_file, finalize_temp_file
 from ftw_dataset_tools.api.geo import (
     detect_geometry_column,
     ensure_spatial_loaded,
-    finalize_temp_file,
     sql_path,
     write_geoparquet,
 )
@@ -73,10 +72,7 @@ def _write_chips(chips_path: Path, con: duckdb.DuckDBPyConnection, query: str) -
         query = f'SELECT * FROM ({query}) ORDER BY "{CHIP_ID_COLUMN}"'
     tmp_path: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile(
-            suffix=".parquet", delete=False, dir=chips_path.parent
-        ) as tmp:
-            tmp_path = Path(tmp.name)
+        tmp_path = create_temp_file(chips_path, suffix=".parquet")
         write_geoparquet(tmp_path, conn=con, query=query)
         finalize_temp_file(tmp_path, chips_path)
         tmp_path = None

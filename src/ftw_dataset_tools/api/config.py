@@ -416,6 +416,11 @@ class DownloadImagesConfig:
     resolution: float = 10.0
     # Scenes are downloaded in parallel; the STAC item writes stay serialized.
     workers: int = DEFAULT_IMAGERY_WORKERS
+    # Leave chips that already have local imagery alone, so a rerun picks up where
+    # it stopped. Set false to fetch every chip again - which is the only way to
+    # pick up a changed `bands` or `resolution`, since resume skips on the local
+    # file existing and never checks what is inside it.
+    resume: bool = True
 
 
 @dataclass
@@ -623,6 +628,9 @@ class DatasetConfig:
 
         if not isinstance(self.stages.masks.skip_existing, bool):
             raise ConfigError("stages.masks.skip_existing must be true or false")
+
+        if not isinstance(self.stages.download_images.resume, bool):
+            raise ConfigError("stages.download_images.resume must be true or false")
 
         _validate_workers(self.stages.select_images.workers, "stages.select_images.workers")
         _validate_workers(self.stages.download_images.workers, "stages.download_images.workers")
