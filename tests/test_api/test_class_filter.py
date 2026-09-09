@@ -161,3 +161,47 @@ class TestDataPlane:
     def test_bad_column_name_rejected(self, fields_with_classes: Path) -> None:
         with pytest.raises(ClassFilterError, match="Invalid class filter column"):
             cf_module.get_distinct_classes(fields_with_classes, 'crop"; DROP')
+
+
+class TestCropNameColumn:
+    """A colon-named text column (crop:name) with special-character/quoted values.
+
+    Estonia has no numeric crop:code; it filters on the Estonian crop:name text,
+    whose values include embedded double quotes (e.g. kartul "Ando") and diacritics.
+    """
+
+    @pytest.fixture
+    def fields_crop_name(self, tmp_path: Path) -> Path:
+        gdf = gpd.GeoDataFrame(
+            {"crop:name": ['kartul "Ando"', "suvinisu", "rohumaa", "kõrvits"]},
+            geometry=[box(i, i, i + 1, i + 1) for i in range(4)],
+            crs="EPSG:4326",
+        )
+        path = tmp_path / "ee_fields.parquet"
+        gdf.to_parquet(path)
+        return path
+
+    def _filter(self) -> ClassFilter:
+        return ClassFilter(
+            column="crop:name",
+            include=['kartul "Ando"', "suvinisu", "kõrvits"],
+            exclude=["rohumaa"],
+            column_aliases=["crop_name"],
+        )
+
+    def test_resolve_and_distinct(self, fields_crop_name: Path) -> None:
+        cf = self._filter()
+        assert cf_module.resolve_column(fields_crop_name, cf) == "crop:name"
+        assert cf_module.get_distinct_classes(fields_crop_name, "crop:name") == {
+            'kartul "Ando"',
+            "suvinisu",
+            "rohumaa",
+            "kõrvits",
+        }
+
+    def test_write_filtered_keeps_only_include(self, fields_crop_name: Path, tmp_path: Path) -> None:
+        cf = self._filter()
+        out = tmp_path / "filtered.parquet"
+        cf_module.write_filtered_fields(fields_crop_name, out, cf, column="crop:name")
+        rows = duckdb.connect().execute(f'SELECT DISTINCT "crop:name" FROM \'{out}\'').fetchall()
+        assert {r[0] for r in rows} == {'kartul "Ando"', "suvinisu", "kõrvits"}  # rohumaa dropped
