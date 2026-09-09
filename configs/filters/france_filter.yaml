@@ -1,0 +1,367 @@
+# Class filter used for France (FR) field boundaries.
+# Codes are the French RPG (Registre Parcellaire Graphique) 3-letter crop:code from the
+# harmonized ftw/harmonized-field-data fr dataset; HCAT English names shown as comments.
+# Covers fr years 2017 and 2019-2024 (2018 is not published). 314 distinct codes.
+#
+# Excluded (background): permanent & temporary grassland, pasture, meadow, ryegrass, pure
+# forage grasses (fescue, dactylis, timothy, bromus), fallow/set-aside/EFA & temporarily
+# unused agricultural land, orchards/fruit/berries/vineyards/nut trees/olive groves,
+# greenhouse (off-ground) and open-field ornamental horticulture & ornamental flowers,
+# biomass/energy crops (miscanthus, switchgrass, short-rotation coppice), nurseries, cover
+# crops (phacelia, niger), nitrogen-fixing greening mixes, buffer/forest strips, field
+# margins, agroforestry (grazed/pig-grazed groves, truffle oaks), reed beds/salt marsh,
+# afforested land, pastoral rangeland, and administrative/unknown codes.
+#
+# Notable inclusions: cereals (incl. silage maize & forage cereals), oilseeds, protein crops
+# & pulses, fibre hemp/flax, fodder legumes and legume-predominant leys (alfalfa, clover,
+# sainfoin, vetch, lupine, melilot), fodder roots/brassicas (beet, carrot, cabbage, turnip),
+# sugar beet, hops, mustard, tobacco, lavender & other aromatic/medicinal herbs, all field &
+# market-garden vegetables, potatoes, strawberries, and (France-specific) open-field
+# melon/watermelon and inter-row arable declarations.
+
+column: ["crop:code", "crop_code"]
+
+include:
+  # Common/soft wheat
+  - BTH  # Soft winter wheat
+  - BTP  # Soft spring wheat
+  # Other cereals (durum, oats, rye, triticale, spelt, buckwheat, sorghum, millet, mixes)
+  - TTH  # Winter triticale
+  - BDH  # Hard winter wheat
+  - MCR  # Mix of cereals
+  - SOG  # Sorghum
+  - AVH  # Winter oats
+  - AVP  # Spring oats
+  - SRS  # Buckwheat
+  - SGH  # Winter rye
+  - EPE  # Spelt
+  - MLT  # Millet
+  - BDP  # Durum spring wheat
+  - TTP  # Spring triticale
+  - CAG  # Other cereal of a different type
+  - CHT  # Other winter cereal of the genus Triticum
+  - MCS  # Spring cereal mix
+  - SGP  # Spring rye
+  - CGP  # Other cereal of the genus Panicum (millet)
+  - CGO  # Other cereal of the genus Sorghum
+  - CHA  # Other winter cereal of the genus Avena
+  - CPA  # Other spring cereal of the genus Avena
+  - CHH  # Other winter cereal of the genus Hordeum
+  - CPT  # Other spring cereal of the genus Triticum
+  - CAH  # Other secondary winter cereal
+  - CHS  # Other Secale winter cereal
+  - CPH  # Other spring cereal of the genus Hordeum
+  - CGH  # Other cereal of the genus Phalaris
+  - CGF  # Other cereal of the genus Fagopyrum
+  - CPZ  # Other spring cereal of the genus Zea
+  - CPS  # Other spring cereal of the genus Secale
+  - BDT  # Durum wheat (other)
+  # Maize (grain, silage, sweet)
+  - MIS  # Maize
+  - MIE  # Silage Maize
+  - MID  # Sweet corn
+  # Barley
+  - ORH  # Winter barley
+  - ORP  # Spring barley
+  # Rice
+  - RIZ  # Rice
+  # Rapeseed
+  - CZH  # Winter rapeseed
+  - CZP  # Spring rapeseed
+  # Sunflower
+  - TRN  # Sunflower
+  # Other oilseeds (soy, linseed, peanut, poppy)
+  - SOJ  # Soybean
+  - LIH  # Winter non-textile linen
+  - LIP  # Spring non-textile linen
+  - OEI  # Oilseed poppy
+  - OAG  # Other oilseeds of a different type
+  - MOL  # Oilseed blend
+  - NVE  # Summer rape
+  - OHR  # Other winter oilseeds of the species Brassica rapa
+  - NVH  # Winter rape
+  - ARA  # Peanut
+  - OEH  # Other oilseeds of the species Helianthus
+  - OHN  # Other winter oilseeds of the species Brassica napus
+  - OPR  # Other Brassica rapa spring oilseeds
+  - OPN  # Other Brassica napus spring oilseeds
+  # Protein crops / pulses (peas, faba bean, lupine, mixes)
+  - PPR  # Spring peas sown before 31 May
+  - FVL  # Faba bean sown before 31 May
+  - MPC  # Mixture of predominantly protein crops (peas and / or lupine and / or faba bean) sown before 31 May and cereals
+  - PHI  # Winter peas
+  - PHF  # Fresh peas & beans (food)
+  - FVP  # Spring faba bean
+  - PHS  # Dry peas & beans (food)
+  - LDH  # Sweet winter lupine
+  - LDP  # Sweet spring lupine sown before 31 May
+  - MLS  # Grain legume mix (spring)
+  - MPP  # Protein crop mixture (pea and/or lupin and/or faba bean)
+  - FEV  # Faba bean
+  - PAG  # Other protein crop of another type
+  # Dried pulses (lentil, chickpea)
+  - LEC  # Cultivated lentil (not fodder)
+  - PCH  # Chickpea
+  # Fibre crops (hemp, flax fibre)
+  - LIF  # Linen fibers
+  - CHV  # Hemp
+  - CSE  # Hemp without conforming label
+  # Fodder legumes & fodder roots/brassicas (alfalfa, clover, sainfoin, vetch, lupine, melilot, leys; fodder beet/carrot/cabbage/turnip/radish)
+  - LUZ  # Other alfalfa
+  - MLG  # Mixture of legumes predominantly at seed and forage grasses 5 years or less
+  - TRE  # Other clover
+  - MLF  # Forage legume mix (entre elles)
+  - MLC  # Legume-predominant mix + cereals/oilseeds
+  - SAI  # Other sainfoin
+  - CPL  # Fodder composed of cereals and / or protein crops (in proportion <50%) and / or fodder legumes (in proportion <50%)
+  - LUD  # Dehydrated alfalfa
+  - FAG  # Other annual fodder of a different type
+  - MH7  # Legume-predominant fodder + grass mix (2017)
+  - BVF  # Fodder beet
+  - LU7  # Alfalfa planted for the 2017 harvest
+  - MH6  # Legume-predominant fodder + grass mix (2016)
+  - LU6  # Alfalfa planted for the 2016 harvest
+  - LU5  # Alfalfa (recent)
+  - MH5  # Legume-predominant fodder + grass mix (2015)
+  - MOH  # Foxtail millet
+  - VES  # Other vetch
+  - FSG  # Another root fodder plant of another type
+  - TR7  # Clover planted for the 2017 harvest
+  - MC7  # Mixture of predominantly forage legumes planted for the 2017 harvest and cereals and/or oilseeds
+  - TR6  # Clover planted for the 2016 harvest
+  - ML7  # Fodder legume mixture planted for the 2017 harvest
+  - FFO  # Other fodder bean
+  - PFP  # Other spring feed peas
+  - PFH  # Other winter feed peas
+  - SA7  # Sainfoin planted for the 2017 harvest
+  - ML6  # Mixture of forage legumes implanted for the 2016 harvest (among themselves)
+  - CHF  # Forage cabbage
+  - AFG  # Other annual forage (catch-all)
+  - TR5  # Clover (recent)
+  - SA6  # Sainfoin planted for the 2016 harvest
+  - ML5  # Forage legume mix (recent)
+  - FF7  # Feed faba bean planted for the 2017 harvest
+  - SA5  # Sainfoin (recent)
+  - LOT  # Trefoil
+  - VE7  # Vetch planted for the 2017 harvest
+  - RDF  # Forage radish
+  - PP7  # Spring fodder pea planted for the 2017 harvest
+  - TRD  # Dehydrated clover
+  - MC6  # Mixture of predominantly forage legumes planted for the 2016 harvest and cereals
+  - MEL  # Other sweet clover
+  - SAD  # Dehydrated Sainfoin
+  - PH7  # Winter fodder pea planted for the 2017 harvest
+  - GES  # Chickling vetch
+  - LEF  # Forage lentil
+  - LFP  # Other spring forage lupine
+  - MLD  # Mixture of dehydrated legumes (among themselves)
+  - LFH  # Other winter forage lupine
+  - MC5  # Legume-predominant + cereals mix (recent)
+  - NVF  # Forage turnip
+  - LP7  # Spring forage lupin planted for 2017 harvest
+  - LH7  # Winter forage lupin planted for the 2017 harvest
+  - CAF  # Forage carrot
+  - MIN  # Hop clover Medicago
+  - JOS  # Vetch/red pea
+  - VED  # Dehydrated vetch
+  - LO7  # Trefoil planted for the 2017 harvest
+  - VE6  # Vetch planted for the 2016 harvest
+  - ME7  # Melilot planted for the 2017 harvest
+  - LH6  # Winter forage lupine planted for the 2016 harvest
+  - LH5  # Winter forage lupine (recent)
+  - FF6  # Fodder faba bean implanted for the 2016 harvest
+  - LP5  # Spring forage lupine (recent)
+  - SER  # Serradella
+  - LP6  # Spring forage lupine planted for the 2016 harvest
+  - ME6  # Melilot planted for the 2016 harvest
+  - JO6  # vetch/red pea planted for the 2016 harvest
+  - MI7  # Hop clover Medicago planted for the 2017 harvest
+  - SE7  # Serradelle planted for the 2017 harvest
+  - JO7  # vetch/red pea  planted for the 2017 harvest
+  - JO5  # Vetch/red pea (recent)
+  - PH6  # Winter fodder peas planted for the 2016 harvest
+  - VE5  # Vetch (recent)
+  - MED  # Dehydrated melilot
+  - PP5  # Spring fodder pea (recent)
+  - PP6  # Spring fodder pea planted for the 2016 harvest
+  - FF5  # Fodder faba bean (recent)
+  - SE6  # Serradella planted for the 2016 harvest
+  - PH5  # Winter fodder pea (recent)
+  - SE5  # Serradella (recent)
+  # Aromatic/medicinal/industrial (sugar beet, hops, mustard, tobacco, lavender, herbs, processing tomato)
+  - BTN  # Non-forage beet / Swiss chard
+  - LAV  # Lavender / Lavandin
+  - PPP  # Other perennial perfume, aromatic and medicinal plants
+  - MOT  # Mustard
+  - PPA  # Other annual perfume, aromatic and medicinal plant
+  - AAR  # Annual aromatic herbs
+  - SGE  # Sage
+  - TAB  # Tobacco
+  - ARP  # Perennial aromatic plant
+  - AME  # Annual medicinal/perfume plants
+  - THY  # Thyme
+  - CRD  # Coriander
+  - PSL  # Parsley
+  - CML  # Camelina
+  - HBL  # Hop
+  - TOT  # Tomato for processing
+  - FNO  # Fennel
+  - MTH  # Mint
+  - FNU  # Fenugreek
+  - PRF  # Perennial perfume plant
+  - ROM  # Rosemary
+  - MLI  # Lemon balm
+  - MRJ  # Marjoram / Oregano
+  - CMM  # Chamomile
+  - SRI  # Summer savory
+  - BAS  # Basil
+  - CIB  # Chive
+  - ANE  # Dill
+  - CHR  # Milk thistle
+  - EST  # Tarragon
+  - PSN  # Provence black psyllium
+  - ANG  # Angelic
+  - ORT  # Nettle
+  - CRF  # Chervil
+  - MAV  # Mallow
+  - PSY  # Psyllium plantain
+  - MLP  # St. John's Wort
+  - BRH  # Borage 5 years or less
+  - VAL  # Valerian
+  - OSE  # Sorrel
+  - ANI  # Anise
+  - BAR  # Burdock
+  - CAV  # Caraway
+  - CUM  # Cumin
+  # Field & market-garden vegetables, potatoes, strawberries, melon/watermelon
+  - PTC  # Potato for consumption
+  - FLA  # Other vegetables or annual fruits
+  - CHU  # Cabbage
+  - FLP  # Other perennial vegetable or fruit
+  - MDI  # Diversified market-garden veg
+  - OIG  # Onion / Shallot
+  - PPO  # Green peas
+  - HAR  # Bean / Flageolet
+  - FRA  # Strawberry
+  - CAR  # Carrot
+  - ART  # Artichoke
+  - MLO  # Melon
+  - LBF  # Lettuce / Batavia / Oak leaf
+  - POT  # Pumpkin / Red kuri squash
+  - PTF  # Starch potato
+  - POR  # Leek
+  - AIL  # Garlic
+  - CES  # Chicory / Endive / Escarole
+  - CMB  # Butternut squash / Butternut
+  - TOM  # Tomato
+  - CCT  # Zucchini / Pumpkin
+  - NVT  # Turnip
+  - RDI  # Radish
+  - CEL  # Celery
+  - MAC  # Lamb's lettuce
+  - EPI  # Spinach
+  - PME  # Perennial medicinal plant
+  - CCN  # Cucumber / Pickle
+  - PVP  # Pepper / Chili
+  - TOP  # Jerusalem artichoke
+  - PAN  # Parsnip
+  - AUB  # Aubergine
+  - ROQ  # Rocket
+  - PAS  # Watermelon
+  - SFI  # Salsify
+  - RUT  # Rutabaga
+  - CRS  # Cress
+  - DOL  # cowpea
+  - CRA  # Garden cress 5 years old or less
+  - CRN  # Cowpea
+  # Inter-row arable crops; tropical tuber
+  - CID  # Inter-row cultivation: 2 crops each representing more than 25% of the total
+  - CIT  # Crops managed in inter-rows: 3 crops representing each more than 25%
+  - TBT  # (unmapped)
+
+exclude:
+  # Fallow / set-aside / EFA / temporarily unused
+  - J6S  # Fallow land 6 years or more declared as Ecological Focus Area (EFA)
+  - JAC  # Fallow (jachere)
+  - J5M  # Fallow land 5 years or less
+  - J6P  # Fallow 6 years or more
+  - JNO  # Black fallow
+  # Pastoral areas & grazed wood
+  - SPH  # Pastoral area - predominantly grass and woody forage resources present
+  - SPL  # Pastoral area - predominant woody fodder resources
+  - BOP  # Grazed wood
+  # Permanent pasture & long-rotation meadow
+  - PPH  # Permanent pasture - predominantly grass (woody fodder resources absent or scarce)
+  - PRL  # Long rotation meadow (6 years or more)
+  # Temporary grassland & ryegrass
+  - PTR  # Other temporary grassland 5 years or less
+  - RGA  # Ryegrass 5 years or less
+  # Pure forage grasses (in the fodder group)
+  - FET  # Fescue 5 years or less
+  - DTY  # Dactylis Orchard grass 5 years or less
+  - GFP  # Other pure forage grass 5 years or less
+  - FLO  # Timothy 5 years or less
+  - PAT  # Other rough blue-grass 5 years or less
+  - XFE  # X-Felium 5 years or younger type of forage
+  - GAI  # Galium
+  # Orchards, fruit & berries
+  - VRG  # Orchard
+  - PRU  # Plum for processing
+  - PFR  # Berry
+  - CBT  # Bigarreau cherry for processing
+  - PVT  # Pavia peaches for processing
+  - PWT  # Williams pear for processing
+  - AGR  # Citrus
+  - AVO  # Avocado
+  # Vineyards
+  - VRC  # Vine: wine grapes
+  - VRN  # Vine: wine grapes not in production
+  - RVI  # Restructuring of the vineyard
+  - VRT  # Vine: table grapes
+  # Nut trees
+  - NOX  # Walnuts
+  - CTG  # Chestnut
+  - NOS  # Hazelnut
+  - PIS  # Pistachio
+  - CAB  # Carob
+  # Olive groves
+  - OLI  # Olive grove
+  # Greenhouse & ornamental horticulture (in the veg group)
+  - CSS  # Off-ground cultivation in greenhouse
+  - HPC  # (unmapped)
+  - BLT  # Cornflower
+  - PAQ  # Daisy
+  - MRG  # Daisy
+  - PMV  # Primrose
+  - PSE  # Viola tricolor
+  - VER  # (unmapped)
+  - BUR  # (unmapped)
+  # Energy/biomass, nurseries, cover crops (phacelia/niger), buffer & forest strips, field margins, agroforestry, reed beds, admin
+  - SNE  # Temporarily unused agricultural area
+  - BTA  # Buffer strip
+  - BOR  # Field margin
+  - BFS  # Eligible strip along a forest without production
+  - BFP  # Permissible strip along a forest with production
+  - TRU  # Truffle patch (oak grove of mycorrhizal trees)
+  - SBO  # Wooded area on former agricultural land
+  - PEP  # Nursery
+  - CEE  # Oak grove maintained by pigs or small ruminants
+  - MCT  # Miscanthus
+  - CAE  # Chestnut grove maintained by pigs or small ruminants
+  - MSW  # Biomass energy crops (miscanthus/switchgrass/silphie)
+  - TCR  # Short rotation coppice
+  - SIN  # Pastoral area unused this year
+  - PCL  # Phacelia 5 years or less
+  - GRA  # Pure grass for turf or certified seed
+  - MPA  # Other mixture of nitrogen fixing plants
+  - MRS  # Salt marsh
+  - ACP  # Other perennial crop / fallow in banana groves
+  - PEV  # Nursery (<1 yr in ground)
+  - ROS  # Reed bed
+  - BRO  # Bromus grass 5 years or less
+  - SNU  # Pastoral area, degraded/bare cover
+  - SAG  # Reed bed (roseliere)
+  - NYG  # Nyger
+  - CNE  # Admin/unknown
+  # Admin / unknown
+  - CNA  # Admin/unknown
