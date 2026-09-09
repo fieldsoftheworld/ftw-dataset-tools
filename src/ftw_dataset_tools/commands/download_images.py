@@ -18,7 +18,7 @@ from ftw_dataset_tools.api.imagery import (
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 from ftw_dataset_tools.api.imagery.thumbnails import has_rgb_bands
-from ftw_dataset_tools.api.stac_items import STACSaveError
+from ftw_dataset_tools.api.stac_items import STACSaveError, write_item
 
 # All valid Sentinel-2 bands from EarthSearch
 VALID_BANDS: tuple[str, ...] = (
@@ -136,10 +136,12 @@ def download_images_cmd(
     click.echo(f"Bands: {band_list}")
     click.echo(f"Resolution: {resolution}m")
 
-    # Find all child S2 items (planting and harvest)
-    child_items = find_s2_child_items(catalog_dir)
+    # Find all child S2 items (planting and harvest). Items whose JSON cannot be
+    # read are reported as failures rather than silently dropped from the run.
+    unreadable: list[dict] = []
+    child_items = find_s2_child_items(catalog_dir, unreadable=unreadable)
 
-    if not child_items:
+    if not child_items and not unreadable:
         raise click.ClickException(
             "No S2 child items found. Run 'select-images' first to create them."
         )
@@ -149,7 +151,7 @@ def download_images_cmd(
     # Track results
     successful: list[str] = []
     skipped: list[dict] = []
-    failed: list[dict] = []
+    failed: list[dict] = list(unreadable)
 
     # Progress callback
     def on_progress(msg: str) -> None:
@@ -215,7 +217,7 @@ def download_images_cmd(
                             title=f"Clipped {len(band_list)}-band image ({','.join(band_list)})",
                             roles=["data"],
                         )
-                        item.save_object(str(item_path))
+                        write_item(item, item_path)
                     else:
                         # Use shared processing logic for default workflow
                         try:

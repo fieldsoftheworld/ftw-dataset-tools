@@ -225,8 +225,16 @@ def select_images_cmd(
                 raise click.ClickException(f"Failed to copy catalog: {e}") from e
             catalog_dir = output_dir
 
-        # Find all chip items (parent items, not child S2 items)
-        chip_items = [item for item, _item_path in find_chip_items(catalog_dir)]
+        # Find all chip items (parent items, not child S2 items). Chips whose JSON
+        # cannot be read are reported rather than silently dropped from the run.
+        unreadable: list[dict] = []
+        chip_items = [item for item, _item_path in find_chip_items(catalog_dir, unreadable)]
+
+        for detail in unreadable:
+            click.echo(
+                click.style(f"  {detail['chip']}: {detail['error']}", fg="red"),
+                err=True,
+            )
 
         if not chip_items:
             raise click.ClickException("No chip items found in catalog")

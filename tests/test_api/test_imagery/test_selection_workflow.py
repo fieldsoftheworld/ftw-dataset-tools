@@ -505,3 +505,94 @@ class TestSelectionWorkflowResult:
 
         assert len(result1.skipped_details) == 1
         assert len(result2.skipped_details) == 0
+
+
+class TestFailuresAreReported:
+    """A swallowed per-chip exception still has to reach the operator."""
+
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip")
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar")
+    def test_errors_go_to_the_progress_bar(
+        self,
+        mock_progress_class: MagicMock,
+        mock_select: MagicMock,
+        mock_catalog_with_chips: Path,
+    ) -> None:
+        mock_select.side_effect = RuntimeError("does not resolve to a STAC object")
+        mock_progress = MagicMock()
+        mock_progress_class.return_value.__enter__.return_value = mock_progress
+        mock_progress_class.return_value.__exit__.return_value = None
+
+        result = select_imagery_for_catalog(catalog_dir=mock_catalog_with_chips, year=2024)
+
+        mock_progress.report_failures.assert_called_once_with(result.failed_details)
+        assert "does not resolve" in result.failed_details[0]["error"]
+
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip")
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.create_child_items_from_selection")
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar")
+    def test_nothing_reported_when_every_chip_succeeds(
+        self,
+        mock_progress_class: MagicMock,
+        _mock_create_child: MagicMock,
+        mock_select: MagicMock,
+        mock_catalog_with_chips: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        mock_select.return_value = mock_selection_result
+        mock_progress = MagicMock()
+        mock_progress_class.return_value.__enter__.return_value = mock_progress
+        mock_progress_class.return_value.__exit__.return_value = None
+
+        select_imagery_for_catalog(catalog_dir=mock_catalog_with_chips, year=2024)
+
+        mock_progress.report_failures.assert_called_once_with([])
+
+
+class TestUnreadableChipsAreReported:
+    """A chip whose JSON cannot be read is reported, not silently dropped.
+
+    Without this the chip disappears from every later run: it never gets imagery
+    and is counted in neither the success, skip nor failure totals.
+    """
+
+    def test_find_chip_items_collects_the_unreadable_file(
+        self, mock_catalog_with_invalid_json: Path
+    ) -> None:
+        unreadable: list[dict] = []
+
+        items = find_chip_items(mock_catalog_with_invalid_json, unreadable=unreadable)
+
+        assert [item.id for item, _ in items] == ["chip_001"]
+        assert [detail["chip"] for detail in unreadable] == ["invalid_chip"]
+        assert "Unreadable chip" in unreadable[0]["error"]
+
+    def test_find_chip_items_still_skips_silently_without_a_collector(
+        self, mock_catalog_with_invalid_json: Path
+    ) -> None:
+        """The collector is opt-in, so existing callers are unaffected."""
+        assert len(find_chip_items(mock_catalog_with_invalid_json)) == 1
+
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip")
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.create_child_items_from_selection")
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar")
+    def test_workflow_counts_the_unreadable_chip_as_failed(
+        self,
+        mock_progress_class: MagicMock,
+        _mock_create_child: MagicMock,
+        mock_select: MagicMock,
+        mock_catalog_with_invalid_json: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        mock_select.return_value = mock_selection_result
+        mock_progress = MagicMock()
+        mock_progress_class.return_value.__enter__.return_value = mock_progress
+        mock_progress_class.return_value.__exit__.return_value = None
+
+        result = select_imagery_for_catalog(catalog_dir=mock_catalog_with_invalid_json, year=2024)
+
+        assert result.successful == 1
+        assert result.failed == 1
+        assert result.failed_details[0]["chip"] == "invalid_chip"
+        # And it reaches the operator rather than only the counter.
+        mock_progress.report_failures.assert_called_once_with(result.failed_details)

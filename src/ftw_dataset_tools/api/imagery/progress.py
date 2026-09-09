@@ -9,6 +9,14 @@ if TYPE_CHECKING:
     from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
 
 
+# tqdm prefixes a non-empty ``{postfix}`` with ", ", so the counters have to carry
+# their own labels: a literal ``ok={postfix}`` in the format rendered "ok=, 0 fail=19".
+BAR_FORMAT = "|{bar:25}| {n}/{total}{postfix} {desc}"
+
+# Failures shown inline when a run finishes; the rest are left to the caller's summary.
+MAX_REPORTED_FAILURES = 3
+
+
 @dataclass
 class SelectionStats:
     """Track selection statistics."""
@@ -18,6 +26,15 @@ class SelectionStats:
     failed: int = 0
     already_has: int = 0
     no_scenes: int = 0
+
+
+def format_counters(stats: SelectionStats) -> str:
+    """Render the counters as ``ok=19 skip=0 fail=0``.
+
+    All three always show, so a run that failed everything reads as such instead
+    of looking like an unlabelled number.
+    """
+    return f"ok={stats.successful} skip={stats.skipped} fail={stats.failed}"
 
 
 @dataclass
@@ -36,14 +53,14 @@ class ImageryProgressBar:
     _last_result: "SceneSelectionResult | None" = field(default=None, repr=False)
 
     def __enter__(self) -> "ImageryProgressBar":
-        # Compact bar format: progress bar | count | stats | description (at end so width changes don't matter)
-        bar_format = "|{bar:25}| {n}/{total} ok={postfix} {desc}"
+        # Compact bar: progress bar | count | stats | description (at the end so
+        # width changes don't shift everything else).
         self._pbar = tqdm(
             total=self.total,
             desc="",
             unit="chip",
             leave=self.leave,
-            bar_format=bar_format,
+            bar_format=BAR_FORMAT,
         )
         self._update_postfix()
         return self
@@ -57,14 +74,7 @@ class ImageryProgressBar:
         if not self._pbar:
             return
 
-        # Build stats string: "5" or "5 skip=2" or "5 skip=2 fail=1"
-        parts = [str(self.stats.successful)]
-        if self.stats.skipped > 0:
-            parts.append(f"skip={self.stats.skipped}")
-        if self.stats.failed > 0:
-            parts.append(f"fail={self.stats.failed}")
-
-        self._pbar.set_postfix_str(" ".join(parts))
+        self._pbar.set_postfix_str(format_counters(self.stats))
 
     def _status(self, message: str) -> None:
         """Update the status message in-place."""
@@ -137,6 +147,26 @@ class ImageryProgressBar:
         self._update_postfix()
         if self._pbar:
             self._pbar.update(1)
+
+    def report_failures(self, failed_details: list[dict]) -> None:
+        """Print the first few failures so they don't vanish with the bar.
+
+        Selection swallows per-chip exceptions to keep going, which left a run
+        reporting only a count of them.
+
+        Args:
+            failed_details: ``{"chip": ..., "error": ...}`` entries, in order
+        """
+        if not failed_details:
+            return
+
+        tqdm.write(f"  {len(failed_details)} chip(s) failed:")
+        for detail in failed_details[:MAX_REPORTED_FAILURES]:
+            tqdm.write(f"    {detail.get('chip', '?')}: {detail.get('error', 'unknown error')}")
+
+        remaining = len(failed_details) - MAX_REPORTED_FAILURES
+        if remaining > 0:
+            tqdm.write(f"    ... and {remaining} more")
 
     def get_stats_dict(self) -> dict:
         """Return stats as a dictionary for backward compatibility."""

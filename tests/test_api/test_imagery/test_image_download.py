@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import rasterio
@@ -460,3 +460,189 @@ class TestImageryNodata:
         assert stats is not None
         assert stats.minimum == 5
         assert stats.valid_percent == 50.0
+
+
+class TestProcessDownloadedSceneWithoutAResolvableRoot:
+    """A staged child item whose `rel: root` target is missing must still save."""
+
+    def test_writes_the_child_item(self, tmp_path: Path) -> None:
+        import json
+
+        import numpy as np
+        import pystac
+        from rasterio.transform import from_bounds
+
+        from ftw_dataset_tools.api.imagery.image_download import (
+            process_downloaded_scene,
+            write_cog,
+        )
+
+        chip_dir = tmp_path / "chips" / "33UXP" / "chip"
+        chip_dir.mkdir(parents=True)
+        child_path = chip_dir / "chip_planting_s2.json"
+        child = pystac.Item(
+            id="chip_planting_s2",
+            geometry={"type": "Point", "coordinates": [0.5, 0.5]},
+            bbox=[0, 0, 1, 1],
+            datetime=datetime(2024, 3, 1, tzinfo=UTC),
+            properties={},
+        )
+        child.add_link(pystac.Link(rel="root", target="../../../../catalog.json"))
+        child_path.write_text(
+            json.dumps(child.to_dict(include_self_link=False, transform_hrefs=False), indent=2)
+        )
+
+        profile = {
+            "driver": "COG",
+            "dtype": "uint16",
+            "width": 2,
+            "height": 2,
+            "count": 4,
+            "crs": "EPSG:4326",
+            "transform": from_bounds(0, 0, 1, 1, 2, 2),
+            "compress": "deflate",
+        }
+        image_path = chip_dir / "chip_planting_image_s2.tif"
+        write_cog(
+            image_path,
+            np.zeros((4, 2, 2), dtype=np.uint16),
+            ["red", "green", "blue", "nir"],
+            profile,
+        )
+
+        staged = pystac.Item.from_file(str(child_path))
+        process_downloaded_scene(
+            item=staged,
+            item_path=child_path,
+            output_path=image_path,
+            output_filename=image_path.name,
+            band_list=["red", "green", "blue", "nir"],
+            season="planting",
+            base_id="chip",
+            generate_thumbnails=False,
+        )
+
+        written = json.loads(child_path.read_text())
+        rels = {link["rel"]: link["href"] for link in written["links"]}
+        assert rels["root"] == "../../../../catalog.json"
+        assert written["assets"]["image"]["href"] == "./chip_planting_image_s2.tif"
+
+
+class TestProcessDownloadedSceneParentFailure:
+    """A parent-item write failure is surfaced, not swallowed.
+
+    The parent update used to run inside ``contextlib.suppress(Exception)``, so a
+    read-only or full destination left the chip without its season image and
+    thumbnail assets while the run still counted the scene as downloaded.
+    """
+
+    @staticmethod
+    def _staged_chip(tmp_path: Path) -> tuple[Path, Path, Path]:
+        """Stage parent + child items and a written image; return their paths."""
+        import json
+
+        import numpy as np
+        import pystac
+        from rasterio.transform import from_bounds
+
+        from ftw_dataset_tools.api.imagery.image_download import write_cog
+
+        chip_dir = tmp_path / "chips" / "33UXP" / "chip"
+        chip_dir.mkdir(parents=True)
+
+        geometry = {"type": "Point", "coordinates": [0.5, 0.5]}
+        parent = pystac.Item(
+            id="chip",
+            geometry=geometry,
+            bbox=[0, 0, 1, 1],
+            datetime=datetime(2024, 1, 1, tzinfo=UTC),
+            properties={},
+        )
+        parent_path = chip_dir / "chip.json"
+        parent_path.write_text(
+            json.dumps(parent.to_dict(include_self_link=False, transform_hrefs=False), indent=2)
+        )
+
+        child = pystac.Item(
+            id="chip_planting_s2",
+            geometry=geometry,
+            bbox=[0, 0, 1, 1],
+            datetime=datetime(2024, 3, 1, tzinfo=UTC),
+            properties={},
+        )
+        child_path = chip_dir / "chip_planting_s2.json"
+        child_path.write_text(
+            json.dumps(child.to_dict(include_self_link=False, transform_hrefs=False), indent=2)
+        )
+
+        image_path = chip_dir / "chip_planting_image_s2.tif"
+        write_cog(
+            image_path,
+            np.zeros((4, 2, 2), dtype=np.uint16),
+            ["red", "green", "blue", "nir"],
+            {
+                "driver": "COG",
+                "dtype": "uint16",
+                "width": 2,
+                "height": 2,
+                "count": 4,
+                "crs": "EPSG:4326",
+                "transform": from_bounds(0, 0, 1, 1, 2, 2),
+                "compress": "deflate",
+            },
+        )
+        return parent_path, child_path, image_path
+
+    def test_raises_when_the_parent_cannot_be_written(self, tmp_path: Path) -> None:
+        import pystac
+        import pytest
+
+        from ftw_dataset_tools.api.imagery.image_download import process_downloaded_scene
+        from ftw_dataset_tools.api.stac_items import STACSaveError
+
+        _parent_path, child_path, image_path = self._staged_chip(tmp_path)
+
+        with (
+            patch(
+                "ftw_dataset_tools.api.imagery.image_download.update_parent_item",
+                side_effect=STACSaveError("destination is read-only"),
+            ),
+            pytest.raises(STACSaveError, match="read-only"),
+        ):
+            process_downloaded_scene(
+                item=pystac.Item.from_file(str(child_path)),
+                item_path=child_path,
+                output_path=image_path,
+                output_filename=image_path.name,
+                band_list=["red", "green", "blue", "nir"],
+                season="planting",
+                base_id="chip",
+                generate_thumbnails=False,
+            )
+
+    def test_a_read_only_parent_is_reported_as_a_failed_scene(self, tmp_path: Path) -> None:
+        """End to end: the catalog workflow attributes the failure to the scene."""
+        import stat
+
+        from ftw_dataset_tools.api.imagery.download_workflow import download_imagery_for_catalog
+
+        parent_path, _child_path, _image_path = self._staged_chip(tmp_path)
+        parent_path.chmod(stat.S_IRUSR)
+
+        try:
+            with patch(
+                "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene"
+            ) as mock_download:
+                mock_download.return_value = MagicMock(success=True)
+
+                result = download_imagery_for_catalog(
+                    catalog_dir=tmp_path,
+                    show_progress_bar=False,
+                )
+        finally:
+            parent_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+        assert result.successful == 0
+        assert result.failed == 1
+        assert result.failed_details[0]["item"] == "chip_planting_s2"
+        assert "parent item" in result.failed_details[0]["error"]

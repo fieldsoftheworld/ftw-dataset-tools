@@ -43,7 +43,10 @@ class DownloadWorkflowResult:
     failed_details: list[dict] = field(default_factory=list)
 
 
-def find_s2_child_items(catalog_dir: Path) -> list[tuple[pystac.Item, Path]]:
+def find_s2_child_items(
+    catalog_dir: Path,
+    unreadable: list[dict] | None = None,
+) -> list[tuple[pystac.Item, Path]]:
     """Find all S2 child items (planting/harvest) in a catalog directory.
 
     Searches subdirectories for STAC item JSON files that end with
@@ -53,6 +56,10 @@ def find_s2_child_items(catalog_dir: Path) -> list[tuple[pystac.Item, Path]]:
         catalog_dir: Path to the collection directory (holding collection.json),
                      whose ``chips/<square>/<item_id>/`` subdirectories hold STAC
                      item files
+        unreadable: Optional list that collects ``{"item": ..., "error": ...}``
+                    entries for item files that could not be parsed. An item that
+                    cannot be read is otherwise invisible: it is not downloaded and
+                    is counted nowhere, so pass this in to report it.
 
     Returns:
         List of (pystac.Item, item_path) tuples for each S2 child item found.
@@ -64,12 +71,13 @@ def find_s2_child_items(catalog_dir: Path) -> list[tuple[pystac.Item, Path]]:
         for json_file in subdir.glob("*_s2.json"):
             try:
                 item = pystac.Item.from_file(str(json_file))
-                # Only include child items (they have _planting_s2 or _harvest_s2 suffix)
-                if item.id.endswith("_planting_s2") or item.id.endswith("_harvest_s2"):
-                    child_items.append((item, json_file))
-            except Exception:
-                # Skip invalid JSON files
-                pass
+            except Exception as e:
+                if unreadable is not None:
+                    unreadable.append({"item": json_file.stem, "error": f"Unreadable item: {e}"})
+                continue
+            # Only include child items (they have _planting_s2 or _harvest_s2 suffix)
+            if item.id.endswith("_planting_s2") or item.id.endswith("_harvest_s2"):
+                child_items.append((item, json_file))
 
     return child_items
 
@@ -107,8 +115,12 @@ def download_imagery_for_catalog(
     band_list = list(bands)
     can_generate_thumbnail = generate_thumbnails and has_rgb_bands(band_list)
 
-    # Find all child S2 items
-    child_items = find_s2_child_items(catalog_dir)
+    # Find all child S2 items; items whose JSON cannot be read are reported as
+    # failures rather than silently dropped from the run.
+    unreadable: list[dict] = []
+    child_items = find_s2_child_items(catalog_dir, unreadable=unreadable)
+    result.failed += len(unreadable)
+    result.failed_details.extend(unreadable)
 
     if not child_items:
         return result
