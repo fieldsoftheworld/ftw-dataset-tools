@@ -48,6 +48,15 @@ DEFAULT_MASK_TYPES = ("instance", "semantic_2_class", "semantic_3_class")
 DERIVED_MASK_TYPES = ("decode_boundary", "decode_distance")
 DERIVED_MASK_SOURCE = "semantic_2_class"
 
+#: How the imagery stage materialises each chip's picture.
+#: "clip" writes a local 4-band GeoTIFF per chip and previews that.
+#: "preview" leaves the scene COG remote - the chip item still references the full
+#: asset as <season>_visual - and renders only the overlay preview, reading the
+#: chip's window out of that scene. Cheap enough to run over a whole country.
+DOWNLOAD_MODE_CLIP = "clip"
+DOWNLOAD_MODE_PREVIEW = "preview"
+DOWNLOAD_MODES = (DOWNLOAD_MODE_CLIP, DOWNLOAD_MODE_PREVIEW)
+
 # The only non-boolean value stages.docs.pmtiles accepts. Booleans are checked
 # with isinstance so the YAML string "true" is rejected rather than coerced.
 PMTILES_AUTO = "auto"
@@ -421,6 +430,8 @@ class DownloadImagesConfig:
     # pick up a changed `bands` or `resolution`, since resume skips on the local
     # file existing and never checks what is inside it.
     resume: bool = True
+    #: "clip" (default) or "preview"; see DOWNLOAD_MODES.
+    mode: str = DOWNLOAD_MODE_CLIP
 
 
 @dataclass
@@ -634,6 +645,12 @@ class DatasetConfig:
 
         _validate_workers(self.stages.select_images.workers, "stages.select_images.workers")
         _validate_workers(self.stages.download_images.workers, "stages.download_images.workers")
+
+        mode = self.stages.download_images.mode
+        if mode not in DOWNLOAD_MODES:
+            raise ConfigError(
+                f"stages.download_images.mode must be one of {list(DOWNLOAD_MODES)} (got {mode!r})"
+            )
 
         pmtiles = self.stages.docs.pmtiles
         if not isinstance(pmtiles, bool) and pmtiles != PMTILES_AUTO:
