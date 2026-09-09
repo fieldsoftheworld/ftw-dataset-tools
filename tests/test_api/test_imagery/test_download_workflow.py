@@ -545,3 +545,78 @@ class TestDownloadWorkflowResult:
 
         assert len(result1.failed_details) == 1
         assert len(result2.failed_details) == 0
+
+
+class TestUnreadableItemsAreReported:
+    """An S2 item whose JSON cannot be read is reported, not silently dropped."""
+
+    @staticmethod
+    def _catalog_with_one_broken_item(tmp_path: Path) -> Path:
+        from .conftest import create_mock_s2_assets, create_mock_stac_item
+
+        broken_dir = tmp_path / "chips" / "33UXP" / "broken"
+        broken_dir.mkdir(parents=True)
+        (broken_dir / "broken_planting_s2.json").write_text("{ invalid json }")
+
+        valid_dir = tmp_path / "chips" / "33UXP" / "chip_001"
+        valid_dir.mkdir(parents=True)
+        valid_item = create_mock_stac_item(
+            item_id="chip_001_planting_s2",
+            bbox=(10.0, 50.0, 10.01, 50.01),
+            properties={"eo:cloud_cover": 1.5},
+            assets=create_mock_s2_assets(),
+        )
+        valid_path = valid_dir / "chip_001_planting_s2.json"
+        valid_item.set_self_href(str(valid_path))
+        valid_item.save_object(dest_href=str(valid_path))
+        return tmp_path
+
+    def test_find_s2_child_items_collects_the_unreadable_file(self, tmp_path: Path) -> None:
+        catalog_dir = self._catalog_with_one_broken_item(tmp_path)
+        unreadable: list[dict] = []
+
+        items = find_s2_child_items(catalog_dir, unreadable=unreadable)
+
+        assert [item.id for item, _ in items] == ["chip_001_planting_s2"]
+        assert [detail["item"] for detail in unreadable] == ["broken_planting_s2"]
+        assert "Unreadable item" in unreadable[0]["error"]
+
+    def test_find_s2_child_items_still_skips_silently_without_a_collector(
+        self, tmp_path: Path
+    ) -> None:
+        """The collector is opt-in, so existing callers are unaffected."""
+        catalog_dir = self._catalog_with_one_broken_item(tmp_path)
+
+        assert len(find_s2_child_items(catalog_dir)) == 1
+
+    def test_workflow_counts_the_unreadable_item_as_failed(self, tmp_path: Path) -> None:
+        catalog_dir = self._catalog_with_one_broken_item(tmp_path)
+
+        with (
+            patch(
+                "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene"
+            ) as mock_download,
+            patch("ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene"),
+        ):
+            mock_download.return_value = MagicMock(success=True)
+
+            result = download_imagery_for_catalog(
+                catalog_dir=catalog_dir,
+                show_progress_bar=False,
+            )
+
+        assert result.successful == 1
+        assert result.failed == 1
+        assert result.failed_details[0]["item"] == "broken_planting_s2"
+
+    def test_a_catalog_of_only_unreadable_items_still_reports_them(self, tmp_path: Path) -> None:
+        """The early return for "no items" must not discard the failures."""
+        broken_dir = tmp_path / "chips" / "33UXP" / "broken"
+        broken_dir.mkdir(parents=True)
+        (broken_dir / "broken_planting_s2.json").write_text("{ invalid json }")
+
+        result = download_imagery_for_catalog(catalog_dir=tmp_path, show_progress_bar=False)
+
+        assert result.successful == 0
+        assert result.failed == 1
+        assert result.failed_details[0]["item"] == "broken_planting_s2"

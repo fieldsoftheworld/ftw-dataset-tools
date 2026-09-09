@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Literal
 
 import click
-import pystac
 from tqdm import tqdm
 
 from ftw_dataset_tools.api import crop_stats, dataset, masks, splits
@@ -15,7 +14,7 @@ from ftw_dataset_tools.api.assets import MaskReadError
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
     download_and_clip_scene,
-    iter_chip_dirs,
+    find_s2_child_items,
     process_downloaded_scene,
     select_imagery_for_catalog,
 )
@@ -376,7 +375,7 @@ def create_dataset_cmd(
             click.echo(f"  Selected: {selection.successful}")
             click.echo(f"  Skipped: {selection.skipped}")
             if selection.failed:
-                click.echo(click.style(f"  Failed: {selection.failed}", fg="yellow"))
+                click.echo(click.style(f"  Failed: {selection.failed}", fg="red"))
 
             if not download_images:
                 return
@@ -394,7 +393,7 @@ def create_dataset_cmd(
             if download_stats["skipped"]:
                 click.echo(f"  Skipped: {download_stats['skipped']}")
             if download_stats["failed"]:
-                click.echo(click.style(f"  Failed: {download_stats['failed']}", fg="yellow"))
+                click.echo(click.style(f"  Failed: {download_stats['failed']}", fg="red"))
 
         result = dataset.create_dataset(
             fields_file=fields_file,
@@ -496,20 +495,15 @@ def _run_image_download(
     Uses shared process_downloaded_scene() for consistent behavior with
     the standalone download-images command.
     """
-    # Find all child S2 items
-    child_items = []
-    for subdir in iter_chip_dirs(catalog_dir):
-        for json_file in subdir.glob("*_s2.json"):
-            try:
-                item = pystac.Item.from_file(str(json_file))
-                if item.id.endswith("_planting_s2") or item.id.endswith("_harvest_s2"):
-                    child_items.append((item, json_file))
-            except Exception:
-                pass
+    # Find all child S2 items via the shared finder so this pipeline stage and the
+    # standalone download-images command agree. Items whose JSON cannot be read are
+    # counted as failures rather than silently dropped from the run.
+    unreadable: list[dict] = []
+    child_items = find_s2_child_items(catalog_dir, unreadable=unreadable)
 
     successful = 0
     skipped = 0
-    failed = 0
+    failed = len(unreadable)
     band_list = list(bands)
     can_generate_thumbnail = has_rgb_bands(band_list)
 

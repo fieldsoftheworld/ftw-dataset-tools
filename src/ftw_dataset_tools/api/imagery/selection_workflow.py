@@ -41,7 +41,10 @@ class SelectionWorkflowResult:
     failed_details: list[dict] = field(default_factory=list)
 
 
-def find_chip_items(catalog_dir: Path) -> list[tuple[pystac.Item, Path]]:
+def find_chip_items(
+    catalog_dir: Path,
+    unreadable: list[dict] | None = None,
+) -> list[tuple[pystac.Item, Path]]:
     """Find all parent chip items in a catalog directory.
 
     Searches subdirectories for STAC item JSON files, excluding child S2 items
@@ -51,6 +54,10 @@ def find_chip_items(catalog_dir: Path) -> list[tuple[pystac.Item, Path]]:
         catalog_dir: Path to the collection directory (holding collection.json),
                      whose ``chips/<square>/<item_id>/`` subdirectories hold STAC
                      item files
+        unreadable: Optional list that collects ``{"chip": ..., "error": ...}``
+                    entries for chip files that could not be parsed. A chip that
+                    cannot be read is otherwise invisible: it never gets imagery
+                    and is counted nowhere, so pass this in to report it.
 
     Returns:
         List of (pystac.Item, item_path) tuples for each parent chip item found.
@@ -65,10 +72,11 @@ def find_chip_items(catalog_dir: Path) -> list[tuple[pystac.Item, Path]]:
                 continue
             try:
                 item = pystac.Item.from_file(str(json_file))
-                chip_items.append((item, json_file))
-            except Exception:
-                # Skip invalid JSON files
-                pass
+            except Exception as e:
+                if unreadable is not None:
+                    unreadable.append({"chip": json_file.stem, "error": f"Unreadable chip: {e}"})
+                continue
+            chip_items.append((item, json_file))
 
     return chip_items
 
@@ -112,8 +120,12 @@ def select_imagery_for_catalog(
     """
     result = SelectionWorkflowResult()
 
-    # Find all chip items
-    chip_items = find_chip_items(catalog_dir)
+    # Find all chip items; chips whose JSON cannot be read are reported as
+    # failures rather than silently dropped from the run.
+    unreadable: list[dict] = []
+    chip_items = find_chip_items(catalog_dir, unreadable=unreadable)
+    result.failed += len(unreadable)
+    result.failed_details.extend(unreadable)
 
     if not chip_items:
         return result

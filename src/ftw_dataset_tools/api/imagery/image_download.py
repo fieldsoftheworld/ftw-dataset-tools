@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
@@ -596,16 +595,18 @@ def process_downloaded_scene(
             else:
                 thumb_for_parent = result.thumbnail_path.name
 
-        # Suppress errors - child item was saved successfully
-        with contextlib.suppress(Exception):
-            update_parent_item(
-                parent_item=parent_item,
-                parent_path=parent_item_path,
-                season=season,
-                output_filename=output_filename,
-                band_list=band_list,
-                thumbnail_filename=thumb_for_parent,
-                is_overlay=is_overlay,
-            )
+        # A failure here used to be swallowed, so a read-only or full destination
+        # left the chip without its season image while the run still reported the
+        # scene as downloaded. Let it propagate: every caller attributes the error
+        # to this scene and counts it in the failure summary.
+        update_parent_item(
+            parent_item=parent_item,
+            parent_path=parent_item_path,
+            season=season,
+            output_filename=output_filename,
+            band_list=band_list,
+            thumbnail_filename=thumb_for_parent,
+            is_overlay=is_overlay,
+        )
 
     return result
