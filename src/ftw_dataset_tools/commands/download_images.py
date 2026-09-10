@@ -166,10 +166,15 @@ def _update_stac_items(
     ),
 )
 @click.option(
-    "--resume",
-    is_flag=True,
-    default=False,
-    help="Resume from previous run, skipping already downloaded images.",
+    "--resume/--no-resume",
+    default=True,
+    show_default=True,
+    help=(
+        "Leave chips that already have local imagery alone. Use --no-resume to fetch "
+        "every chip again, which is the only way to pick up a changed --bands or "
+        "--resolution (the skip is on the local file existing, not on what is inside it). "
+        "--no-resume needs remote band refs, so re-run select-images first."
+    ),
 )
 @click.option(
     "--output-report",
@@ -218,6 +223,9 @@ def download_images_cmd(
     Use --keep-remote-refs to keep original remote references and add a separate
     "clipped" asset for the local file.
 
+    Chips that already have local imagery are left alone, so a second run picks up
+    where the first stopped. Pass --no-resume to fetch every chip again.
+
     \b
     CATALOG_PATH: Path to the dataset directory (containing collection.json)
 
@@ -226,6 +234,7 @@ def download_images_cmd(
         ftwd download-images ./my-dataset
         ftwd download-images ./my-dataset --bands red,green,blue,nir,scl
         ftwd download-images ./my-dataset --keep-remote-refs  # Keep remote asset refs
+        ftwd download-images ./my-dataset --no-resume  # Re-fetch every chip
     """
     input_path = Path(catalog_path)
     try:

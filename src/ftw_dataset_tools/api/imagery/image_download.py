@@ -96,6 +96,26 @@ def _get_band_hrefs(
     return hrefs
 
 
+def _missing_bands_error(item: pystac.Item) -> str:
+    """Explain why an item carries no band assets to fetch.
+
+    A completed download replaces the child's band assets with a single local
+    `image` (or adds `clipped` under --keep-remote-refs), so the usual cause of
+    an empty band set is that this scene is already on disk - a symptom worth
+    naming, since "no matching band assets" reads like a broken catalog.
+    """
+    local_asset = (
+        "image" if "image" in item.assets else "clipped" if "clipped" in item.assets else None
+    )
+    if local_asset is not None:
+        return (
+            "Scene is already downloaded: its band assets were replaced by the local "
+            f"'{local_asset}' asset, leaving nothing to fetch. Resume (the default) skips "
+            "these; to re-download, run select-images first to restore the remote band refs."
+        )
+    return f"No matching band assets found in scene. Available: {list(item.assets.keys())}"
+
+
 def find_reference_mask_for_output(output_path: Path) -> Path | None:
     """Find a co-located mask raster to use as reference grid for imagery.
 
@@ -339,7 +359,7 @@ def download_and_clip_scene(
             height=0,
             crs="",
             success=False,
-            error=f"No matching band assets found in scene. Available: {list(scene.item.assets.keys())}",
+            error=_missing_bands_error(scene.item),
         )
 
     found_bands = list(band_hrefs.keys())

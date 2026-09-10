@@ -7,10 +7,12 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pystac
 import rasterio
 from rasterio.transform import from_origin
 
 from ftw_dataset_tools.api.imagery.image_download import (
+    _missing_bands_error,
     download_and_clip_scene,
     find_reference_mask_for_output,
 )
@@ -266,6 +268,43 @@ class TestDownloadAndClipScene:
         )
 
         assert "Resolution must be > 0" not in (result.error or "")
+
+
+class TestMissingBandsError:
+    """An item with no band assets gets an explanation, not just the symptom."""
+
+    @staticmethod
+    def _item(assets: dict[str, str]) -> pystac.Item:
+        item = pystac.Item(
+            id="chip_000_planting_s2",
+            geometry=None,
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            datetime=datetime(2024, 6, 1, tzinfo=UTC),
+            properties={},
+        )
+        for key, href in assets.items():
+            item.assets[key] = pystac.Asset(href=href)
+        return item
+
+    def test_local_image_asset_is_reported_as_already_downloaded(self) -> None:
+        message = _missing_bands_error(self._item({"image": "./chip_000_planting_image_s2.tif"}))
+
+        assert "already downloaded" in message
+        assert "'image'" in message
+        assert "select-images" in message
+
+    def test_keep_remote_refs_clipped_asset_is_reported_too(self) -> None:
+        message = _missing_bands_error(self._item({"clipped": "./chip_000_planting_image_s2.tif"}))
+
+        assert "already downloaded" in message
+        assert "'clipped'" in message
+
+    def test_an_item_with_no_local_imagery_keeps_the_original_message(self) -> None:
+        """Nothing downloaded and no bands either is a genuinely malformed item."""
+        message = _missing_bands_error(self._item({"scl": "https://example.com/scl.tif"}))
+
+        assert "No matching band assets found in scene" in message
+        assert "scl" in message
 
 
 class TestWriteCogStats:

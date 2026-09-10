@@ -269,6 +269,104 @@ class TestDownloadImagesWorkers:
         assert "Skipped: 1" in result.output
 
 
+class TestDownloadImagesResumeDefault:
+    """A second run over a complete catalog resumes instead of re-attempting.
+
+    A finished download replaces each child's band assets with the local `image`,
+    so a re-attempt finds no band hrefs left to fetch and fails. Resuming is the
+    only sensible default: without it, `ftwd download-images` against an intact
+    catalog reported every scene as failed rather than skipped.
+    """
+
+    @staticmethod
+    def _mark_downloaded(
+        dataset_dir: Path, chip_id: str, *, keep_remote_refs: bool = False
+    ) -> None:
+        """Leave a chip in the state a completed download leaves it in."""
+        chip_dir = dataset_dir / "chips" / "33UXP" / chip_id
+        for season in ("planting", "harvest"):
+            item_path = chip_dir / f"{chip_id}_{season}_s2.json"
+            item = pystac.Item.from_file(str(item_path))
+            filename = f"{chip_id}_{season}_image_s2.tif"
+            if keep_remote_refs:
+                # --keep-remote-refs leaves the band assets alone and adds `clipped`.
+                item.assets["clipped"] = pystac.Asset(href=f"./{filename}")
+            else:
+                for band in ("red", "green", "blue", "nir"):
+                    item.assets.pop(band, None)
+                item.assets["image"] = pystac.Asset(href=f"./{filename}")
+            item.save_object(dest_href=str(item_path))
+            (chip_dir / filename).write_bytes(b"tif")
+
+    def test_second_run_skips_instead_of_failing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+        self._mark_downloaded(dataset_dir, "chip_000")
+
+        def never(**_kwargs: object) -> DownloadResult:
+            raise AssertionError("a resumed scene must not be re-attempted")
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene", never
+        )
+
+        result = CliRunner().invoke(cli, ["download-images", str(dataset_dir)])
+
+        assert result.exit_code == 0, result.output
+        assert "Skipped: 2" in result.output
+        assert "Failed: 0" in result.output
+        assert "2 items already downloaded" in result.output
+
+    def test_no_resume_reattempts_a_downloaded_scene(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--no-resume ignores the local file, which is how a changed --bands is picked up.
+
+        Uses the --keep-remote-refs shape, the one where the band refs survive a
+        download and so a re-fetch can actually succeed.
+        """
+        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+        self._mark_downloaded(dataset_dir, "chip_000", keep_remote_refs=True)
+        attempted: list[str] = []
+
+        def fake_download(**kwargs: object) -> MagicMock:
+            attempted.append(str(kwargs["output_path"]))
+            return MagicMock(success=True, error=None)
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            fake_download,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.commands.download_images.process_downloaded_scene",
+            lambda **_kwargs: None,
+        )
+
+        result = CliRunner().invoke(cli, ["download-images", str(dataset_dir), "--no-resume"])
+
+        assert result.exit_code == 0, result.output
+        assert "Downloaded: 2" in result.output
+        assert "Skipped: 0" in result.output
+        assert len(attempted) == 2
+
+    def test_no_resume_on_a_stripped_catalog_names_the_cause(self, tmp_path: Path) -> None:
+        """The failure should say the scene is already downloaded, not just "no bands".
+
+        No download is mocked here: the real code path returns before any network
+        read, which is exactly the case the message has to explain.
+        """
+        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+        self._mark_downloaded(dataset_dir, "chip_000")
+
+        result = CliRunner().invoke(cli, ["download-images", str(dataset_dir), "--no-resume"])
+
+        assert result.exit_code == 0, result.output
+        assert "Failed: 2" in result.output
+        assert "already downloaded" in result.output
+        assert "select-images" in result.output
+
+
 class TestDownloadImagesWorkerValidation:
     """--workers is bounded the same way stages.download_images.workers is."""
 
