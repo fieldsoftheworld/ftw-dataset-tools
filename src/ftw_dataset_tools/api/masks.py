@@ -20,7 +20,7 @@ from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 
 from ftw_dataset_tools.api import decode
-from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded
+from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 
 if TYPE_CHECKING:
@@ -86,6 +86,91 @@ def get_mgrs_square(grid_id: str) -> str:
     """
     match = _FTW_GRID_ID.match(grid_id)
     return match.group("square") if match else "other"
+
+
+def chip_dirs_for_ids(
+    grid_ids: Iterable[str],
+    chips_base_dir: Path | str,
+    year: int | None = None,
+) -> dict[str, Path]:
+    """Create one chip directory per grid id, nested by MGRS 100 km square.
+
+    The single implementation of the ``<base>/<square>/<item_id>/`` layout. Callers
+    that already hold the filtered grid ids use this directly; :func:`build_chip_dirs`
+    queries them from a chips file first.
+
+    Args:
+        grid_ids: Grid cell ids to create directories for
+        chips_base_dir: Base directory items live under (``<output>/chips``)
+        year: Optional year folded into the item id
+
+    Returns:
+        Dict mapping item_id to its created directory.
+    """
+    base = Path(chips_base_dir)
+    chip_dirs: dict[str, Path] = {}
+    for grid_id in grid_ids:
+        grid_id_str = str(grid_id)
+        item_id = get_item_id(grid_id_str, year)
+        chip_dir = base / get_mgrs_square(grid_id_str) / item_id
+        chip_dir.mkdir(parents=True, exist_ok=True)
+        chip_dirs[item_id] = chip_dir
+    return chip_dirs
+
+
+def build_chip_dirs(
+    chips_file: str | Path,
+    chips_base_dir: Path | str,
+    min_coverage: float = 0.01,
+    year: int | None = None,
+    grid_id_col: str = "id",
+    coverage_col: str | None = "field_coverage_pct",
+) -> dict[str, Path]:
+    """Create per-chip directories for grids at or above the coverage threshold.
+
+    Shared by the pipeline's mask stage and standalone ``create-masks`` so both
+    write chips to the same paths.
+
+    Args:
+        chips_file: Path to chips GeoParquet file (from create-chips)
+        chips_base_dir: Base directory items live under (``<output>/chips``)
+        min_coverage: Minimum coverage percentage to include
+        year: Optional year folded into the item id
+        grid_id_col: Column name for grid cell ID
+        coverage_col: Column name for field coverage percentage; falsy disables filtering
+
+    Returns:
+        Dict mapping item_id to its created directory.
+
+    Raises:
+        ValueError: If grid_id_col or coverage_col is missing from the chips file.
+    """
+    conn = duckdb.connect(":memory:")
+    try:
+        ensure_spatial_loaded(conn)
+        # Checked up front so a missing column is a clear error rather than a
+        # DuckDB BinderException from the SELECT below.
+        schema = conn.execute(
+            "DESCRIBE SELECT * FROM read_parquet(?)", [str(chips_file)]
+        ).fetchall()
+        col_names = {row[0] for row in schema}
+        if grid_id_col not in col_names:
+            raise ValueError(f"Grid ID column '{grid_id_col}' not found in chips file")
+        if coverage_col and coverage_col not in col_names:
+            raise ValueError(f"Coverage column '{coverage_col}' not found in chips file")
+
+        coverage_filter = f'WHERE "{coverage_col}" >= {min_coverage}' if coverage_col else ""
+        rows = conn.execute(
+            f"""
+            SELECT "{grid_id_col}"
+            FROM '{sql_path(chips_file)}'
+            {coverage_filter}
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    return chip_dirs_for_ids((row[0] for row in rows), chips_base_dir, year)
 
 
 def get_mask_output_path(
@@ -205,7 +290,7 @@ def _get_geometries_in_bounds(
 
     query = f"""
         SELECT {select_cols}
-        FROM '{file_path}'
+        FROM '{sql_path(file_path)}'
         WHERE ST_Intersects(
             "{geom_col}",
             ST_GeomFromText('POLYGON(({minx} {miny}, {maxx} {miny}, {maxx} {maxy}, {minx} {maxy}, {minx} {miny}))')
@@ -892,8 +977,8 @@ def create_masks(
         resolution: Pixel resolution in CRS units (default: 10.0 meters)
         num_workers: Number of parallel workers (default: CPU count, capped at 8)
         chip_dirs: Optional dict mapping item_id (grid_id or grid_id_year) to output directory.
-                   If provided, masks are written to chip-specific directories.
-                   If None, all masks go to output_dir with dataset prefix in filename.
+                   If None, one is built under ``output_dir/chips`` from the grid cells
+                   that pass the coverage filter, matching the pipeline's layout.
         year: Optional year for year-based naming convention (e.g., 2024).
               When provided, item IDs and filenames include the year.
         background_class_value: Value to use for background pixels (default: 0). Use 3 for presence-only labels.
@@ -945,7 +1030,7 @@ def create_masks(
     ensure_spatial_loaded(conn)
 
     # Get total grid count (before filtering)
-    total_count_result = conn.execute(f"SELECT COUNT(*) FROM '{chips_path}'").fetchone()
+    total_count_result = conn.execute(f"SELECT COUNT(*) FROM '{sql_path(chips_path)}'").fetchone()
     total_grids = total_count_result[0] if total_count_result else 0
 
     # Build query with optional coverage filter
@@ -961,7 +1046,7 @@ def create_masks(
             ST_YMin("{grid_geom_col}") as miny,
             ST_XMax("{grid_geom_col}") as maxx,
             ST_YMax("{grid_geom_col}") as maxy
-        FROM '{chips_path}'
+        FROM '{sql_path(chips_path)}'
         {coverage_filter}
     """
 
@@ -975,6 +1060,16 @@ def create_masks(
         raise
 
     total_cells = len(grid_cells)
+
+    if chip_dirs is None:
+        # Derived from the already-filtered grid_cells rather than a second query, so
+        # the keys cannot drift from the cells actually processed. Imported here
+        # because api.stac imports this module.
+        from ftw_dataset_tools.api.stac import chips_base_dir_for
+
+        chip_dirs = chip_dirs_for_ids(
+            (str(row[0]) for row in grid_cells), chips_base_dir_for(output_path), year
+        )
 
     # One task per (grid cell, group of mask types sharing a rasterization).
     groups = _group_by_source(mask_types)
@@ -1005,7 +1100,9 @@ def create_masks(
     if MaskType.INSTANCE in mask_types:
         # Try to find an ID column in boundaries file
         try:
-            schema = conn.execute(f"DESCRIBE SELECT * FROM '{boundaries_path}'").fetchall()
+            schema = conn.execute(
+                f"DESCRIBE SELECT * FROM '{sql_path(boundaries_path)}'"
+            ).fetchall()
             col_names = [row[0] for row in schema]
             for candidate in ["id", "ID", "fid", "FID", "objectid", "OBJECTID"]:
                 if candidate in col_names:
