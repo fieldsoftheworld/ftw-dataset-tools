@@ -264,7 +264,8 @@ top level, as the [render extension](https://github.com/stac-extensions/render) 
 schema requires for each type. The categorical masks get an entry with only `assets`,
 `title` and `nodata`, so a viewer that ignores `classification:classes` still hides the
 background — deliberately no `colormap`, so the class hints stay the single source of
-colour. Only the continuous rasters get a ramp:
+colour. Only the continuous rasters get a ramp, and a chip that has season imagery also
+gets a true-colour render per season:
 
 | Render | Assets | Definition |
 |--------|--------|------------|
@@ -273,6 +274,8 @@ colour. Only the continuous rasters get a ramp:
 | `decode_boundary` | `decode_boundary_mask` | `nodata: 0` |
 | `decode_distance` | `decode_distance_mask` | `rescale: [[0, 1]]`, `nodata` from the band, else 0 |
 | `instance` | `instance_mask` | `rescale: [[band minimum, band maximum]]`, `nodata`: the background value, `colormap_name: viridis` |
+| `planting_rgb` | `planting_image`, else `planting_visual` | `bidx` + `rescale` — see below |
+| `harvest_rgb` | `harvest_image`, else `harvest_visual` | `bidx` + `rescale` — see below |
 
 `nodata` is the dataset's background pixel value — 0 normally, **3** when
 `presence_only` is set — for the three class-valued masks (`semantic_2class`,
@@ -296,10 +299,58 @@ Two caveats on that:
   and so still yield a `[[0, maximum]]` stretch. Re-run the `masks` stage (then `stac`) to
   pick up the tighter range.
 
-Item renders are keyed by mask kind and only cover the masks that chip actually has; the
-collection mirrors the same definitions keyed by asset name, as a default for clients that
-read the collection first. The collection's instance render carries no `rescale` at all —
-there is no meaningful collection-wide id range — so use the item's.
+Item mask renders are keyed by mask kind and only cover the masks that chip actually has;
+the collection mirrors the same definitions keyed by asset name, as a default for clients
+that read the collection first. The collection's instance render carries no `rescale` at
+all — there is no meaningful collection-wide id range — so use the item's. The season
+renders below are item-level only: they depend on per-chip imagery and statistics, so the
+collection has no equivalent.
+
+### Season imagery renders
+
+`planting_rgb` and `harvest_rgb` are true colour, titled `"<Season> season (true colour)"`.
+One is emitted per season the chip has imagery for, drawn from whichever asset that season
+has:
+
+- **`<season>_image`** — the chip-clipped GeoTIFF, when it is on disk. `bidx` selects the
+  red, green and blue bands **by name**, read from the band descriptions the download
+  stage writes into `raster:bands[].description`; a file written without any descriptions
+  falls back to its first three bands. A stack whose named bands do not include all of
+  red, green and blue (`--bands nir,red,green`, say) is *never* guessed at — the season
+  falls back to its `visual` asset instead of publishing false colour under a true-colour
+  title. `rescale` is per band, taken from that band's own embedded statistics and clipped
+  to `mean ± 2σ` within the band's extremes, so one bright cloud edge does not crush the
+  image; a band with no mean/stddev, or whose clipped range collapses, uses its raw
+  minimum/maximum. `nodata` is published only when all three colour bands declare the same
+  fill (0 for an all-reflectance stack; a stack sharing `scl`/`cloud`/`aot` declares none,
+  because 0 is a real measurement there).
+- **`<season>_visual`** — the full scene's true-colour COG, used when the chip has a
+  selection but no local download. It is 8-bit, so its stretch is fixed:
+  `bidx: [1, 2, 3]`, `rescale: [[0, 255], [0, 255], [0, 255]]`, `nodata: 0`. A COG reader
+  only fetches the tiles the chip covers.
+
+**`portolan:render_order`.** An item that has season imagery also carries this property: an
+array of keys **into that item's own `renders` object, bottom first**, naming the layer
+stack a viewer should open the chip on. It is always the season's true-colour imagery with
+the field labels drawn over it:
+
+```json
+"portolan:render_order": ["planting_rgb", "decode_boundary"]
+```
+
+The base layer is `planting_rgb` when the chip has planting imagery, else `harvest_rgb`.
+The overlay is `decode_boundary` when the chip has a DECODE boundary mask — an outline, so
+the imagery stays visible inside each field — and `semantic_2class` otherwise; a chip with
+neither carries the base layer alone. Every key names a render of the same item, and the
+overlay's `nodata` makes its background transparent so the imagery shows through.
+
+The property is **absent** on a chip with no season imagery of any kind: a mask-only stack
+would show nothing a viewer's single-asset default does not already show.
+
+This is a browser-side Portolan convention, pending standardisation in portolan-spec issue
+#41, and it costs nothing to a reader that does not know it: a client that ignores the property keeps
+its own default asset choice, a key naming no render is skipped, and a render whose assets
+cannot be drawn contributes nothing.
 
 ## Output Layout
 
