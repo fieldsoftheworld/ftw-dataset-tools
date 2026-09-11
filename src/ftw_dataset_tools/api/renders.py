@@ -101,7 +101,10 @@ _VISUAL_NODATA = 0
 #: Overlay candidates for the default stack, best first. The DECODE boundary is an
 #: outline, so the imagery stays visible inside each field; the binary mask fills
 #: them and is only the fallback for a dataset built without DECODE layers.
-_OVERLAY_PREFERENCE = ("decode_boundary", "semantic_2class")
+# The instance colouring reads best over imagery: each field a distinct colour,
+# background transparent, so the scene stays visible between fields. Boundary
+# outlines and the binary mask are the fallbacks for datasets without it.
+_OVERLAY_PREFERENCE = ("instance", "decode_boundary", "semantic_2class")
 
 
 def _first_band(asset: pystac.Asset | None) -> dict:

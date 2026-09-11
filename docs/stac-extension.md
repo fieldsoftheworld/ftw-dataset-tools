@@ -335,13 +335,14 @@ stack a viewer should open the chip on. It is always the season's true-colour im
 the field labels drawn over it:
 
 ```json
-"portolan:render_order": ["planting_rgb", "decode_boundary"]
+"portolan:render_order": ["planting_rgb", "instance"]
 ```
 
 The base layer is `planting_rgb` when the chip has planting imagery, else `harvest_rgb`.
-The overlay is `decode_boundary` when the chip has a DECODE boundary mask — an outline, so
-the imagery stays visible inside each field — and `semantic_2class` otherwise; a chip with
-neither carries the base layer alone. Every key names a render of the same item, and the
+The overlay is `instance` when the chip has an instance mask — each field a distinct
+colour, the background transparent, so the imagery shows between fields — falling back to
+`decode_boundary` (an outline) and then `semantic_2class`; a chip with none of the three
+carries the base layer alone. Every key names a render of the same item, and the
 overlay's `nodata` makes its background transparent so the imagery shows through.
 
 The property is **absent** on a chip with no season imagery of any kind: a mask-only stack
