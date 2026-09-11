@@ -1,0 +1,208 @@
+# Class filter used for Slovenia (SI) field boundaries.
+# Codes are the Slovenian GERK crop code, shared by both harmonized editions: si (crop:code,
+# years 2019-2024) and ec_si (crop_type_class, 2021, EuroCrops). English crop names shown as
+# comments. 184 distinct codes; NULL codes are treated as background.
+#
+# Excluded (background): permanent grassland, grass leys on arable land, grass turf / green
+# cover; fallow (incl. GAEC set-aside), cover crops, phacelia, niger and honey/pollinator
+# mixtures; vineyards & vines for non-wine use; olive groves; orchards, fruit, berries & nuts;
+# tree/vine nurseries, root-stock, short-rotation coppice, Miscanthus, ornamental plants & roses;
+# hop-propagation nurseries; and non-agricultural / soilless / landscape / unknown areas.
+# Grass grown for SEED (code 200) and clover-predominant clover-grass leys (206) are field, while
+# grass-predominant grass-clover leys (203) and pure grass on arable (201) are background.
+#
+# Notable inclusions: all cereals, maize, sorghum, oilseeds (rape, sunflower, oil pumpkin, poppy,
+# camelina, mustard, oil/fodder radish), hemp, flax, tobacco, soy, legumes & pulses, fodder
+# legumes (clover, alfalfa, sainfoin, vetch, lupine, trefoil, grass pea, N-fixing mixes), fodder
+# roots & brassicas, potatoes, sugar/fodder beet, all vegetables & herbs, medicinal/aromatic
+# plants (lavender, echinacea), asparagus, artichoke, rhubarb, strawberries and hops.
+
+column: ["crop:code", "crop_type_class", "crop_code"]
+
+include:
+  - "001"  # Common wheat spring
+  - "002"  # Rye (spring)
+  - "003"  # Spring Spelt
+  - "004"  # Buckwheat
+  - "005"  # Grain maize
+  - "006"  # Silo Maize
+  - "007"  # Spring Triticale
+  - "008"  # Oats (spring)
+  - "009"  # spring barley
+  - "010"  # Proso millet
+  - "011"  # Mixture of cereals (spring)
+  - "012"  # Common Sunflower
+  - "013"  # Winter squash pumkin
+  - "014"  # Rapeseed spring
+  - "017"  # Field bean
+  - "019"  # Sugar beet
+  - "020"  # potatoes (late)
+  - "021"  # Meslin (spring)
+  - "022"  # potatoes (early)
+  - "023"  # Quinoa
+  - "024"  # sorghum
+  - "025"  # Durum wheat spring
+  - "027"  # Cannabis
+  - "028"  # Flax
+  - "030"  # Soybean
+  - "031"  # Spring Poppy
+  - "033"  # Pea spring
+  - "034"  # Brown mustard
+  - "035"  # Khorasan wheat spring
+  - "036"  # Camelina
+  - "037"  # Amaranth
+  - "038"  # Turnip
+  - "049"  # Sweet corn
+  - "054"  # White mustard
+  - "055"  # Oilseed radish
+  - "057"  # Buckwheat
+  - "058"  # Sunflower
+  - 101  # Beet fodder
+  - 102  # Turnip
+  - 103  # Oilseed rape
+  - 104  # Oilseed rape spring
+  - 105  # Fodder cabbage
+  - 106  # Common Chicory
+  - 107  # Daucus
+  - 108  # Swede
+  - 109  # Sorghum
+  - 110  # Peas (spring)
+  - 111  # White mustard
+  - 112  # Spring oilseed rape
+  - 113  # Fodder Radish
+  - 114  # Other fodder crops on arable land
+  - 116  # Sudan grass
+  - 129  # Other mixtures with nitrogen-fixing crops
+  - 200  # Grass for seed production
+  - 206  # Clover grass mixture
+  - 207  # Red clover
+  - 208  # Alfalfa
+  - 210  # White lupin
+  - 211  # Grass pea (Lathyrus)
+  - 220  # Egyptian clover
+  - 221  # Reversed clover
+  - 222  # Crimson clover
+  - 223  # Birdsfoot trefoil (Lotus corniculatus)
+  - 395  # Field bean (from 0.1 ha)
+  - 396  # Pea (from 0.1 ha)
+  - 397  # Beans (from 0.1 ha)
+  - 398  # Lentils (from 0.1 ha)
+  - 399  # Chickpeas (from 0.1 ha)
+  - 400  # vegetables and herbs under 0.1 ha
+  - 401  # seedlings of vegetables, herbs and spices
+  - 402  # Mixed vegetables
+  - 403  # Mixed permanent herbs
+  - 404  # One-year herbs on fields
+  - 405  # Mixed use (vegetables, crops, aromatic plants and medicinal herbs)
+  - 409  # Mixed vegetables (<0.1 ha)
+  - 410  # mixed crops in organic farming
+  - 651  # Strawberries
+  - 703  # Garden asparagus
+  - 723  # Tobacco
+  - 733  # Globe artichocke
+  - 734  # Garden rhubarb
+  - 737  # Lavender
+  - 738  # Purple coneflower (Echinacea)
+  - 801  # Common wheat winter
+  - 802  # Rye winter
+  - 803  # Spelt winter
+  - 804  # Turnip rape winter
+  - 807  # Triticale winter
+  - 808  # Winter oats
+  - 809  # Barley winter
+  - 810  # Winter vetch
+  - 811  # Mixture of cereals (winter)
+  - 812  # Fodder rape (winter)
+  - 814  # Winter rape
+  - 821  # Meslin (winter)
+  - 825  # Durum winter
+  - 831  # Opium poppy winter
+  - 833  # Peas winter
+  - 835  # Khorasan wheat (winter)
+  - 900  # Common hop
+
+exclude:
+  - "000"  # Not known
+  - "026"  # Fallow land
+  - "029"  # The rooting of hop seedlings
+  - "052"  # A mixture of honey plants
+  - "053"  # A mixture of honey plants with other agricultural plants
+  - "056"  # Phacelia
+  - "060"  # Fallow land without crops (empty area)
+  - "061"  # Fallow land without agricultural production
+  - "062"  # Green cover
+  - "063"  # Fallow land for GAEC 7 and GAEC 8
+  - 100  # Common grape vine
+  - 115  # Niger (Guizotia abyssinica)
+  - 201  # Grass on arable land
+  - 202  # Green cover (grass turf)
+  - 203  # Grass clover mixture
+  - 204  # Permanent grassland
+  - 219  # Lacy phacelia
+  - 333  # Not mantained because of technical obstacle
+  - 444  # Production not in the soil
+  - 611  # Apple
+  - 612  # European pear
+  - 613  # Quince
+  - 614  # Asian pear
+  - 615  # Pomegranate
+  - 616  # Common medlar
+  - 618  # Jujube red date
+  - 619  # Feijoa
+  - 621  # Peach
+  - 622  # Nectarine
+  - 623  # Common plum
+  - 624  # Armenian plum
+  - 625  # Sweet cherry
+  - 626  # Sour cherry
+  - 631  # English walnut
+  - 632  # Common hazel
+  - 633  # Almond
+  - 634  # Pecan
+  - 635  # Pistachio
+  - 642  # Golden kiwifruit
+  - 643  # Japanese Persimmon
+  - 644  # Chestnut
+  - 646  # Elderberry
+  - 647  # Fig
+  - 648  # Pawpaw
+  - 649  # Seaberry
+  - 652  # American blueberry
+  - 653  # Red raspberry
+  - 654  # Blackberry
+  - 655  # Redcurrant
+  - 656  # Blackcurrant
+  - 657  # Black chokeberry
+  - 658  # White mulberry
+  - 659  # Goji berry
+  - 660  # Jostaberry
+  - 661  # Common grape vine
+  - 662  # Tayberry
+  - 671  # Lemon
+  - 674  # Mandarin orange
+  - 675  # Cornelian cherry
+  - 676  # European gooseberry
+  - 677  # Sorb tree
+  - 678  # Kamchatka honeysuckle
+  - 680  # Rosa canina
+  - 681  # American cranberry
+  - 682  # Serviceberry
+  - 698  # Sweet chestnut
+  - 699  # Mixed fruit plants
+  - 701  # nurseries and Vine nurseries (not in the ground)
+  - 702  # Nurseries
+  - 704  # Vine nurseries
+  - 705  # Mixed permanent crops on field under 0,1 ha size
+  - 706  # Vines for other uses than for wine or fruits
+  - 707  # Root-stock nursery
+  - 710  # Mixed plants for snail farming
+  - 720  # Short rotation coppice (willow tree, poplar)
+  - 721  # Other short rotation coppices
+  - 722  # Silvergrass
+  - 735  # Ornamental plants
+  - 736  # Roses
+  - 777  # Crop not known
+  - 778  # non-agricultural area
+  - 800  # Olive
+  - 901  # Landscape feature
+  - ""  # (unlabelled)

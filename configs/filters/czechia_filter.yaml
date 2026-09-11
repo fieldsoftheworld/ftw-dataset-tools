@@ -1,0 +1,362 @@
+# Class filter used for Czechia (CZ) field boundaries. Codes are the crop:code from the
+# harmonized ftw/harmonized-field-data cz dataset; the English HCAT name (or the Czech crop:name
+# where no English label exists) is shown as a comment. Covers cz year 2026 (the published
+# edition); 335 codes. This is an arable-crop declaration scheme (no orchard/vineyard codes).
+#
+# Excluded (background): temporary grassland, forage & meadow grasses (ryegrass, fescue,
+# timothy, bluegrass, bent, foxtail, cocksfoot, festulolium, reed canary grass, etc.) and
+# grass-predominant grass-clover/grass-legume leys; poplar/willow/alder/ash short-rotation trees
+# & forest planting material; Miscanthus, cup plant & grass-for-energy; phacelia, niger; fallow
+# and the eco-scheme cover/strip mixtures (nectar & pollinator biobelts, catch crops, erosion &
+# dividing & protective strips, headland & greening-lane mixes, species-rich & non-productive
+# PVN mixes); hop-propagation seedlings; ornamental plants; landscape elements; and temporarily
+# ineligible / crop-less arable areas.
+#
+# Notable inclusions: all cereals (incl. spelt, emmer, einkorn), maize (silage/grain/sweet/pop),
+# sorghum, millet, buckwheat, quinoa; oilseeds (rape, sunflower, poppy, flax, camelina,
+# safflower, mustard, oilseed pumpkin), soy, hemp cultivars; legumes & pulses; fodder legumes
+# (alfalfa, clovers, vetches, sainfoin, galega, lupines, trefoil) and legume/protein & cereal
+# mixtures (incl. clover-predominant clover-grass leys); potatoes, sugar/fodder beet, all field
+# vegetables & roots; culinary/medicinal/aromatic herbs; grass grown for seed (canary seed);
+# Tagetes; and strawberries.
+
+column: ["crop:code", "crop_code"]
+
+include:
+  - "2"  # sugar beet
+  - "3"  # fodder beet 
+  - "4"  # Jerusalem artichoke
+  - "8"  # Millet
+  - "9"  # Sugar sorghum
+  - "10"  # Radishes
+  - "11"  # Chinese mallow
+  - "14"  # Fodder Cabbage
+  - "15"  # Dock and Sorrel
+  - "16"  # Swedes
+  - "18"  # Dill
+  - "19"  # Coriander
+  - "23"  # St. Benedict's thistle
+  - "25"  # dense-flowered mullein
+  - "26"  # Chamomile
+  - "30"  # galega
+  - "31"  # ribwort plantain
+  - "33"  # Valerian 
+  - "34"  # English lavender
+  - "36"  # Lovage
+  - "38"  # Peppermint
+  - "39"  # Lemon balm
+  - "44"  # Milk thistle
+  - "46"  # Tarragon
+  - "48"  # marshmallow
+  - "50"  # Chinese rhubarb
+  - "53"  # common agrimony
+  - "54"  # Saturejka zahradní
+  - "55"  # Moorish mallow
+  - "56"  # Sage
+  - "58"  # Thyme
+  - "59"  # Moldavian dragonhead
+  - "61"  # Hyssop
+  - "63"  # Common yarrow
+  - "65"  # chickpea
+  - "67"  # Lentils
+  - "68"  # Field beans
+  - "69"  # Field peas
+  - "70"  # Spring field pea (Pea)
+  - "71"  # Winter field pea (Pea)
+  - "72"  # crimson clover
+  - "73"  # red clover
+  - "74"  # Persian clover
+  - "75"  # white clover
+  - "76"  # alsike clover
+  - "77"  # sweet clover
+  - "78"  # Lupine white
+  - "79"  # Lupina žlutá
+  - "80"  # Narrow-leaved lupine
+  - "81"  # Lupine variable (Andean)
+  - "83"  # Štírovník jednoletý
+  - "84"  # common bird's-foot trefoil
+  - "85"  # hop clover
+  - "86"  # kidney vetch
+  - "87"  # common sainfoin
+  - "88"  # common vetch
+  - "89"  # fodder vetch 
+  - "90"  # Hungarian vetch
+  - "91"  # Alfafa
+  - "92"  # Fenugreek
+  - "93"  # field clover
+  - "94"  # Clover (T. nigrescens Viv.)
+  - "95"  # Grain sorghum
+  - "96"  # Spring barley
+  - "97"  # Two-row winter barley
+  - "98"  # Multi-row winter barley
+  - "100"  # Naked spring oats
+  - "101"  # Fluffy spring oats
+  - "102"  # Buckwheat
+  - "103"  # Millet
+  - "104"  # Spring Wheat
+  - "105"  # Winter Wheat
+  - "106"  # Winter Spelt
+  - "107"  # Durum wheat spring
+  - "108"  # Durum wheat, winter
+  - "109"  # Spring triticale
+  - "110"  # Winter triticale
+  - "111"  # Spring rye
+  - "112"  # Winter rye
+  - "113"  # Canary grass 
+  - "114"  # Emmer wheat 
+  - "130"  # pot marigold
+  - "178"  # Tagetes
+  - "246"  # Thyme
+  - "249"  # Sorghum × drummondii
+  - "250"  # Sarepta mustard (brown)
+  - "251"  # Rapeseed winter
+  - "252"  # White mustard
+  - "253"  # winter Caraway
+  - "255"  # flax oil
+  - "256"  # flax
+  - "257"  # Gold of pleasure spring
+  - "258"  # Gold of pleasure winter
+  - "260"  # Rapeseed Spring
+  - "261"  # Rapeseed winter
+  - "262"  # Sunflowers
+  - "263"  # Soybean
+  - "264"  # Safflower
+  - "276"  # Strawberry
+  - "352"  # Broccoli
+  - "353"  # Kohlrabi
+  - "354"  # Celeriac
+  - "356"  # Celery
+  - "357"  # Spring onions
+  - "358"  # Onions (Winter onions)
+  - "359"  # Radicchio
+  - "361"  # Spring garlic
+  - "362"  # Winter garlic
+  - "363"  # Garden beans (bush)
+  - "364"  # Garden beans (climbing)
+  - "365"  # Fennel
+  - "366"  # Garden peas
+  - "367"  # Garden peas (sugar)
+  - "368"  # Asparagus
+  - "369"  # Kale
+  - "370"  # Spring cabbage
+  - "371"  # Brussels sprouts
+  - "373"  # Sweet corn
+  - "374"  # Popcorn
+  - "375"  # Cauliflower
+  - "376"  # Perennial horseradish
+  - "377"  # Eggplant (eggplant)
+  - "378"  # Chard
+  - "379"  # Muskmelon
+  - "380"  # Watermelon
+  - "381"  # Fodder Carrot
+  - "382"  # Carrot
+  - "383"  # Gherkin
+  - "384"  # salad Cucumber
+  - "385"  # Allspice paprika
+  - "386"  # Vegetable paprika
+  - "387"  # Parsnip
+  - "388"  # Chive
+  - "389"  # Petroselinum
+  - "390"  # Parsley
+  - "391"  # Spring leek
+  - "392"  # Tomato determinant
+  - "393"  # Tomato indeterminate
+  - "394"  # Reveň kadeřavá (rebarbora)
+  - "395"  # Radish (not elsewhere specified)
+  - "396"  # Garden radish
+  - "397"  # Beetroot
+  - "398"  # Garden cress
+  - "399"  # Butterhead lettuce
+  - "400"  # coral lettuce
+  - "401"  # Romaine lettuce
+  - "405"  # Tykev fíkolistá
+  - "406"  # Field Pumpkin (except butternut squash)
+  - "407"  # oilseed pumpkin
+  - "408"  # Cucurbita maxima
+  - "409"  # Turnip
+  - "411"  # Cabbage white
+  - "412"  # Cabbage red
+  - "413"  # Napa cabbage
+  - "414"  # Welsh onion
+  - "416"  # Shallots
+  - "421"  # Seed potatoes
+  - "422"  # Legume mixes
+  - "423"  # Cereal mixtures
+  - "430"  # Industrial potatoes
+  - "431"  # Clover grass mix (clover dominated)
+  - "432"  # Legume mixture without undersowing
+  - "433"  # silage maize
+  - "434"  # Grain maize
+  - "436"  # Cruciferous vegetables (multiple types)
+  - "437"  # Squash vegetables (multiple types)
+  - "438"  # Apiaceae vegetables (multiple types)
+  - "439"  # Medicinal plants (multiple species)
+  - "444"  # Zucchini
+  - "445"  # Iceberg salad
+  - "446"  # Lupine blue
+  - "449"  # Sepp Holzer Rye
+  - "465"  # Spring spinach
+  - "466"  # Mixed pumpkin
+  - "468"  # Alfalfa mixture (predominantly clovers)
+  - "469"  # Other mixes
+  - "470"  # Crookneck pumpkin
+  - "524"  # Sweet potatoes
+  - "527"  # Oregano
+  - "529"  # Lathyrus
+  - "532"  # Stinging nettle
+  - "535"  # Quinoa 
+  - "536"  # Poppy sown winter
+  - "538"  # lopsided oat
+  - "541"  # eastern galega
+  - "542"  # Berseem clover
+  - "543"  # Field Bean
+  - "547"  # Black mustard
+  - "548"  # Hybrid Alfafa
+  - "550"  # Poppy sown in spring
+  - "551"  # Potatoes for consumption early (harvest until 30.6.)
+  - "552"  # Late Potatoes
+  - "554"  # Einkorn wheat
+  - "555"  # Winter spinach
+  - "557"  # Cornflower blue
+  - "559"  # winter savoy cabbage
+  - "560"  # spring Caraway
+  - "562"  # Mild mint
+  - "564"  # Spearmint
+  - "565"  # Round-leaf mint
+  - "567"  # Winter leek
+  - "582"  # Common Sorrel
+  - "587"  # Echinacea purpurea
+  - "590"  # rye for biogas
+  - "591"  # Black Spanish radish 
+  - "592"  # crownvetch
+  - "593"  # Roman wormwood
+  - "40019"  # Hemp
+  - "40020"  # Hemp
+  - "40026"  # Hemp
+  - "40027"  # Hemp
+  - "40032"  # Konopí - Kompolti
+  - "40040"  # Hemp
+  - "40280"  # Hemp
+  - "40299"  # Hemp
+  - "40326"  # Hemp
+  - "40377"  # Konopí - Fiona
+  - "50019"  # Naked winter oats
+  - "50020"  # Fluffy winter oats
+  - "50021"  # Spring Spelt
+  - "50022"  # Šalvěj hispánská (chia)
+  - "50025"  # Annual horseradish
+  - "50026"  # A mixture of annual protein crops (PVN).
+  - "50027"  # Mixture of annual protein crops (PVN) with other crops up to 50%
+  - "50028"  # Mixture of protein crops (PVN) of perennials
+  - "50029"  # Mixture of protein crops (PVN) perennial with annual crops up to 50%
+  - "50030"  # Legume mix with PVN undersowing
+  - "50068"  # Salát (více druhů)
+  - "50081"  # Kmín kořenný dvouletý
+  - "50086"  # Plodiny pro vědecké účely
+  - "50101"  # Směs zeleniny a bylin podporovaných v EZ
+  - "50105"  # Konopí - Felice
+  - "50108"  # Konopí - Ostara 9
+  - "50113"  # Konopí - Midwest
+  - "50117"  # Konopí - Auto Power 1
+  - "50129"  # Konopí - Finola2
+  - "50130"  # Směs zeleniny a bylin
+  - "50337"  # Pažitka víceletá
+  - "50347"  # Konopí - Bialobrzeskie
+  - "50348"  # Konopí - Białobrzeskie
+  - "50355"  # Konopí - Tiborszallasi
+
+exclude:
+  - "12"  # Lacy phacelia
+  - "49"  # common hollyhock
+  - "316"  # Timothy grass
+  - "317"  # Festulolium
+  - "318"  # hybrid ryegrass
+  - "319"  # Italian ryegrass
+  - "320"  # ryegrass
+  - "321"  # perennial ryegrass
+  - "322"  # Red fescue
+  - "323"  # Meadow fescue
+  - "324"  # Sheep fescue
+  - "325"  # tall fescue
+  - "327"  # wood bluegrass
+  - "328"  # Kentucky bluegrass
+  - "332"  # Metlice trsnatá
+  - "333"  # bulbous oat grass
+  - "334"  # crested dog's-tail
+  - "335"  # black bent
+  - "336"  # common bent
+  - "337"  # Psineček výběžkatý
+  - "338"  # meadow foxtail 
+  - "339"  # Dactylis polygama
+  - "340"  # cat grass
+  - "342"  # Yellow Oatgrass
+  - "343"  # Bromus inermis
+  - "344"  # sweet vernal grass
+  - "345"  # Psineček psí
+  - "347"  # Lipnice obecná
+  - "348"  # Lesknice vodní
+  - "351"  # Temporary grassland
+  - "424"  # Grasses with legumes
+  - "425"  # Pasture mixture of grasses
+  - "426"  # Grass meadow mix
+  - "435"  # Ornamental plants and perennials n.e.c. (more species)
+  - "451"  # Fallow without vegetation
+  - "453"  # giant miscanthus
+  - "454"  # cup plant
+  - "455"  # niger
+  - "457"  # A mixture of grasses for energy use
+  - "458"  # Feed mixture (lark)
+  - "459"  # Mixture for feed biobelt
+  - "460"  # Mixture for nectar-giving biobelt
+  - "461"  # Mixture for pollinators
+  - "463"  # Temporarily ineligible area
+  - "464"  # Arable without a crop
+  - "471"  # Grasses for protective strips
+  - "473"  # Headland mix
+  - "474"  # Mixture for catch crops
+  - "522"  # Mixture for erosion belt
+  - "530"  # Hops seedling
+  - "537"  # A mixture of grasses of the poaceae family
+  - "539"  # hair fescue
+  - "540"  # hard fescue
+  - "546"  # rescuegrass
+  - "577"  # Mixture of improved non-market crops (not elsewhere specified)
+  - "20002"  # Populus maximowiczii Henry
+  - "20004"  # Populus trichocarpa
+  - "20005"  # Populus ×generosa
+  - "20007"  # Populus × canadensis
+  - "20008"  # Populus simonii
+  - "20010"  # Populus balsamifera
+  - "20011"  # Populus nigra
+  - "20012"  # Populus tremula
+  - "20013"  # White willow and its hybrids
+  - "20014"  # goat willow and its hybrids
+  - "20015"  # basket willow and its hybrids
+  - "20017"  # European Ash
+  - "20018"  # European alder
+  - "50015"  # Mixture for catch crops to improve soil structure
+  - "50016"  # Směs pro meziplodiny proti utužení půdy
+  - "50017"  # Clover-grass mix (grass-dominated)
+  - "50018"  # Mixture for species-rich arable land coverage 
+  - "50024"  # Mixture of Fallow and growth
+  - "50031"  # VAT mixture of non-producing annuals
+  - "50032"  # A mixture of PVN non-productive annuals with other crops up to 50%
+  - "50033"  # VAT mixture of non-productive perennials
+  - "50034"  # A mixture of PVN non-productive perennials with other crops up to 50%
+  - "50035"  # A mixture of grasses with PVN up to 50%
+  - "50036"  # Alfalfa grass mixture (with a predominance of grasses)
+  - "50037"  # Mixture for nectar fallow 
+  - "50038"  # A mixture of grasses with low-growing PVN up to 10%
+  - "50040"  # Blue Curls
+  - "50041"  # Forest planting material
+  - "50043"  # Headland Mix (Premium)
+  - "50044"  # Mixture for erosion belt (premium)
+  - "50045"  # Mixture for dividing strip 
+  - "50046"  # Směs pro dělící pás (premiová)
+  - "50047"  # Greening Lane Mix (Premium)
+  - "50077"  # Směs pro ochranný pás kolem KP (prémiová)
+  - "50082"  # Krajinný prvek
+  - "50085"  # Dřeviny pro ochr. pás ALS
+  - "50138"  # Úhor po vyklučené trvalé kultuře
+  - "50371"  # Směs pro ozeleněný kolejový řádek
+  - "50372"  # Směs pro ochranný pás kolem KP

@@ -1,0 +1,345 @@
+# Class filter used for Tuscany, Italy (it_1) field boundaries. Codes are the regional crop:code
+# from the harmonized ftw/harmonized-field-data it_1 dataset; the English HCAT name is shown as a
+# comment. Covers it_1 year 2023 (the published edition); 320 codes. Tuscany is dominated by
+# olive groves, vineyards and woodland, so most parcels fall in the background class.
+#
+# Excluded (background): olive groves & olive nurseries, vineyards & vine nurseries; woodland,
+# arboriculture, specialized tree crops, hedges, poplar/oak/eucalyptus/pine and other forest &
+# ornamental trees; permanent & multifloral pasture/meadow, wooded pasture, forage grasses,
+# ryegrass, fescue, bamboo, giant reed, turf; orchards, fruit trees, citrus, nuts, chestnuts &
+# berries; ornamental flowers & plants, iris, lilies, roses, nurseries & greenhouses; shrubs,
+# hawthorn, phacelia, Silphium, truffle & mushrooms; land withdrawn from production, field
+# margins/edges, buffer strips, and non-agricultural areas.
+#
+# Notable inclusions: all cereals & pseudocereals, maize, sorghum, millet; oilseeds (sunflower,
+# rape, mustard, flax, safflower, poppy, castor), hemp, tobacco, saffron; legumes & pulses,
+# fodder legumes (alfalfa, clovers, sainfoin, vetches, trefoil, galega, lupin) & nitrogen-fixing
+# mixes; potatoes, all field & horticultural vegetables; culinary/medicinal/aromatic herbs
+# (lavender, rosemary, sage, thyme, helichrysum, chamomile, echinacea, ...); hops; family gardens;
+# and strawberries.
+
+column: ["crop:code", "crop_code"]
+
+include:
+  - "3"  # RAPE
+  - "4"  # Soybean
+  - "11"  # STEVIA REBAUDIANA
+  - "16"  # LENTILS
+  - "19"  # RICE
+  - "20"  # PEA
+  - "24"  # CHARD (Including CHELTENHAM BEET, RED BEET/CHARD)
+  - "27"  # CARROT
+  - "28"  # CABBAGE
+  - "29"  # CHICKENING PEA
+  - "39"  # Genisteae
+  - "45"  # SPELT
+  - "51"  # Black Medic
+  - "53"  # foxtail millet
+  - "55"  # LINEN
+  - "56"  # HEMP
+  - "58"  # RAPESEED
+  - "62"  # CHILI PEPPER
+  - "66"  # CALENDULA
+  - "76"  # HOPS
+  - "77"  # MUSTARD
+  - "79"  # Vetches
+  - "83"  # JERUSALEM ARTICHOKE
+  - "89"  # Sweet potato
+  - "101"  # POPPY
+  - "113"  # GARLIC
+  - "117"  # Rapini
+  - "118"  # CAULIFLOWER
+  - "121"  # green bean
+  - "122"  # bean
+  - "127"  # LETTUCE LETTUCE
+  - "129"  # AUBERGINE
+  - "130"  # MELON
+  - "131"  # FIELD VEGETABLES
+  - "135"  # Leek
+  - "145"  # wild celery
+  - "162"  # ENDIVE or ESCAROLE
+  - "167"  # ROCKET rucola
+  - "217"  # Hyacinth bean
+  - "219"  # SPRING ONION
+  - "226"  # CORIADER
+  - "240"  # BEET - beetroot/CHARD
+  - "265"  # SPANISH BEAN
+  - "270"  # CHINESE CABBAGE
+  - "279"  # SWEET MINT
+  - "280"  # PEPPERMINT
+  - "286"  # Marshmallow
+  - "289"  # COMMON ANISE
+  - "295"  # ARTEMISIA
+  - "296"  # Artemisia absinthium
+  - "297"  # BURDOCK
+  - "306"  # BORAGE
+  - "322"  # Lemon Verbena
+  - "324"  # CHAMOMILE
+  - "328"  # HELICHRYSUM
+  - "331"  # Poppy
+  - "334"  # Meadowsweet
+  - "335"  # CORNFLOWER
+  - "337"  # GALEGA
+  - "342"  # GRINDELIA
+  - "344"  # st johns wort
+  - "345"  # HYSSOP
+  - "346"  # KHORASAN WHEAT
+  - "348"  # MALLOW
+  - "379"  # Clover (Alexandrian Clover)
+  - "383"  # Clover (specifically Crimson Clover)
+  - "384"  # Clover (specifically Red Clover)
+  - "385"  # Clover (specifically White Clover)
+  - "388"  # Clover (specifically TRIFOLIUM RESUPINATUM)
+  - "389"  # Common Vetch
+  - "390"  # Hairy Vetch
+  - "392"  # Nettle
+  - "396"  # Plantain (ribwort plantain)
+  - "398"  # Plantain (blond plantain)
+  - "412"  # Wild Pea
+  - "413"  # Winter savory
+  - "414"  # Black Salsify
+  - "415"  # Dandelion
+  - "416"  # VALERIAN
+  - "418"  # Goldenrod
+  - "429"  # wild radish
+  - "436"  # BROWN MUSTARD
+  - "445"  # LAVENDER
+  - "453"  # cow pea
+  - "456"  # ALOE
+  - "457"  # ECHINACEA PALLIDA
+  - "458"  # ECHINACEA ANGUSTIFOLIA
+  - "467"  # Yarrow
+  - "469"  # Okra
+  - "483"  # CENTELLA
+  - "484"  # GARDEN CRESSE OR ENGLISH CRESSE
+  - "485"  # Bay Laurel
+  - "488"  # ECHINACEA PURPUREA
+  - "496"  # AMARANTH
+  - "507"  # AROMATIC AND MEDICINAL PLANTS AND SPICES
+  - "508"  # COMMON PURSLANE
+  - "539"  # SAFFLOWER
+  - "541"  # MIZUNA OR BRASSICA RAPA
+  - "545"  # QUINOA
+  - "562"  # ALFAFA
+  - "581"  # bird's-foot trefoil
+  - "597"  # BUCKWHEAT
+  - "607"  # GRAIN LEGUMES
+  - "615"  # LUPIN
+  - "622"  # sweet yellow clover
+  - "624"  # Proso MILLET
+  - "629"  # Family Gardens
+  - "630"  # PEANUT
+  - "656"  # CHERRY TOMATO
+  - "666"  # ARABLE LAND
+  - "676"  # CLOVER (SP. TRIFOLIUM SQUARROSUM L.)
+  - "680"  # SHALLOT
+  - "682"  # TEFF
+  - "684"  # RYE
+  - "710"  # POTATO
+  - "719"  # LUFFA
+  - "722"  # Mixture of Nitrogen-Fixing Plants
+  - "842"  # Castor oil
+  - "862"  # FENUGREEK
+  - "902"  # ASPARAGUS
+  - "903"  # BASIL
+  - "909"  # ARTICHOKE
+  - "910"  # carduus (plumeless thistles)
+  - "917"  # Cucumber
+  - "919"  # CHICORY
+  - "921"  # Scallion
+  - "924"  # WATERMELON
+  - "926"  # FENNEL
+  - "927"  # STRAWBERRY
+  - "932"  # BELL PEPPER
+  - "933"  # PARSLEY
+  - "935"  # RADICCHIO
+  - "936"  # RADISH
+  - "939"  # SPINACH
+  - "940"  # PUMPKIN
+  - "941"  # COURGETTE
+  - "942"  # CHIVES
+  - "951"  # THYME
+  - "952"  # SAFFRON
+  - "954"  # Kohlrabi
+  - "961"  # LEMON BALM
+  - "962"  # MINT
+  - "963"  # OREGANO
+  - "964"  # MARJORAM
+  - "965"  # ROSEMARY
+  - "966"  # SAGE
+  - "970"  # CABBAGE BROCCOLI
+  - "972"  # BRASSICA CARINATA (Ethiopian Rape)
+  - "1001"  # Oats
+  - "1002"  # Durum wheat
+  - "1003"  # Common soft wheat
+  - "1005"  # Corn
+  - "1007"  # Barley
+  - "1012"  # Sorghum
+  - "1013"  # Triticale
+  - "1014"  # Spelt/emmer/einkorn
+  - "1102"  # Chickpea
+  - "1148"  # Sweet Vetch Hedysarum coronarium L.
+  - "1167"  # Medicago sativa L. (Alfalfa)
+  - "1170"  # Onobrichis viciifolia Scop. (Sainfoin)
+  - "1305"  # Tobacco
+  - "1308"  # Tomato
+  - "1451"  # Clover
+  - "1482"  # Fava bean
+  - "1904"  # Sunflower
+
+exclude:
+  - "7"  # ARALIA
+  - "13"  # CALLA lily
+  - "23"  # HYDRANGEA
+  - "35"  # ROSE
+  - "43"  # Butcher's Broom
+  - "46"  # PERENNIAL RYEGRASS
+  - "47"  # RYEGRASS PERENNIAL
+  - "48"  # VIBURNUM
+  - "60"  # CEDAR
+  - "65"  # Multifloral Pasture
+  - "69"  # POPLAR
+  - "80"  # CHRYSANTHEMUM
+  - "92"  # LILY
+  - "150"  # MEADOW TRUFFLE
+  - "156"  # NON-AGRICULTURAL USE - OTHER
+  - "171"  # STRAWBERRY TREE
+  - "176"  # Sorbus trees
+  - "177"  # MULBERRY
+  - "178"  # MAPLE
+  - "179"  # ALDER
+  - "183"  # ELM
+  - "188"  # PAULOWNIA TOMENTOSA Princess tree
+  - "191"  # cooking bananas
+  - "192"  # English Oak
+  - "193"  # Downy oak
+  - "194"  # LINDEN
+  - "195"  # FIR
+  - "197"  # douglas fir
+  - "199"  # CYPRESS
+  - "201"  # ORANGE
+  - "204"  # LEMON
+  - "208"  # PINE
+  - "209"  # LAWN IN ROLL (TURF)
+  - "213"  # LYCIUM BARBARUM (GOJI)
+  - "218"  # PASTURE WITH TRADITIONAL PRACTICES TARE 50%
+  - "228"  # JUJUBE
+  - "292"  # BLACK ARONIA
+  - "298"  # BIRCH
+  - "300"  # WHITE POPLAR
+  - "301"  # BLACK POPLAR
+  - "304"  # HAWTHORN
+  - "305"  # BIRICOCCOLO Apricot
+  - "309"  # ASH narrow-leaved OR SOUTHERN
+  - "310"  # GINKGO BILOBA
+  - "311"  # HOLM OAK
+  - "314"  # CORK OAK
+  - "315"  # elderberry
+  - "316"  # SEA BUCKTHORN
+  - "317"  # JUNIPER
+  - "318"  # MYRTLE
+  - "319"  # BUTCHER'S BROOM
+  - "320"  # grey-leaved cistus
+  - "329"  # inula
+  - "332"  # phacelia
+  - "336"  # Multifloral Meadow
+  - "338"  # Iris
+  - "340"  # White Iris
+  - "359"  # Tall fescue
+  - "361"  # Meadow Fescue
+  - "369"  # Ryegrass (Lolium x boucheanum)
+  - "380"  # Natural Permanent Grasslands with Environmental Constraints - Tare 20%
+  - "382"  # Natural Permanent Grasslands with Environmental Constraints - Tare 50%
+  - "386"  # Edges of Arable Fields
+  - "391"  # Natural Permanent Grasslands with Environmental Constraints
+  - "394"  # passionflower
+  - "405"  # AVOCADO
+  - "407"  # Prickly Pear
+  - "408"  # Pomegranate
+  - "411"  # dog rose
+  - "422"  # Bamboo
+  - "424"  # Giant Bamboo
+  - "428"  # Black Pine
+  - "430"  # Citrus Fruits
+  - "446"  # Annual bluegrass
+  - "447"  # MUSHROOMS
+  - "463"  # Mountain Pine
+  - "466"  # BEARBERRY
+  - "468"  # SOUR CHERRY (MARASCA, SOUR CHERRY, BLACK CHERRY)
+  - "471"  # Persimmon
+  - "472"  # FIG
+  - "473"  # RASPBERRY
+  - "474"  # BLACKBERRIES
+  - "475"  # CRANBERRIES, Blue berries AND OTHER FRUITS OF THE VACCINIUM GENUS
+  - "476"  # MEDLAR
+  - "477"  # BLACK CURRANT
+  - "479"  # Sour cherry
+  - "480"  # WHITE CURRANTS (GOOSEBERRIES)
+  - "481"  # RED CURRANT
+  - "490"  # NUTS
+  - "491"  # CAROB
+  - "492"  # CHESTNUT
+  - "493"  # ALMOND TREE
+  - "494"  # HAZELNUT
+  - "497"  # PISTACHIO
+  - "499"  # blackthorn
+  - "500"  # ARBORICULTURE
+  - "501"  # TRUFFLE
+  - "503"  # HORTICULTURAL NURSERY
+  - "524"  # CAMELLIA
+  - "535"  # GERANIUM
+  - "552"  # FRUIT NURSERY
+  - "553"  # VINEYARD NURSERY
+  - "554"  # OLIVE NURSERY
+  - "555"  # FORESTRY NURSERY
+  - "556"  # NURSERY - OTHERS
+  - "557"  # GREENHOUSES
+  - "646"  # ORNAMENTAL PLANTS
+  - "651"  # SPECIALIZED TREE CROPS
+  - "653"  # Giant Reed
+  - "655"  # COMBINABLE ARBORETUM (WITH HERBACEOUS CROPS)
+  - "660"  # non agricultural area
+  - "661"  # QUINCE
+  - "668"  # EUCALYPTUS
+  - "669"  # ROBINIA
+  - "679"  # FAMILY ORCHARDS
+  - "685"  # Mixed Tree Cultivations (Multiple Tree Species)
+  - "692"  # SILENE
+  - "732"  # SPIRULINA -cyanobacteria
+  - "736"  # SILPHUM Silphium perfoliatum
+  - "770"  # NON-AGRICULTURAL USE - NON-CULTIVABLE AREAS
+  - "783"  # TREES IN ROWS
+  - "784"  # Marshes, Ponds, and Small Lakes
+  - "785"  # GROUPS OF TREE AND SMALL GROVES
+  - "786"  # DITCHES AND CANALS
+  - "788"  # HEDGES AND TREE-LINED STRIPS
+  - "789"  # FIELD MARGINS
+  - "790"  # TERRACES
+  - "791"  # RIPARIAN BUFFER STRIPS
+  - "792"  # NON-RIPARIAN BUFFER STRIPS
+  - "793"  # TREES ISOLATED
+  - "804"  # PEACH TREE NECTARINE
+  - "826"  # DOMESTIC PINE
+  - "831"  # ACTINIDIA (KIWI)
+  - "899"  # PASTURE
+  - "950"  # PLUMS
+  - "967"  # ASH
+  - "1095"  # Woodland
+  - "1098"  # Ornamental species nursery
+  - "1172"  # Wooded Pasture - Shrubby Tare 20%
+  - "1173"  # Wooded Pasture - Tare 50%
+  - "1464"  # forage grass less than a year
+  - "1700"  # Land withdrawn from production
+  - "1905"  # Multifloral Pasture with Exposed Rock - Tare 20%
+  - "1906"  # Multifloral Pasture with Exposed Rock  TARE 50%
+  - "2101"  # Apricot
+  - "2103"  # Cherry
+  - "2107"  # Peach
+  - "2109"  # PLUM TREE
+  - "2201"  # APPLE TREE
+  - "2202"  # PEAR TREE
+  - "2302"  # GRAPE
+  - "2402"  # Olive for processing
+  - "2706"  # non agricultural area
+  - "3080"  # WALNUT
+  - "7001"  # Buildings

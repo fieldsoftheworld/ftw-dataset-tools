@@ -1,0 +1,410 @@
+# Class filter used for the Spain national dataset (es). Codes are the national MAPA/FEGA
+# "producto" crop:code; the English HCAT crop name is shown as a comment. Covers es year 2025
+# (the published national edition); 385 codes. NOTE: this scheme is specific to the national es
+# dataset - the Cataluña (es_cat), Canarias (es_cn) and coarse SIGPAC-uso regional datasets use
+# different code schemes and have their own filters.
+#
+# Excluded (background): olive groves, vineyards & grapevine rootstocks; all fruit trees, citrus,
+# subtropical fruit (avocado, mango, banana, pineapple, ...), berries, nuts and their
+# associations; permanent & temporary pastures and forage/energy grasses (ryegrass, fescue,
+# timothy, reed canary grass, Miscanthus); ryegrass-predominant leys; traditional/environmental/
+# biodiversity fallow and permanent-crop headlands; forest & ornamental trees, nurseries,
+# ornamental plants & flowers; truffle, mushrooms; tagasaste (tree lucerne); and unknown codes.
+#
+# Notable inclusions: all cereals & maize, sorghum, rice; oilseeds (sunflower, rape, camelina,
+# safflower, poppy, sesame, mustard); cotton, hemp, flax, tobacco, hops, sugar cane, chufa,
+# licorice; legumes & pulses; fodder legumes (alfalfa, sainfoin, clover, vetch, lupine, sulla,
+# trefoil) and cereal/legume mixtures (incl. nitrogen-fixing-predominant meadow mixes); potatoes,
+# sugar beet; all vegetables; culinary/medicinal/aromatic herbs (incl. lavender, saffron, aloe);
+# and strawberries.
+
+column: ["crop:code", "crop_code"]
+
+include:
+  - 1  # SOFT WHEAT
+  - 2  # SPELT
+  - 3  # Durum
+  - 4  # Corn
+  - 5  # BARLEY
+  - 6  # RYE
+  - 7  # SORGHUM
+  - 8  # OAT
+  - 9  # BUCKWHEAT
+  - 10  # Millet
+  - 11  # Canary Grass
+  - 12  # Meslin
+  - 13  # TRITICALE
+  - 14  # TRITORDEUM
+  - 19  # Teff
+  - 33  # SUNFLOWER
+  - 34  # SOY
+  - 35  # RAPE
+  - 36  # CAMELINA
+  - 40  # PEA
+  - 41  # Broad Bean
+  - 43  # WHITE LUPINE
+  - 49  # BEAN
+  - 50  # CHICKPEA
+  - 51  # LENTIL
+  - 52  # Vetches
+  - 53  # Vetches
+  - 60  # ALFALFA
+  - 61  # Fenugreek/lucerne
+  - 67  # sainfoin
+  - 76  # Sulla coronaria
+  - 77  # CLOVER
+  - 80  # RICE
+  - 81  # COTTON
+  - 82  # Beetroot
+  - 83  # TOBACCO
+  - 84  # HOP
+  - 85  # LINEN
+  - 86  # HEMP
+  - 87  # PEANUT
+  - 88  # safflower
+  - 89  # CHUFA
+  - 90  # Licorice
+  - 92  # Romanesco
+  - 96  # HERBACEOUS AROMATIC SPECIES
+  - 99  # POTATO
+  - 118  # Woody Aromatic Plants (rosemary, lavender, etc)
+  - 121  # SWEET POTATO
+  - 138  # POPPY
+  - 141  # Deccan Hemp
+  - 151  # LEEK
+  - 152  # Pepper (Bell pepper)
+  - 153  # Melon
+  - 154  # BROCCOLI
+  - 155  # Lettuce
+  - 156  # WATERMELON
+  - 157  # ONION
+  - 158  # CELERY
+  - 159  # kohlrabi
+  - 160  # CAULIFLOWER
+  - 162  # EGGPLANT
+  - 163  # Zucchini
+  - 164  # ARTICHOKE
+  - 165  # CUCUMBER
+  - 166  # CHARD
+  - 167  # SPRING ONION
+  - 169  # GARLIC
+  - 171  # PARSNIP
+  - 172  # CABBAGE
+  - 173  # RED OR LOMBARD CABBAGE
+  - 174  # Savoy Cabbage
+  - 175  # Collard
+  - 176  # BRUSSELS SPROUTS
+  - 177  # Cichorium Endivia
+  - 178  # CARROT
+  - 179  # TURNIP
+  - 181  # CHICORY
+  - 182  # CHILLI
+  - 183  # SPINACH
+  - 184  # THISTLE
+  - 185  # Winter Squash
+  - 186  # Bottle Gourd
+  - 187  # BORAGE
+  - 189  # ENDIVE
+  - 190  # RADISH
+  - 191  # WATERCRESS
+  - 193  # VEGETABLE GARDEN
+  - 197  # TOMATO
+  - 219  # STRAWBERRY
+  - 220  # SUGAR CANE
+  - 222  # QUINOA
+  - 238  # YELLOW LUPINE
+  - 239  # Lathyrus sativus (Pea)
+  - 240  # Lathyrus cicera (red pea)
+  - 241  # Oat-vetches mixture
+  - 242  # TRITICALE-vetches MIXTURE
+  - 243  # Wheat-vetches mixture
+  - 244  # Barley-vetches mixture
+  - 245  # Oat Sweet tvetch mixture
+  - 246  # Barley sweet vetch mixture
+  - 247  # Mixed Crops of the Pratense (clover) species
+  - 249  # Pea
+  - 250  # Chickpea
+  - 251  # SAVORY
+  - 252  # CILANTRO
+  - 253  # SWEET ANISE
+  - 254  # DILL
+  - 256  # VALERIAN
+  - 257  # Ambrosia Peruviana
+  - 259  # HYSSOP
+  - 260  # FENNEL
+  - 261  # PARSLEY
+  - 262  # SAFFRON
+  - 263  # THYME
+  - 264  # BASIL
+  - 266  # MINT
+  - 267  # OREGANO
+  - 268  # SAGE
+  - 270  # TARRAGON
+  - 271  # Majoran
+  - 272  # CALENDULA
+  - 274  # STEVIA
+  - 275  # St John’s Wort
+  - 276  # PEPPERMINT
+  - 279  # ASPARAGUS
+  - 281  # LAVENDER
+  - 282  # LAVENDER
+  - 283  # Caper
+  - 284  # Artemisia
+  - 285  # LAVENDER
+  - 288  # ROSEMARY
+  - 289  # SANTOLINA
+  - 290  # ALOE VERA
+  - 298  # BARLEY-PEA MIXTURE
+  - 299  # OAT-PEA MIXTURE
+  - 304  # CHINESE CABBAGE
+  - 305  # OAT-WHEAT MIXTURE
+  - 306  # OATS-BARLEY MIXTURE
+  - 307  # OAT-TRITICALE MIXTURE
+  - 308  # AGRIMONY
+  - 309  # BURDOCK
+  - 310  # DANDELION
+  - 312  # Coneflowers
+  - 313  # GINSENG
+  - 315  # Broadleaf PLANTAIN/Plantago Major
+  - 316  # MARSHMALLOW
+  - 317  # BITTER CHAMOMILE
+  - 318  # SWEET CHAMOMILE
+  - 319  # YARROW
+  - 322  # Lepidium latifolium
+  - 323  # Common Knotgrass
+  - 324  # GOLDEN ROD
+  - 325  # Khorasan Wheat
+  - 328  # Sorghum x drummondii
+  - 329  # AMARANTH
+  - 332  # MUSTARD
+  - 339  # Oat vetch mixture
+  - 340  # BARLEY-Vetches MIXTURE
+  - 390  # Field Beans
+  - 392  # BEAN-CORN MIXTURE
+  - 393  # Emmer
+  - 394  # Spelt
+  - 395  # Maiz
+  - 397  # SCARLET Runner BEAN
+  - 399  # SESAME
+  - 401  # CHIVE
+  - 403  # STAR ANISE
+  - 412  # COMMON MALLOW
+  - 416  # Jerusalem artichoke
+  - 417  # Lambs lettuce
+  - 420  # RHUBARB
+  - 423  # TOMATILLO
+  - 424  # Chinese artichoke
+  - 426  # Parsley
+  - 428  # Lima Bea
+  - 429  # Bladder campion
+  - 445  # Curly kale
+  - 446  # SERRADELLA
+  - 447  # CEREAL-RYEGRASS MIXTURE
+  - 448  # OAT-CORN MIXTURE
+  - 449  # BEAN-VETCHES MIXTURE
+  - 450  # BARLEY-WHEAT MIXTURE
+  - 451  # RYE-WHEAT MIXTURE
+  - 452  # OAT-CORN-VETCHES MIXTURE
+  - 453  # BARLEY-CORN-VETCHES MIXTURE
+  - 454  # LUPINE-OATS MIXTURE
+  - 455  # OAT-RYE MIXTURE
+  - 456  # RYE-CORN MIXTURE
+  - 457  # CORN-SORGHUM MIXTURE
+  - 460  # Black-eyed pea
+  - 461  # YELLOW SWEET CLOVER
+  - 463  # CHOISUM
+  - 464  # Kai-lan
+  - 465  # Water spinach
+  - 466  # CHINESE CHIVES
+  - 468  # MALABAR SPINACH
+  - 469  # LUFFA
+  - 470  # Lablab purpureus
+  - 471  # BITTER GOURD
+  - 472  # Armenian cucumber
+  - 473  # Wax gourd
+  - 475  # Wild radish
+  - 478  # SWEDE
+  - 482  # Blue Lupin
+  - 483  # Hairy vetch
+  - 484  # Rapini
+  - 486  # HUNGARIAN PEA
+  - 490  # MEDICAGO
+  - 492  # True indigo
+  - 493  # Chinese indigo
+  - 497  # CELERIAC
+  - 498  # BROCCOLINI
+  - 904  # Sunn Hemp
+  - 913  # BUDDHA HAND
+  - 916  # KALE
+  - 926  # SWEET POTATO
+  - 927  # OKRA
+  - 928  # PHYSALIS
+  - 929  # ARUGULA
+  - 933  # YAM
+  - 937  # Birds foot trefoil
+  - 938  # STRAWBERRY
+  - 945  # OAT-BEAN MIXTURE
+  - 946  # OATS-BARLEY-Vetches MIXTURE
+  - 950  # TURMERIC
+  - 952  # POINTED CABBAGE
+  - 953  # MEADOW MIXTURE WITH PREDOMINANT NITROGEN-FIXING CROPS
+  - 954  # VETCH-PEA-CLOVER MIXTURE
+  - 956  # TRITICALE-PEA MIXTURE
+  - 957  # MUNG BEAN
+  - 958  # TRITICALE-BARLEY MIXTURE
+
+exclude:
+  - "0"  # UNKNOWN PRODUCT
+  - 20  # TRADITIONAL FALLOW
+  - 23  # ENVIRONMENTAL FALLOW
+  - 62  # PERMANENT PASTURES OF 5 OR MORE YEARS
+  - 63  # PASTURES LESS THAN 5 YEARS OLD
+  - 68  # Fescue
+  - 69  # PERENNIAL RYEGRASS
+  - 70  # Bent grass
+  - 72  # Cat grass
+  - 73  # Timothy
+  - 74  # Poa grass
+  - 78  # Ryegrass annual
+  - 91  # FLOWERS
+  - 97  # MUSHROOMS
+  - 101  # OLIVE
+  - 102  # VINEYARD
+  - 104  # ALMOND
+  - 105  # PEACH TREE
+  - 106  # NECTARINE
+  - 107  # APRICOT
+  - 108  # PEAR TREE
+  - 109  # APPLE TREE
+  - 110  # CHERRY
+  - 111  # PLUM TREE
+  - 112  # WALNUT
+  - 113  # OTHER FRUIT TREES
+  - 116  # Populus
+  - 117  # CHESTNUT
+  - 119  # Nursery
+  - 120  # VINEYARD - OLIVE GROVE
+  - 122  # CAROB TREE
+  - 123  # HAZEL
+  - 124  # PISTACHIO
+  - 125  # NUTS
+  - 139  # Reed Canary Grass
+  - 147  # HOLM OAK
+  - 149  # blackberry
+  - 192  # RASPBERRY
+  - 194  # MUSHROOM
+  - 200  # Paulownia
+  - 201  # Peach
+  - 202  # Flat Peach
+  - 203  # blackthorn
+  - 204  # CLEMENTINE
+  - 205  # SATSUMA
+  - 206  # ORANGE TREE
+  - 207  # LEMON TREE
+  - 208  # GRAPEFRUIT
+  - 209  # MANDARIN
+  - 210  # HYBRID MANDARIN
+  - 211  # QUINCE
+  - 212  # KIWI
+  - 213  # PERSIMMON
+  - 214  # Loquat
+  - 215  # GOOSEBERRY
+  - 216  # BLUEBERRY
+  - 217  # POMEGRANATE
+  - 218  # FIG TREE
+  - 223  # MISCANTHUS
+  - 225  # EUCALYPTUS
+  - 226  # Prickly Pear
+  - 227  # WILLOW
+  - 228  # Acacia
+  - 248  # CAROB TREE
+  - 265  # Lemon balm
+  - 278  # Berry
+  - 280  # TRUFFLE
+  - 286  # Strawflower
+  - 287  # Lemon Verbena
+  - 293  # OAK
+  - 295  # Cork Oat
+  - 296  # Fir
+  - 297  # JUNIPER
+  - 300  # Sabina (type of Junipers)
+  - 331  # MORINGA
+  - 333  # GRAPEVINE ROOTSTOCKS
+  - 334  # BIODIVERSITY FALLOW (INCLUDING MELLIFERS)
+  - 335  # PERMANENT CROP HEADLAND AND BORDERS
+  - 336  # CAROB-OAT MIXTURE
+  - 337  # CAROB-BARLEY MIXTURE
+  - 338  # Ryegrass Vetch mixture
+  - 343  # AVOCADO
+  - 344  # MANGO
+  - 345  # cherimoya
+  - 346  # PAPAYA
+  - 347  # MULBERRY
+  - 348  # VINEYARD - FRUIT
+  - 349  # OLIVE - FRUIT
+  - 351  # HYBRID CITRUS-KHAKI
+  - 352  # ORANGE-AVOCADO
+  - 353  # CHERRY-OLIVE TREE
+  - 354  # CHERRY-CAROB
+  - 356  # BITTER ORANGE
+  - 358  # FOREST MIX
+  - 360  # BIRCH
+  - 361  # DOUGLAS FIR
+  - 362  # Christmas HOLLY
+  - 363  # Wild Olive
+  - 364  # POPLAR
+  - 367  # Adler
+  - 370  # MAPLE
+  - 372  # CEDAR
+  - 373  # Kermes Oak
+  - 375  # CYPRESS
+  - 376  # ASH TREE
+  - 377  # Strawberry Tree
+  - 378  # ELM
+  - 381  # Portuguese oak
+  - 383  # RETAMA
+  - 385  # Tamarix
+  - 387  # Tilia tree
+  - 389  # PINE TREE
+  - 391  # Mahaleb Cherrz
+  - 430  # Bergamot
+  - 436  # Mediterranean Medlar (crataegus azarolus)
+  - 437  # Sour Cherry
+  - 442  # Osier
+  - 443  # BAMBOO
+  - 444  # SUMAC
+  - 467  # LEMONGRASS
+  - 481  # Kola nut
+  - 485  # GOJI BERRIES
+  - 489  # Scutch grass
+  - 491  # Soft brome
+  - 494  # (unlabelled source code)
+  - 495  # (unlabelled source code)
+  - 496  # RYEGRASS-CLOVER MIXTURE
+  - 501  # PECAN
+  - 905  # Banana
+  - 906  # PINEAPPLE
+  - 907  # JUjube
+  - 909  # NASHI
+  - 910  # Lychee
+  - 911  # KUMQUAT
+  - 912  # LIMEQUAT
+  - 914  # CITRUS CAVIAR/ FINGER LIME
+  - 915  # Lime
+  - 918  # Argan
+  - 919  # Dragonfruit
+  - 923  # Guava
+  - 924  # Sapote
+  - 932  # ORNAMENTAL PLANTS
+  - 936  # Tree Lucerne
+  - 939  # ALMOND-OLIVE
+  - 940  # ORANGE.KAKI
+  - 941  # ORANGE-MANDARIN
+  - 942  # MEDLAR-KAKI
+  - 943  # DATE PALM
+  - 944  # PASSION FRUIT
+  - 947  # JOJOBA
+  - 948  # CLEMENTINE-KAKI
+  - 949  # SATSUMA-KHAKI
+  - 955  # YUZU
+  - 959  # RYEGRASS MIXTURE

@@ -1,0 +1,297 @@
+# Class filter used for Portugal (PT) field boundaries.
+# Codes are the Portuguese IFAP/iSIP crop:code from the harmonized ftw/harmonized-field-data pt
+# dataset; labels (from the source code list https://fiboa.org/code/pt/pt.csv, else the HCAT
+# English name) shown as comments. Covers pt years 2020-2023 and 2025 (2024 is not published);
+# 261 distinct codes. crop:code has both zero-padded and unpadded variants of some codes; both
+# are listed. There is no crop:name column.
+#
+# Excluded (background): permanent, temporary & natural pasture/meadow, forage grasses (ryegrass,
+# Maralfalfa), greenhouse vegetables, fallow; oak montado (cork & holm oak), eucalyptus, forest,
+# shrubs; orchards, fruit, berries, nuts, chestnuts, citrus, olive groves and vineyards;
+# ornamental flowers & nurseries; and all non-agricultural / infrastructure / landscape features
+# (roads, buildings, water lines, riparian galleries, headlands, hydroponic/soilless cultures).
+# Unlabelled codes - the blank code, a single-space code, and source codes absent from the code
+# list - are treated as background (no crop can be affirmed).
+#
+# Notable inclusions: cereals, maize & rice, oilseeds, cotton, hemp, flax, tobacco, sugar cane,
+# groundnut, legumes & pulses, fodder legumes (clover, alfalfa, serradella, vetch), potatoes &
+# roots, all open-field vegetables (incl. melon/watermelon), herbs, tea, strawberries, and
+# annual forage / other temporary arable crops.
+
+column: ["crop:code", "crop_code"]
+
+include:
+  # Cereals, maize & rice
+  - "001"  # WHEAT
+  - 1  # WHEAT
+  - "003"  # RYE
+  - 3  # RYE
+  - "004"  # BARLEY
+  - "005"  # OAT
+  - "006"  # CORN
+  - 6  # CORN
+  - "007"  # TRITICALE
+  - "008"  # SORGHUM
+  - 8  # SORGHUM
+  - "022"  # SILAGE CORN
+  - 22  # SILAGE CORN
+  - "023"  # SWEET CORN
+  - 23  # SWEET CORN
+  - "024"  # RICE
+  - "026"  # OTHER CEREALS
+  - 304  # SPELT WHEAT
+  - 314  # QUINOA
+  - 324  # BUCKWHEAT
+  - 325  # MILLET
+  # Oilseeds, fibre & industrial crops
+  - "009"  # Linen
+  - "017"  # SUNFLOWER
+  - "018"  # SOYBEAN
+  - "029"  # SUGAR CANE
+  - 29  # SUGAR CANE
+  - "042"  # TABACCO
+  - "058"  # HEMP
+  - "059"  # COTTON
+  - 130  # PEANUT
+  - 156  # OTHER OILSEEDS
+  - 264  # RAPESEED
+  - 276  # MUSTARD
+  - 321  # SAFFLOWER
+  # Legumes, pulses & fodder legumes
+  - "013"  # PEA
+  - "014"  # BEAN
+  - 14  # BEAN
+  - "038"  # CHICKPEA
+  - "044"  # LUCERNE
+  - 44  # LUCERNE
+  - "046"  # CLOVER
+  - "047"  # LUPINE
+  - "048"  # VETCH
+  - 230  # BEAN
+  - 240  # Lupinus luteus
+  - 266  # association of nitrogen-fixing plants
+  - 287  # SERRADELA
+  - 315  # LENTIL
+  - 316  # GRASS PEA
+  - 319  # COWPEA
+  # Potatoes & root crops
+  - "032"  # BEETROOT
+  - 103  # Potato
+  - 127  # SWEET POTATO
+  - 128  # Yam
+  - 233  # TURNIP
+  - 236  # RADISH
+  - 237  # RADISH
+  - 238  # RUTABAGA
+  - 249  # CARROT
+  - 277  # Turnip greens
+  # Vegetables (open field)
+  - "033"  # TOMATO
+  - "078"  # PEPPER
+  - "090"  # Other crops
+  - 90  # Other crops
+  - 137  # EGGPLANT
+  - 148  # OTHER DRIED VEGETABLES
+  - 205  # MELON
+  - 231  # WATERMELON
+  - 232  # Melon
+  - 234  # Cucumber
+  - 241  # PUMPKINS AND COURGETTES
+  - 242  # watercress
+  - 244  # LETTUCE
+  - 245  # GARLIC
+  - 248  # ONION
+  - 250  # COURGETTE
+  - 254  # GREEN CABBAGE
+  - 263  # Chayote Gourd
+  - 279  # ARUGULA
+  - 293  # FRENCH GARLIC
+  - 305  # SPINACH
+  - 309  # ASPARAGUS
+  - 327  # LAMB'S LETTUCE
+  # Herbs, strawberries & other temporary/forage arable crops
+  - "035"  # HOPS
+  - "081"  # AROM. MEDICINAL AND CONDIMENTAL PLANTS
+  - 81  # AROM. MEDICINAL AND CONDIMENTAL PLANTS
+  - 115  # TEA
+  - 204  # STRAWBERRY
+  - 267  # ANNUAL AND OTHER CULT. FORAGE ANNUALS
+  - 307  # OTHER TEMPORARY CROPS
+  - 323  # FENNEL
+
+exclude:
+  # Grassland, pasture, forage grass, greenhouse & fallow
+  - "067"  # ryegrass
+  - "077"  # GREENHOUSE VEGETABLES
+  - 77  # GREENHOUSE VEGETABLES
+  - "089"  # FALLOWING/ INTERCROPPING (INTERRUPTED CULTIVATEN TO MAKE SOI
+  - 89  # FALLOWING/ INTERCROPPING (INTERRUPTED CULTIVATEN TO MAKE SOI
+  - 142  # TEMPORARY MEADOWS
+  - 143  # PERMANENT PASTURES
+  - 280  # PASTURE WITH BUSHES
+  - 283  # COMMON LAND PASTURE
+  - 288  # FESCUE
+  - 289  # HALFA GRASS
+  - 290  # BROME GRASS
+  - 291  # MARALFALFA
+  - 292  # ANAFA
+  # Orchards, fruit, berries, nuts, citrus, olive & vineyards
+  - "034"  # VINEYARD
+  - 34  # VINEYARD
+  - "060"  # OTHER PERMANENT CROPS
+  - 60  # OTHER PERMANENT CROPS
+  - "083"  # OLIVE VALLEY
+  - 83  # OLIVE VALLEY
+  - "084"  # MIXED FRESH FRUIT ORCHARDS
+  - 84  # MIXED FRESH FRUIT ORCHARDS
+  - "085"  # FIG
+  - 85  # FIG
+  - "086"  # Other Dried Fruits
+  - 86  # Other Dried Fruits
+  - "093"  # PEAR
+  - 93  # PEAR
+  - "094"  # PEACH
+  - 94  # PEACH
+  - "096"  # ORANGE
+  - 96  # ORANGE
+  - "097"  # LEMON
+  - 97  # LEMON
+  - 102  # OTHER SUB-TROPICAL FRUITS
+  - 105  # APPLE
+  - 106  # CHERRY
+  - 107  # apricot
+  - 108  # PLUM
+  - 109  # ALMOND
+  - 110  # CASTANIA
+  - 111  # CAROB
+  - 112  # NUT
+  - 116  # HAZELNUT
+  - 117  # OTHER SMALL FRUITS
+  - 118  # QUINCE
+  - 119  # Loquat
+  - 123  # LIME
+  - 124  # KIWI
+  - 131  # Strawberry Tree
+  - 132  # PINEAPPLE
+  - 133  # BANANA
+  - 134  # PISTACES
+  - 136  # AVOCADO
+  - 151  # CHERIMOYA
+  - 155  # Tangerine
+  - 157  # OTHER CITRUS FRUIT
+  - 161  # MIXED PERMANENT CULTURES
+  - 166  # CHESTNUT PLANTATIONS
+  - 195  # OTHER FRESH FRUIT
+  - 201  # BLACKBERRY
+  - 202  # BLUEBERRY
+  - 203  # RASPBERRY
+  - 208  # Persimmon
+  - 209  # POMEGRANATE
+  - 211  # sour cherry
+  - 223  # ELDERBERRY
+  - 261  # TANGERINE
+  - 269  # Passion fruit
+  - 284  # PAPAYA
+  - 285  # Prickly pear
+  - 286  # Redcurrant
+  - 298  # MANGO
+  - 299  # GUAVA
+  - 300  # Vineyard
+  - 310  # GOJI BERRY
+  - 311  # STRAWBERRY GUAVA
+  - 312  # DRAGON FRUIT
+  - 313  # PHYSALIS
+  # Oak montado, forest, eucalyptus, shrubs, ornamentals & nurseries
+  - "091"  # ORNAMENTAL FLOWERS AND PLANTS
+  - 91  # ORNAMENTAL FLOWERS AND PLANTS
+  - 101  # NURSERY
+  - 135  # PINE NUTS
+  - 139  # groves
+  - 162  # CORK OAK PLANTATION
+  - 163  # EVERGREEN OAK PLANTATION
+  - 164  # BLACK OAK NEGRAL PLANTATION
+  - 165  # oak MIXED SETTLEMENT (UNDER AZENH.CARVAL/NEGRAL)
+  - 167  # PLANTATION OF OTHER HARDWOODS
+  - 168  # PINE TREES PLANTATION
+  - 169  # OTHER CONIFEROUS FORESTS
+  - 170  # MIXED Forest
+  - 173  # FOREST FIREBREAKS
+  - 174  # OTHER FOREST SURFACES
+  - 190  # RELICT OR REMARKABLE FORMATIONS
+  - 210  # EUCALYPTUS PLANTATION
+  - 262  # CORK OAK FOR CORK PRODUCTION
+  - 265  # non-grazable shrub area
+  - 268  # RIPARIAN GALLERY FOREST
+  - 294  # SHORT ROTATION COPPICE
+  - 308  # BROOM SHRUB
+  - 322  # BAMBOO
+  - 939  # Usable Area
+  # Non-agricultural, infrastructure & landscape features
+  - "088"  # UNPRODUCTIVE
+  - 88  # UNPRODUCTIVE
+  - 125  # RIPARIAN GALLERY
+  - 149  # AGRICULTURAL CONSTRUCTIONS AND FACILITIES
+  - 150  # NON-AGRICULTURAL SOCIAL BUILDINGS
+  - 175  # INDUSTRIAL BUILDINGS
+  - 176  # AGRICULTURAL BUILDINGS
+  - 177  # WATER TREATMENT STATION
+  - 178  # ROAD
+  - 180  # HIGHWAY
+  - 181  # RURAL ROAD
+  - 183  # LAGOON
+  - 184  # WATER CHANNEL
+  - 185  # WATER LINES
+  - 186  # WET ZONES
+  - 200  # OTHER SURFACES
+  - 301  # Hydroponic crops
+  - 302  # SOILLESS CULTURES
+  - 725  # NON-AGRICULTURAL SURFACE
+  - 914  # Linear element hedge or windbreak
+  - 925  # Riparian Gallery - Usable Area
+  - 982  # Headlands of permanent crops - useful area
+  - 985  # ELEGIBLE LANDSCAPE FEATURES - WATER LINES
+  - 986  # ELP PONDS AND LAGOONS - USABLE AREA
+  - 987  # ELP DRY STONE WALL - USABLE AREA
+  - 988  # ELP CULTURAL HERITAGE - USABLE AREA
+  - 989  # Usable Area
+  # Unmapped / unlabelled source codes (no crop in source code list)
+  - "098"  # unmapped
+  - 98  # unmapped
+  - 100  # unmapped
+  - 104  # unmapped
+  - 114  # unmapped
+  - 120  # unmapped
+  - 122  # unmapped
+  - 126  # unmapped
+  - 196  # unmapped
+  - 214  # unmapped
+  - 220  # unmapped
+  - 270  # unmapped
+  - 317  # unmapped
+  - 326  # unmapped
+  - 328  # unmapped
+  - 329  # unmapped
+  - 330  # unmapped
+  - 331  # unmapped
+  - 335  # unmapped
+  - 337  # unmapped
+  - 338  # unmapped
+  - 339  # unmapped
+  - 340  # unmapped
+  - 341  # unmapped
+  - 342  # unmapped
+  - 343  # unmapped
+  - 344  # unmapped
+  - 345  # unmapped
+  - 346  # unmapped
+  - 348  # unmapped
+  - 350  # unmapped
+  - 352  # unmapped
+  - 353  # unmapped
+  - 673  # unmapped
+  - 675  # unmapped
+  - 676  # unmapped
+  - 724  # Linear element RICE (COMP. MAA)
+  - 924  # Linear element in rice cultivation - useful area
+  - ""  # no crop declared
+  - " "  # no crop declared

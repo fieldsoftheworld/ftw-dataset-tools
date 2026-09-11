@@ -1,0 +1,50 @@
+# Class filter used for Lithuania (LT) field boundaries.
+# Lithuania publishes a coarse crop-group scheme as text (not a numeric code). The categories
+# live in crop:name (in the native `lt` dataset, crop:code carries the same text). This is a
+# land-use / crop-group filter, not a fine crop-type filter. Covers the editions that share
+# the scheme: lt (2024 & 2025) and ec_lt (2021, EuroCrops); 27 distinct category strings.
+# NOTE: the source strings carry a character-encoding quirk (e.g. þ=ž, ð=š, ë=ė, û=ū); values
+# below are reproduced byte-for-byte so they match the data. Some year editions differ only by
+# a space (e.g. "iki 5m." vs "iki 5 m."); both spellings are listed.
+#
+# Excluded (background): pastures & meadows, perennial grasses, fallow, landscape elements,
+# ditches, non-supported areas, orchards (Sodai), berry plantations, other plantations,
+# woods, and wetlands (the 'Ðlapynës' category, mislabelled "Spinach"/spinach in the source
+# HCAT mapping).
+#
+# Included (field): winter/summer/early cereals, oats, buckwheat, maize, rapeseed, flax,
+# fibre hemp, grain legumes (Ankðtiniai javai), sugar beet, vegetables, aromatic/medicinal
+# plants, and other arable land.
+
+column: ["crop:name", "crop:code", "crop_name"]
+
+include:
+  - "Þieminiai javai"  # Winter cereals
+  - "Vasariniai javai"  # Summer cereals
+  - "Ankðtiniai javai"  # Early cereals
+  - "Aviþos"  # Oats
+  - "Rapsai"  # Rape
+  - "Darþovës"  # Vegetables
+  - "Kita ariama þemë"  # Other arable land
+  - "Grikiai"  # Buckwheat
+  - "Kukurûzai"  # Corn
+  - "Cukriniai runkeliai"  # Sugar beet
+  - "Aromatiniai augalai"  # Aromatic plants
+  - "Pluoðtinës kanapës"  # Fiber hemp
+  - "Linai"  # Linen
+
+exclude:
+  - "Ganyklos-pievos virð 5m."  # Pastures-meadows over 5m.
+  - "Ganyklos-pievos virð 5 m."  # Pastures-meadows over 5m.
+  - "Kraðtovaizdþio elementai"  # Landscape elements
+  - "Ganyklos-pievos iki 5m."  # Pastures-meadows up to 5m.
+  - "Ganyklos-pievos iki 5 m."  # Pastures-meadows up to 5m.
+  - "Neremiami plotai"  # Non-supported areas
+  - "Daugiametës þolës"  # Perennial grasses
+  - "Pûdymas"  # Fallow
+  - "Sodai"  # Gardens
+  - "Miðkai"  # Woods
+  - "Uogynai"  # Berries
+  - "Ðlapynës"  # wetlands (labelled 'Spinach' in source)
+  - "Kiti sodiniai"  # Other plantations
+  - "Grioviai"  # Ditches

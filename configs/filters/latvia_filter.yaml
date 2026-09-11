@@ -1,0 +1,219 @@
+# Class filter used for Latvia (LV) field boundaries.
+# Codes are the Latvian crop:code from the harmonized ftw/harmonized-field-data datasets;
+# English (or Latvian) crop labels shown as comments. Covers both LV editions that share the
+# native Latvian code scheme: lv (2026) and ec_lv (2021, EuroCrops); 185 distinct codes.
+#
+# Excluded (background): permanent grassland and pure grass leys sown on arable land,
+# grasses not elsewhere specified, phacelia (grown as cover / nectar / green manure),
+# fallow & green-manure fallow, agricultural land ineligible for support, tree nurseries,
+# energy trees & grasses (reed canary grass, switchgrass, willow, aspen, alder), orchards,
+# fruit, berries, nuts, vineyards, shrubs, nectar-plant mixtures, perennial plantings, and
+# semi-natural areas dominated by self-sown plants.
+#
+# Notable inclusions: all cereals (incl. hemp), oilseeds & mustard, flax, legumes & pulses,
+# fodder legumes and legume-predominant leys (clover, alfalfa, galega, sainfoin, melilot,
+# trefoil, crimson clover) and grasses grown for seed, maize (incl. biogas maize), potatoes,
+# sugar/fodder beet, all field & market-garden vegetables, culinary/medicinal/aromatic herbs,
+# strawberries, melon/watermelon, cultivated nectar/medicinal species, and sunflower.
+
+column: ["crop:code", "crop_code"]
+
+include:
+  # Cereals (incl. spelt, durum, buckwheat, hemp)
+  - 111  # Wheat summer
+  - 112  # Wheat winter
+  - 113  # Wheat in summer with grass or legume sowing
+  - 115  # Spelt summer
+  - 116  # Spelt wheat, winter
+  - 117  # Kvieši, ziemas ar stiebrzāļu pasēju vai tauriņziež
+  - 118  # Speltas kvieši, vasaras ar stiebrzāļu pasēju vai t
+  - 119  # Speltas kvieši, ziemas ar stiebrzāļu pasēju vai ta
+  - 121  # Rye
+  - 122  # Rye Kaupo varieties
+  - 123  # Rye population varieties other than
+  - 124  # Rudzi, ar stiebrzāļu pasēju vai tauriņziežu pasēju
+  - 125  # Rudzi, populācijas šķirnes, t.sk. ‘Kaupo’ ar stieb
+  - 131  # Barley summer
+  - 132  # Barley winter
+  - 133  # Barley summer with grass or legume sowing
+  - 135  # Mieži, ziemas ar stiebrzāļu pasēju vai tauriņziežu
+  - 140  # Oats
+  - 141  # Oats with grass or legume paste
+  - 142  # Auzas, ziemas
+  - 143  # Auzas, ziemas, ar stiebrzāļu pasēju vai tauriņziež
+  - 150  # Triticale summer
+  - 151  # Triticale winter
+  - 152  # Summer triticale with grass or legume paste
+  - 154  # Tritikāle, ziemas ar stiebrzāļu pasēju vai tauriņz
+  - 160  # Buckwheat
+  - 161  # Buckwheat with legume seed
+  - 170  # Cannabis
+  - 180  # Cietie kvieši, vasaras
+  - 181  # Cietie kvieši, vasaras, ar stiebrzāļu vai tauriņzi
+  - 182  # Cietie kvieši, ziemas
+  # Oilseeds, mustard, flax
+  - 211  # Rape summer
+  - 212  # Rape winter
+  - 213  # Rapeseed, summer
+  - 214  # Rapeseed winter
+  - 215  # Mustard
+  - 216  # Mustard with legume paste
+  - 218  # Eļļas rutks sēklas ieguvei
+  - 219  # Melnais rutks
+  - 220  # Baltā sinepe
+  - 221  # Baltā sinepe ar tauriņziežu pasēju
+  - 310  # Linen fibers
+  - 330  # Flax oils
+  # Legumes & pulses (beans, peas, lupine, vetch, soy, cereal-legume mixes)
+  - 410  # Field beans
+  - 411  # Pupas ar stiebrzāļu pasēju vai tauriņziežu pasēju
+  - 420  # Peas
+  - 421  # Zirņi ar stiebrzāļu pasēju vai tauriņziežu pasēju
+  - 430  # Lupine (sweet or yellow white narrow leaf)
+  - 441  # Vetches summer
+  - 442  # Vetches winter
+  - 443  # Soybeans
+  - 444  # Soja ar stiebrzāļu pasēju vai tauriņziežu pasēju
+  - 445  # Mixture of cereals and peas or vetches with protein crops> 50%
+  - 446  # Mixture of cereals and peas or vetches with grass or legume sowing whe
+  - 447  # Graudaugu un vīķu maisījums, kurā vīķi > 50 %
+  - 471  # Vīķi, vasaras sēklas ieguvei
+  - 472  # Vīķi, ziemas sēklas ieguvei
+  # Fodder legumes & legume-predominant leys; grasses grown for seed
+  - 714  # Esparsete
+  - 723  # Red clover
+  - 724  # White clover
+  - 725  # Bastard clover
+  - 726  # Lucerne
+  - 727  # Eastern galega
+  - 728  # Birds foot trefoil
+  - 729  # Sweet clover
+  - 731  # Meadow timothy for seed production
+  - 732  # Meadow fescue for seed production
+  - 733  # Hybrid ryegrass Folium boucheanum for seed production
+  - 734  # Italian ryegrass for seed production
+  - 735  # Red fescue for seed production
+  - 736  # Perennial ryegrass for seed production
+  - 737  # Tall fescue for seed production
+  - 738  # Meadow fescue for seed production
+  - 739  # Cocksfoot for seed production
+  - 741  # Maize not elsewhere specified
+  - 742  # Citur neminēta kukurūza ar starpkultūru
+  - 743  # Citur neminēta kukurūza ar zālāju pasēju
+  - 760  # Mixture of grasses or legumes sown on arable land with legumes> 50%
+  - 761  # Festulolium for seed production
+  - 773  # Sarkanais āboliņš sēklas ieguvei
+  - 774  # Baltais āboliņš sēklas ieguvei
+  - 775  # Bastarda āboliņš sēklas ieguvei
+  - 776  # Lucerna sēklas ieguvei
+  - 777  # Austrumu galega sēklas ieguvei
+  - 778  # Ragainais vanagnadziņš sēklas ieguvei
+  - 779  # Amoliņš sēklas ieguvei
+  - 781  # Inkarnāta āboliņš
+  - 782  # Inkarnāta āboliņš sēklas ieguvei
+  - 785  # Sorgo, Sudānas zāle, sorgo hibrīdi sēklas ieguvei
+  # Maize (incl. biogas)
+  - 791  # Maize for biogas production
+  # Potatoes, sugar/fodder beet, field & market-garden vegetables, herbs/medicinal
+  - 811  # Different crops on a small area of arable land or several crops grown
+  - 820  # Potatoes not elsewhere specified or included
+  - 821  # Seed potatoes
+  - 825  # Starch potatoes
+  - 826  # Tomatoes
+  - 831  # Fodder beet sugar beet
+  - 832  # Ķīnas kāposti, Pekinas kāposti
+  - 833  # Kolrābis
+  - 842  # Cauliflower
+  - 843  # Carrots
+  - 844  # Table beets chard (leaf beets)
+  - 845  # Cucumbers and gherkins
+  - 846  # Onions shallots chives shallots and trampolines
+  - 847  # Garlic
+  - 848  # Herbs and cultivated medicinal plants (fennel basil thyme tarragon ani
+  - 849  # leek
+  - 850  # Kailsēklu (eļļas) ķirbis
+  - 851  # Turnips
+  - 852  # Celery
+  - 853  # Radish and black radish
+  - 854  # Parsley
+  - 855  # Parsnips
+  - 856  # rutabaga
+  - 857  # Garden pumpkins zucchini courgettes squash
+  - 858  # Fig-leaf, large-fruit, and nutmeg pumpkins
+  - 859  # Ordinary or garden beans
+  - 860  # Sorrel
+  - 861  # Rhubarb
+  - 862  # Spinach
+  - 863  # Horseradish
+  - 864  # Salads
+  - 865  # Jerusalem artichokes
+  - 866  # Skābenes, daudzgadīgas
+  - 867  # Paprika
+  - 869  # Asparagus
+  - 870  # Cabbages not elsewhere specified or included (white or red headed cabb
+  - 871  # Vegetables if the BSA eligible vegetable crop species growing in a con
+  - 872  # Other crops sown on pure arable land
+  - 873  # Other crops not elsewhere specified sown as a mixture of crops on arab
+  - 874  # Common dill
+  - 877  # Sowing coriander or kinza
+  - 878  # Cumin
+  - 879  # Marian Thistles
+  - 881  # Chamomile
+  - 882  # Marigold
+  - 883  # Chicory
+  - 884  # Borage
+  - 885  # Lavender
+  - 886  # Lielaugļu ķirbis
+  - 887  # Muskata ķirbis
+  - 888  # Vīģlapu ķirbis
+  - 889  # Kumelīte, vasaras
+  - 890  # Kumelīte, ziemas
+  # Strawberry, melon/watermelon, cultivated nectar/medicinal plants, sunflower
+  - 926  # Strawberry
+  - 930  # Other cultivated nectar plants (hedgehog periwinkle dragon's head lemo
+  - 937  # Watermelons and melons
+  - 960  # Saulespuķe
+
+exclude:
+  # Fallow, green-manure fallow, unused agricultural land
+  - "0"  # unlabelled
+  - 610  # Idle land
+  - 612  # Zaļmēslojuma augu papuve
+  - 620  # UAA for which no support is available in the current year
+  # Nurseries & energy trees/grasses (reed canary grass, switchgrass, willow, aspen, alder)
+  - 640  # Tree nurseries on agricultural land
+  - 641  # Reed canary grass
+  - 642  # Switch grass
+  - 644  # Apsen
+  - 645  # Willow
+  - 646  # White alder
+  # Permanent grassland, pure grass leys, phacelia (cover/nectar), semi-natural
+  - 710  # Permanent grasslands
+  - 713  # Grasses not elsewhere specified or included
+  - 715  # Phacelia
+  - 716  # Phacelia with legume sowing
+  - 720  # Mixture of grasses or fodder grasses sown on arable land
+  - 792  # Area where the proportion of naturally sown plants exceeds 40% the num
+  # Orchards, fruit, berries, nuts, vineyard, shrubs, nectar-plant mixes, perennial plantings
+  - 911  # Apples
+  - 912  # Pears
+  - 914  # Plums
+  - 915  # Elderberry
+  - 918  # Chokeberry
+  - 919  # Sea buckthorn
+  - 921  # Raspberries
+  - 922  # Blackcurrant
+  - 924  # Blueberries (blueberries)
+  - 927  # Gooseberries
+  - 928  # Quince
+  - 929  # Blackberries
+  - 931  # Garden rowans or garden mountain-ashes
+  - 932  # Sweet and sour cherries
+  - 933  # Red and white currants
+  - 934  # Large cranberries
+  - 935  # Grapes
+  - 938  # Honeysuckle
+  - 939  # Guilder rose
+  - 940  # Nektāraugi savstarpējos maisījumos vai citur nemin
+  - 950  # Fruit trees and berry bushes (excluding strawberries) if BSA species g
+  - 952  # Perennial crops not mentioned elsewhere

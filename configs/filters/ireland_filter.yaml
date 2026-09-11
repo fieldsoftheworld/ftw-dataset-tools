@@ -1,0 +1,174 @@
+# Class filter used for Ireland (IE) field boundaries. Codes are the crop:code from the
+# harmonized ftw/harmonized-field-data ie dataset (numeric, stored as e.g. "124.0"); the English
+# crop:name is shown as a comment. Covers ie year 2024 (the published edition); 152 codes.
+#
+# Excluded (background): permanent pasture, extensively grazed / low-input / peat grassland,
+# hay meadows, multi-year grass leys (Grass Year 1-5), grass silage & grassmeal, reed canary
+# grass; fallow; forestry, woodland, short-rotation coppice, willow, Miscanthus, scrub, foliage
+# & tree belts; orchards, fruit, berries & grapes; daffodils, cut-flower/bulb crops & nurseries;
+# glasshouse crops; riparian buffers/zones, bird-food & wildlife-cover plots, designated
+# habitats, bog, farmyards, buildings, water and other non-crop/unknown areas.
+#
+# Notable inclusions: cereals (barley, wheat, oats, rye, triticale), maize & sweetcorn; oilseed
+# rape, forage rape, mustard, sunflower, linseed, flax, camelina, hemp; beans, peas, vetch,
+# lupins, protein/cereal mixes; clover, alfalfa/lucerne; fodder & sugar beet, potatoes and all
+# field vegetables & roots; herbs; arable silage (non-grass) & mixed cropping; grass grown for
+# seed; and strawberries.
+
+column: ["crop:code", "crop_code"]
+
+include:
+  - "3.0"  # Alfalfa
+  - "7.0"  # Arable Silage (No Grass)
+  - "8.0"  # Artichoke
+  - "9.0"  # Asparagus
+  - "10.0"  # Baby Leaf Spinach
+  - "11.0"  # Barley - Spring
+  - "12.0"  # Barley - Winter
+  - "13.0"  # Basil
+  - "14.0"  # Beans - Spring
+  - "15.0"  # Beans - Winter
+  - "16.0"  # Beetroot
+  - "21.0"  # Borage
+  - "22.0"  # Broccoli - Spring
+  - "23.0"  # Broccoli - Winter
+  - "24.0"  # Brussel sprouts
+  - "26.0"  # Cabbage - Spring
+  - "27.0"  # Cabbage - Winter
+  - "29.0"  # Camelina
+  - "30.0"  # Carrots
+  - "31.0"  # Cauliflowers - Spring
+  - "32.0"  # Cauliflowers - Winter
+  - "34.0"  # Celery - Spring
+  - "35.0"  # Celery - Winter
+  - "38.0"  # Clover
+  - "40.0"  # Coriander
+  - "41.0"  # Courgettes
+  - "51.0"  # Flax
+  - "52.0"  # Fodder Beet
+  - "54.0"  # Forage Rape
+  - "66.0"  # Garlic
+  - "70.0"  # Grass Seed
+  - "85.0"  # Hemp for Food Use
+  - "86.0"  # Hemp for Industrial Use
+  - "89.0"  # Kale
+  - "91.0"  # Leeks - Spring
+  - "92.0"  # Leeks - Winter
+  - "93.0"  # Lettuce
+  - "95.0"  # Linseed
+  - "100.0"  # Lucerne
+  - "101.0"  # Lupins
+  - "102.0"  # Maize
+  - "106.0"  # Mint
+  - "108.0"  # Mixed Cropping
+  - "109.0"  # Mustard
+  - "111.0"  # Oats - Spring
+  - "112.0"  # Oats - Winter
+  - "113.0"  # Oilseed Rape - Spring
+  - "114.0"  # Oilseed Rape - Winter
+  - "115.0"  # Onions
+  - "118.0"  # Pak Choi
+  - "119.0"  # Parsley
+  - "120.0"  # Parsnips
+  - "122.0"  # Peas
+  - "123.0"  # Peppers
+  - "128.0"  # Perpetual Spinach
+  - "131.0"  # Potatoes - Early
+  - "132.0"  # Potatoes - Maincrop
+  - "133.0"  # Potatoes - Seed
+  - "134.0"  # Protein/Cereal Mix 50/50
+  - "135.0"  # Pumpkins
+  - "140.0"  # Red Clover
+  - "143.0"  # Rhubarb
+  - "147.0"  # Rocket
+  - "149.0"  # Rosemary
+  - "150.0"  # Rye
+  - "151.0"  # Scallions
+  - "156.0"  # Squash
+  - "157.0"  # Strawberries
+  - "158.0"  # Sugar Beet
+  - "159.0"  # Sunflower
+  - "160.0"  # Swede
+  - "161.0"  # Sweetcorn
+  - "162.0"  # Thyme
+  - "163.0"  # Tomatoes
+  - "166.0"  # Triticale - Spring
+  - "167.0"  # Triticale - Winter
+  - "169.0"  # Turnips
+  - "171.0"  # Vetch
+  - "172.0"  # Wheat - Spring
+  - "173.0"  # Wheat - Winter
+
+exclude:
+  - "4.0"  # Apples
+  - "5.0"  # Arable Habitat
+  - "6.0"  # Arable Silage (Grass)
+  - "17.0"  # Blackberries
+  - "18.0"  # Blackcurrants
+  - "19.0"  # Blueberries
+  - "20.0"  # Bog
+  - "25.0"  # Building
+  - "36.0"  # Cherries
+  - "43.0"  # Daffodils
+  - "44.0"  # Designated Habitat
+  - "45.0"  # Environmental Management Of Arable Fallow
+  - "46.0"  # Extensively Grazed Pasture
+  - "47.0"  # Fallow
+  - "49.0"  # Farmyard
+  - "53.0"  # Foliage
+  - "55.0"  # Forestry
+  - "58.0"  # Forestry Eligible
+  - "60.0"  # Forestry ESB Corridor Eligible
+  - "62.0"  # Forestry Ineligible
+  - "63.0"  # Forestry Pre-2009
+  - "64.0"  # Forestry Setaside
+  - "67.0"  # Glasshouse
+  - "68.0"  # Gooseberries
+  - "69.0"  # Grapes
+  - "71.0"  # Grass Year 1
+  - "72.0"  # Grass Year 1 (MSS Eco-Scheme)
+  - "73.0"  # Grass Year 1 (MSS Measure)
+  - "74.0"  # Grass Year 1 (MSS)
+  - "75.0"  # Grass Year 2
+  - "76.0"  # Grass Year 2 (MSS)
+  - "77.0"  # Grass Year 3
+  - "78.0"  # Grass Year 3 (MSS)
+  - "79.0"  # Grass Year 4
+  - "80.0"  # Grass Year 4 (MSS)
+  - "81.0"  # Grass Year 5
+  - "82.0"  # Grass Year 5 (MSS)
+  - "83.0"  # Grassmeal
+  - "84.0"  # Habitat
+  - "87.0"  # Inactive
+  - "90.0"  # Lake / Waterway / Pond
+  - "94.0"  # Linnet Habitat
+  - "97.0"  # Low Input Grassland
+  - "98.0"  # Low Input Peat Grassland
+  - "99.0"  # Low Input Permanent Pasture
+  - "103.0"  # Management of Environmental Fallow (horticulture)
+  - "104.0"  # Management of intensive grassland next to a watercourse
+  - "107.0"  # Miscanthus Sinensis
+  - "110.0"  # Nursery
+  - "116.0"  # Orchard
+  - "117.0"  # Other cut flower / bulb crops
+  - "124.0"  # Permanent Pasture
+  - "125.0"  # Permanent Pasture (MSS Eco-Scheme 2023)
+  - "126.0"  # Permanent Pasture (MSS Measure)
+  - "127.0"  # Permanent Pasture (MSS)
+  - "130.0"  # Plums
+  - "138.0"  # Raspberries
+  - "141.0"  # Redcurrants
+  - "142.0"  # Reed Canary Grass
+  - "144.0"  # Riparian Buffer Zone - Arable
+  - "145.0"  # Riparian Buffer Zone - Grassland
+  - "146.0"  # Riparian Zone
+  - "148.0"  # Rocky Outcrop
+  - "152.0"  # Scrub
+  - "154.0"  # Short Rotation Coppice
+  - "164.0"  # Traditional Hay Meadow
+  - "165.0"  # Tree belts for ammonia capture from farmyards
+  - "170.0"  # Unknown
+  - "174.0"  # Wild Bird Cover
+  - "175.0"  # Willow
+  - "176.0"  # Winter Bird Food Plot
+  - "177.0"  # Woodland

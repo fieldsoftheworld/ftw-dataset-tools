@@ -1,0 +1,78 @@
+# Class filter for the Canary Islands (es_cn). Canarias uses its own crop:code scheme (distinct
+# from the national es, Cataluña es_cat and the coarse SIGPAC-uso regions), with Spanish crop
+# names. Covers es_cn year 2026 (the published edition); 59 codes.
+#
+# Excluded (background): subtropical & temperate fruit (avocado, banana, mango, papaya,
+# pineapple, fig, pome/stone fruit, prickly pear, dragon/passion fruit, moringa), berries,
+# citrus, vineyard, olive, almond, tagasaste fodder shrub, nurseries & ornamentals (protea,
+# strelitzia), all permanent-crop associations, fallow (barbecho), grazing on non-agricultural
+# land, and unused agricultural area (NUAA).
+#
+# Included (field): cereals & maize, potato, sweet potato, yam, tomato, cucumber, melon/
+# watermelon, onion, vegetable mixtures & market/family gardens (huerta, huerto familiar),
+# strawberries, legumes, forage crops, sugar cane, tobacco, aloe and aromatic plants.
+
+column: ["crop:code", "crop_code"]
+
+include:
+  - "C1000_O"  # Cereal Otros
+  - "C1500"  # Millo
+  - "FOP9"  # Otras Forrajeras
+  - "I0000"  # Tabaco
+  - "I5000_L5"  # Aloe
+  - "I5000_S1_S1"  # Aromáticas
+  - "I9000_L1"  # Caña de Azúcar
+  - "K0000"  # Huerto Familiar
+  - "P0000"  # Leguminosa
+  - "Q0000_L1"  # Huerta Limpia
+  - "R1000"  # Papa
+  - "S0000"  # Fresas
+  - "V0000_S0000_L1"  # Hortaliza Otras Mezclas
+  - "V3000"  # Pepino
+  - "V3100"  # Tomate
+  - "V3500"  # Melón-Sandía
+  - "V4200"  # Cebolla
+  - "V4900_L1"  # Batata
+  - "V4900_L3"  # Ñame
+
+exclude:
+  - "-"  # Pastoreo sobre superficie no agrícola
+  - "CROPS_L1_L1_L1"  # Asociación Cítricos-Hortaliza
+  - "CROPS_L1_L1_L2"  # Asociación Cítricos-Ornamentales
+  - "CROPS_L1_L1_L3"  # Asociación Cítricos-Papa
+  - "CROPS_L1_L2_L4"  # Asociación Platanera-Cítricos
+  - "CROPS_L1_L3"  # Asociación Templados-Millo
+  - "CROPS_L1_L3_L1"  # Asociación Viña-Barbecho
+  - "CROPS_L1_L3_L2"  # Asociación Viña-Cítricos
+  - "CROPS_L1_L3_L3"  # Asociación Viña-Hortaliza
+  - "CROPS_L1_L3_L4"  # Asociación Viña-Huerta Limpia
+  - "CROPS_L1_L3_L5"  # Asociación Viña-Papa
+  - "CROPS_L1_L3_L6"  # Asociación Viña-Templados
+  - "CROPS_L1_L3_L7"  # Asociación Viña-Tunera
+  - "F1100"  # Templado Pepita
+  - "F1200"  # Templado Hueso
+  - "F2100"  # Higuera
+  - "F2300"  # Aguacate
+  - "F2400"  # Platanera
+  - "F2900_L10"  # Moringa
+  - "F2900_L11"  # Parchita
+  - "F2900_L12"  # Pitaya
+  - "F2900_L13"  # Tunera
+  - "F2900_L14"  # Subtropicales Otras Mezclas
+  - "F2900_L2"  # Mango
+  - "F2900_L3"  # Papaya
+  - "F2900_L4"  # Piña
+  - "F2900_L5"  # Granado
+  - "F4300"  # Almendro
+  - "H0000_L1"  # Frutos Rojos
+  - "H0000_L2"  # Templado Otras Mezclas
+  - "J0000_L2"  # Tagasaste
+  - "N0000_L0000_O"  # Viveros
+  - "N0000_L1"  # Próteas
+  - "N0000_L2"  # Strelitzias
+  - "N0000_O"  # Ornamentales
+  - "NUAA"  # Superficie agrícola no utilizada
+  - "O1000"  # Olivo
+  - "Q0000_O"  # Barbecho
+  - "T0000"  # Cítricos
+  - "W1000"  # Viña

@@ -1,0 +1,231 @@
+# Class filter for the Catalonia dataset (es_cat). Cataluña uses its OWN numeric crop:code
+# scheme (DUN), distinct from the national es scheme - the same number means different crops in
+# each - so this filter is specific to es_cat. Crop names are Catalan (from crop:name_en).
+# Covers es_cat year 2024 (the published edition); 210 codes.
+#
+# Excluded (background): olive groves, vineyards; all fruit trees, citrus, nuts and berries;
+# forage grasses (agrostis, dactylis, fescue, ryegrass) and pastures; traditional & biodiversity
+# fallow (guaret); short-rotation energy trees (poplar, willow, paulownia, eucalyptus) & osier;
+# cut flowers, ornamental plants & nurseries (viver); and mushrooms & truffle.
+#
+# Notable inclusions: all cereals, maize, sorghum, sudan grass, rice; oilseeds (sunflower, rape,
+# camelina, safflower, mustard); hemp, flax, hops, saffron; legumes & pulses; fodder legumes
+# (alfalfa, sainfoin, clover, vetch, lupine, sulla, trefoil, crotalaria) and cereal/legume
+# mixtures and forage mixtures; potatoes, beet; all vegetables; culinary/medicinal/aromatic herbs
+# (incl. lavender, aloe, caper); and strawberries.
+
+column: ["crop:code", "crop_code"]
+
+include:
+  - 3  # ALBERGÍNIA
+  - 4  # ALFÀBREGA
+  - 5  # ALFALS
+  - 6  # ALL
+  - 10  # ANET
+  - 11  # ANÍS DOLÇ
+  - 12  # API
+  - 13  # ARRÒS
+  - 15  # BARREJA FARRATGERES
+  - 16  # BLAT DE MORO
+  - 17  # BLAT DUR
+  - 18  # BLAT KAMUT
+  - 19  # BLAT TOU
+  - 20  # BLEDA
+  - 21  # BOIXAC O CALÈNDULA
+  - 23  # BORRATJA
+  - 24  # BRÒCOLI
+  - 25  # CACAUET
+  - 26  # CAMAMILLA DOLÇA
+  - 27  # CAMELINA
+  - 28  # CÀNEM
+  - 31  # CARABASSA
+  - 32  # CARBASSÓ
+  - 34  # CÀRTAM O SAFRANÓ
+  - 35  # CARXOFA
+  - 37  # CEBA I CALÇOT
+  - 38  # CEBA TENDRA
+  - 39  # CIGRÓ
+  - 41  # CIVADA
+  - 44  # COGOMBRE
+  - 45  # COL DE BRUSEL·LES
+  - 46  # COL DE CABDELL
+  - 47  # COL DE MILÀ
+  - 48  # COL GEGANT
+  - 49  # COL LLOMBARDA O MORADA
+  - 50  # COL XINESA
+  - 51  # COL-I-FLOR
+  - 52  # COLRAVE
+  - 53  # COLZA
+  - 55  # CORIANDRE
+  - 57  # CREIXEN
+  - 59  # ENCIAM
+  - 60  # ENDÍVIA
+  - 61  # ERB
+  - 62  # ERBS I ORDI
+  - 64  # ESCAIOLA
+  - 65  # ESCAROLA
+  - 66  # ESPÀRREC
+  - 67  # ESPECIES AROMÀTIQUES HERBÀCIES
+  - 68  # ESPECIES AROMÀTIQUES LLENYOSES
+  - 69  # ESPELTA
+  - 70  # ESPINAC
+  - 72  # FAJOL
+  - 73  # FARIGOLA O TIMÓ
+  - 74  # FAVA
+  - 75  # FAVA I CIVADA
+  - 76  # FAVERS BORDA O MOREU
+  - 77  # FAVÓ
+  - 78  # FENIGREC
+  - 82  # FONOLL
+  - 84  # GARROFA HERBÀCIA
+  - 87  # GIRA-SOL
+  - 91  # GUIXES O PEDREROL
+  - 93  # HORTA
+  - 94  # JULIVERT
+  - 96  # LAVANDA
+  - 97  # LLENTIA
+  - 98  # LLI
+  - 100  # LLOBÍ (TRAMÚS)
+  - 101  # LLOBÍ GROC (TRAMÚS GROC)
+  - 102  # LLÚPOL
+  - 103  # MADUIXA
+  - 104  # MADUIXOT
+  - 107  # MARDUIX
+  - 108  # MELCA DEL SUDAN
+  - 109  # MELISSA O TARONGINA
+  - 110  # MELÓ
+  - 111  # MENTA
+  - 112  # MILL
+  - 113  # MONGETA
+  - 114  # MONIATO
+  - 115  # MOSTASSA
+  - 117  # NAP
+  - 124  # ORDI
+  - 125  # ORENGA
+  - 126  # PASTANAGA
+  - 128  # PATATA
+  - 130  # PEBROT
+  - 132  # PÈSOL
+  - 133  # PÈSOL I CIVADA
+  - 134  # PÈSOL I ORDI
+  - 141  # PORRO
+  - 146  # QUINOA
+  - 149  # RAVE
+  - 150  # REMOLATXA
+  - 151  # ROMANESCO
+  - 152  # ROMANÍ
+  - 153  # SAFRÀ
+  - 154  # SAJOLIDA
+  - 155  # SÀLVIA
+  - 158  # SÈGOL
+  - 159  # SÍNDRIA
+  - 160  # SOIA
+  - 161  # SORGO
+  - 164  # TEFF
+  - 166  # TOMÀQUET
+  - 167  # TREPADELLA
+  - 168  # TRÈVOL
+  - 169  # TRITICALE
+  - 170  # TRITORDEUM
+  - 172  # VEÇA
+  - 173  # VEÇA I BLAT
+  - 174  # VEÇA I CIVADA
+  - 175  # VEÇA I ORDI
+  - 176  # VEÇA I TRITICALE
+  - 177  # VEÇA VELLOSA
+  - 178  # VEÇA, CIVADA I ORDI
+  - 181  # XICÒRIA
+  - 182  # XIRIVIA
+  - 187  # ARTEMÍSIA O ESTRAGÓ
+  - 254  # TÀPERA
+  - 313  # ALOE VERA
+  - 316  # BITXO, VITXO
+  - 317  # CIBULET
+  - 318  # CIVADA I BLAT
+  - 319  # CIVADA I ORDI
+  - 320  # CIVADA I TRITICALE
+  - 321  # COL KALE
+  - 322  # CROTALÀRIA
+  - 323  # ERBS I CIVADA
+  - 324  # ESPELTA PETITA
+  - 326  # LAVANDA X ESPIGOL
+  - 327  # LOT CORNICULAT
+  - 328  # MALVA
+  - 329  # MARIALLUÏSA
+  - 330  # MARXANT, BLET
+  - 331  # MENTA VERDA, HERBA DE SANTA MARIA
+  - 332  # MILL ITALIÀ, CUA DE GUILLA
+  - 333  # MONGETA VERMELLA
+  - 335  # NYÀMERA, PATATA DE CANYA
+  - 336  # OKRA
+  - 337  # PASSACAMINS
+  - 338  # PISANA, ESPELTA BESSONA
+  - 339  # RAVE PICANT, RAVE RUSTICÀ
+  - 340  # RUIBARBRE
+  - 341  # SULLA O ENCLOVA
+  - 343  # VEÇA I RAIGRÀS
+
+exclude:
+  - 1  # AGROSTIS
+  - 2  # ALBERCOQUER
+  - 7  # ALTRES FRUITERS
+  - 8  # ALVOCAT
+  - 9  # AMETLLER
+  - 14  # AVELLANER
+  - 22  # BOLETS
+  - 30  # CAQUI
+  - 36  # CASTANYER
+  - 40  # CIRERER
+  - 42  # CLEMENTINA
+  - 43  # CODONY
+  - 54  # CONREU DE FRUITS DEL BOSC
+  - 58  # DÀCTIL (DACTYLIS)
+  - 63  # ESBARZER
+  - 71  # EUCALIPTUS ROT. CURTA
+  - 79  # FESTUCA
+  - 80  # FIGUERA
+  - 81  # FLOR TALLADA
+  - 83  # GARLANDA
+  - 85  # GARROFER
+  - 86  # GERD
+  - 88  # GROSELLER
+  - 89  # GUARET / SUP. LLIURE SEMBRA
+  - 90  # GUARET BIODIVERSITAT
+  - 95  # KIWI
+  - 99  # LLIMONER
+  - 105  # MAGRANER
+  - 106  # MANDARINER HÍBRID
+  - 116  # NABIU
+  - 118  # NASHI
+  - 119  # NECTARINA PLANA
+  - 120  # NECTARINER
+  - 121  # NESPRER
+  - 122  # NOGUERA
+  - 123  # OLIVERA
+  - 127  # PASTURES DE MENYS DE 5 ANYS
+  - 129  # PAULÒNIA ROT. CURTA
+  - 131  # PERERA
+  - 135  # PISTATXER O FESTUC
+  - 136  # PLANTA ORNAMENTAL
+  - 137  # POA
+  - 138  # POLLANCRE ROT. CURTA
+  - 139  # POMELO O ARANJA
+  - 140  # POMERA
+  - 142  # PRÉSSEC PLA
+  - 143  # PRESSEGUER
+  - 145  # PRUNERA
+  - 147  # RAIGRÀS MULTIFLORUM
+  - 148  # RAIGRÀS PERENNE
+  - 156  # SALZE ROT. CURTA
+  - 157  # SATSUMA
+  - 163  # TARONGER
+  - 165  # TÒFONA
+  - 179  # VINYA
+  - 314  # ANTARA VINYA
+  - 315  # ARANYONER, PRUNYONER
+  - 325  # GINJOLER
+  - 334  # MORER
+  - 342  # TARONGER AGRE
+  - 344  # VIMETERA
+  - 345  # VIVER - PRODUCTOR MVR
+  - 346  # XIRIMOIER
