@@ -441,7 +441,24 @@ class TestTrueColourStretch:
 class TestBuildRenderOrder:
     """The default stack a Portolan browser opens a chip on: fields over imagery."""
 
-    def test_boundary_outline_is_drawn_over_the_planting_image(self) -> None:
+    def test_field_instances_are_the_preferred_overlay(self) -> None:
+        """Each field a distinct colour over the scene, background transparent."""
+        from ftw_dataset_tools.api.renders import build_item_renders, build_render_order
+
+        renders = build_item_renders(
+            _item(
+                {
+                    "planting_image": IMAGE_BANDS,
+                    "instance_mask": [{"statistics": {"minimum": 1, "maximum": 900}}],
+                    "semantic_2class_mask": None,
+                    "decode_boundary_mask": None,
+                }
+            )
+        )
+
+        assert build_render_order(renders) == ["planting_rgb", "instance"]
+
+    def test_boundary_outline_is_the_overlay_without_instances(self) -> None:
         from ftw_dataset_tools.api.renders import build_item_renders, build_render_order
 
         renders = build_item_renders(
