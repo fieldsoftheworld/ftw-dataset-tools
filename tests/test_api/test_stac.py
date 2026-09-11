@@ -369,6 +369,10 @@ class TestChipItemAssetMetadata:
 
         boundary = item.assets["decode_boundary_mask"].extra_fields["raster:bands"][0]
         assert [c["name"] for c in boundary["classification:classes"]] == ["background", "boundary"]
+        # The overlay draws from these hints, with the background left transparent.
+        hints = {c["name"]: c.get("color_hint") for c in boundary["classification:classes"]}
+        assert hints == {"background": None, "boundary": "D55E00"}
+        assert item.properties["renders"]["decode_boundary"]["nodata"] == 0
 
         distance = item.assets["decode_distance_mask"].extra_fields["raster:bands"][0]
         assert distance["data_type"] == "float32"
@@ -1002,6 +1006,126 @@ class TestRendersOnCatalog:
         assert ia["planting_visual"]["roles"] == ["visual"]
         assert ia["harvest_visual"]["type"] == MEDIA_TYPE_COG
         assert ia["planting_image"]["roles"] == ["data"]
+
+
+def _write_season_image(
+    path: Path, bands: tuple[str, ...] = ("red", "green", "blue", "nir")
+) -> None:
+    """Write a clipped season image the way ``imagery.image_download`` writes one.
+
+    Bands are stored in the requested order, each named by its GDAL description,
+    with 0 declared as the reflectance fill and per-band statistics embedded.
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_bounds
+
+    from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
+
+    data = np.array(
+        [
+            [[100 * (index + 1), 200 * (index + 1)], [300 * (index + 1), 0]]
+            for index in range(len(bands))
+        ],
+        dtype="uint16",
+    )
+    with rasterio.open(
+        path,
+        "w",
+        driver="COG",
+        width=data.shape[2],
+        height=data.shape[1],
+        count=len(bands),
+        dtype="uint16",
+        crs="EPSG:4326",
+        transform=from_bounds(0, 0, 1, 1, data.shape[2], data.shape[1]),
+        compress="deflate",
+        nodata=0,
+    ) as dst:
+        dst.write(data)
+        for index, name in enumerate(bands, start=1):
+            dst.set_band_description(index, name)
+            embed_band_stats(dst, index, compute_band_stats(data[index - 1], nodata=0))
+
+
+class TestRenderOrderOnCatalog:
+    """The default layer stack survives the full stac stage, not just the unit builder."""
+
+    def _chip_dir(self, tmp_path: Path) -> Path:
+        return tmp_path / "chips" / "33UXP" / CHIP_ID
+
+    def _item(self, tmp_path: Path) -> dict:
+        import json
+
+        return json.loads((self._chip_dir(tmp_path) / f"{CHIP_ID}.json").read_text())
+
+    def test_local_image_backs_the_stack(self, tmp_path: Path) -> None:
+        build_catalog(tmp_path)
+        chip_dir = self._chip_dir(tmp_path)
+        _write_season_child(chip_dir, CHIP_ID, "planting", with_image=True)
+        _write_season_image(chip_dir / f"{CHIP_ID}_planting_image_s2.tif")
+
+        build_catalog(tmp_path)
+
+        item = self._item(tmp_path)
+        assert item["properties"]["portolan:render_order"] == ["planting_rgb", "semantic_2class"]
+        render = item["properties"]["renders"]["planting_rgb"]
+        assert render["assets"] == ["planting_image"]
+        assert render["bidx"] == [1, 2, 3]
+        assert render["nodata"] == 0
+        # The stretch comes from the file's own embedded statistics, clipped to
+        # mean +/- 2 sigma; it is never the fixed 0-255 stretch of a scene asset.
+        bands = item["assets"]["planting_image"]["raster:bands"]
+        assert len(render["rescale"]) == 3
+        for (lower, upper), band in zip(render["rescale"], bands[:3], strict=True):
+            statistics = band["statistics"]
+            assert statistics["minimum"] <= lower < upper <= statistics["maximum"]
+
+    def test_selection_alone_backs_the_stack_with_the_scene_asset(self, tmp_path: Path) -> None:
+        build_catalog(tmp_path)
+        _write_season_child(self._chip_dir(tmp_path), CHIP_ID, "planting")
+
+        build_catalog(tmp_path)
+
+        item = self._item(tmp_path)
+        assert item["properties"]["portolan:render_order"] == ["planting_rgb", "semantic_2class"]
+        render = item["properties"]["renders"]["planting_rgb"]
+        assert render["assets"] == ["planting_visual"]
+        assert render["rescale"] == [[0, 255], [0, 255], [0, 255]]
+        assert item["assets"]["planting_visual"]["href"].startswith("https://")
+
+    def test_harvest_only_falls_back_to_harvest(self, tmp_path: Path) -> None:
+        build_catalog(tmp_path)
+        _write_season_child(self._chip_dir(tmp_path), CHIP_ID, "harvest")
+
+        build_catalog(tmp_path)
+
+        assert self._item(tmp_path)["properties"]["portolan:render_order"] == [
+            "harvest_rgb",
+            "semantic_2class",
+        ]
+
+    def test_chip_without_imagery_carries_no_stack(self, tmp_path: Path) -> None:
+        build_catalog(tmp_path)
+
+        properties = self._item(tmp_path)["properties"]
+        assert "portolan:render_order" not in properties
+        assert "planting_rgb" not in properties["renders"]
+
+    def test_the_overlay_colour_reaches_the_published_mask(self, tmp_path: Path) -> None:
+        build_catalog(tmp_path)
+        _write_season_child(self._chip_dir(tmp_path), CHIP_ID, "planting")
+
+        build_catalog(tmp_path)
+
+        item = self._item(tmp_path)
+        overlay_key = item["properties"]["portolan:render_order"][1]
+        overlay = item["properties"]["renders"][overlay_key]
+        assert overlay["nodata"] == 0
+        classes = item["assets"][overlay["assets"][0]]["raster:bands"][0]["classification:classes"]
+        by_name = {entry["name"]: entry for entry in classes}
+        assert by_name["field"]["color_hint"] == "009E73"
+        assert "color_hint" not in by_name["background"]
 
 
 class TestImageryReattachedOnStacRerun:

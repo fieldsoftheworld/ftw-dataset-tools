@@ -37,9 +37,11 @@ from ftw_dataset_tools.api.assets import (
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.masks import MaskType, get_mgrs_square
 from ftw_dataset_tools.api.renders import (
+    RENDER_ORDER_PROP,
     add_render_schema,
     build_collection_renders,
     build_item_renders,
+    build_render_order,
 )
 
 if TYPE_CHECKING:
@@ -683,6 +685,11 @@ def _create_chip_item(
     if renders:
         item.properties["renders"] = renders
         add_render_schema(item)
+        # The default layer stack a Portolan browser opens the chip on: fields over
+        # the season's imagery. Absent on a chip with no imagery to stack them over.
+        render_order = build_render_order(renders)
+        if render_order:
+            item.properties[RENDER_ORDER_PROP] = render_order
 
     return item
 

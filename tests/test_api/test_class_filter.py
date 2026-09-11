@@ -199,9 +199,11 @@ class TestCropNameColumn:
             "kõrvits",
         }
 
-    def test_write_filtered_keeps_only_include(self, fields_crop_name: Path, tmp_path: Path) -> None:
+    def test_write_filtered_keeps_only_include(
+        self, fields_crop_name: Path, tmp_path: Path
+    ) -> None:
         cf = self._filter()
         out = tmp_path / "filtered.parquet"
         cf_module.write_filtered_fields(fields_crop_name, out, cf, column="crop:name")
-        rows = duckdb.connect().execute(f'SELECT DISTINCT "crop:name" FROM \'{out}\'').fetchall()
+        rows = duckdb.connect().execute(f"SELECT DISTINCT \"crop:name\" FROM '{out}'").fetchall()
         assert {r[0] for r in rows} == {'kartul "Ando"', "suvinisu", "kõrvits"}  # rohumaa dropped
