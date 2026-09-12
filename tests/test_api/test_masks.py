@@ -8,6 +8,25 @@ import numpy as np
 import pytest
 
 
+def expected_mask_path(output_dir, grid_id: str, mask_type, year: int | None = None) -> Path:
+    """Where create_masks writes a mask when the caller supplies no chip_dirs.
+
+    Mirrors the chip layout create_masks builds for itself, so tests that pre-place
+    a file for skip_existing put it where the run will actually look.
+    """
+    from ftw_dataset_tools.api.masks import get_item_id, get_mask_filename, get_mgrs_square
+
+    path = (
+        Path(output_dir)
+        / "chips"
+        / get_mgrs_square(grid_id)
+        / get_item_id(grid_id, year)
+        / get_mask_filename(grid_id, mask_type, year)
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 class TestMaskFilenameConvention:
     """Tests for mask filename generation."""
 
@@ -591,32 +610,16 @@ class TestCreateMasksSkipExisting:
         assert result.masks_existing == 0
 
     def test_skip_existing_skips_non_empty_file_and_recreates_empty_one(self, tmp_path) -> None:
-        from ftw_dataset_tools.api.masks import (
-            MaskType,
-            create_masks,
-            get_mask_output_path,
-        )
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
 
         chips_path, fields_path, lines_path = self._build_inputs(tmp_path)
         output_dir = tmp_path / "masks"
         output_dir.mkdir()
 
-        existing_path = get_mask_output_path(
-            grid_id="c1",
-            mask_type=MaskType.SEMANTIC_2_CLASS,
-            chip_dirs=None,
-            output_dir=output_dir,
-            field_dataset="test",
-        )
+        existing_path = expected_mask_path(output_dir, "c1", MaskType.SEMANTIC_2_CLASS)
         existing_path.write_bytes(b"not-really-a-tif-but-non-empty")
 
-        empty_path = get_mask_output_path(
-            grid_id="c2",
-            mask_type=MaskType.SEMANTIC_2_CLASS,
-            chip_dirs=None,
-            output_dir=output_dir,
-            field_dataset="test",
-        )
+        empty_path = expected_mask_path(output_dir, "c2", MaskType.SEMANTIC_2_CLASS)
         empty_path.write_bytes(b"")
 
         results = create_masks(
@@ -641,24 +644,14 @@ class TestCreateMasksSkipExisting:
 
     def test_skip_existing_filters_per_output_not_per_group(self, tmp_path) -> None:
         """A group whose 2-class mask exists must still burn its missing DECODE layer."""
-        from ftw_dataset_tools.api.masks import (
-            MaskType,
-            create_masks,
-            get_mask_output_path,
-        )
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
 
         chips_path, fields_path, lines_path = self._build_inputs(tmp_path)
         output_dir = tmp_path / "masks"
         output_dir.mkdir()
 
         paths = {
-            mask_type: get_mask_output_path(
-                grid_id=grid_id,
-                mask_type=mask_type,
-                chip_dirs=None,
-                output_dir=output_dir,
-                field_dataset="test",
-            )
+            mask_type: expected_mask_path(output_dir, grid_id, mask_type)
             for grid_id in ("c1",)
             for mask_type in (MaskType.SEMANTIC_2_CLASS, MaskType.DECODE_BOUNDARY)
         }
@@ -1201,18 +1194,13 @@ class TestSharedRasterization:
 
     def test_write_failure_is_only_reported_for_the_unwritten_type(self, tmp_path) -> None:
         """The type that succeeded counts as created, not as skipped."""
-        from ftw_dataset_tools.api.masks import MaskType, create_masks, get_mask_output_path
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
 
         chips, boundaries, lines = self._inputs(tmp_path)
         output_dir = tmp_path / "out"
         output_dir.mkdir()
-        blocked = get_mask_output_path(
-            grid_id="grid_001",
-            mask_type=MaskType.DECODE_BOUNDARY,
-            chip_dirs=None,
-            output_dir=output_dir,
-            field_dataset="test",
-        )
+        # A directory where the file belongs makes the write fail for this type only.
+        blocked = expected_mask_path(output_dir, "grid_001", MaskType.DECODE_BOUNDARY)
         blocked.mkdir(parents=True)
 
         results = create_masks(
@@ -1614,14 +1602,17 @@ class TestMaskWriteIsAtomic:
         )
 
         assert results[masks.MaskType.SEMANTIC_2_CLASS].total_created == 0
-        assert list(output_dir.iterdir()) == []
+        # The chip directories are created up front; what must not survive is any
+        # file skip_existing could mistake for a finished mask.
+        assert list(output_dir.rglob("*.tif")) == []
+        assert [p for p in output_dir.rglob("*") if p.is_file()] == []
 
 
 class TestOnStartCountsQueuedTasks:
     """The progress total has to be taken after the skip_existing filter."""
 
     def test_total_tasks_excludes_masks_already_on_disk(self, tmp_path) -> None:
-        from ftw_dataset_tools.api.masks import MaskType, create_masks, get_mask_output_path
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
 
         chips_path, fields_path, lines_path = TestCreateMasksSkipExisting._build_inputs(tmp_path)
         output_dir = tmp_path / "masks"
@@ -1638,13 +1629,7 @@ class TestOnStartCountsQueuedTasks:
         create_masks(**common)
 
         # Drop one of the two masks; only that one should be queued on the rerun.
-        get_mask_output_path(
-            grid_id="c2",
-            mask_type=MaskType.SEMANTIC_2_CLASS,
-            chip_dirs=None,
-            output_dir=output_dir,
-            field_dataset="test",
-        ).unlink()
+        expected_mask_path(output_dir, "c2", MaskType.SEMANTIC_2_CLASS).unlink()
 
         seen: list[tuple[int, int, int]] = []
         progress: list[tuple[int, int]] = []
@@ -1872,3 +1857,140 @@ class TestInstanceMaskStatistics:
         with rasterio.open(path) as src:
             assert src.nodata is None
             assert float(src.tags(1)["STATISTICS_MINIMUM"]) == 0
+
+
+class TestBuildChipDirs:
+    """Tests for the chip-directory builder shared by the pipeline and create-masks."""
+
+    @staticmethod
+    def _chips(tmp_path, ids=("ftw-33UXP0410", "ftw-33UXQ0001", "grid_001"), coverage=None):
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        coverage = [5.0] * len(ids) if coverage is None else coverage
+        gdf = gpd.GeoDataFrame(
+            {"id": list(ids), "field_coverage_pct": coverage},
+            geometry=[box(0, 0, 1, 1)] * len(ids),
+            crs="EPSG:4326",
+        )
+        path = tmp_path / "chips.parquet"
+        gdf.to_parquet(path)
+        return path
+
+    def test_nests_by_mgrs_square_and_creates_dirs(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import build_chip_dirs
+
+        base = tmp_path / "chips"
+        dirs = build_chip_dirs(self._chips(tmp_path), base, year=2024)
+
+        assert dirs["ftw-33UXP0410_2024"] == base / "33UXP" / "ftw-33UXP0410_2024"
+        assert dirs["ftw-33UXQ0001_2024"] == base / "33UXQ" / "ftw-33UXQ0001_2024"
+        # Non-FTW ids still get a sub-catalog, under 'other'.
+        assert dirs["grid_001_2024"] == base / "other" / "grid_001_2024"
+        assert all(p.is_dir() for p in dirs.values())
+
+    def test_year_is_optional(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import build_chip_dirs
+
+        base = tmp_path / "chips"
+        dirs = build_chip_dirs(self._chips(tmp_path, ids=("ftw-33UXP0410",)), base)
+
+        assert dirs == {"ftw-33UXP0410": base / "33UXP" / "ftw-33UXP0410"}
+
+    def test_filters_below_min_coverage(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import build_chip_dirs
+
+        chips = self._chips(tmp_path, ids=("ftw-33UXP0410", "ftw-33UXQ0001"), coverage=[5.0, 0.0])
+        dirs = build_chip_dirs(chips, tmp_path / "chips", min_coverage=1.0)
+
+        assert list(dirs) == ["ftw-33UXP0410"]
+
+    def test_missing_grid_id_column_is_a_clear_error(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import build_chip_dirs
+
+        with pytest.raises(ValueError, match="Grid ID column 'nope' not found"):
+            build_chip_dirs(self._chips(tmp_path), tmp_path / "chips", grid_id_col="nope")
+
+    def test_missing_coverage_column_is_a_clear_error(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import build_chip_dirs
+
+        with pytest.raises(ValueError, match="Coverage column 'nope' not found"):
+            build_chip_dirs(self._chips(tmp_path), tmp_path / "chips", coverage_col="nope")
+
+    def test_falsy_coverage_col_disables_filtering(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import build_chip_dirs
+
+        chips = self._chips(tmp_path, ids=("ftw-33UXP0410", "ftw-33UXQ0001"), coverage=[5.0, 0.0])
+        dirs = build_chip_dirs(chips, tmp_path / "chips", min_coverage=1.0, coverage_col=None)
+
+        assert len(dirs) == 2
+
+
+class TestCreateMasksDefaultLayout:
+    """create_masks must write the pipeline's layout when given no chip_dirs."""
+
+    def test_masks_land_in_chip_directories(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        chips_path, fields_path, lines_path = TestCreateMasksSkipExisting._build_inputs(tmp_path)
+        output_dir = tmp_path / "masks"
+
+        results = create_masks(
+            chips_file=chips_path,
+            boundaries_file=fields_path,
+            boundary_lines_file=lines_path,
+            output_dir=output_dir,
+            field_dataset="test",
+            mask_types=[MaskType.SEMANTIC_2_CLASS],
+            num_workers=1,
+            year=2024,
+        )
+
+        assert results[MaskType.SEMANTIC_2_CLASS].total_created == 2
+        # c1/c2 are not FTW grid ids, so they sit under 'other'.
+        expected = output_dir / "chips" / "other" / "c1_2024" / "c1_2024_semantic_2_class.tif"
+        assert expected.exists()
+        # No file is left at the legacy flat path.
+        assert not (output_dir / "test_c1_2024_semantic_2_class.tif").exists()
+
+    def test_matches_the_paths_the_pipeline_builds(self, tmp_path) -> None:
+        """The acceptance criterion of #69: both entry points write the same paths."""
+        from ftw_dataset_tools.api.masks import MaskType, build_chip_dirs, create_masks
+        from ftw_dataset_tools.api.stac import chips_base_dir_for
+
+        chips_path, fields_path, lines_path = TestCreateMasksSkipExisting._build_inputs(tmp_path)
+
+        standalone_out = tmp_path / "standalone"
+        create_masks(
+            chips_file=chips_path,
+            boundaries_file=fields_path,
+            boundary_lines_file=lines_path,
+            output_dir=standalone_out,
+            field_dataset="test",
+            mask_types=[MaskType.SEMANTIC_2_CLASS],
+            num_workers=1,
+            year=2024,
+        )
+
+        # What the pipeline does: build chip_dirs itself, then hand them to create_masks.
+        pipeline_out = tmp_path / "pipeline"
+        chip_dirs = build_chip_dirs(
+            chips_path, chips_base_dir_for(pipeline_out), min_coverage=0.01, year=2024
+        )
+        create_masks(
+            chips_file=chips_path,
+            boundaries_file=fields_path,
+            boundary_lines_file=lines_path,
+            output_dir=pipeline_out,
+            field_dataset="test",
+            mask_types=[MaskType.SEMANTIC_2_CLASS],
+            num_workers=1,
+            chip_dirs=chip_dirs,
+            year=2024,
+        )
+
+        def relative_tifs(root):
+            return sorted(p.relative_to(root).as_posix() for p in root.rglob("*.tif"))
+
+        assert relative_tifs(standalone_out) == relative_tifs(pipeline_out)
+        assert relative_tifs(standalone_out) != []

@@ -333,26 +333,45 @@ ftwd create-chips fields.parquet --reproject
 
 Create raster masks from vector boundaries for each grid cell. Outputs Cloud Optimized GeoTIFFs (COGs).
 
+Masks are written into the same catalog layout `create-dataset` produces, alongside a STAC
+collection describing them, so standalone output can feed `select-images` and `download-images`:
+
+```
+{output-dir}/
+├── collection.json
+└── chips/
+    └── {mgrs100k}/                 # 'other' for non-FTW grid ids
+        ├── catalog.json
+        └── {item_id}/
+            ├── {item_id}.json
+            └── {item_id}_{mask_type}.tif
+```
+
+`{item_id}` is `{grid_id}_{year}` when `--year` is given, otherwise `{grid_id}`. Pass the same
+`--year` as `create-dataset` to reproduce its item ids.
+
 ```bash
 # Create semantic 2-class masks
-ftwd create-masks chips.parquet fields.parquet boundary_lines.parquet --field-dataset austria
+ftwd create-masks chips.parquet fields.parquet boundary_lines.parquet --field-dataset austria --year 2024
 
 # Create instance masks
-ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset france --mask-type instance
+ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset france --mask-type instance --year 2024
 
 # Custom settings
-ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spain --min-coverage 1.0 --resolution 5.0
+ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spain --min-coverage 1.0 --resolution 5.0 --year 2024
 ```
 
 **Options:**
-- `-o, --output-dir` - Output directory (default: `./masks`)
-- `--field-dataset` - Dataset name for output filenames (required)
+- `-o, --output-dir` - Dataset root; masks go under `{output-dir}/chips/` (default: `./masks`)
+- `--field-dataset` - Dataset name, used as the STAC collection id (required)
+- `--year` - Year folded into item ids and filenames. Required unless the boundaries file has a `determination_datetime` column, since the collection needs a temporal extent
 - `--mask-type` - Type of mask: `instance`, `semantic_2_class`, or `semantic_3_class` (default: `semantic_2_class`)
 - `--grid-id-col` - Column name for grid cell ID (default: `id`)
 - `--coverage-col` - Column name for coverage percentage (default: `field_coverage_pct`)
 - `--min-coverage` - Minimum coverage to process (default: 0.01)
 - `--resolution` - Pixel resolution in CRS units (default: 10.0)
-- `--workers` - Number of parallel workers (default: half of CPUs)
+- `--workers` - Number of parallel workers (default: CPU count, capped at 8)
+- `--skip-existing` - Reuse masks already on disk instead of recreating them
 
 ### create-boundaries
 

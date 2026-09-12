@@ -1,10 +1,11 @@
 """CLI command for creating raster masks from vector boundaries."""
 
 import sys
+from pathlib import Path
 
 import click
 
-from ftw_dataset_tools.api import masks
+from ftw_dataset_tools.api import masks, stac
 from ftw_dataset_tools.api.config import VALID_MASK_TYPES
 from ftw_dataset_tools.api.masks import MaskType
 
@@ -19,12 +20,18 @@ from ftw_dataset_tools.api.masks import MaskType
     type=click.Path(),
     default="./masks",
     show_default=True,
-    help="Output directory for mask files.",
+    help="Dataset root. Masks are written under {output-dir}/chips/{mgrs}/{item_id}/.",
 )
 @click.option(
     "--field-dataset",
     required=True,
-    help="Name of the field dataset (used in output filenames).",
+    help="Name of the field dataset (used as the STAC collection id).",
+)
+@click.option(
+    "--year",
+    type=int,
+    default=None,
+    help="Year folded into item IDs and filenames, matching create-dataset.",
 )
 @click.option(
     "--grid-id-col",
@@ -78,6 +85,7 @@ def create_masks_cmd(
     boundary_lines_file: str,
     output_dir: str,
     field_dataset: str,
+    year: int | None,
     grid_id_col: str,
     mask_type: str,
     coverage_col: str | None,
@@ -91,8 +99,13 @@ def create_masks_cmd(
     Takes a chips file (from create-chips), boundaries file (polygons),
     and boundary lines file to create raster masks for training data.
 
-    Output files are Cloud Optimized GeoTIFFs (COGs) named:
-    {field_dataset}_{grid_id}_{mask_type}.tif
+    Masks are Cloud Optimized GeoTIFFs written into the same STAC catalog
+    layout create-dataset produces, alongside a STAC collection describing them:
+
+    \b
+        {output-dir}/collection.json
+        {output-dir}/chips/{mgrs_square}/{item_id}/{item_id}.json
+        {output-dir}/chips/{mgrs_square}/{item_id}/{item_id}_{mask_type}.tif
 
     \b
     CHIPS_FILE: GeoParquet file with chip definitions (from create-chips)
@@ -101,12 +114,27 @@ def create_masks_cmd(
 
     \b
     Examples:
-        ftwd create-masks chips.parquet fields.parquet boundary_lines_fields.parquet --field-dataset austria
-        ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset france --mask-type instance
-        ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spain --coverage-col field_coverage_pct --min-coverage 1.0
+        ftwd create-masks chips.parquet fields.parquet boundary_lines_fields.parquet --field-dataset austria --year 2024
+        ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset france --mask-type instance --year 2024
+        ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spain --min-coverage 1.0 --year 2024
+
+    \b
+    --year may be omitted when the boundaries file has a determination_datetime
+    column, which the STAC collection's temporal extent is then read from.
     """
+    # The STAC collection written at the end needs a temporal extent. Checked before
+    # any rasterization so a missing --year fails in a second rather than after a
+    # full mask run.
+    if year is None and stac.detect_datetime_column(boundaries_file) is None:
+        raise click.BadParameter(
+            "Cannot determine the collection's temporal extent: "
+            f"{boundaries_file} has no 'determination_datetime' column. "
+            "Pass --year.",
+            param_hint="--year",
+        )
+
     click.echo(f"Creating {mask_type} masks for {field_dataset}")
-    click.echo(f"Output: {output_dir}")
+    click.echo(f"Output: {Path(output_dir) / 'chips'}")
 
     # Convert mask type string to enum
     mask_type_enum = MaskType(mask_type)
@@ -148,6 +176,7 @@ def create_masks_cmd(
             min_coverage=min_coverage,
             resolution=resolution,
             num_workers=num_workers,
+            year=year,
             skip_existing=skip_existing,
             on_progress=on_progress,
             on_start=on_start,
@@ -175,6 +204,23 @@ def create_masks_cmd(
                 click.echo(f"  {grid_id}: {reason}")
             if len(result.masks_skipped) > 10:
                 click.echo(f"  ... and {len(result.masks_skipped) - 10} more")
+
+        # Without this the command leaves the catalog's directory shape with no
+        # catalog in it, and select-images/download-images both require a
+        # collection.json to run against the output.
+        click.echo("\nGenerating STAC catalog...")
+        stac_result = stac.generate_stac_catalog(
+            output_dir=output_dir,
+            field_dataset=field_dataset,
+            fields_file=boundaries_file,
+            chips_file=chips_file,
+            boundary_lines_file=boundary_lines_file,
+            year=year,
+        )
+        click.echo(
+            f"  Created STAC collection with {stac_result.total_items} item(s) "
+            f"in {len(stac_result.subcatalog_paths)} sub-catalog(s)"
+        )
 
         click.echo(click.style("Done!", fg="green"))
 
