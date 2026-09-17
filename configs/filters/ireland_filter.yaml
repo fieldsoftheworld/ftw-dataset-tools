@@ -1,174 +1,189 @@
-# Class filter used for Ireland (IE) field boundaries. Codes are the crop:code from the
-# harmonized ftw/harmonized-field-data ie dataset (numeric, stored as e.g. "124.0"); the English
-# crop:name is shown as a comment. Covers ie year 2024 (the published edition); 152 codes.
+# Class filter used for Ireland (IE) field boundaries. Keyed on crop:name (English), because the
+# crop:code representation is inconsistent across editions (e.g. "124.0" in 2022/2024 vs "124" in
+# 2023). Covers ie years 2022-2024; 167 distinct crop names. The HCAT group is shown as a comment.
 #
-# Excluded (background): permanent pasture, extensively grazed / low-input / peat grassland,
-# hay meadows, multi-year grass leys (Grass Year 1-5), grass silage & grassmeal, reed canary
-# grass; fallow; forestry, woodland, short-rotation coppice, willow, Miscanthus, scrub, foliage
-# & tree belts; orchards, fruit, berries & grapes; daffodils, cut-flower/bulb crops & nurseries;
-# glasshouse crops; riparian buffers/zones, bird-food & wildlife-cover plots, designated
-# habitats, bog, farmyards, buildings, water and other non-crop/unknown areas.
+# Excluded (background): permanent, extensively-grazed & low-input grassland, hay meadows, grass
+# leys (Grass Year 1-5) and grass silage/grassmeal, reed canary grass; fallow; forestry, woodland,
+# short-rotation coppice, willow, Miscanthus, scrub, foliage, tree belts, Christmas trees; orchards,
+# fruit, berries & grapes; daffodils, cut-flower/bulb crops & nurseries; glasshouse crops; riparian
+# & planted buffer zones, bird-food & wildlife-cover plots, designated habitats, bog, farmyards,
+# roads, buildings, quarries, recreational & water areas and other non-crop/unknown land.
 #
 # Notable inclusions: cereals (barley, wheat, oats, rye, triticale), maize & sweetcorn; oilseed
-# rape, forage rape, mustard, sunflower, linseed, flax, camelina, hemp; beans, peas, vetch,
-# lupins, protein/cereal mixes; clover, alfalfa/lucerne; fodder & sugar beet, potatoes and all
-# field vegetables & roots; herbs; arable silage (non-grass) & mixed cropping; grass grown for
-# seed; and strawberries.
+# rape, forage rape, mustard, sunflower, linseed, flax, camelina, hemp; beans, peas, vetch, lupins,
+# soya, protein/cereal mixes; clover, alfalfa/lucerne; fodder & sugar beet, potatoes and all field
+# vegetables & roots; herbs; arable silage (non-grass) & mixed cropping; grass grown for seed; and
+# strawberries.
 
-column: ["crop:code", "crop_code"]
+column: ["crop:name", "crop_name"]
 
 include:
-  - "3.0"  # Alfalfa
-  - "7.0"  # Arable Silage (No Grass)
-  - "8.0"  # Artichoke
-  - "9.0"  # Asparagus
-  - "10.0"  # Baby Leaf Spinach
-  - "11.0"  # Barley - Spring
-  - "12.0"  # Barley - Winter
-  - "13.0"  # Basil
-  - "14.0"  # Beans - Spring
-  - "15.0"  # Beans - Winter
-  - "16.0"  # Beetroot
-  - "21.0"  # Borage
-  - "22.0"  # Broccoli - Spring
-  - "23.0"  # Broccoli - Winter
-  - "24.0"  # Brussel sprouts
-  - "26.0"  # Cabbage - Spring
-  - "27.0"  # Cabbage - Winter
-  - "29.0"  # Camelina
-  - "30.0"  # Carrots
-  - "31.0"  # Cauliflowers - Spring
-  - "32.0"  # Cauliflowers - Winter
-  - "34.0"  # Celery - Spring
-  - "35.0"  # Celery - Winter
-  - "38.0"  # Clover
-  - "40.0"  # Coriander
-  - "41.0"  # Courgettes
-  - "51.0"  # Flax
-  - "52.0"  # Fodder Beet
-  - "54.0"  # Forage Rape
-  - "66.0"  # Garlic
-  - "70.0"  # Grass Seed
-  - "85.0"  # Hemp for Food Use
-  - "86.0"  # Hemp for Industrial Use
-  - "89.0"  # Kale
-  - "91.0"  # Leeks - Spring
-  - "92.0"  # Leeks - Winter
-  - "93.0"  # Lettuce
-  - "95.0"  # Linseed
-  - "100.0"  # Lucerne
-  - "101.0"  # Lupins
-  - "102.0"  # Maize
-  - "106.0"  # Mint
-  - "108.0"  # Mixed Cropping
-  - "109.0"  # Mustard
-  - "111.0"  # Oats - Spring
-  - "112.0"  # Oats - Winter
-  - "113.0"  # Oilseed Rape - Spring
-  - "114.0"  # Oilseed Rape - Winter
-  - "115.0"  # Onions
-  - "118.0"  # Pak Choi
-  - "119.0"  # Parsley
-  - "120.0"  # Parsnips
-  - "122.0"  # Peas
-  - "123.0"  # Peppers
-  - "128.0"  # Perpetual Spinach
-  - "131.0"  # Potatoes - Early
-  - "132.0"  # Potatoes - Maincrop
-  - "133.0"  # Potatoes - Seed
-  - "134.0"  # Protein/Cereal Mix 50/50
-  - "135.0"  # Pumpkins
-  - "140.0"  # Red Clover
-  - "143.0"  # Rhubarb
-  - "147.0"  # Rocket
-  - "149.0"  # Rosemary
-  - "150.0"  # Rye
-  - "151.0"  # Scallions
-  - "156.0"  # Squash
-  - "157.0"  # Strawberries
-  - "158.0"  # Sugar Beet
-  - "159.0"  # Sunflower
-  - "160.0"  # Swede
-  - "161.0"  # Sweetcorn
-  - "162.0"  # Thyme
-  - "163.0"  # Tomatoes
-  - "166.0"  # Triticale - Spring
-  - "167.0"  # Triticale - Winter
-  - "169.0"  # Turnips
-  - "171.0"  # Vetch
-  - "172.0"  # Wheat - Spring
-  - "173.0"  # Wheat - Winter
+  - "Barley - Spring"  # spring_barley
+  - "Barley - Winter"  # winter_barley
+  - "Wheat - Winter"  # winter_common_soft_wheat
+  - "Maize"  # grain_maize_corn_popcorn
+  - "Oats - Spring"  # spring_oats
+  - "Beans - Spring"  # beans
+  - "Oilseed Rape - Winter"  # winter_rapeseed_rape
+  - "Fodder Beet"  # mangelwurzel_fodder_beet
+  - "Oats - Winter"  # winter_oats
+  - "Potatoes - Maincrop"  # potatoes
+  - "Red Clover"  # clover
+  - "Wheat - Spring"  # spring_common_soft_wheat
+  - "Rye"  # rye
+  - "Protein/Cereal Mix 50/50"  # legumes_dried_pulses_protein_crops
+  - "Potatoes - Early"  # potatoes
+  - "Kale"  # kale
+  - "Carrots"  # carrots_daucus
+  - "Oilseed Rape - Spring"  # spring_rapeseed_rape
+  - "Mixed Cropping"  # arable_crops
+  - "Sugar Beet"  # sugar_beet
+  - "Forage Rape"  # rapeseed_rape
+  - "Peas"  # peas
+  - "Beans - Winter"  # beans
+  - "Grass Seed"  # temporary_grass
+  - "Turnips"  # turnips
+  - "Arable Silage (No Grass)"  # other_arable_land_crops
+  - "Cabbage - Spring"  # brassica_oleracea_cabbage
+  - "Broccoli - Spring"  # broccoli
+  - "Strawberries"  # strawberries
+  - "Parsnips"  # parsnips
+  - "Potatoes - Seed"  # potatoes
+  - "Triticale - Spring"  # spring_triticale
+  - "Swede"  # swede_rutabaga
+  - "Cabbage - Winter"  # brassica_oleracea_cabbage
+  - "Pumpkins"  # pumpkin_squash_gourd
+  - "Cauliflowers - Spring"  # cauliflower
+  - "Cauliflowers - Winter"  # cauliflower
+  - "Onions"  # onions
+  - "Clover"  # clover
+  - "Lettuce"  # salads_lettuce_leaf_vegetables
+  - "Brussel sprouts"  # brussels_sprouts
+  - "Leeks - Spring"  # leek
+  - "Beetroot"  # beetroot_beets
+  - "Broccoli - Winter"  # broccoli
+  - "Rhubarb"  # rhubarb
+  - "Peppers"  # capsicum
+  - "Triticale - Winter"  # winter_triticale
+  - "Leeks - Winter"  # leek
+  - "Mustard"  # mustard
+  - "Celery - Spring"  # celery
+  - "Sunflower"  # sunflower
+  - "Parsley"  # parsly
+  - "Scallions"  # scallion
+  - "Hemp for Industrial Use"  # hemp_cannabis
+  - "Baby Leaf Spinach"  # spinach
+  - "Celery - Winter"  # celery
+  - "Linseed"  # flax_linseed
+  - "Sweetcorn"  # grain_maize_corn_popcorn
+  - "Garlic"  # garlic
+  - "Perpetual Spinach"  # spinach
+  - "Alfalfa"  # alfalfa_lucerne
+  - "Hemp for Food Use"  # hemp_cannabis
+  - "Courgettes"  # zucchini_courgette
+  - "Lucerne"  # alfalfa_lucerne
+  - "Artichoke"  # artichoke
+  - "Lupins"  # sweet_lupins
+  - "Tomatoes"  # tomato
+  - "Pak Choi"  # bok_choy_pak_choi
+  - "Vetch"  # vetches
+  - "Flax"  # flax_linseed
+  - "Asparagus"  # asparagus
+  - "Borage"  # borage
+  - "Millet"  # millet_sorghum
+  - "Rosemary"  # rosemary
+  - "Squash"  # pumpkin_squash_gourd
+  - "Thyme"  # thyme
+  - "Camelina"  # camelina
+  - "Coriander"  # coriander
+  - "Basil"  # basil
+  - "Mint"  # mints_peppermint
+  - "Quinoa"  # quinoa
+  - "Rocket"  # rocket_arugula
+  - "Soya Bean"  # soy_soybeans
+  - "Calabrese"  # broccoli
+  - "Cucumbers"  # cucumber_pickle
+  - "Shallot"  # shallot
 
 exclude:
-  - "4.0"  # Apples
-  - "5.0"  # Arable Habitat
-  - "6.0"  # Arable Silage (Grass)
-  - "17.0"  # Blackberries
-  - "18.0"  # Blackcurrants
-  - "19.0"  # Blueberries
-  - "20.0"  # Bog
-  - "25.0"  # Building
-  - "36.0"  # Cherries
-  - "43.0"  # Daffodils
-  - "44.0"  # Designated Habitat
-  - "45.0"  # Environmental Management Of Arable Fallow
-  - "46.0"  # Extensively Grazed Pasture
-  - "47.0"  # Fallow
-  - "49.0"  # Farmyard
-  - "53.0"  # Foliage
-  - "55.0"  # Forestry
-  - "58.0"  # Forestry Eligible
-  - "60.0"  # Forestry ESB Corridor Eligible
-  - "62.0"  # Forestry Ineligible
-  - "63.0"  # Forestry Pre-2009
-  - "64.0"  # Forestry Setaside
-  - "67.0"  # Glasshouse
-  - "68.0"  # Gooseberries
-  - "69.0"  # Grapes
-  - "71.0"  # Grass Year 1
-  - "72.0"  # Grass Year 1 (MSS Eco-Scheme)
-  - "73.0"  # Grass Year 1 (MSS Measure)
-  - "74.0"  # Grass Year 1 (MSS)
-  - "75.0"  # Grass Year 2
-  - "76.0"  # Grass Year 2 (MSS)
-  - "77.0"  # Grass Year 3
-  - "78.0"  # Grass Year 3 (MSS)
-  - "79.0"  # Grass Year 4
-  - "80.0"  # Grass Year 4 (MSS)
-  - "81.0"  # Grass Year 5
-  - "82.0"  # Grass Year 5 (MSS)
-  - "83.0"  # Grassmeal
-  - "84.0"  # Habitat
-  - "87.0"  # Inactive
-  - "90.0"  # Lake / Waterway / Pond
-  - "94.0"  # Linnet Habitat
-  - "97.0"  # Low Input Grassland
-  - "98.0"  # Low Input Peat Grassland
-  - "99.0"  # Low Input Permanent Pasture
-  - "103.0"  # Management of Environmental Fallow (horticulture)
-  - "104.0"  # Management of intensive grassland next to a watercourse
-  - "107.0"  # Miscanthus Sinensis
-  - "110.0"  # Nursery
-  - "116.0"  # Orchard
-  - "117.0"  # Other cut flower / bulb crops
-  - "124.0"  # Permanent Pasture
-  - "125.0"  # Permanent Pasture (MSS Eco-Scheme 2023)
-  - "126.0"  # Permanent Pasture (MSS Measure)
-  - "127.0"  # Permanent Pasture (MSS)
-  - "130.0"  # Plums
-  - "138.0"  # Raspberries
-  - "141.0"  # Redcurrants
-  - "142.0"  # Reed Canary Grass
-  - "144.0"  # Riparian Buffer Zone - Arable
-  - "145.0"  # Riparian Buffer Zone - Grassland
-  - "146.0"  # Riparian Zone
-  - "148.0"  # Rocky Outcrop
-  - "152.0"  # Scrub
-  - "154.0"  # Short Rotation Coppice
-  - "164.0"  # Traditional Hay Meadow
-  - "165.0"  # Tree belts for ammonia capture from farmyards
-  - "170.0"  # Unknown
-  - "174.0"  # Wild Bird Cover
-  - "175.0"  # Willow
-  - "176.0"  # Winter Bird Food Plot
-  - "177.0"  # Woodland
+  - "Permanent Pasture"  # pasture_meadow_grassland_grass
+  - "Extensively Grazed Pasture"  # pasture_meadow_grassland_grass
+  - "Low Input Grassland"  # pasture_meadow_grassland_grass
+  - "Low Input Permanent Pasture"  # pasture_meadow_grassland_grass
+  - "Riparian Buffer Zone - Grassland"  # pasture_meadow_grassland_grass
+  - "Forestry Eligible"  # tree_wood_forest
+  - "Traditional Hay Meadow"  # pasture_meadow_grassland_grass
+  - "Grass Year 1"  # temporary_grass
+  - "Wild Bird Cover"  # not_known_and_other
+  - "Grass Year 2"  # temporary_grass
+  - "Winter Bird Food Plot"  # not_known_and_other
+  - "Grass Year 5"  # temporary_grass
+  - "Grass Year 4"  # temporary_grass
+  - "Grass Year 3"  # temporary_grass
+  - "Riparian Buffer Zone - Arable"  # not_known_and_other
+  - "Designated Habitat"  # not_known_and_other
+  - "Orchard"  # orchards_fruits
+  - "Fallow"  # fallow_land_not_crop
+  - "Permanent Pasture (MSS Measure)"  # pasture_meadow_grassland_grass
+  - "Permanent Pasture (MSS)"  # pasture_meadow_grassland_grass
+  - "Management of intensive grassland next to a watercourse"  # pasture_meadow_grassland_grass
+  - "Environmental Management Of Arable Fallow"  # fallow_land_not_crop
+  - "Low Input Peat Grassland"  # pasture_meadow_grassland_grass
+  - "Arable Silage (Grass)"  # pasture_meadow_grassland_grass
+  - "Riparian Zone"  # not_known_and_other
+  - "Grass Year 1 (MSS Measure)"  # temporary_grass
+  - "Grass Year 1 (MSS)"  # temporary_grass
+  - "Willow"  # willows_osiers
+  - "Grass Year 2 (MSS)"  # temporary_grass
+  - "Miscanthus Sinensis"  # miscanthus_silvergrass
+  - "Tree belts for ammonia capture from farmyards"  # tree_wood_forest
+  - "Short Rotation Coppice"  # tree_wood_forest
+  - "Foliage"  # tree_wood_forest
+  - "Grass Year 3 (MSS)"  # temporary_grass
+  - "Nursery"  # nurseries_nursery
+  - "Apples"  # apples
+  - "Building"  # not_known_and_other
+  - "Permanent Pasture (MSS Eco-Scheme 2023)"  # pasture_meadow_grassland_grass
+  - "Daffodils"  # narcissus_daffodil
+  - "Bog"  # not_known_and_other
+  - "Glasshouse"  # greenhouse_foil_film
+  - "Forestry ESB Corridor Eligible"  # tree_wood_forest
+  - "Other cut flower / bulb crops"  # unspecified_flowers_ornamental_plants
+  - "Farmyard"  # not_known_and_other
+  - "Habitat"  # not_known_and_other
+  - "Scrub"  # shrubberries_shrubs
+  - "Inactive"  # not_known_and_other
+  - "Raspberries"  # raspberry_raspberries
+  - "Blueberries"  # blueberry
+  - "Arable Habitat"  # arable_crops
+  - "Reed Canary Grass"  # poaceae_grasses
+  - "Blackcurrants"  # blackcurrant_cassis
+  - "Grass Year 1 (MSS Eco-Scheme)"  # temporary_grass
+  - "Rocky Outcrop"  # not_known_and_other
+  - "Woodland"  # tree_wood_forest
+  - "Grass Year 5 (MSS)"  # temporary_grass
+  - "Access Road / Roadways"  # not_known_and_other
+  - "Blackberries"  # blackberry
+  - "Grass Year 4 (MSS)"  # temporary_grass
+  - "Grassmeal"  # temporary_grass
+  - "Farm Road"  # not_known_and_other
+  - "Lake / Waterway / Pond"  # not_known_and_other
+  - "Forestry Setaside"  # tree_wood_forest
+  - "Plums"  # plums
+  - "Management of Environmental Fallow (horticulture)"  # fallow_land_not_crop
+  - "Forestry Ineligible"  # tree_wood_forest
+  - "Forestry"  # tree_wood_forest
+  - "Linnet Habitat"  # not_known_and_other
+  - "Cherries"  # cherry_cherries
+  - "Unknown"  # not_known_and_other
+  - "Recreational Area"  # not_known_and_other
+  - "Grapes"  # vineyards_wine_vine_rebland_grapes
+  - "Quarry"  # not_known_and_other
+  - "Forestry Pre-2009"  # tree_wood_forest
+  - "Gooseberries"  # gooseberry_gooseberries_cranberries
+  - "Loganberries"  # berries_berry_species
+  - "Redcurrants"  # redcurrant
+  - "Gardens"  # kitchen_gardens
+  - "Pears"  # pears
+  - "Christmas Trees"  # other_tree_wood_forest
+  - "Planted Buffer Zone"  # not_known_and_other

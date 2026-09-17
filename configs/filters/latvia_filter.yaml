@@ -1,7 +1,7 @@
 # Class filter used for Latvia (LV) field boundaries.
 # Codes are the Latvian crop:code from the harmonized ftw/harmonized-field-data datasets;
 # English (or Latvian) crop labels shown as comments. Covers both LV editions that share the
-# native Latvian code scheme: lv (2026) and ec_lv (2021, EuroCrops); 185 distinct codes.
+# native Latvian code scheme: lv (years 2015-2026) and ec_lv (2021, EuroCrops); 194 distinct codes.
 #
 # Excluded (background): permanent grassland and pure grass leys sown on arable land,
 # grasses not elsewhere specified, phacelia (grown as cover / nectar / green manure),
@@ -217,3 +217,15 @@ exclude:
   - 940  # Nektāraugi savstarpējos maisījumos vai citur nemin
   - 950  # Fruit trees and berry bushes (excluding strawberries) if BSA species g
   - 952  # Perennial crops not mentioned elsewhere
+  # Codes present only in the earlier lv editions (2015-2025) with no name in the dataset or
+  # source code lists. 619 = "Papuve" (fallow, LAD). The rest are unmapped and, per policy,
+  # treated as background (no crop can be affirmed); all are rare (1-13 records each).
+  - 340  # unmapped source code
+  - 473  # unmapped source code
+  - 619  # Papuve (fallow)
+  - 630  # unmapped source code
+  - 783  # unmapped source code
+  - 784  # unmapped source code
+  - 810  # unmapped source code
+  - 880  # unmapped source code
+  - 910  # unmapped source code

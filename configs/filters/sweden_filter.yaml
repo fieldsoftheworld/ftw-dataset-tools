@@ -1,0 +1,126 @@
+# Class filter used for Sweden (SE) field boundaries. Codes are the Swedish Jordbruksverket
+# grödkod (crop:code); the English HCAT name is shown as a comment. Covers se years 2015-2025;
+# 103 distinct codes. Sweden is grassland-dominated, so much of the area is background.
+#
+# Excluded (background): all pasture, meadow & mowing/grazing grassland on arable and non-arable
+# land, mountain & mosaic pasture, grass hay (forage dryer), forage ryegrass, energy grass, turf;
+# fallow; forest grazing, energy willow (Salix) & poplar, Christmas trees; fruit, berries & nuts;
+# nurseries; green manure; ornamental horticulture; and non-agricultural / biodiversity / admin
+# areas (alvar, wetlands, protection zones, game fields, flowering-field margins, ineligible land,
+# grass-poor land). Four codes (17, 26, 51, 69) are unmapped in the data and the Jordbruksverket
+# code list and, per policy, are treated as background.
+#
+# Notable inclusions: all cereals (incl. mixed grain, green-fodder cereals, perennial wheat/rye),
+# maize; oilseeds (rape, turnip rape, sunflower, mustard, oil radish, flax), hemp, tobacco;
+# legumes & pulses and protein/cereal mixtures; potatoes, sugar & fodder beet; field vegetables,
+# herbs, hops, chicory, kale, asparagus, rhubarb; green fodder; grass & clover grown for seed;
+# strawberries; and other arable crops.
+
+column: ["crop:code", "crop_code"]
+
+include:
+  - "1"  # Barley (autumn)
+  - "2"  # Barley (spring)
+  - "3"  # Oats
+  - "4"  # Wheat (autumn)
+  - "5"  # Wheat (spring)
+  - "6"  # Mixtures of legumes or clover for roughage / silage
+  - "7"  # Rye wheat (autumn)
+  - "8"  # Rye
+  - "9"  # Maize
+  - "10"  # Buckwheat
+  - "11"  # Cereal experiments
+  - "12"  # Mixed grain (cereal mixtures)
+  - "13"  # Mixed grain (cereal / legume mixture), more than 50% cereals
+  - "14"  # Canary seeds
+  - "15"  # Millet
+  - "16"  # Cereals for green fodder / silage
+  - "20"  # Rapeseed (autumn)
+  - "21"  # Rapeseed (spring)
+  - "22"  # Rybs (autumn)
+  - "23"  # Rybs (spring)
+  - "24"  # Sunflower
+  - "25"  # Oil plant experiments
+  - "27"  # Vitsenap
+  - "28"  # Oil radish
+  - "29"  # Triticale (spring)
+  - "30"  # Peas (not canned)
+  - "31"  # Pea for preserving
+  - "32"  # Field beans
+  - "33"  # Sweet lupines
+  - "34"  # Protein crop mixtures (legumes / cereals) *
+  - "35"  # Brown beans
+  - "36"  # Vetch
+  - "37"  # Chickpeas
+  - "38"  # Soybeans (oil plant)
+  - "39"  # Soybeans (fodder plant)
+  - "40"  # Flax oil
+  - "41"  # Flax linen
+  - "42"  # Hemp
+  - "43"  # Other beans
+  - "45"  # Food potatoes
+  - "46"  # Starch potatoes
+  - "47"  # Sugar beet
+  - "48"  # Feed beets
+  - "58"  # Grass seed embankment (annual)
+  - "59"  # Grass seed grass (perennial)
+  - "62"  # Clover seed embankment
+  - "70"  # Strawberry cultivation
+  - "74"  # Vegetable growing (vegetables)
+  - "79"  # Herbs and seed vegetables
+  - "80"  # Green fodder
+  - "86"  # Ineligible crop (only for compensation in organic production)
+  - "87"  # Other eligible crops (only for compensation in organic production)
+  - "88"  # Other cultivation on arable land ***
+  - "300"  # Fodder marrowstem kale
+  - "302"  # Lucerne
+  - "303"  # Chicory
+  - "305"  # Hops
+  - "306"  # Quinoa
+  - "307"  # Spelt
+  - "308"  # Sweet clover
+  - "309"  # Tobacco
+  - "311"  # Fresh potatoes
+  - "312"  # Asparagus
+  - "313"  # Rhubarb
+  - "315"  # Mixed grain (cereal mixtures) (autumn)
+  - "316"  # Wheat (perennial)
+  - "317"  # Rye (perennial)
+
+exclude:
+  - "17"  # (unmapped source code)
+  - "26"  # (unmapped source code)
+  - "49"  # Mowing and grazing on arable land with a hay crop that is not approved for environmental compensation and compensation for organic production
+  - "50"  # Mowing and grazing on arable land
+  - "51"  # (unmapped source code)
+  - "52"  # Pasture (not arable)
+  - "53"  # Mowing meadow (does not go)
+  - "54"  # Forest grazing
+  - "55"  # Mountain pasture that does not entitle to farm support and compensation suppor
+  - "56"  # Alvar
+  - "57"  # Haymaking in the field (contract with forage dryer)
+  - "60"  # Fallow
+  - "61"  # Mountain pasture that entitles to farm support and compensation support
+  - "63"  # Energy grass
+  - "65"  # Salix willow
+  - "66"  # Custom protection zones
+  - "67"  # Poplar
+  - "68"  # Hybrid poplar
+  - "69"  # (unmapped source code)
+  - "71"  # Other berry cultivation
+  - "72"  # Fruit growing
+  - "73"  # Nut cultivation
+  - "77"  # Protection zone against watercourses
+  - "78"  # Nurseries with cultivation of permanent crops
+  - "81"  # Green manure
+  - "82"  # Wetland
+  - "83"  # Christmas tree cultivation
+  - "85"  # Horticulture (excluding vegetables, fruit or berries)
+  - "89"  # Mosaic pasture
+  - "90"  # Grass-poor lands
+  - "95"  # Pasture and hay meadow during restoration
+  - "301"  # Westerwolds ryegrass
+  - "304"  # Turf cultivation
+  - "310"  # Game field
+  - "314"  # Other land use that is not eligible
+  - "318"  # Flowering arable field and field margin

@@ -1,351 +1,351 @@
 # Class filter used for Estonia (EE) field boundaries.
-# Estonia has no national crop:code; the class column is the Estonian crop:name (text), so this filter
-# lists crop NAMES. Excluded are classes that are not open arable fields: permanent grassland/pasture,
-# pure/forage grass & grazing, orchards, fruit & nut trees, berries, vineyards, ornamentals & nurseries,
-# greenhouse / protected veg, fallow, mushroom cultivation, willow, and grazing outside agricultural land.
-# Notable inclusions: cereals, legumes (incl. clover/lucerne/melilot/trefoil/N-fixing forage leys),
-# oilseeds, potatoes, beet, field vegetables, herbs/medicinal, flax, hemp, hops, strawberries, and named
-# grass-seed varieties. Pure/forage grass and permanent grass are background.
-# Covers ee years 2016-2024. Values are Estonian crop:name from the harmonized ftw/harmonized-field-data
-# ee datasets; English HCAT names shown as comments where available.
+# Keyed on crop:code (the zero-padded Estonian crop code; 1:1 with crop:name). The English HCAT
+# name (or the Estonian crop:name) is shown as a comment. Covers ee years 2016-2024.
+# Excluded are classes that are not open arable fields: permanent grassland/pasture, pure/forage
+# grass & grazing, orchards, fruit & nut trees, berries, vineyards, ornamentals & nurseries,
+# greenhouse / protected veg, fallow, mushroom cultivation, willow, and grazing outside
+# agricultural land. Notable inclusions: cereals, legumes (incl. clover/lucerne/melilot/trefoil/
+# N-fixing forage leys), oilseeds, potatoes, beet, field vegetables, herbs/medicinal, flax, hemp,
+# hops, strawberries, and named grass-seed varieties. Pure/forage grass and permanent grass are
+# background.
 
-column: ["crop:name", "crop_name"]
+column: ["crop:code", "crop_code"]
 
 include:
-  - 'N siduv heint. ja N siduv põllumaj. kult. segu (N siduvaid kult. üle 50%, segus valdavalt heint.)'  # Mix of nitrogen-binding grasses and nitrogen-binding cr
-  - 'N siduv heint. ja kõrreliste segu (N siduvaid heintaimi üle 50%, kõrrelisi heintaimi alla 50%)'  # Mix of nitrogen-binding grasses and graminoids (over 50
-  - 'N siduv heint. ja muu põllumaj. kult. segu (N siduvaid heint. üle 50%, muid kultuure alla 50%)'  # Mix of nitrogen-binding grasses and other crops (over 5
-  - 'N siduv heint. segu (N siduvaid heintaimi üle 50%, teisi liblikõielisi heintaimi alla 50%)'  # Mix of nitrogen-binding grasses (over 50% nitrogen-bind
-  - 'N siduvate kaunviljade segu (N siduvaid kaunvilju segus üle 50%)'  # Mix of nitrogen-binding pulses (pulses over 50%)
-  - 'Sangaste rukis allakülviga, v.a liblikõielise allakülviga'  # Rye of Sangaste with sowing except for sowing of legume
-  - 'Sangaste rukis allakülvita'  # Sangaste rye
-  - 'Sangaste rukis liblikõieliste allakülviga'  # Rye ""Sangaste"" undersown with legumes
-  - 'aas-rebasesaba "Haljas"'  # Meadow foxtail "Haljas"
-  - 'aed-apteegitill'  # garden fennel
-  - 'aedhernes'  # Green peas
-  - 'aedkoriander'  # garden coriander
-  - 'aedmaasikad avamaal või madala katte all'  # Strawberries (open field or under low cover)
-  - 'aedpetersell'  # garden parsley
-  - 'aedtill'  # Dill
-  - 'aeduba'  # kidney bean
-  - 'aniis, harilik'  # aniseed common
-  - 'harakputk, aed-'
-  - 'harilik esparsett (100% esparsetti)'  # Common sainfoin (100%)
-  - 'harilik esparsett (esparsetti 50-80%, teisi heintaimi 20-50%)'  # common asparagus (asparagus 50-80% other grasses 20-50%
-  - 'harilik esparsett (vähemalt 80% esparsetti, kuni 20% heintaimi)'  # Common sainfoin (at least 80% sainfoin up to 20% grasse
-  - 'harilik kanep'  # cannabis
-  - 'harilik lutsern (100% lutsern)'
-  - 'harilik lutsern (100% lutserni)'  # Lucerne (100%)
-  - 'harilik lutsern (lutserni 50-80%, teisi heintaimi 20-50%)'  # alfalfa (alfalfa 50-80% other grasses 20-50%)
-  - 'harilik lutsern (vähemalt 80% lutserni, kun 20% heintaimi)'  # Lucerne (at least 80% alfalfa 20% grasses)
-  - 'harilik nõiahammas (100% nõiahammast)'  # Birdsfoot trefoil (100%)
-  - 'harilik nõiahammas (nõiahammast 50-80%, teisi heintaimi 20-50%)'  # common trefoil (50-80% of witch tooth 20-50% other gras
-  - 'harilik nõiahammas (vähemalt 80% nõiahammast, kuni 20% heintaimi)'
-  - 'harilik sibul "Jõgeva 3"'  # Onion "Jõgeva 3"
-  - 'harilik sibul (söögisibul)'  # onion (onion)
-  - 'harilik ussikeel (100% ussikeelt)'  # Viper's bugloss (100%)
-  - 'hiina kapsas'
-  - 'humal'  # hops
-  - 'humallutsern (100% lutserni)'  # hop alfalfa (100% alfalfa)
-  - 'ida-kitsehernes (100% ida-kitsehernest)'  # Eastern goat pea (100% eastern goat pea)
-  - 'ida-kitsehernes (vähemalt 80% ida-kitsehernest, kuni 20% heintaimi)'  # Fodder galega (at least 80% galega up to 20% grasses)
-  - 'iisop, harilik'
-  - 'juurseller'  # celery root
-  - 'jääsalat'  # iceberg lettuce
-  - 'kaalikas'  # Rutabaga
-  - 'kaalikas "Kohalik sinine"'  # Rutabaga "Kohalik sinine"
-  - 'kabatšokk'  # Zucchini
-  - 'kaer allakülviga, v.a liblikõieliste allakülviga'  # Oats undersown (excl. legumes)
-  - 'kaer allakülvita'  # oats sown
-  - 'kaer liblikõieliste allakülviga'  # Oats undersown with legumes
-  - 'kanep, Bialobrzeskie'  # Hemp Bialobrzeskie
-  - 'kanep, CFX-2'  # Hemp CFX-2
-  - 'kanep, CRS-1'
-  - 'kanep, Earlina 8 FC'
-  - 'kanep, Estica'  # Hemp Estica
-  - 'kanep, Fibror 79'
-  - 'kanep, Finola'  # Hemp Finola
-  - 'kanep, Fiona'
-  - 'kanep, Futura 75'
-  - 'kanep, Henola'  # Cannabis Heinola
-  - 'kanep, Loja'  # Hemp Loja
-  - 'kanep, Mara 21'
-  - 'kanep, Santhica 27'
-  - 'kanep, Secuieni Jubileu'
-  - 'kanep, Tiborszallasi'  # cannabis Tiborszallasi
-  - 'kanep, Uso - 31'  # cannabis Uso - 31
-  - 'kapsasrohi, must'  # Black mustard
-  - 'kapsasrohi, sarepta'  # Brown mustard
-  - 'kartul "Ando"'  # potato "Ando"
-  - 'kartul "Endla"'  # Potato "Endla"
-  - 'kartul "Jõgeva kollane"'  # Potato "Jõgeva kollane"
-  - 'kartul "Väike verev"'  # Potato "Väike verev"
-  - 'kartul v.a "Ando"'  # Potato (excl. "Ando")
-  - 'kassinaeris, mets-'  # Malva sylvestris
-  - 'kaunviljade segu'  # Mixture of legumes
-  - 'keerispea allakülviga v.a liblikõieliste allakülviga'  # Phacelia tanacetifolia undersown (excl. legumes)
-  - 'keerispea allakülvita'  # Phacelia tanacetifolia
-  - 'keerispea liblikõieliste allakülviga'  # Phacelia tanacetifolia undersown with legumes
-  - 'kikerhernes'  # chickpeas
-  - 'kikkaputk, harilik'  # Garden angelica
-  - 'kiulina'  # Fibre flax
-  - 'kollane mesikas (100% mesikat)'  # yellow melilot (100% melilot)
-  - 'kollane mesikas (mesikat 50-80%, teisi heintaimi 20-50%)'  # yellow melilot (melilot 50-80% other grasses 20-50%)
-  - 'kollane mesikas (vähemalt 80% mesikat, kuni 20% heintaimi)'  # yellow melilot (at least 80% melilot up to 20% grasses)
-  - 'kuningakepp, kaheaastane'  # Common evening-primrose
-  - 'kurgirohi, harilik'  # Borage
-  - 'kuumaasikad avamaal või madala katte all'  # strawberries in the open or under low cover
-  - 'kõrvits'  # pumpkin
-  - 'köögivili väikestel pindadel'  # Fresh vegetables grown in small area (open field)
-  - 'köömen'  # Caraway
-  - 'küüslauk'  # garlic
-  - 'lambalääts, põld-'
-  - 'lavendel, tähk-'  # lavender star
-  - 'lehtkapsas'  # kale
-  - 'lehtpeet'  # Leaf beet (chard)
-  - 'lehtsalat'  # lettuce
-  - 'liblikõieliste ja kõrreliste segu (30-80% liblikõielisi)'  # mixture of legumes and grasses (30-80% legumes)
-  - 'liblikõieliste ja muude põllumajanduskultuuride segu (30-80% liblikõielisi)'  # Mix of legumes and other crops (30-80% legumes)
-  - 'liivsinep, võõr-'  # mustard foreign
-  - 'lillkapsas'  # Cauliflower
-  - 'lääts'  # lentil
-  - 'maapirn'  # Jerusalem artichoke
-  - 'maarjaohakas, harilik'  # Milk thistle
-  - 'maguslupiin'  # Sweet lupin
-  - 'mais'  # Grain maize
-  - 'mesiputk'  # Sweet Cicely
-  - 'minimais'  # Baby corn
-  - 'mitmeliigiline väike põld'  # Multi-species small field
-  - 'monarda, sidrun-'  # Lemon beebalm
-  - 'moon (magun)'
-  - 'mugulsibul'
-  - 'mustköömen, aed-'
-  - 'mustköömen, türgi'
-  - 'mustrõigas'  # patterned radish
-  - 'muu harilik sibul (söögisibul)'  # Other common onion
-  - 'muu kaalikas'  # Other rutabaga
-  - 'muu kapsas'  # Other cabbage
-  - 'muu kartul'  # Other potato
-  - 'muu kaunvili'  # other pulses
-  - 'muu köögivili'  # other vegetables
-  - 'muu põldhernes (100% põldhernest)'  # Other field pea (100%)
-  - 'muu põldhernes tugikultuuriga (vähemalt 70% põldhernest)'  # Other field pea with support crop (at least 70%)
-  - 'muu põlduba'  # Other field bean
-  - 'muu ravim- ja maitsetaim'  # Other medicinal and culinary plant
-  - 'muu rühvelkultuur'  # Other cultures
-  - 'muu söödapeet'  # Other fodder beet
-  - 'muu tehniline kultuur'  # other technical culture
-  - 'muu teravili allakülviga, v.a liblikõieliste allakülviga'  # other cereals sown with the exception of legumes
-  - 'muu teravili allakülvita'  # Other cereals
-  - 'muu teravili liblikõieliste allakülviga'  # Other cereals with legumes
-  - 'muu valge peakapsas'  # Other white head cabbage
-  - 'muu õli- ja kiukultuur'  # Other oil and fibre crop
-  - 'muud liblikõielised (100% liblikõielisi)'  # Other legumes (100%)
-  - 'muud liblikõielised (vähemalt 80% liblikõielisi, kuni 20% heintaimi)'  # other legumes (at least 80% legumes up to 20% grasses)
-  - 'mädarõigas'  # horseradish
-  - 'mädarõigas, aed-'  # Garden horseradish
-  - 'münt, pikaleheline'
-  - 'münt, rohe-'  # Spearmint
-  - 'münt, vääris-'  # Apple mint
-  - 'münt, ümaraleheline'  # mint round leaf
-  - 'naeris'  # turnip
-  - 'naistenõges, harilik'  # catnip
-  - 'naistepuna, liht-'  # Perforate St Johns-wort
-  - 'neitsikummel, lõhnav'
-  - 'nuikapsas'
-  - 'nuikapsas (koolrabi)'  # kohlrabi
-  - 'nõges, kõrve-'  # Stinging nettle
-  - 'pastinaak'  # parsnips
-  - 'piparmünt'  # peppermint
-  - 'poolsuhkrupeet'  # Semi-sugar beet
-  - 'porgand'  # carrots
-  - 'porrulauk'  # Leek
-  - 'punane aruhein "Jõgeva 70"'  # Red fescue "Jõgeva 70"
-  - 'punane peakapsas'  # Red head cabbage
-  - 'punane ristik (100% ristikut)'  # red clover (100% clover)
-  - 'punane ristik (ristikut 50-80%, teisi heintaimi 20-50%)'  # red clover (clover 50-80% other grasses 20-50%)
-  - 'punane ristik (vähemalt 80% ristikut, kuni 20% heintaimi)'  # Red clover (at least 80% clover up to 20% grasses)
-  - 'punapeet (söögipeet)'  # beetroot (beetroot)
-  - 'pune, harilik'  # oregano
-  - 'päevalill'  # Sunflower
-  - 'põld-hiirehernes (talivikk)'  # Hairy vetch (winter)
-  - 'põldhernes "Kirke" (100% põldhernest "Kirke")'  # Field pea "Kirke" (100%)
-  - 'põldhernes "Kirke" tugikultuuriga (kuni 70% põldhernest "Kirke")'  # Field pea "Kirke" with support crop (up to 70%)
-  - 'põldhernes "Kirke" tugikultuuriga (vähemalt 70% põldhernest "Kirke")'  # Field pea "Kirke" with support crop (at least 70%)
-  - 'põldhernes "Mehis" (100% põldhernest "Mehis")'  # field pea "Mehis" (100% field pea "Mehis")
-  - 'põldhernes "Mehis" tugikultuuriga (kuni 70% põldhernes "Mehis")'  # field pea "Mehis" "support for culture (up to 70% field
-  - 'põldhernes "Mehis" tugikultuuriga (vähemalt 70% põldhernes "Mehis")'  # Field pea "Mehis" (at least 70%) with support crop
-  - 'põldhernes, v.a "Mehis" (100% põldhernest)'  # Field pea (100%)
-  - 'põldhernes, v.a "Mehis" tugikultuuriga (vähemalt 70% põldhernest)'  # Field pea (at least 70%) with support crop
-  - 'põlduba "Helbi"'  # Field bean ""Helbi""
-  - 'põlduba "Jõgeva"'  # field bean "Jõgeva" ""
-  - 'põlduba, v.a "Jõgeva"'  # Broad bean (excl. ""Jgeva"")
-  - 'rabarber'  # rhubarb
-  - 'raudrohi, harilik'  # yarrow
-  - 'ravim- ja maitsetaimed väikestel pindadel'  # Medicinal and culinary plants grown in small area
-  - 'ravim- ja maitsetaimede segu muude põllumajanduskultuuridega'  # Medicinal and culinary plants mixed with other crops
-  - 'redis'  # radish
-  - 'ristik (100% ristikut), v.a punane, roosa ja valge ristik'  # Clover (100%) excl. red alsike and white
-  - 'ristik (50-80% ristikut, teisi heintaimi 20-50%), v.a punane, roosa ja valge ristik'  # Clover (50-80% clover 20-50% other grasses) excl. red a
-  - 'ristik (vähemalt 80% ristikut, kuni 20% heintaimi), v.a punane, roosa ja valge ristik'  # Clover (at least 80% clover up to 20% grasses) excl. re
-  - 'roosa ristik (100% ristikut)'  # Alsike clover (100%)
-  - 'roosa ristik (ristikut 50-80%, teisi heintaimi 20-50%)'  # Alsike clover (clover 50-80% other grasses 20-50%)
-  - 'roosa ristik (vähemalt 80% ristikut, kuni 20% heintaimi)'  # Alsike clover (at least 80% clover up to 20% grasses)
-  - 'rukis, v.a sangaste rukis, allakülviga, v.a liblikõieliste allakülviga'  # Rye undersown (excl. legumes)
-  - 'rukis, v.a sangaste rukis, allakülvita'  # Rye
-  - 'rukis, v.a sangaste rukis, liblikõieliste allakülviga'  # Rye undersown with legumes
-  - 'saialill, harilik'  # English marigold
-  - 'salat'
-  - 'salatsigur'
-  - 'salvei, aed-'  # Garden sage
-  - 'segavili/segatis'  # Cereal mixture
-  - 'segavili/segatis N siduvate kaunviljadega (N siduvaid kaunvilju segus üle 50%)'  # Cereal mixture with nitrogen-binding pulses (pulses ove
-  - 'sidrunmeliss'  # lemon balm
-  - 'sigur, harilik'  # chicory
-  - 'siilkübar, purpur-'
-  - 'sinerõigas, harilik'  # Common oil radish
-  - 'sojauba'  # Soybean
-  - 'sorgo'  # sorghum
-  - 'spargel'  # asparagus
-  - 'spargelkapsas (brokkoli)'  # Broccoli
-  - 'speltanisu allakülviga, v.a liblikõieliste allakülviga'  # Spelt with the exception of legumes
-  - 'speltanisu allakülvita'  # Spelt
-  - 'speltanisu liblikõieliste allakülviga'  # Spelt with legumes
-  - 'spinat'
-  - 'suhkrumais'  # sweet corn
-  - 'suhkrupeet'
-  - 'suvinisu allakülviga, v.a liblikõieliste allakülviga'  # Summer wheat undersown (excl. legumes)
-  - 'suvinisu allakülvita'  # Summer wheat
-  - 'suvinisu liblikõieliste allakülviga'  # Summer wheat undersown with legumes
-  - 'suvioder allakülviga, v.a liblikõieliste allakülviga'  # Summer barley undersown (excl. legumes)
-  - 'suvioder allakülvita'  # Summer barley
-  - 'suvioder liblikõieliste allakülviga'  # Summer barley undersown with legumes
-  - 'suviraps allakülviga, v.a liblikõieliste allakülviga'  # Summer oilseed rape with the exception of leguminous cr
-  - 'suviraps allakülvita'  # Summer oilseed rape
-  - 'suviraps liblikõielise allakülviga'  # Summer rape with leguminous sowing
-  - 'suvirüps allakülviga, v.a liblikõieliste allakülviga'
-  - 'suvirüps allakülvita'  # Summer rape
-  - 'suvirüps liblikõieliste allakülviga'  # Summer rape undersown with legumes
-  - 'suvitritikale allakülviga, v.a liblikõieliste allakülviga'  # Spring triticale undersown (excl. legumes)
-  - 'suvitritikale allakülvita'  # Summer triticale
-  - 'suvitritikale liblikõeliste allakülviga'
-  - 'suvitritikale liblikõieliste allakülviga'  # Summer triticale with sown legumes
-  - 'suvivikk'  # Common vetch Summer
-  - 'söödakapsas'  # fodder cabbage
-  - 'söödapeet'  # fodder beet
-  - 'söögipeet'
-  - 'südamerohi, veiste-'
-  - 'talinisu allakülviga, v.a liblikõieliste allakülviga'  # Winter wheat undersown (excl. legumes)
-  - 'talinisu allakülvita'  # Winter wheat
-  - 'talinisu liblikõieliste allakülviga'  # Winter wheat undersown with legumes
-  - 'talioder allakülviga, v.a liblikõieliste allakülviga'  # Winter barley undersown (excl. legumes)
-  - 'talioder allakülvita'  # Winter barley
-  - 'talioder liblikõieliste allakülviga'  # winter barley with leguminous sowing
-  - 'taliraps allakülviga, v.a liblikõieliste allakülviga'  # winter oilseed rape with the exception of legumes
-  - 'taliraps allakülvita'  # Winter oilseed rape
-  - 'taliraps liblikõielise allakülviga'
-  - 'taliraps liblikõieliste allakülviga'  # winter oilseed rape with legumes
-  - 'talirüps allakülviga, v.a liblikõieliste allakülviga'  # winter rape with sowing other than leguminous sowing
-  - 'talirüps allakülvita'  # Winter turnip rape
-  - 'talirüps liblikõieliste allakülviga'  # Winter oilseed rape
-  - 'talisibul'
-  - 'talitritikale allakülviga, v.a liblikõieliste allakülviga'  # Winter triticale with the exception of leguminous crops
-  - 'talitritikale allakülvita'  # Winter triticale
-  - 'talitritikale liblikõieliste allakülviga'  # Winter triticale undersown with legumes
-  - 'tatar allakülviga, v.a liblikõieliste allakülviga'  # Buckwheat undersown (excl. legumes)
-  - 'tatar allakülvita'  # buckwheat
-  - 'tatar liblikõieliste allakülviga'  # Buckwheat undersown with legumes
-  - 'teekummel'  # chamomile
-  - 'teeleht, suur'  # tea leaf large
-  - 'teraviljade segu allakülviga, v.a liblikõieliste allakülviga'  # Cereal mixture undersown (excl. legumes)
-  - 'teraviljade segu allakülvita'  # mixed grains
-  - 'teraviljade segu liblikõieliste allakülviga'  # Mixed grains undersown with legumes
-  - 'tondipea, moldaavia'  # Moldavian dragonhead
-  - 'tritikale allakülviga, v.a liblikõieliste allakülviga'
-  - 'tritikale allakülvita'
-  - 'tritikale liblikõieliste allakülviga'
-  - 'tuder'  # Camelina
-  - 'vaak, aed-'  # Elecampane
-  - 'valge mesikas (100% mesikat)'  # White melilot (100%)
-  - 'valge mesikas (mesikat 50-80%, teisi heintaimi 20-50%)'  # white melilot (honeysuckle 50-80% other grasses 20-50%)
-  - 'valge mesikas (vähemalt 80% mesikat, kuni 20% heintaimi)'  # white melilot (at least 80% melilot up to 20% grasses)
-  - 'valge peakapsas'  # white head cabbage
-  - 'valge ristik "Jõgeva 4" (100% ristikut)'  # white clover (100% clover)
-  - 'valge ristik "Jõgeva 4" segus aasnurmikaga (mõlemat 50%)'  # White clover "Jgeva 4" mixed with Kentucky bluegrass (b
-  - 'valge ristik "Jõgeva 4" segus muude põllumaj. kultuuridega (ristik üle 50%, muid kultuure alla 50%)'  # white clover "Jõgeva 4" "in a mixture with other agricu
-  - 'valge ristik (100% ristikut)'  # white clover (100% clover)
-  - 'valge ristik (ristikut 50-80%, teisi heintaimi 20-50%)'  # White clover (50-80% clover 20-50% other grasses)
-  - 'valge ristik (vähemalt 80% ristikut, kuni 20% heintaimi)'  # white clover (at least 80% clover up to 20% grasses)
-  - 'valge sinep allakülviga, v.a liblikõieliste allakülviga'  # white mustard with the exception of leguminous crops
-  - 'valge sinep allakülvita'  # white mustard without sowing
-  - 'valge sinep liblikõieliste allakülviga'  # White mustard with sown legumes
-  - 'valkjas mesiohakas (100% mesiohakat)'  # Glandular globe thistle
-  - 'varajane kartul'  # early potatoes
-  - 'varsseller'  # celery
-  - 'vägihein, kõrge'
-  - 'võilill, harilik'  # Dandelion common
-  - 'vürtsköömen, harilik'  # Common cumin
-  - 'õlilina'  # Linseed (oil flax)
-  - 'õlirõigas'  # Oil radish
+  - "0001"  # garden fennel
+  - "0002"  # Green peas
+  - "0003"  # garden coriander
+  - "0004"  # Strawberries (open field or under low cover)
+  - "0005"  # garden parsley
+  - "0006"  # Dill
+  - "0007"  # kidney bean
+  - "0008"  # aniseed common
+  - "0016"  # Common sainfoin (100%)
+  - "0017"  # common asparagus (asparagus 50-80% other grasses 20-50%)
+  - "0018"  # cannabis
+  - "0019"  # Lucerne (100%)
+  - "0020"  # alfalfa (alfalfa 50-80% other grasses 20-50%)
+  - "0021"  # Lucerne (at least 80% alfalfa 20% grasses)
+  - "0022"  # Birdsfoot trefoil (100%)
+  - "0023"  # common trefoil (50-80% of witch tooth 20-50% other grasses)
+  - "0026"  # onion (onion)
+  - "0027"  # Viper's bugloss (100%)
+  - "0028"  # hops
+  - "0029"  # hop alfalfa (100% alfalfa)
+  - "0030"  # Eastern goat pea (100% eastern goat pea)
+  - "0031"  # Fodder galega (at least 80% galega up to 20% grasses)
+  - "0032"  # iceberg lettuce
+  - "0034"  # celery root
+  - "0035"  # Rutabaga
+  - "0036"  # Zucchini
+  - "0037"  # Oats undersown (excl. legumes)
+  - "0038"  # oats sown
+  - "0039"  # Oats undersown with legumes
+  - "0040"  # Hemp Finola
+  - "0041"  # Cannabis Heinola
+  - "0042"  # cannabis Tiborszallasi
+  - "0043"  # cannabis Uso - 31
+  - "0044"  # Black mustard
+  - "0045"  # Brown mustard
+  - "0047"  # potato "Ando"
+  - "0048"  # Potato (excl. "Ando")
+  - "0050"  # Malva sylvestris
+  - "0051"  # Mixture of legumes
+  - "0052"  # Phacelia tanacetifolia undersown (excl. legumes)
+  - "0053"  # Phacelia tanacetifolia
+  - "0054"  # Phacelia tanacetifolia undersown with legumes
+  - "0055"  # chickpeas
+  - "0056"  # Garden angelica
+  - "0057"  # yellow melilot (100% melilot)
+  - "0058"  # yellow melilot (melilot 50-80% other grasses 20-50%)
+  - "0059"  # yellow melilot (at least 80% melilot up to 20% grasses)
+  - "0060"  # Fresh vegetables grown in small area (open field)
+  - "0061"  # Caraway
+  - "0063"  # pumpkin
+  - "0064"  # Common evening-primrose
+  - "0066"  # Borage
+  - "0068"  # strawberries in the open or under low cover
+  - "0069"  # garlic
+  - "0070"  # lentil
+  - "0071"  # lavender star
+  - "0072"  # kale
+  - "0073"  # lettuce
+  - "0074"  # mixture of legumes and grasses (30-80% legumes)
+  - "0075"  # Mix of legumes and other crops (30-80% legumes)
+  - "0076"  # mustard foreign
+  - "0078"  # Cauliflower
+  - "0079"  # Jerusalem artichoke
+  - "0080"  # Milk thistle
+  - "0081"  # horseradish
+  - "0083"  # Grain maize
+  - "0085"  # Sweet Cicely
+  - "0086"  # Baby corn
+  - "0087"  # mint round leaf
+  - "0091"  # patterned radish
+  - "0093"  # Other cabbage
+  - "0094"  # other pulses
+  - "0095"  # other vegetables
+  - "0096"  # Other medicinal and culinary plant
+  - "0097"  # Other cultures
+  - "0098"  # other technical culture
+  - "0099"  # other cereals sown with the exception of legumes
+  - "0100"  # Other cereals
+  - "0101"  # Other cereals with legumes
+  - "0102"  # other legumes (at least 80% legumes up to 20% grasses)
+  - "0105"  # Mix of nitrogen-binding grasses and graminoids (over 50% nit
+  - "0106"  # Mix of nitrogen-binding grasses and other crops (over 50% ni
+  - "0107"  # Mix of nitrogen-binding grasses and nitrogen-binding crops(o
+  - "0108"  # Mix of nitrogen-binding grasses (over 50% nitrogen-binding g
+  - "0109"  # Mix of nitrogen-binding pulses (pulses over 50%)
+  - "0110"  # turnip
+  - "0111"  # catnip
+  - "0112"  # Perforate St Johns-wort
+  - "0113"  # kohlrabi
+  - "0114"  # Linseed (oil flax)
+  - "0115"  # Oil radish
+  - "0118"  # Sunflower
+  - "0121"  # parsnips
+  - "0122"  # peppermint
+  - "0125"  # Hairy vetch (winter)
+  - "0126"  # field pea "Mehis" (100% field pea "Mehis")
+  - "0127"  # field pea "Mehis" "support for culture (up to 70% field pea"
+  - "0128"  # Field pea "Mehis" (at least 70%) with support crop
+  - "0129"  # Field pea (100%)
+  - "0130"  # Field pea (at least 70%) with support crop
+  - "0131"  # field bean "Jõgeva" ""
+  - "0132"  # Broad bean (excl. ""Jgeva"")
+  - "0133"  # Semi-sugar beet
+  - "0134"  # carrots
+  - "0135"  # Leek
+  - "0136"  # red clover (100% clover)
+  - "0137"  # red clover (clover 50-80% other grasses 20-50%)
+  - "0138"  # Red clover (at least 80% clover up to 20% grasses)
+  - "0140"  # beetroot (beetroot)
+  - "0141"  # oregano
+  - "0143"  # rhubarb
+  - "0144"  # yarrow
+  - "0145"  # Medicinal and culinary plants grown in small area
+  - "0146"  # Medicinal and culinary plants mixed with other crops
+  - "0147"  # radish
+  - "0149"  # Alsike clover (100%)
+  - "0150"  # Alsike clover (clover 50-80% other grasses 20-50%)
+  - "0151"  # Alsike clover (at least 80% clover up to 20% grasses)
+  - "0152"  # Rye undersown (excl. legumes)
+  - "0153"  # Rye
+  - "0154"  # Rye undersown with legumes
+  - "0156"  # English marigold
+  - "0157"  # Rye of Sangaste with sowing except for sowing of legumes
+  - "0158"  # Sangaste rye
+  - "0159"  # Rye ""Sangaste"" undersown with legumes
+  - "0160"  # Cereal mixture
+  - "0161"  # Cereal mixture with nitrogen-binding pulses (pulses over 50%
+  - "0162"  # lemon balm
+  - "0163"  # chicory
+  - "0164"  # fodder cabbage
+  - "0165"  # fodder beet
+  - "0168"  # sorghum
+  - "0169"  # asparagus
+  - "0170"  # Broccoli
+  - "0171"  # Spelt with the exception of legumes
+  - "0172"  # Spelt
+  - "0173"  # Spelt with legumes
+  - "0174"  # sweet corn
+  - "0175"  # Summer wheat undersown (excl. legumes)
+  - "0176"  # Summer wheat
+  - "0177"  # Summer wheat undersown with legumes
+  - "0178"  # Summer barley undersown (excl. legumes)
+  - "0179"  # Summer barley
+  - "0180"  # Summer barley undersown with legumes
+  - "0181"  # Summer oilseed rape with the exception of leguminous crops
+  - "0182"  # Summer oilseed rape
+  - "0183"  # Summer rape with leguminous sowing
+  - "0184"  # Summer rape
+  - "0185"  # Summer rape undersown with legumes
+  - "0186"  # Summer triticale
+  - "0187"  # Summer triticale with sown legumes
+  - "0188"  # Common vetch Summer
+  - "0189"  # Winter wheat undersown (excl. legumes)
+  - "0190"  # Winter wheat
+  - "0191"  # Winter wheat undersown with legumes
+  - "0192"  # Winter barley
+  - "0193"  # winter barley with leguminous sowing
+  - "0194"  # winter oilseed rape with the exception of legumes
+  - "0195"  # Winter oilseed rape
+  - "0196"  # winter oilseed rape with legumes
+  - "0197"  # winter rape with sowing other than leguminous sowing
+  - "0198"  # Winter turnip rape
+  - "0199"  # Winter oilseed rape
+  - "0200"  # Winter triticale with the exception of leguminous crops
+  - "0201"  # Winter triticale
+  - "0202"  # Winter triticale undersown with legumes
+  - "0203"  # Buckwheat undersown (excl. legumes)
+  - "0204"  # buckwheat
+  - "0205"  # Buckwheat undersown with legumes
+  - "0206"  # chamomile
+  - "0207"  # tea leaf large
+  - "0208"  # Cereal mixture undersown (excl. legumes)
+  - "0209"  # mixed grains
+  - "0210"  # Mixed grains undersown with legumes
+  - "0212"  # Moldavian dragonhead
+  - "0214"  # Camelina
+  - "0216"  # Elecampane
+  - "0218"  # White melilot (100%)
+  - "0219"  # white melilot (honeysuckle 50-80% other grasses 20-50%)
+  - "0220"  # white melilot (at least 80% melilot up to 20% grasses)
+  - "0221"  # white head cabbage
+  - "0222"  # white clover (100% clover)
+  - "0223"  # White clover "Jgeva 4" mixed with Kentucky bluegrass (both 5
+  - "0224"  # white clover "Jõgeva 4" "in a mixture with other agricultura
+  - "0225"  # white clover (100% clover)
+  - "0226"  # White clover (50-80% clover 20-50% other grasses)
+  - "0227"  # white clover (at least 80% clover up to 20% grasses)
+  - "0228"  # white mustard with the exception of leguminous crops
+  - "0229"  # white mustard without sowing
+  - "0230"  # White mustard with sown legumes
+  - "0232"  # Glandular globe thistle
+  - "0233"  # early potatoes
+  - "0234"  # celery
+  - "0237"  # Dandelion common
+  - "0238"  # Common cumin
+  - "0240"  # Other potato
+  - "0241"  # Other field pea (100%)
+  - "0242"  # Other field bean
+  - "0243"  # Other white head cabbage
+  - "0244"  # Other oil and fibre crop
+  - "0245"  # Clover (50-80% clover 20-50% other grasses) excl. red alsike
+  - "0246"  # Field bean ""Helbi""
+  - "0248"  # Field pea "Kirke" (100%)
+  - "0249"  # Clover (100%) excl. red alsike and white
+  - "0250"  # Other legumes (100%)
+  - "0251"  # Multi-species small field
+  - "0252"  # Potato "Jõgeva kollane"
+  - "0253"  # Other common onion
+  - "0254"  # Hemp Estica
+  - "0259"  # Clover (at least 80% clover up to 20% grasses) excl. red als
+  - "0261"  # Hemp CFX-2
+  - "0262"  # Red fescue "Jõgeva 70"
+  - "0263"  # Other field pea with support crop (at least 70%)
+  - "0264"  # Potato "Endla"
+  - "0265"  # Field pea "Kirke" with support crop (up to 70%)
+  - "0266"  # Other rutabaga
+  - "0267"  # Winter barley undersown (excl. legumes)
+  - "0268"  # Garden sage
+  - "0270"  # Hemp Loja
+  - "0271"  # Rutabaga "Kohalik sinine"
+  - "0272"  # Common oil radish
+  - "0273"  # Onion "Jõgeva 3"
+  - "0274"  # Field pea "Kirke" with support crop (at least 70%)
+  - "0275"  # Sweet lupin
+  - "0276"  # Other fodder beet
+  - "0277"  # Spring triticale undersown (excl. legumes)
+  - "0278"  # Red head cabbage
+  - "0279"  # Meadow foxtail "Haljas"
+  - "0280"  # Common sainfoin (at least 80% sainfoin up to 20% grasses)
+  - "0281"  # Garden horseradish
+  - "0282"  # Leaf beet (chard)
+  - "0283"  # Potato "Väike verev"
+  - "0284"  # Fibre flax
+  - "0286"  # Hemp Bialobrzeskie
+  - "0287"  # Stinging nettle
+  - "0288"  # Apple mint
+  - "0289"  # Lemon beebalm
+  - "0290"  # Spearmint
+  - "0291"  # Soybean
+  - "0292"  # Garden chervil
+  - "0293"  # Alfalfa (100% alfalfa)
+  - "0294"  # Birdsfoot trefoil (at least 80%)
+  - "0295"  # Chinese cabbage
+  - "0296"  # Hyssop
+  - "0297"  # Hemp (CRS-1)
+  - "0298"  # Hemp (Earlina 8 FC)
+  - "0299"  # Hemp (Fibror 79)
+  - "0300"  # Hemp (Fiona)
+  - "0301"  # Hemp (Futura 75)
+  - "0302"  # Hemp (Mara 21)
+  - "0303"  # Hemp (Santhica 27)
+  - "0304"  # Hemp (Secuieni Jubileu)
+  - "0308"  # Lentil
+  - "0310"  # Poppy
+  - "0311"  # Shallot
+  - "0312"  # Black cumin
+  - "0313"  # Turkish black cumin
+  - "0314"  # Long-leaved mint
+  - "0315"  # Scented mayweed
+  - "0316"  # Kohlrabi
+  - "0318"  # Lettuce
+  - "0319"  # Chicory (salad)
+  - "0321"  # Purple coneflower
+  - "0322"  # Spinach
+  - "0323"  # Sugar beet
+  - "0324"  # Spring turnip rape undersown, other than legumes
+  - "0325"  # Spring triticale undersown with legumes
+  - "0326"  # Beetroot
+  - "0327"  # Motherwort
+  - "0328"  # Winter rapeseed undersown with legumes
+  - "0329"  # Winter onion
+  - "0331"  # Triticale undersown, other than legumes
+  - "0332"  # Triticale without undersowing
+  - "0333"  # Triticale undersown with legumes
+  - "0335"  # Great mullein
 
 exclude:
-  - 'Karjatamine väljaspool põllumaj. maad'  # Rough grazings
-  - 'arbuus'  # watermelon
-  - 'aroonia'  # chokeberry
-  - 'astelpaju'  # Sea-buckthorn
-  - 'ebaküdoonia'  # Chaenomeles
-  - 'füüsal'  # Groundcherry
-  - 'hapu kirsipuu'  # Sour cherry
-  - 'hapu kirsipuu sh murelipuu'  # Sour cherry incl. morello cherry
-  - 'haraline ploomipuu (alõtša)'  # Plum tree
-  - 'harilik pihlakas'  # Rowan
-  - 'harilik sarapuu'  # common hazel
-  - 'jõhvikas'  # Cranberry
-  - 'karusmari'  # gooseberry
-  - 'kirsipuu (hapukirss)'
-  - 'kreegipuu'
-  - 'kreegipuu, haraline ploomipuu (alõtša)'
-  - 'kurdlehine kibuvits'  # Kurdish rose
-  - 'kurk'  # cucumber
-  - 'kõrreliste rohumaa (vähemalt 80% kõrrelisi)'  # grassland (at least 80% grasses)
-  - 'lauaviinamarjad'
-  - 'lauaviinamarjad (viinapuu)'  # Table grapes
-  - 'lilled ja ehistaimed (dekoratiivtaimed) avamaal või madala katte all'  # flowers and ornamental plants (ornamental plants) in th
-  - 'lillede segu'  # Mixture of flowers
-  - 'magus kirsipuu'  # sweet cherry tree
-  - 'melon'  # melon
-  - 'murelipuu'  # Morello cherry
-  - 'must leeder'  # Black elder
-  - 'must sõstar'  # black currant
-  - 'mustikas'  # blueberry
-  - 'mustkesa'  # Fallow land (bare land)
-  - 'muu heintaimede segu'  # Other mix of grasses
-  - 'muud kõrrelised (100% kõrrelisi)'  # Other grasses (100% grasses)
-  - 'muud marjapõõsad'  # Other berries
-  - 'muud viljapuud'  # other fruits
-  - 'orashein'  # Elymus grass
-  - 'paju'  # willow
-  - 'paprika'  # paprika
-  - 'pirnipuu'  # pear tree
-  - 'ploomipuu'  # European plum
-  - 'punane ja valge sõstar'
-  - 'punane sõstar'  # redcurrant
-  - 'puukoolid'  # nurseries
-  - 'rohttaimed'  # grasses
-  - 'rukkilill'  # Cornflower
-  - 'seenekasvatus põllumajandusmaal'
-  - 'söödav kuslapuu'  # honeysuckle
-  - 'sööti jäetud maa'  # Fallow land
-  - 'tihashein, harilik'  # Timothy grass
-  - 'tihashein, külgõieline'
-  - 'tomat'  # Tomato
-  - 'toompihlakas'  # Serviceberry (Amelanchier)
-  - 'tšillipipar'  # Chilli pepper
-  - 'vaarikas'  # raspberry
-  - 'valge sõstar'  # White currant
-  - 'veiniviinamarjad'
-  - 'veiniviinamarjad (viinapuu)'  # Wine grapes
-  - 'viinapuu'  # grapes
-  - 'viljapuu- ja marjaaiad väikestel pindadel'  # Fruits and berries in small area
-  - 'õunapuu'  # apple tree
-  - 'üheaastane raihein jm üheaastased heintaimed'  # Annual ryegrass and other annual grasses
+  - "0009"  # watermelon
+  - "0010"  # chokeberry
+  - "0011"  # Sea-buckthorn
+  - "0012"  # Chaenomeles
+  - "0013"  # Groundcherry
+  - "0014"  # Sour cherry incl. morello cherry
+  - "0015"  # Plum tree
+  - "0024"  # Rowan
+  - "0025"  # common hazel
+  - "0033"  # Cranberry
+  - "0046"  # Rough grazings
+  - "0049"  # gooseberry
+  - "0062"  # grassland (at least 80% grasses)
+  - "0065"  # Kurdish rose
+  - "0067"  # cucumber
+  - "0077"  # flowers and ornamental plants (ornamental plants) in the ope
+  - "0082"  # sweet cherry tree
+  - "0084"  # melon
+  - "0088"  # black currant
+  - "0089"  # blueberry
+  - "0090"  # Fallow land (bare land)
+  - "0092"  # Other mix of grasses
+  - "0103"  # Other berries
+  - "0104"  # other fruits
+  - "0116"  # Elymus grass
+  - "0117"  # apple tree
+  - "0119"  # willow
+  - "0120"  # paprika
+  - "0123"  # pear tree
+  - "0124"  # European plum
+  - "0139"  # redcurrant
+  - "0142"  # nurseries
+  - "0148"  # grasses
+  - "0155"  # Cornflower
+  - "0166"  # honeysuckle
+  - "0167"  # Fallow land
+  - "0211"  # Tomato
+  - "0213"  # Chilli pepper
+  - "0215"  # Annual ryegrass and other annual grasses
+  - "0217"  # raspberry
+  - "0231"  # White currant
+  - "0235"  # grapes
+  - "0236"  # Fruits and berries in small area
+  - "0239"  # Other grasses (100% grasses)
+  - "0247"  # Table grapes
+  - "0255"  # Wine grapes
+  - "0256"  # Sour cherry
+  - "0257"  # Morello cherry
+  - "0258"  # Timothy grass
+  - "0260"  # Black elder
+  - "0269"  # Mixture of flowers
+  - "0285"  # Serviceberry (Amelanchier)
+  - "0305"  # Sour cherry
+  - "0306"  # Damson
+  - "0307"  # Damson, cherry plum
+  - "0309"  # Table grapes
+  - "0317"  # Red and white currant
+  - "0320"  # Mushroom growing on agricultural land
+  - "0330"  # Sideflowering skullcap
+  - "0334"  # Wine grapes

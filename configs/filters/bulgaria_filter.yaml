@@ -1,0 +1,15 @@
+# Class filter used for Bulgaria (BG) field boundaries. Bulgaria publishes only a coarse land-use
+# crop:code (5 categories), not a crop type. Codes are the crop:code from the harmonized
+# ftw/harmonized-field-data bg dataset; English land-use names shown as comments. Covers bg years
+# 2021-2025. This is a land-use-level filter, not a crop-type filter: arable land and rice fields
+# are field; greenhouses, courtyards and mixed land use are background.
+column: ["crop:code", "crop_code"]
+
+include:
+  - "010"  # Arable Land
+  - "012"  # Rice fields
+
+exclude:
+  - "011"  # Greenhouses (covered cultivation)
+  - "031"  # Courtyards (residential / homestead plots)
+  - "050"  # Mixed Land Use
