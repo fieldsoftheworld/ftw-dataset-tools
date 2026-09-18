@@ -26,6 +26,8 @@ class TestFromDict:
         # Stage defaults
         assert config.stages.chips.min_coverage == 0.01
         assert config.stages.chips.coverage_batch_size == 2000
+        assert config.stages.chips.min_chip_area == 99.5
+        assert config.stages.chips.km_size == 2.0
         assert config.stages.splits.split_percents == (80, 10, 10)
         assert config.stages.masks.mask_types == [
             "instance",
@@ -49,6 +51,8 @@ class TestFromDict:
                         "min_coverage": 0.5,
                         "drop_border_chips": True,
                         "coverage_batch_size": 500,
+                        "min_chip_area": 0,
+                        "km_size": 5,
                     },
                     "splits": {"split_type": "block3x3", "split_percents": [70, 20, 10]},
                     "masks": {"mask_types": ["semantic_2_class"], "resolution": 5.0},
@@ -75,6 +79,20 @@ class TestFromDict:
         with pytest.raises(ConfigError, match="coverage_batch_size"):
             DatasetConfig.from_dict(
                 {"fields_file": "f.parquet", "stages": {"chips": {"coverage_batch_size": bad}}}
+            )
+
+    @pytest.mark.parametrize("bad", [-1, 101, "most", True])
+    def test_invalid_min_chip_area_raises(self, bad: object) -> None:
+        with pytest.raises(ConfigError, match="min_chip_area"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"chips": {"min_chip_area": bad}}}
+            )
+
+    @pytest.mark.parametrize("bad", [0, -2, "big", True])
+    def test_invalid_km_size_raises(self, bad: object) -> None:
+        with pytest.raises(ConfigError, match="km_size"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"chips": {"km_size": bad}}}
             )
 
     def test_missing_fields_file_raises(self) -> None:

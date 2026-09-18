@@ -80,6 +80,10 @@ class TestCreateChipsCommand:
                 str(output_file),
                 "--batch-size",
                 "1",
+                # The sample grid's cells are smaller than a real 2 km chip, so the
+                # default size filter would drop them before coverage ever runs.
+                "--min-chip-area",
+                "0",
             ],
         )
         assert result.exit_code == 0
@@ -107,3 +111,49 @@ class TestCreateChipsCommand:
         assert result.exit_code != 0
         assert "Invalid value for '--batch-size'" in result.output
         assert "range x>=1" in result.output
+
+    def test_size_filter_is_on_by_default(
+        self, sample_fields_geoparquet: Path, sample_grid_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        """Chips truncated below a full cell are dropped without asking.
+
+        The sample grid's cells are under 2 km, so the default threshold removes them
+        and says so rather than shipping short chips.
+        """
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "create-chips",
+                str(sample_fields_geoparquet),
+                "--grid-file",
+                str(sample_grid_geoparquet),
+                "-o",
+                str(tmp_path / "chips.parquet"),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Removed 2 undersized chips" in result.output
+        assert "Undersized chips dropped: 2" in result.output
+
+    def test_size_filter_can_be_disabled(
+        self, sample_fields_geoparquet: Path, sample_grid_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        """--min-chip-area 0 keeps every cell, whatever its size."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "create-chips",
+                str(sample_fields_geoparquet),
+                "--grid-file",
+                str(sample_grid_geoparquet),
+                "-o",
+                str(tmp_path / "chips.parquet"),
+                "--min-chip-area",
+                "0",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Total grid cells: 2" in result.output
+        assert "undersized" not in result.output.lower()
