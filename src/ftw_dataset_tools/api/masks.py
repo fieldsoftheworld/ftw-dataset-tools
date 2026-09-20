@@ -20,7 +20,7 @@ from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 
 from ftw_dataset_tools.api import decode
-from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded
+from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 
 if TYPE_CHECKING:
@@ -205,7 +205,7 @@ def _get_geometries_in_bounds(
 
     query = f"""
         SELECT {select_cols}
-        FROM '{file_path}'
+        FROM '{sql_path(file_path)}'
         WHERE ST_Intersects(
             "{geom_col}",
             ST_GeomFromText('POLYGON(({minx} {miny}, {maxx} {miny}, {maxx} {maxy}, {minx} {maxy}, {minx} {miny}))')
@@ -945,7 +945,8 @@ def create_masks(
     ensure_spatial_loaded(conn)
 
     # Get total grid count (before filtering)
-    total_count_result = conn.execute(f"SELECT COUNT(*) FROM '{chips_path}'").fetchone()
+    chips_sql = sql_path(chips_path)
+    total_count_result = conn.execute(f"SELECT COUNT(*) FROM '{chips_sql}'").fetchone()
     total_grids = total_count_result[0] if total_count_result else 0
 
     # Build query with optional coverage filter
@@ -961,7 +962,7 @@ def create_masks(
             ST_YMin("{grid_geom_col}") as miny,
             ST_XMax("{grid_geom_col}") as maxx,
             ST_YMax("{grid_geom_col}") as maxy
-        FROM '{chips_path}'
+        FROM '{chips_sql}'
         {coverage_filter}
     """
 
@@ -1005,7 +1006,9 @@ def create_masks(
     if MaskType.INSTANCE in mask_types:
         # Try to find an ID column in boundaries file
         try:
-            schema = conn.execute(f"DESCRIBE SELECT * FROM '{boundaries_path}'").fetchall()
+            schema = conn.execute(
+                f"DESCRIBE SELECT * FROM '{sql_path(boundaries_path)}'"
+            ).fetchall()
             col_names = [row[0] for row in schema]
             for candidate in ["id", "ID", "fid", "FID", "objectid", "OBJECTID"]:
                 if candidate in col_names:

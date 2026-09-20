@@ -149,7 +149,7 @@ def detect_datetime_column(file_path: str | Path) -> str | None:
     """
     conn = duckdb.connect(":memory:")
     try:
-        schema = conn.execute(f"DESCRIBE SELECT * FROM '{file_path}'").fetchall()
+        schema = conn.execute(f"DESCRIBE SELECT * FROM '{sql_path(file_path)}'").fetchall()
         col_names = [row[0].lower() for row in schema]
 
         # Check for fiboa determination_datetime column
@@ -181,7 +181,7 @@ def get_temporal_extent_from_data(
             SELECT
                 MIN("{datetime_col}") as min_dt,
                 MAX("{datetime_col}") as max_dt
-            FROM '{file_path}'
+            FROM '{sql_path(file_path)}'
         """).fetchone()
 
         if result and result[0] and result[1]:
@@ -223,7 +223,7 @@ def get_year_from_datetime_column(
         # Get the most common year (mode) from the datetime column
         result = conn.execute(f"""
             SELECT EXTRACT(YEAR FROM "{datetime_col}") as year, COUNT(*) as cnt
-            FROM '{file_path}'
+            FROM '{sql_path(file_path)}'
             WHERE "{datetime_col}" IS NOT NULL
             GROUP BY year
             ORDER BY cnt DESC
@@ -266,7 +266,7 @@ def _get_dataset_bounds(file_path: Path, geom_col: str = "geometry") -> list[flo
                 MIN(ST_YMin("{geom_col}")) as ymin,
                 MAX(ST_XMax("{geom_col}")) as xmax,
                 MAX(ST_YMax("{geom_col}")) as ymax
-            FROM '{file_path}'
+            FROM '{sql_path(file_path)}'
         """).fetchone()
 
         if result:

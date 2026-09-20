@@ -17,6 +17,7 @@ from ftw_dataset_tools.api.geo import (
     detect_geometry_column,
     ensure_spatial_loaded,
     reproject,
+    sql_path,
     write_geoparquet,
 )
 
@@ -110,7 +111,7 @@ def detect_bbox_column(
 
     # Fallback: Check schema for bbox-like STRUCT columns
     try:
-        schema = conn.execute(f"DESCRIBE SELECT * FROM '{file_path}'").fetchall()
+        schema = conn.execute(f"DESCRIBE SELECT * FROM '{sql_path(file_path)}'").fetchall()
 
         # Look for common bbox column names
         bbox_candidates = ["bbox", f"{geom_col}_bbox", "geometry_bbox"]
@@ -346,7 +347,7 @@ def add_field_stats(
 
         # Load fields table first (needed for bounds calculation if fetching grid from S3)
         log("Loading fields data...")
-        conn.execute(f"CREATE TABLE fields_table AS SELECT * FROM '{fields_path}'")
+        conn.execute(f"CREATE TABLE fields_table AS SELECT * FROM '{sql_path(fields_path)}'")
         fields_count = conn.execute("SELECT COUNT(*) FROM fields_table").fetchone()[0]
         log(f"Loaded {fields_count:,} field polygons")
 
@@ -385,7 +386,9 @@ def add_field_stats(
                         log(f"Reprojected fields to: {fields_temp}")
                         # Reload fields table with reprojected data
                         conn.execute("DROP TABLE fields_table")
-                        conn.execute(f"CREATE TABLE fields_table AS SELECT * FROM '{fields_path}'")
+                        conn.execute(
+                            f"CREATE TABLE fields_table AS SELECT * FROM '{sql_path(fields_path)}'"
+                        )
                 else:
                     raise CRSMismatchError(
                         crs1=str(grid_crs),
@@ -395,7 +398,7 @@ def add_field_stats(
                     )
 
             log("Loading grid data...")
-            conn.execute(f"CREATE TABLE grid_table AS SELECT * FROM '{grid_path}'")
+            conn.execute(f"CREATE TABLE grid_table AS SELECT * FROM '{sql_path(grid_path)}'")
         else:
             # Fetch grid from S3 based on fields bounds
             # First check that fields file is in EPSG:4326 (required for S3 grid)
@@ -449,7 +452,7 @@ def add_field_stats(
             conn.execute(f"""
                 CREATE TABLE grid_table AS
                 SELECT *
-                FROM '{grid_source}'
+                FROM '{sql_path(grid_source)}'
                 WHERE bbox.xmin <= {xmax}
                   AND bbox.xmax >= {xmin}
                   AND bbox.ymin <= {ymax}
