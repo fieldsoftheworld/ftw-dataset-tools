@@ -21,6 +21,7 @@ import yaml
 
 from ftw_dataset_tools import __version__
 from ftw_dataset_tools.api import field_stats, splits
+from ftw_dataset_tools.api.chip_borders import DEFAULT_BORDER_GAP_CHIPS
 from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
 
 if TYPE_CHECKING:
@@ -239,6 +240,8 @@ class ChipsConfig:
 
     min_coverage: float = 0.01
     drop_border_chips: bool = False
+    # How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.
+    border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS
     # Local FTW grid parquet to use instead of fetching from Source Coop. Path is
     # resolved relative to the config file. Optional.
     grid_file: str | None = None
@@ -544,6 +547,7 @@ class DatasetConfig:
         mask_types: list[str] | None,
         presence_only: bool,
         drop_border_chips: bool,
+        border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS,
     ) -> DatasetConfig:
         """Build a config from ``create_dataset`` keyword arguments.
 
@@ -561,6 +565,7 @@ class DatasetConfig:
                 chips=ChipsConfig(
                     min_coverage=min_coverage,
                     drop_border_chips=drop_border_chips,
+                    border_gap_chips=border_gap_chips,
                 ),
                 splits=SplitsConfig(split_type=split_type, split_percents=split_percents),
                 masks=MasksConfig(

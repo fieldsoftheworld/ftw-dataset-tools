@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from ftw_dataset_tools.api import crop_stats, dataset, masks, splits
+from ftw_dataset_tools.api import chip_borders, crop_stats, dataset, masks, splits
 from ftw_dataset_tools.api.assets import MaskReadError
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
@@ -179,7 +179,14 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     "--drop-border-chips",
     is_flag=True,
     default=False,
-    help="Remove chips touching outer boundary (edges of convex hull). Useful when fields at boundary may have partial coverage.",
+    help="Remove chips on the edge of any labelled cluster. Useful when fields at a cluster boundary may have partial coverage.",
+)
+@click.option(
+    "--border-gap-chips",
+    type=click.IntRange(min=0),
+    default=chip_borders.DEFAULT_BORDER_GAP_CHIPS,
+    show_default=True,
+    help="How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.",
 )
 @click.option(
     "--class-filter",
@@ -221,6 +228,7 @@ def create_dataset_cmd(
     mask_types: str,
     presence_only: bool,
     drop_border_chips: bool,
+    border_gap_chips: int,
     class_filter: str | None,
     checksums: bool,
 ) -> None:
@@ -422,6 +430,7 @@ def create_dataset_cmd(
             mask_types=mask_types_list,
             presence_only=presence_only,
             drop_border_chips=drop_border_chips,
+            border_gap_chips=border_gap_chips,
             class_filter=class_filter,
             checksums=checksums,
             on_imagery=select_and_download if should_select_images else None,

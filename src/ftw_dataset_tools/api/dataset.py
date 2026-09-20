@@ -14,6 +14,7 @@ from ftw_dataset_tools.api import (
     splits,
     stac,
 )
+from ftw_dataset_tools.api.chip_borders import DEFAULT_BORDER_GAP_CHIPS
 from ftw_dataset_tools.api.config import ClassFilter, DatasetConfig
 
 if TYPE_CHECKING:
@@ -61,6 +62,7 @@ def create_dataset(
     mask_types: list[str] | None = None,
     presence_only: bool = False,
     drop_border_chips: bool = False,
+    border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS,
     checksums: bool = False,
     class_filter: str | Path | None = None,
     on_imagery: Callable[[Path], None] | None = None,
@@ -99,7 +101,8 @@ def create_dataset(
         year: Year for temporal extent (required if fields lack determination_datetime)
         mask_types: List of mask types to generate (e.g., ["instance", "semantic_2_class"]). If None, generates all types.
         presence_only: If True, background class value is 3 instead of 0 (for presence-only labels)
-        drop_border_chips: If True, remove chips touching outer boundary (edges of convex hull). Useful when fields at boundary may have partial coverage.
+        drop_border_chips: If True, remove chips on the edge of any labelled cluster. Useful when fields at a cluster boundary may have partial coverage.
+        border_gap_chips: How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.
         checksums: Compute file:checksum for every asset (slow; default False).
         class_filter: Optional path to a class filter YAML (column + include/exclude
             lists). Include classes count as field; all others become background.
@@ -135,6 +138,7 @@ def create_dataset(
         mask_types=mask_types,
         presence_only=presence_only,
         drop_border_chips=drop_border_chips,
+        border_gap_chips=border_gap_chips,
     )
     config.stages.stac.checksums = checksums
     if class_filter is not None:

@@ -107,3 +107,46 @@ class TestCreateChipsCommand:
         assert result.exit_code != 0
         assert "Invalid value for '--batch-size'" in result.output
         assert "range x>=1" in result.output
+
+    def test_border_gap_chips_option(
+        self, sample_fields_geoparquet: Path, sample_grid_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        """--border-gap-chips is accepted alongside --drop-border-chips."""
+        output_file = tmp_path / "chips.parquet"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "create-chips",
+                str(sample_fields_geoparquet),
+                "--grid-file",
+                str(sample_grid_geoparquet),
+                "-o",
+                str(output_file),
+                "--drop-border-chips",
+                "--border-gap-chips",
+                "3",
+            ],
+        )
+        assert result.exit_code == 0
+        assert output_file.exists()
+
+    def test_border_gap_chips_must_not_be_negative(
+        self, sample_fields_geoparquet: Path, sample_grid_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        """A negative --border-gap-chips is rejected at parse time."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "create-chips",
+                str(sample_fields_geoparquet),
+                "--grid-file",
+                str(sample_grid_geoparquet),
+                "-o",
+                str(tmp_path / "chips.parquet"),
+                "--border-gap-chips",
+                "-1",
+            ],
+        )
+        assert result.exit_code != 0
