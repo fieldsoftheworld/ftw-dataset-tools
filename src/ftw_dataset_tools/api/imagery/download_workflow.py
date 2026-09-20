@@ -118,7 +118,7 @@ def download_imagery_for_catalog(
         catalog_dir: Path to the chips collection directory
         bands: List of bands to download. Default: ["red", "green", "blue", "nir"]
         resolution: Target resolution in meters
-        generate_thumbnails: Whether to generate JPEG preview thumbnails
+        generate_thumbnails: Whether to generate WebP preview thumbnails
         resume: If True, skip items that already have local imagery
         on_progress: Optional callback (current, total) for progress updates
         show_progress_bar: If True, show tqdm progress bar

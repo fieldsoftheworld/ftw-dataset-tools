@@ -17,6 +17,8 @@ from rasterio.warp import Resampling
 from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
 from ftw_dataset_tools.api.imagery.settings import BANDS_OF_INTEREST, REFLECTANCE_BANDS
 from ftw_dataset_tools.api.imagery.thumbnails import (
+    PREVIEW_MEDIA_TYPE,
+    PREVIEW_SUFFIX,
     ThumbnailError,
     generate_overlay_thumbnail,
     generate_thumbnail,
@@ -543,15 +545,15 @@ def process_downloaded_scene(
     # Generate thumbnail if RGB bands available
     if generate_thumbnails and has_rgb_bands(band_list):
         try:
-            thumbnail_filename = output_filename.replace(".tif", ".jpg")
+            thumbnail_filename = output_filename.replace(".tif", PREVIEW_SUFFIX)
             thumbnail_path = output_path.parent / thumbnail_filename
             generate_thumbnail(output_path, thumbnail_path)
             item.add_asset(
                 "thumbnail",
                 pystac.Asset(
                     href=f"./{thumbnail_filename}",
-                    media_type=pystac.MediaType.JPEG,
-                    title="JPEG preview",
+                    media_type=PREVIEW_MEDIA_TYPE,
+                    title="WebP preview",
                     roles=["thumbnail"],
                 ),
             )
@@ -577,7 +579,7 @@ def process_downloaded_scene(
             mask_path = item_path.parent / f"{base_id}_semantic_3_class.tif"
             if mask_path.exists():
                 try:
-                    overlay_filename = f"{base_id}_overlay.jpg"
+                    overlay_filename = f"{base_id}_overlay{PREVIEW_SUFFIX}"
                     overlay_path = item_path.parent / overlay_filename
                     generate_overlay_thumbnail(result.thumbnail_path, mask_path, overlay_path)
                     thumb_for_parent = overlay_filename

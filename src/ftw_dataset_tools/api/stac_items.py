@@ -140,6 +140,11 @@ def update_parent_item(
     Raises:
         STACSaveError: If the save operation fails
     """
+    # Imported here, not at module scope: ``api.imagery``'s package __init__ pulls
+    # preview_workflow, which imports this module, so a top-level import deadlocks
+    # whichever of the two is loaded first.
+    from ftw_dataset_tools.api.imagery.thumbnails import preview_media_type
+
     asset_key = f"{season}_image"
     added_thumbnail = False
 
@@ -169,7 +174,7 @@ def update_parent_item(
                 "thumbnail",
                 pystac.Asset(
                     href=f"./{thumbnail_filename}",
-                    media_type=pystac.MediaType.JPEG,
+                    media_type=preview_media_type(thumbnail_filename),
                     title=thumb_title,
                     roles=["thumbnail"],
                 ),

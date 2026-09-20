@@ -26,6 +26,11 @@ from ftw_dataset_tools.api.imagery.image_download import (
     download_and_clip_scene,
     process_downloaded_scene,
 )
+from ftw_dataset_tools.api.imagery.preview_conversion import (
+    ConversionResult,
+    conversion_summary_line,
+    convert_previews_for_catalog,
+)
 from ftw_dataset_tools.api.imagery.preview_workflow import (
     preview_imagery_for_catalog,
     preview_summary_line,
@@ -55,6 +60,7 @@ __all__ = [
     "CROP_CALENDAR_FILES",
     "STAC_URL",
     "ClearResult",
+    "ConversionResult",
     "CropCalendarDates",
     "DownloadResult",
     "DownloadWorkflowResult",
@@ -68,6 +74,8 @@ __all__ = [
     "calculate_pixel_cloud_cover",
     "chip_dir_for_item",
     "clear_chip_selections",
+    "conversion_summary_line",
+    "convert_previews_for_catalog",
     "create_child_items_from_selection",
     "download_and_clip_scene",
     "download_imagery_for_catalog",

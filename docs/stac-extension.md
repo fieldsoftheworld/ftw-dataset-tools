@@ -378,8 +378,9 @@ The output directory is a self-contained STAC collection. `collection.json` sits
     │       ├── {item_id}.json                   # Chip item
     │       ├── {item_id}_{mask_type}.tif        # Masks (if masks generated)
     │       ├── {item_id}_{season}_s2.json       # Scene items (if imagery selected)
-    │       ├── {item_id}_{season}_image_s2.tif  # Clipped imagery (if downloaded)
-    │       └── {item_id}_{season}_image_s2.jpg  # Thumbnails (if downloaded)
+    │       ├── {item_id}_{season}_image_s2.tif   # Clipped imagery (if downloaded)
+    │       ├── {item_id}_{season}_image_s2.webp  # Previews (if downloaded)
+    │       └── {item_id}_overlay.webp            # Preview with the mask drawn over it
     └── other/                        # For non-FTW grid ids
         ├── catalog.json
         └── {item_id}/...
@@ -401,6 +402,15 @@ sub-catalog and every item — declares the
 **Items parquet:** The `items.parquet` asset with role `collection-mirror` exists only if at least one chip item has masks. It is a geoparquet mirror of all chip items in the collection.
 
 **Item assets:** The collection's `item_assets` declares the possible assets on chip items: mask types (`instance_mask`, `semantic_2class_mask`, `semantic_3class_mask`, `decode_boundary_mask`, `decode_distance_mask`), imagery (`planting_image`, `harvest_image`), and `thumbnail`.
+
+**Chip previews:** Every chip item carries a `thumbnail` asset of media type `image/webp` —
+the mask overlay (`{item_id}_overlay.webp`) when it could be drawn, otherwise the plain
+planting preview (`{item_id}_planting_image_s2.webp`). A browser rendering a collection
+loads one per card, so this is the most-fetched image in a catalog; WebP runs 25-35%
+smaller than JPEG at equivalent quality. Catalogs built before that switch carry `.jpg`
+previews and are still described correctly (`image/jpeg`); convert one in place with
+`ftwd convert-previews <catalog_dir>`, which re-renders each preview from the imagery it
+was made from and removes the superseded `.jpg`.
 
 **Collection reference:** Every chip item carries a `collection` field and link pointing to the dataset collection (the one holding `collection.json`). The collection's `root` link points to itself (downstream Portolan catalogs rewrite `root` when ingesting the output).
 

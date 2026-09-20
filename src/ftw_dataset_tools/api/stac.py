@@ -52,7 +52,9 @@ if TYPE_CHECKING:
 # Media types
 MEDIA_TYPE_PARQUET = "application/vnd.apache.parquet"
 MEDIA_TYPE_COG = "image/tiff; application=geotiff; profile=cloud-optimized"
-MEDIA_TYPE_JPEG = "image/jpeg"
+# Chip previews; kept in step with api/imagery/thumbnails.PREVIEW_MEDIA_TYPE, which
+# cannot be imported here without cycling back through api.imagery's package init.
+MEDIA_TYPE_WEBP = "image/webp"
 
 # Layout strategy for the single collection: sub-catalogs per MGRS square, items
 # co-located with their assets inside the square's sub-catalog directory.
@@ -488,7 +490,7 @@ def _build_item_assets() -> dict[str, ItemAssetDefinition]:
             }
         )
     defs["thumbnail"] = ItemAssetDefinition(
-        {"type": MEDIA_TYPE_JPEG, "roles": ["thumbnail"], "title": "Chip preview"}
+        {"type": MEDIA_TYPE_WEBP, "roles": ["thumbnail"], "title": "Chip preview"}
     )
     return defs
 
