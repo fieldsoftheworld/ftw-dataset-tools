@@ -156,3 +156,56 @@ class TestSearchBackendDispatch:
                 year=2021,
                 search_backend="bogus",
             )
+
+
+class TestSelectBestSceneNodata:
+    """Scene-level nodata metadata must not reject a chip whose window is clean.
+
+    Old-baseline products carry granule-edge nodata in
+    s2:nodata_pixel_percentage even when a chip's window is untouched, so a
+    non-zero scene value only means the chip's pixels must be checked.
+    """
+
+    BBOX = (14.9, 45.9, 15.1, 46.1)
+
+    def _item(self, nodata_pct):
+        from datetime import UTC, datetime
+
+        item = _canned_item("S2A_33TVM_20210605_0_L2A", datetime(2021, 6, 5, 10, 0, tzinfo=UTC))
+        item.properties["s2:nodata_pixel_percentage"] = nodata_pct
+        import pystac
+
+        item.add_asset("nir", pystac.Asset(href="https://example.com/B08.tif"))
+        return item
+
+    def test_zero_scene_nodata_accepts_without_pixel_check(self, monkeypatch):
+        called = []
+        monkeypatch.setattr(
+            scene_selection,
+            "calculate_nodata_percentage",
+            lambda href, _bbox: called.append(href) or 0.0,
+        )
+        scene = scene_selection._select_best_scene(
+            [self._item(0.0)], season="planting", bbox=self.BBOX
+        )
+        assert scene is not None
+        assert not called
+
+    def test_scene_nodata_triggers_chip_pixel_check_and_accepts_clean_window(self, monkeypatch):
+        """A scene with edge nodata is kept when the chip's own window has none."""
+        monkeypatch.setattr(
+            scene_selection, "calculate_nodata_percentage", lambda _href, _bbox: 0.0
+        )
+        scene = scene_selection._select_best_scene(
+            [self._item(18.3)], season="planting", bbox=self.BBOX
+        )
+        assert scene is not None
+
+    def test_chip_window_nodata_still_rejects(self, monkeypatch):
+        monkeypatch.setattr(
+            scene_selection, "calculate_nodata_percentage", lambda _href, _bbox: 42.0
+        )
+        scene = scene_selection._select_best_scene(
+            [self._item(18.3)], season="planting", bbox=self.BBOX
+        )
+        assert scene is None

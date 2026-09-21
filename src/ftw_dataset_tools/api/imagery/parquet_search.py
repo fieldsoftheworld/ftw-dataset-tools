@@ -10,6 +10,7 @@ return (rebuilt from the scene id), with no rate limit anywhere in the path.
 from __future__ import annotations
 
 import contextlib
+import math
 import threading
 from datetime import date
 from typing import TYPE_CHECKING
@@ -55,12 +56,17 @@ def _utm_zone(lon: float) -> int:
 def zones_for_bbox(bbox: tuple[float, float, float, float]) -> set[int]:
     """UTM zones whose Sentinel-2 tiles can cover a bbox.
 
-    Uses the west and east edges, plus the Norway (32V) and Svalbard (31X-37X)
-    grid exceptions, where tiles from a widened zone extend over longitudes
-    that compute to a neighbouring zone.
+    A tile's footprint can overhang its zone's boundary meridian by up to
+    ~110 km (the last 100 km grid column plus tile overlap), so the west and
+    east edges are padded by that much before computing zones - a chip just
+    east of 6E is routinely covered by a zone 31 tile. The Norway (32V) and
+    Svalbard (31X-37X) grid exceptions are added on top.
     """
     west, south, east, north = bbox
-    zones = set(range(_utm_zone(west), _utm_zone(east) + 1))
+    # 110 km in degrees of longitude at the bbox's widest latitude.
+    widest_lat = min(max(abs(south), abs(north)), 80.0)
+    margin = 110.0 / (111.32 * math.cos(math.radians(widest_lat)))
+    zones = set(range(_utm_zone(west - margin), _utm_zone(east + margin) + 1))
     # Norway: zone 32 is widened over 3-12E in band V (56-64N)
     if north >= 56.0 and south <= 64.0 and east >= 3.0 and west <= 12.0:
         zones.add(32)

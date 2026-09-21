@@ -360,22 +360,19 @@ def _select_best_scene(
     for item in items:
         short_dt = _short_date(item)
 
-        # Check nodata first (fail fast - uses metadata then overviews)
-        nodata_pct = get_nodata_from_metadata(item)
-        if nodata_pct is not None:
-            # Use STAC metadata if available
-            if nodata_pct > nodata_max:
-                log(f"  Skipping {short_dt}: {nodata_pct:.1f}% nodata (from metadata)")
-                continue
-        elif nodata_max < 100:
-            # Check using actual pixel data if threshold is restrictive
+        # Check nodata first (fail fast). A scene-level value of zero proves the
+        # chip's window is clean; any other value says nothing about this chip
+        # (granule-edge nodata may sit far from it), so check the actual pixels.
+        # Old-baseline products in particular carry edge nodata on most scenes.
+        scene_nodata = get_nodata_from_metadata(item)
+        if not (scene_nodata is not None and scene_nodata <= 0) and nodata_max < 100:
             try:
                 # Use NIR band for nodata check (available in all scenes)
                 nir_asset = item.assets.get("nir")
                 if nir_asset:
                     nodata_pct = calculate_nodata_percentage(nir_asset.href, bbox)
                     if nodata_pct > nodata_max:
-                        log(f"  Skipping {short_dt}: {nodata_pct:.1f}% nodata")
+                        log(f"  Skipping {short_dt}: {nodata_pct:.1f}% nodata in chip window")
                         continue
             except Exception as e:
                 log(f"  {item.id}: nodata check failed ({e}), continuing")

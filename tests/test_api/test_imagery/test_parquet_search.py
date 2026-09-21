@@ -26,6 +26,21 @@ class TestZonesForBbox:
         # Luxembourg sits on the 6 degree meridian: zones 31 and 32
         assert zones_for_bbox((5.9, 49.5, 6.1, 49.7)) == {31, 32}
 
+    def test_chip_just_past_zone_boundary_includes_overhanging_zone(self):
+        """Tiles overhang their zone by up to ~110 km.
+
+        A chip at lon 6.00001 computes to zone 32, but its imagery can come
+        from tile 31UGR, which extends east of the 6 degree meridian - Earth
+        Search returns it for this bbox, so the mirror query must read the
+        zone 31 part too.
+        """
+        zones = zones_for_bbox((6.0000001, 49.61, 6.0097, 49.63))
+        assert {31, 32} <= zones
+
+    def test_mid_zone_chip_stays_single_zone(self):
+        # 15E at 46N is ~150 km from either edge of zone 33: no neighbours
+        assert zones_for_bbox(SI_BBOX) == {33}
+
     def test_norway_exception_adds_zone_32(self):
         # Western Norway (band V widening): lon 4E computes zone 31, but
         # Sentinel-2 tiles there are zone 32
