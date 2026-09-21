@@ -24,7 +24,7 @@ These properties are added to parent chip items after image selection:
 | `ftw:calendar_year` | integer | Calendar year for the crop cycle (e.g., 2024) |
 | `ftw:planting_day` | integer | Day of year (1-365) for planting from crop calendar |
 | `ftw:harvest_day` | integer | Day of year (1-365) for harvest from crop calendar |
-| `ftw:stac_host` | string | Source STAC catalog used (always "earthsearch") |
+| `ftw:stac_host` | string | Scene search backend used: "parquet-mirror" (the Sentinel-2 STAC-GeoParquet mirror, default) or "earthsearch" (the Earth Search API) |
 | `ftw:cloud_cover_chip_threshold` | number | Chip-level cloud cover threshold percentage (0-100). Note: 2 means 2%, not 0.02 |
 | `ftw:buffer_days` | integer | Search buffer in days around crop calendar dates |
 | `ftw:num_buffer_expansions` | integer | Number of times to expand buffer if no cloud-free scenes found |
