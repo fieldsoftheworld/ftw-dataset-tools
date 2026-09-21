@@ -64,3 +64,95 @@ class TestGetStacClient:
 
         assert len(clients) == 4
         assert len({id(client) for client in clients}) == 4
+
+
+def _canned_item(item_id: str, dt) -> object:
+    """A trusted-clear scene item: no COG reads needed to select it."""
+    import pystac
+    from pystac.extensions.eo import EOExtension
+
+    item = pystac.Item(
+        id=item_id,
+        geometry={
+            "type": "Polygon",
+            "coordinates": [[[14.9, 45.9], [15.1, 45.9], [15.1, 46.1], [14.9, 46.1], [14.9, 45.9]]],
+        },
+        bbox=[14.9, 45.9, 15.1, 46.1],
+        datetime=dt,
+        properties={"eo:cloud_cover": 0.05, "s2:nodata_pixel_percentage": 0.0},
+    )
+    EOExtension.ext(item, add_if_missing=True)
+    item.set_self_href(f"https://example.com/items/{item_id}")
+    return item
+
+
+class TestSearchBackendDispatch:
+    """select_scenes_for_chip routes queries by search_backend."""
+
+    BBOX = (14.9, 45.9, 15.1, 46.1)
+
+    @pytest.fixture(autouse=True)
+    def _crop_calendar(self, monkeypatch):
+        from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
+
+        monkeypatch.setattr(
+            scene_selection,
+            "get_crop_calendar_dates",
+            lambda _bbox, on_progress=None: CropCalendarDates(150, 270),  # noqa: ARG005
+        )
+
+    def test_parquet_backend_queries_the_mirror(self, monkeypatch):
+        from datetime import UTC, datetime
+
+        calls = []
+
+        def fake_query_scenes(bbox, start, end, cloud_cover_max, **_kwargs):
+            calls.append((bbox, start, end, cloud_cover_max))
+            return [_canned_item("S2A_33TVM_fake", datetime(2021, 5, 30, 10, 0, tzinfo=UTC))]
+
+        monkeypatch.setattr(scene_selection.parquet_search, "query_scenes", fake_query_scenes)
+        result = scene_selection.select_scenes_for_chip(
+            chip_id="chip_001",
+            bbox=self.BBOX,
+            year=2021,
+            search_backend="parquet",
+        )
+        assert calls, "parquet backend was not queried"
+        assert result.success
+        assert result.selection_params["stac_host"] == "parquet-mirror"
+
+    def test_earth_search_backend_uses_query_stac(self, monkeypatch):
+        from datetime import UTC, datetime
+
+        calls = []
+
+        def fake_query_stac(**kwargs):
+            calls.append(kwargs)
+            return scene_selection.STACQueryResult(
+                items=[_canned_item("S2A_33TVM_fake", datetime(2021, 5, 30, 10, 0, tzinfo=UTC))],
+                catalog_url="https://earth-search.aws.element84.com/v1",
+                collection="sentinel-2-c1-l2a",
+                bbox=self.BBOX,
+                date_range="2021-05-16/2021-06-13",
+                cloud_cover_max=75,
+            )
+
+        monkeypatch.setattr(scene_selection, "_query_stac", fake_query_stac)
+        result = scene_selection.select_scenes_for_chip(
+            chip_id="chip_001",
+            bbox=self.BBOX,
+            year=2021,
+            search_backend="earth-search",
+        )
+        assert calls, "earth-search backend was not queried"
+        assert result.success
+        assert result.selection_params["stac_host"] == "earthsearch"
+
+    def test_unknown_backend_raises(self):
+        with pytest.raises(ValueError, match="search_backend"):
+            scene_selection.select_scenes_for_chip(
+                chip_id="chip_001",
+                bbox=self.BBOX,
+                year=2021,
+                search_backend="bogus",
+            )

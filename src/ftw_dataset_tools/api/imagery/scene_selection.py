@@ -15,6 +15,7 @@ from pystac.extensions.eo import EOExtension
 if TYPE_CHECKING:
     import pystac
 
+from ftw_dataset_tools.api.imagery import parquet_search
 from ftw_dataset_tools.api.imagery.cloud_analysis import calculate_pixel_cloud_cover
 from ftw_dataset_tools.api.imagery.crop_calendar import (
     CropCalendarDates,
@@ -231,6 +232,38 @@ def _query_stac(
     )
 
 
+def _query_parquet(
+    bbox: tuple[float, float, float, float],
+    center_date: datetime,
+    cloud_cover_max: int,
+    buffer_days: int,
+) -> STACQueryResult:
+    """Query the Sentinel-2 STAC-GeoParquet mirror for scenes.
+
+    Runs the same search as :func:`_query_stac` (bbox, window, scene-level
+    cloud filter, sorted by cloud cover) against the parquet mirror, which has
+    no API and therefore no rate limit.
+    """
+    _validate_date_not_future(center_date, buffer_days)
+    start = (center_date - timedelta(days=buffer_days)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    end = (center_date + timedelta(days=buffer_days)).replace(
+        hour=23, minute=59, second=59, microsecond=0
+    )
+    items = parquet_search.query_scenes(
+        bbox=bbox, start=start, end=end, cloud_cover_max=cloud_cover_max
+    )
+    return STACQueryResult(
+        items=items,
+        catalog_url=parquet_search.DEFAULT_PARQUET_URL,
+        collection=parquet_search.PARQUET_COLLECTION,
+        bbox=bbox,
+        date_range=_format_date_range(center_date, buffer_days),
+        cloud_cover_max=cloud_cover_max,
+    )
+
+
 def _parse_iso_datetime(value: str) -> datetime:
     """Parse ISO datetime string to timezone-aware datetime."""
 
@@ -408,6 +441,7 @@ def select_scenes_for_chip(
     s2_collection: str = "c1",
     num_buffer_expansions: int = DEFAULT_NUM_BUFFER_EXPANSIONS,
     buffer_expansion_size: int = DEFAULT_BUFFER_EXPANSION_SIZE,
+    search_backend: str = "parquet",
     on_progress: Callable[[str], None] | None = None,
 ) -> SceneSelectionResult:
     """
@@ -420,9 +454,12 @@ def select_scenes_for_chip(
         cloud_cover_chip: Maximum chip-level cloud cover percentage (0-100)
         nodata_max: Maximum nodata percentage (0-100). Default 0 rejects any nodata.
         buffer_days: Days to search around crop calendar dates
-        s2_collection: Sentinel-2 collection identifier
+        s2_collection: Sentinel-2 collection identifier (Earth Search backend only;
+            the parquet mirror holds the ``sentinel-2-l2a`` collection)
         num_buffer_expansions: Number of times to expand buffer for seasons without cloud-free scenes
         buffer_expansion_size: Days to add to buffer on each expansion
+        search_backend: "parquet" (the STAC-GeoParquet mirror, default) or
+            "earth-search" (the Earth Search STAC API)
         on_progress: Optional callback for progress messages
 
     Returns:
@@ -433,9 +470,25 @@ def select_scenes_for_chip(
         but harvest doesn't, only harvest's buffer will be expanded.
     """
 
+    if search_backend not in ("parquet", "earth-search"):
+        raise ValueError(
+            f"Unknown search_backend {search_backend!r}; use 'parquet' or 'earth-search'."
+        )
+
     def log(msg: str) -> None:
         if on_progress:
             on_progress(msg)
+
+    def _run_search(center_date: datetime, buffer: int) -> STACQueryResult:
+        if search_backend == "parquet":
+            return _query_parquet(bbox, center_date, DEFAULT_CLOUD_COVER_SCENE, buffer)
+        return _query_stac(
+            bbox=bbox,
+            center_date=center_date,
+            cloud_cover_max=DEFAULT_CLOUD_COVER_SCENE,
+            buffer_days=buffer,
+            s2_collection=s2_collection,
+        )
 
     # Get crop calendar dates
     try:
@@ -456,7 +509,7 @@ def select_scenes_for_chip(
 
     # Store selection parameters
     selection_params = {
-        "stac_host": "earthsearch",  # Always earthsearch
+        "stac_host": "parquet-mirror" if search_backend == "parquet" else "earthsearch",
         "cloud_cover_chip_threshold": cloud_cover_chip,
         "buffer_days": buffer_days,
         "num_buffer_expansions": num_buffer_expansions,
@@ -489,13 +542,7 @@ def select_scenes_for_chip(
                 if expansion > 0:
                     log(f"Expansion {expansion}: planting buffer now {planting_buffer} days")
                 log(f"Searching for planting scene around {planting_dt.date()}...")
-                planting_result = _query_stac(
-                    bbox=bbox,
-                    center_date=planting_dt,
-                    cloud_cover_max=DEFAULT_CLOUD_COVER_SCENE,  # Internal scene-level filter
-                    buffer_days=planting_buffer,
-                    s2_collection=s2_collection,
-                )
+                planting_result = _run_search(planting_dt, planting_buffer)
                 log(f"STAC Query: {planting_result.catalog_url}")
                 log(f"  Collection: {planting_result.collection}")
                 log(f"  Bbox: {planting_result.bbox}")
@@ -556,13 +603,7 @@ def select_scenes_for_chip(
                 if expansion > 0:
                     log(f"Expansion {expansion}: harvest buffer now {harvest_buffer} days")
                 log(f"Searching for harvest scene around {harvest_dt.date()}...")
-                harvest_result = _query_stac(
-                    bbox=bbox,
-                    center_date=harvest_dt,
-                    cloud_cover_max=DEFAULT_CLOUD_COVER_SCENE,  # Internal scene-level filter
-                    buffer_days=harvest_buffer,
-                    s2_collection=s2_collection,
-                )
+                harvest_result = _run_search(harvest_dt, harvest_buffer)
                 log(f"STAC Query: {harvest_result.catalog_url}")
                 log(f"  Collection: {harvest_result.collection}")
                 log(f"  Bbox: {harvest_result.bbox}")

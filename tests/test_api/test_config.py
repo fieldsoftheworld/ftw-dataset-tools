@@ -588,7 +588,9 @@ class TestImageryWorkers:
     def test_defaults_to_four(self) -> None:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
 
-        assert config.stages.select_images.workers == 4
+        # select_images defaults to the backend's worker count (see
+        # TestSearchBackendConfig); download_images keeps a fixed default.
+        assert config.stages.select_images.workers is None
         assert config.stages.download_images.workers == 4
 
     def test_can_be_overridden(self) -> None:
@@ -664,3 +666,53 @@ class TestImageryWorkers:
 
         assert stages["select_images"]["workers"] == 6
         assert stages["download_images"]["workers"] == 4
+
+
+class TestSearchBackendConfig:
+    """Tests for stages.select_images.search_backend and worker defaults."""
+
+    def test_default_backend_is_parquet(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+        assert config.stages.select_images.search_backend == "parquet"
+
+    def test_earth_search_backend_accepted(self) -> None:
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "f.parquet",
+                "stages": {"select_images": {"search_backend": "earth-search"}},
+            }
+        )
+        assert config.stages.select_images.search_backend == "earth-search"
+
+    def test_invalid_backend_raises(self) -> None:
+        with pytest.raises(ConfigError, match="search_backend"):
+            DatasetConfig.from_dict(
+                {
+                    "fields_file": "f.parquet",
+                    "stages": {"select_images": {"search_backend": "bogus"}},
+                }
+            )
+
+    def test_parquet_backend_defaults_to_16_workers(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+        assert config.stages.select_images.workers is None
+        assert config.stages.select_images.effective_workers == 16
+
+    def test_earth_search_backend_defaults_to_4_workers(self) -> None:
+        """Earth Search rate-bans aggressive clients; 4 workers is the safe cap."""
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "f.parquet",
+                "stages": {"select_images": {"search_backend": "earth-search"}},
+            }
+        )
+        assert config.stages.select_images.effective_workers == 4
+
+    def test_explicit_workers_beat_backend_default(self) -> None:
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "f.parquet",
+                "stages": {"select_images": {"workers": 8}},
+            }
+        )
+        assert config.stages.select_images.effective_workers == 8

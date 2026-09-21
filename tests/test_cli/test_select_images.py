@@ -299,3 +299,65 @@ class TestSelectImagesCropCalendarWarmup:
         assert result.exit_code == 0, result.output
         assert "No chips need processing" in result.output
         crop_calendar_warmup.assert_not_called()
+
+
+class TestSearchBackendOption:
+    """--search-backend reaches the selection loop; workers default follows it."""
+
+    def _run(self, tmp_path: Path, monkeypatch, args: list[str]) -> tuple[dict, dict]:
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        _write_minimal_collection(dataset_dir / "collection.json")
+        _write_chip_item(dataset_dir / "chips" / "33UXP" / "ftw-item1", "ftw-item1")
+
+        select_kwargs: dict = {}
+        parallel_kwargs: dict = {}
+
+        def fake_run_chip_selection(job, **kwargs):
+            select_kwargs.update(kwargs)
+            from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
+            from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
+
+            return SceneSelectionResult(
+                chip_id=job.item.id,
+                bbox=tuple(job.item.bbox),
+                year=job.year,
+                crop_calendar=CropCalendarDates(150, 270),
+                skipped_reason="test stub",
+            )
+
+        def fake_run_in_parallel(jobs, *, work, apply, workers):  # noqa: ARG001
+            parallel_kwargs["workers"] = workers
+            for job in jobs:
+                work(job)
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.commands.select_images.run_chip_selection",
+            fake_run_chip_selection,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.commands.select_images.run_in_parallel",
+            fake_run_in_parallel,
+        )
+
+        result = CliRunner().invoke(
+            cli, ["select-images", str(dataset_dir), "--year", "2024", *args]
+        )
+        assert result.exit_code == 0, result.output
+        return select_kwargs, parallel_kwargs
+
+    def test_defaults_to_parquet_and_16_workers(self, tmp_path: Path, monkeypatch) -> None:
+        select_kwargs, parallel_kwargs = self._run(tmp_path, monkeypatch, [])
+        assert select_kwargs["search_backend"] == "parquet"
+        assert parallel_kwargs["workers"] == 16
+
+    def test_earth_search_backend_defaults_to_4_workers(self, tmp_path: Path, monkeypatch) -> None:
+        select_kwargs, parallel_kwargs = self._run(
+            tmp_path, monkeypatch, ["--search-backend", "earth-search"]
+        )
+        assert select_kwargs["search_backend"] == "earth-search"
+        assert parallel_kwargs["workers"] == 4
+
+    def test_explicit_workers_beat_backend_default(self, tmp_path: Path, monkeypatch) -> None:
+        _, parallel_kwargs = self._run(tmp_path, monkeypatch, ["--workers", "8"])
+        assert parallel_kwargs["workers"] == 8

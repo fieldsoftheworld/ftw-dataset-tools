@@ -11,6 +11,7 @@ import click
 import pystac
 from tqdm import tqdm
 
+from ftw_dataset_tools.api.config import DEFAULT_PARQUET_WORKERS
 from ftw_dataset_tools.api.imagery import (
     ImageryProgressBar,
     clear_chip_selections,
@@ -175,11 +176,19 @@ def _record_chip(
     help="Overwrite existing imagery selections (by default, chips with scenes are skipped).",
 )
 @click.option(
+    "--search-backend",
+    type=click.Choice(["parquet", "earth-search"]),
+    default="parquet",
+    show_default=True,
+    help="Scene search backend: the Sentinel-2 STAC-GeoParquet mirror (no API, "
+    "no rate limit) or the Earth Search STAC API.",
+)
+@click.option(
     "--workers",
     type=click.IntRange(1, MAX_WORKERS),
-    default=DEFAULT_WORKERS,
-    show_default=True,
-    help="Chips to select for concurrently. Each chip costs several STAC searches.",
+    default=None,
+    help="Chips to select for concurrently. Defaults to 16 for the parquet "
+    "backend and 4 for earth-search (which rate-bans aggressive clients).",
 )
 @click.option(
     "--output-report",
@@ -223,7 +232,8 @@ def select_images_cmd(
     num_buffer_expansions: int,
     buffer_expansion_size: int,
     force: bool,
-    workers: int,
+    search_backend: Literal["parquet", "earth-search"],
+    workers: int | None,
     output_report: str | None,
     verbose: bool,
     output_dir: Path | None,
@@ -232,9 +242,10 @@ def select_images_cmd(
 ) -> None:
     """Select optimal Sentinel-2 imagery for chips.
 
-    Queries EarthSearch STAC catalog to find cloud-free Sentinel-2 scenes for each
-    chip based on crop calendar dates (planting and harvest). Creates child STAC
-    items with remote asset links.
+    Finds cloud-free Sentinel-2 scenes for each chip based on crop calendar
+    dates (planting and harvest), searching the Sentinel-2 STAC-GeoParquet
+    mirror by default (--search-backend earth-search queries the Earth Search
+    API instead). Creates child STAC items with remote asset links.
 
     By default, chips that already have imagery selections are skipped.
     Use --force to overwrite existing selections.
@@ -252,6 +263,9 @@ def select_images_cmd(
         ftwd select-images ./my-dataset --force  # Overwrite existing selections
     """
     input_path_obj = Path(input_path)
+
+    if workers is None:
+        workers = DEFAULT_PARQUET_WORKERS if search_backend == "parquet" else DEFAULT_WORKERS
 
     # Determine if input is a single chip JSON or a catalog directory
     single_chip_mode = input_path_obj.suffix == ".json"
@@ -457,6 +471,7 @@ def select_images_cmd(
             buffer_days=buffer_days,
             num_buffer_expansions=num_buffer_expansions,
             buffer_expansion_size=buffer_expansion_size,
+            search_backend=search_backend,
         )
 
     with ImageryProgressBar(total=len(jobs), leave=True, verbose=verbose) as progress:

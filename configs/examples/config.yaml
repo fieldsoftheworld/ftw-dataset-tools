@@ -116,9 +116,16 @@ stages:
     buffer_days: 14
     num_buffer_expansions: 3
     buffer_expansion_size: 14
-    # Chips selected at once. Each chip costs several STAC searches that are
-    # almost all network wait, so this is what decides how long a large run takes.
-    workers: 4
+    # Scene search backend. "parquet" (default) queries the Sentinel-2
+    # STAC-GeoParquet mirror at source.coop/portolan-mirrors/sentinel-2-catalog:
+    # no API, no rate limit. "earth-search" queries the Earth Search STAC API,
+    # which rate-bans aggressive clients.
+    search_backend: parquet
+    # Chips selected at once. Each chip costs several scene searches that are
+    # almost all network wait, so this is what decides how long a large run
+    # takes. Unset, it follows the backend: 16 for parquet, 4 for earth-search
+    # (the API's safe cap).
+    # workers: 16
 
   download_images:
     # Disabled by default; imagery selection creates STAC references only.

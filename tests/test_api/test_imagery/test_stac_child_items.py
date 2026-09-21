@@ -64,6 +64,37 @@ class TestCreateChildItemsFromSelection:
         assert parent_item.properties["ftw:harvest_buffer_used"] == 14
         assert parent_item.properties["ftw:expansions_performed"] == 0
 
+    def test_stac_host_reflects_selection_backend(
+        self,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        """ftw:stac_host records the backend the selection actually used."""
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+        mock_selection_result.selection_params = {"stac_host": "parquet-mirror"}
+
+        parent_item = pystac.Item(
+            id="chip_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            datetime=datetime.now(UTC),
+            properties={},
+        )
+
+        create_child_items_from_selection(
+            chip_dir=chip_dir,
+            parent_item=parent_item,
+            result=mock_selection_result,
+            year=2024,
+            cloud_cover_chip=2.0,
+            buffer_days=14,
+            num_buffer_expansions=3,
+            buffer_expansion_size=14,
+        )
+
+        assert parent_item.properties["ftw:stac_host"] == "parquet-mirror"
+
     def test_sets_temporal_extent_from_scene_dates(
         self,
         tmp_path: Path,

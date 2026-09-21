@@ -68,6 +68,13 @@ CONFIG_SCHEMA_VERSION = 1
 # of threads turns a multi-day run over thousands of chips into hours.
 DEFAULT_IMAGERY_WORKERS = 4
 
+# Scene search backends for the selection stage. "parquet" queries the
+# Sentinel-2 STAC-GeoParquet mirror on source.coop (no API, no rate limit);
+# "earth-search" queries the Earth Search STAC API, which rate-bans
+# aggressive clients, so its worker default stays low.
+SEARCH_BACKENDS = ("parquet", "earth-search")
+DEFAULT_PARQUET_WORKERS = 16
+
 # YAML keys allowed at the top level of a config file. `class_filter` on
 # DatasetConfig is resolved from stages.masks.class_filter, not set via YAML.
 _ALLOWED_TOP_KEYS = (
@@ -411,9 +418,23 @@ class SelectImagesConfig:
     buffer_days: int = 14
     num_buffer_expansions: int = 3
     buffer_expansion_size: int = 14
-    # Chips are selected in parallel: each one costs several STAC searches that
-    # spend nearly all their time waiting on the network.
-    workers: int = DEFAULT_IMAGERY_WORKERS
+    search_backend: str = "parquet"
+    # Chips are selected in parallel: each one costs several scene searches that
+    # spend nearly all their time waiting on the network. None picks the
+    # backend's default: 16 for the parquet mirror, 4 for Earth Search (which
+    # rate-bans aggressive clients).
+    workers: int | None = None
+
+    @property
+    def effective_workers(self) -> int:
+        """The worker count to run with: explicit value, else the backend default."""
+        if self.workers is not None:
+            return self.workers
+        return (
+            DEFAULT_PARQUET_WORKERS
+            if self.search_backend == "parquet"
+            else (DEFAULT_IMAGERY_WORKERS)
+        )
 
 
 @dataclass
@@ -643,7 +664,13 @@ class DatasetConfig:
         if not isinstance(self.stages.download_images.resume, bool):
             raise ConfigError("stages.download_images.resume must be true or false")
 
-        _validate_workers(self.stages.select_images.workers, "stages.select_images.workers")
+        if self.stages.select_images.search_backend not in SEARCH_BACKENDS:
+            raise ConfigError(
+                f"stages.select_images.search_backend must be one of {list(SEARCH_BACKENDS)} "
+                f"(got {self.stages.select_images.search_backend!r})"
+            )
+        if self.stages.select_images.workers is not None:
+            _validate_workers(self.stages.select_images.workers, "stages.select_images.workers")
         _validate_workers(self.stages.download_images.workers, "stages.download_images.workers")
 
         mode = self.stages.download_images.mode
