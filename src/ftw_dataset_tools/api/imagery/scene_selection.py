@@ -232,11 +232,19 @@ def _query_stac(
     )
 
 
+# Mirror collection per ftwd s2_collection identifier.
+_PARQUET_COLLECTIONS = {
+    "c1": parquet_search.COLLECTION_C1,
+    "old-baseline": parquet_search.COLLECTION_OLD,
+}
+
+
 def _query_parquet(
     bbox: tuple[float, float, float, float],
     center_date: datetime,
     cloud_cover_max: int,
     buffer_days: int,
+    s2_collection: str = "c1",
 ) -> STACQueryResult:
     """Query the Sentinel-2 STAC-GeoParquet mirror for scenes.
 
@@ -251,13 +259,14 @@ def _query_parquet(
     end = (center_date + timedelta(days=buffer_days)).replace(
         hour=23, minute=59, second=59, microsecond=0
     )
+    collection = _PARQUET_COLLECTIONS.get(s2_collection, parquet_search.COLLECTION_C1)
     items = parquet_search.query_scenes(
-        bbox=bbox, start=start, end=end, cloud_cover_max=cloud_cover_max
+        bbox=bbox, start=start, end=end, cloud_cover_max=cloud_cover_max, collection=collection
     )
     return STACQueryResult(
         items=items,
-        catalog_url=parquet_search.DEFAULT_PARQUET_URL,
-        collection=parquet_search.PARQUET_COLLECTION,
+        catalog_url=f"{parquet_search.DEFAULT_MIRROR_ROOT}/{collection}",
+        collection=collection,
         bbox=bbox,
         date_range=_format_date_range(center_date, buffer_days),
         cloud_cover_max=cloud_cover_max,
@@ -478,7 +487,9 @@ def select_scenes_for_chip(
 
     def _run_search(center_date: datetime, buffer: int) -> STACQueryResult:
         if search_backend == "parquet":
-            return _query_parquet(bbox, center_date, DEFAULT_CLOUD_COVER_SCENE, buffer)
+            return _query_parquet(
+                bbox, center_date, DEFAULT_CLOUD_COVER_SCENE, buffer, s2_collection
+            )
         return _query_stac(
             bbox=bbox,
             center_date=center_date,

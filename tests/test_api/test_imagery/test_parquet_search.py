@@ -7,6 +7,9 @@ import duckdb
 import pytest
 
 from ftw_dataset_tools.api.imagery.parquet_search import (
+    COLLECTION_C1,
+    COLLECTION_OLD,
+    mgrs_tiles_for_bbox,
     part_urls_for_query,
     query_scenes,
     zones_for_bbox,
@@ -61,6 +64,7 @@ class TestPartUrlsForQuery:
             SI_BBOX,
             datetime(2017, 6, 1, tzinfo=UTC),
             datetime(2017, 7, 1, tzinfo=UTC),
+            collection=COLLECTION_OLD,
             base_url=self.BASE,
             today=date(2026, 9, 21),
         )
@@ -71,6 +75,7 @@ class TestPartUrlsForQuery:
             SI_BBOX,
             datetime(2019, 6, 1, tzinfo=UTC),
             datetime(2019, 7, 1, tzinfo=UTC),
+            collection=COLLECTION_OLD,
             base_url=self.BASE,
             today=date(2026, 9, 21),
         )
@@ -81,6 +86,7 @@ class TestPartUrlsForQuery:
             SI_BBOX,
             datetime(2021, 6, 1, tzinfo=UTC),
             datetime(2021, 7, 1, tzinfo=UTC),
+            collection=COLLECTION_OLD,
             base_url=self.BASE,
             today=date(2026, 9, 21),
         )
@@ -91,6 +97,7 @@ class TestPartUrlsForQuery:
             SI_BBOX,
             datetime(2026, 8, 1, tzinfo=UTC),
             datetime(2026, 9, 1, tzinfo=UTC),
+            collection=COLLECTION_OLD,
             base_url=self.BASE,
             today=date(2026, 9, 21),
         )
@@ -104,6 +111,7 @@ class TestPartUrlsForQuery:
             SI_BBOX,
             datetime(2024, 12, 10, tzinfo=UTC),
             datetime(2025, 1, 20, tzinfo=UTC),
+            collection=COLLECTION_OLD,
             base_url=self.BASE,
             today=date(2026, 9, 21),
         )
@@ -117,6 +125,7 @@ class TestPartUrlsForQuery:
             SI_BBOX,
             datetime(2015, 6, 1, tzinfo=UTC),
             datetime(2015, 7, 1, tzinfo=UTC),
+            collection=COLLECTION_OLD,
             base_url=self.BASE,
             today=date(2026, 9, 21),
         )
@@ -127,6 +136,7 @@ class TestPartUrlsForQuery:
             (5.9, 49.5, 6.1, 49.7),
             datetime(2021, 6, 1, tzinfo=UTC),
             datetime(2021, 7, 1, tzinfo=UTC),
+            collection=COLLECTION_OLD,
             base_url=self.BASE,
             today=date(2026, 9, 21),
         )
@@ -221,6 +231,7 @@ class TestQueryScenes:
             "start": datetime(2021, 6, 1, tzinfo=UTC),
             "end": datetime(2021, 6, 30, tzinfo=UTC),
             "cloud_cover_max": 75,
+            "collection": COLLECTION_OLD,
             "base_url": base_dir,
             "today": date(2026, 9, 21),
         }
@@ -285,6 +296,7 @@ class TestQueryScenes:
             start=datetime(2021, 6, 1, tzinfo=UTC),
             end=datetime(2021, 6, 30, tzinfo=UTC),
             cloud_cover_max=75,
+            collection=COLLECTION_OLD,
             base_url=str(tmp_path),
             today=date(2026, 9, 21),
         )
@@ -317,6 +329,7 @@ class TestQueryScenes:
             start=datetime(2026, 8, 1, tzinfo=UTC),
             end=datetime(2026, 8, 31, tzinfo=UTC),
             cloud_cover_max=75,
+            collection=COLLECTION_OLD,
             base_url=str(tmp_path),
             today=date(2026, 9, 21),
         )
@@ -355,6 +368,7 @@ class TestQueryScenes:
             start=datetime(2024, 12, 15, tzinfo=UTC),
             end=datetime(2025, 1, 15, tzinfo=UTC),
             cloud_cover_max=75,
+            collection=COLLECTION_OLD,
             base_url=str(tmp_path),
             today=date(2026, 9, 21),
         )
@@ -362,3 +376,164 @@ class TestQueryScenes:
             "S2A_33TVM_20241220_0_L2A",
             "S2A_33TVM_20250110_0_L2A",
         }
+
+
+class TestMgrsTilesForBbox:
+    """Tests for mgrs_tiles_for_bbox (the c1 layout is tile-sorted, so queries
+    filter by tile and the candidate set must cover neighbours and other zones)."""
+
+    def test_slovenia_chip_straddling_column_boundary(self):
+        # lon 15 is the 500 km easting of zone 33: columns V and W
+        tiles = mgrs_tiles_for_bbox(SI_BBOX)
+        assert {"33TVM", "33TWM"} <= tiles
+
+    def test_luxembourg_boundary_chip_gets_both_zones(self):
+        """The chip whose square is 32UKA is actually imaged by 31UGQ/31UGR."""
+        tiles = mgrs_tiles_for_bbox((6.0000001, 49.61, 6.0097, 49.63))
+        assert "31UGQ" in tiles
+        assert "32UKA" in tiles
+
+    def test_single_digit_zone_includes_padded_form(self):
+        # c1 ids zero-pad the zone (T08...), the old ids do not; emit both
+        tiles = mgrs_tiles_for_bbox((-134.5, 58.0, -134.4, 58.1))
+        padded = {t for t in tiles if t.startswith("08")}
+        unpadded = {t for t in tiles if t.startswith("8") and not t.startswith("08")}
+        assert padded and unpadded
+
+
+class TestC1PartUrls:
+    """Tests for the c1 collection's one-file-per-year layout."""
+
+    BASE = "https://example.com/c1"
+
+    def _urls(self, start, end, today=date(2026, 9, 22)):
+        return part_urls_for_query(
+            SI_BBOX, start, end, collection=COLLECTION_C1, base_url=self.BASE, today=today
+        )
+
+    def test_one_items_file_per_year(self):
+        urls = self._urls(datetime(2025, 5, 1, tzinfo=UTC), datetime(2025, 6, 1, tzinfo=UTC))
+        assert urls == [f"{self.BASE}/year=2025/items.parquet"]
+
+    def test_current_year_adds_live(self):
+        urls = self._urls(datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 9, 1, tzinfo=UTC))
+        assert urls == [
+            f"{self.BASE}/year=2026/items.parquet",
+            f"{self.BASE}/year=2026/live.parquet",
+        ]
+
+    def test_c1_archive_starts_2015(self):
+        urls = self._urls(datetime(2015, 11, 1, tzinfo=UTC), datetime(2015, 12, 1, tzinfo=UTC))
+        assert urls == [f"{self.BASE}/year=2015/items.parquet"]
+
+
+def _write_c1_part(path: Path, rows: list[dict]) -> None:
+    """Write a c1 part with the mirror's narrow columns (assets omitted)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect()
+    con.execute("SET TimeZone = 'UTC'")
+    con.execute(
+        """
+        CREATE TABLE part (
+            id VARCHAR,
+            bbox DOUBLE[],
+            datetime TIMESTAMP WITH TIME ZONE,
+            _tile VARCHAR,
+            "eo:cloud_cover" DOUBLE,
+            "s2:nodata_pixel_percentage" DOUBLE
+        )
+        """
+    )
+    for r in rows:
+        con.execute(
+            "INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                r["id"],
+                r.get("bbox", [14.5, 45.5, 15.6, 46.5]),
+                r["datetime"],
+                r.get("tile", "33TVM"),
+                r.get("cloud", 1.0),
+                r.get("nodata"),
+            ],
+        )
+    con.execute(f"COPY part TO '{path}' (FORMAT PARQUET)")
+    con.close()
+
+
+class TestC1QueryScenes:
+    """Tests for query_scenes against the c1 layout."""
+
+    @pytest.fixture
+    def base_dir(self, tmp_path):
+        _write_c1_part(
+            tmp_path / "year=2025" / "items.parquet",
+            [
+                {
+                    "id": "S2B_T33TVM_20250610T101021_L2A",
+                    "datetime": datetime(2025, 6, 10, 10, 10, tzinfo=UTC),
+                    "cloud": 0.5,
+                    "nodata": 3.2,
+                },
+                {
+                    "id": "S2A_T33TVM_20250605T101011_L2A",
+                    "datetime": datetime(2025, 6, 5, 10, 10, tzinfo=UTC),
+                    "cloud": 5.0,
+                },
+                {
+                    # right tile, out of window
+                    "id": "S2A_T33TVM_20250705T101011_L2A",
+                    "datetime": datetime(2025, 7, 5, 10, 10, tzinfo=UTC),
+                },
+                {
+                    # a tile the bbox does not touch
+                    "id": "S2A_T33TUL_20250610T101021_L2A",
+                    "datetime": datetime(2025, 6, 10, 10, 10, tzinfo=UTC),
+                    "tile": "33TUL",
+                    "bbox": [13.2, 44.6, 14.6, 45.7],
+                },
+            ],
+        )
+        return str(tmp_path)
+
+    def _query(self, base_dir, **kwargs):
+        defaults = {
+            "bbox": SI_BBOX,
+            "start": datetime(2025, 6, 1, tzinfo=UTC),
+            "end": datetime(2025, 6, 30, tzinfo=UTC),
+            "cloud_cover_max": 75,
+            "collection": COLLECTION_C1,
+            "base_url": base_dir,
+            "today": date(2026, 9, 22),
+        }
+        defaults.update(kwargs)
+        return query_scenes(**defaults)
+
+    def test_filters_by_tile_window_and_sorts(self, base_dir):
+        items = self._query(base_dir)
+        assert [i.id for i in items] == [
+            "S2B_T33TVM_20250610T101021_L2A",
+            "S2A_T33TVM_20250605T101011_L2A",
+        ]
+
+    def test_c1_assets_synthesized_from_id(self, base_dir):
+        item = self._query(base_dir)[0]
+        base = (
+            "https://e84-earth-search-sentinel-data.s3.us-west-2.amazonaws.com"
+            "/sentinel-2-c1-l2a/33/T/VM/2025/6/S2B_T33TVM_20250610T101021_L2A"
+        )
+        assert item.assets["red"].href == f"{base}/B04.tif"
+        assert item.assets["scl"].href == f"{base}/SCL.tif"
+        assert item.assets["visual"].href == f"{base}/TCI.tif"
+        assert item.assets["cloud"].href == f"{base}/CLD_20m.tif"
+
+    def test_c1_item_properties(self, base_dir):
+        from pystac.extensions.eo import EOExtension
+
+        item = self._query(base_dir)[0]
+        assert item.datetime == datetime(2025, 6, 10, 10, 10, tzinfo=UTC)
+        assert EOExtension.ext(item).cloud_cover == 0.5
+        assert item.properties["s2:nodata_pixel_percentage"] == 3.2
+        assert item.properties["s2:mgrs_tile"] == "33TVM"
+        href = item.get_self_href()
+        assert href is not None
+        assert href.endswith("/collections/sentinel-2-c1-l2a/items/S2B_T33TVM_20250610T101021_L2A")

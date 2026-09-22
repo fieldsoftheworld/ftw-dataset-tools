@@ -25,20 +25,31 @@ if TYPE_CHECKING:
     from datetime import datetime
 
 __all__ = [
+    "COLLECTION_C1",
+    "COLLECTION_OLD",
+    "DEFAULT_MIRROR_ROOT",
     "DEFAULT_PARQUET_URL",
     "PARQUET_COLLECTION",
+    "mgrs_tiles_for_bbox",
     "part_urls_for_query",
     "query_scenes",
     "zones_for_bbox",
 ]
 
-DEFAULT_PARQUET_URL = "https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a"
+DEFAULT_MIRROR_ROOT = "https://data.source.coop/portolan-mirrors/sentinel-2-catalog"
 
-# The mirror holds Earth Search's sentinel-2-l2a collection (not c1).
-PARQUET_COLLECTION = "sentinel-2-l2a"
+# The two Earth Search collections the mirror carries. Collection 1 is ESA's
+# reprocessing of the whole archive to one processing baseline and is the
+# default; the old collection remains for the earlier zone-part layout.
+COLLECTION_C1 = "sentinel-2-c1-l2a"
+COLLECTION_OLD = "sentinel-2-l2a"
 
-# The archive starts in November 2016.
+DEFAULT_PARQUET_URL = f"{DEFAULT_MIRROR_ROOT}/{COLLECTION_OLD}"
+PARQUET_COLLECTION = COLLECTION_OLD  # kept for backwards compatibility
+
+# First archive year per collection (old: November 2016; c1: late 2015).
 _FIRST_YEAR = 2016
+_FIRST_YEAR_C1 = 2015
 
 # UTM zone ranges per part file, by year vintage (see the catalog README's
 # layout table; both sets are fixed for the life of the catalog).
@@ -76,6 +87,82 @@ def zones_for_bbox(bbox: tuple[float, float, float, float]) -> set[int]:
     return zones
 
 
+# MGRS lettering (the scheme Sentinel-2 tiling uses). Column letter sets cycle
+# with zone mod 3; row letters cycle through 20 with a half-cycle offset on
+# even zones; latitude bands run C-X in 8 degree steps from 80S.
+_MGRS_COL_SETS = {1: "ABCDEFGH", 2: "JKLMNPQR", 0: "STUVWXYZ"}
+_MGRS_ROWS = "ABCDEFGHJKLMNPQRSTUV"
+_MGRS_BANDS = "CDEFGHJKLMNPQRSTUVWX"
+
+# How far beyond the chip a covering tile's 100 km square may start: the
+# ~4.9 km tile overlap, padded to 10 km for margin.
+_TILE_OVERLAP_M = 10_000.0
+
+
+def _lat_band(lat: float) -> str:
+    """MGRS latitude band letter (band X absorbs 72-84N)."""
+    idx = min(max(int((lat + 80.0) // 8.0), 0), len(_MGRS_BANDS) - 1)
+    return _MGRS_BANDS[idx]
+
+
+def _zone_tiles(bbox: tuple[float, float, float, float], zone: int, south: bool) -> set[str]:
+    """MGRS tile ids of one UTM zone whose squares can cover a bbox."""
+    from pyproj import Transformer
+
+    epsg = (32700 if south else 32600) + zone
+    fwd = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+    inv = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+    west, s, east, n = bbox
+    corners = [fwd.transform(lon, lat) for lon in (west, east) for lat in (s, n)]
+    xs = [c[0] for c in corners]
+    ys = [c[1] for c in corners]
+    e0 = max(min(xs) - _TILE_OVERLAP_M, 100_000.0)
+    e1 = min(max(xs) + _TILE_OVERLAP_M, 899_999.0)
+    n0 = max(min(ys) - _TILE_OVERLAP_M, 0.0)
+    n1 = min(max(ys) + _TILE_OVERLAP_M, 9_999_999.0)
+    if e0 > e1 or n0 > n1:
+        return set()
+
+    tiles: set[str] = set()
+    col_set = _MGRS_COL_SETS[zone % 3]
+    row_offset = 0 if zone % 2 else 5
+    easting = math.floor(e0 / 1e5) * 1e5
+    while easting <= e1:
+        northing = math.floor(n0 / 1e5) * 1e5
+        while northing <= n1:
+            col = col_set[int(easting // 1e5) - 1]
+            row = _MGRS_ROWS[(int(northing // 1e5) + row_offset) % 20]
+            _, center_lat = inv.transform(easting + 50_000, northing + 50_000)
+            # A square can straddle a band boundary; over-generating a band
+            # is harmless (an absent tile matches no rows).
+            for lat in (center_lat - 0.6, center_lat, center_lat + 0.6):
+                band = _lat_band(lat)
+                tiles.add(f"{zone}{band}{col}{row}")
+                if zone < 10:
+                    # c1 ids zero-pad the zone, the old ids do not: emit both
+                    tiles.add(f"{zone:02d}{band}{col}{row}")
+            northing += 1e5
+        easting += 1e5
+    return tiles
+
+
+def mgrs_tiles_for_bbox(bbox: tuple[float, float, float, float]) -> set[str]:
+    """MGRS tile ids whose Sentinel-2 scenes can cover a bbox.
+
+    Covers neighbouring squares (tiles overlap ~5 km into each other) and
+    tiles from adjacent UTM zones, which routinely image chips across a zone
+    boundary meridian.
+    """
+    _west, south, _east, north = bbox
+    tiles: set[str] = set()
+    for zone in zones_for_bbox(bbox):
+        if north >= 0:
+            tiles |= _zone_tiles(bbox, zone, south=False)
+        if south < 0:
+            tiles |= _zone_tiles(bbox, zone, south=True)
+    return tiles
+
+
 def _part_name(year: int, zone: int) -> str:
     """Part file name holding a UTM zone's scenes for a year."""
     if year <= 2018:
@@ -92,21 +179,28 @@ def part_urls_for_query(
     start: datetime,
     end: datetime,
     *,
-    base_url: str = DEFAULT_PARQUET_URL,
+    collection: str = COLLECTION_C1,
+    base_url: str | None = None,
     today: date | None = None,
 ) -> list[str]:
     """Catalog part URLs a bbox + date-window query must read.
 
-    Years outside the archive (before 2016 or after the current year) are
-    dropped; the current year also reads ``live.parquet``, the daily tail.
+    The c1 collection is one ``items.parquet`` per year; the old collection
+    splits a year by UTM zone ranges. Years outside the archive are dropped;
+    the current year also reads ``live.parquet``, the rolling tail.
     """
+    base_url = base_url or f"{DEFAULT_MIRROR_ROOT}/{collection}"
+    first_year = _FIRST_YEAR_C1 if collection == COLLECTION_C1 else _FIRST_YEAR
     today = today or date.today()
     urls: list[str] = []
     for year in range(start.year, end.year + 1):
-        if year < _FIRST_YEAR or year > today.year:
+        if year < first_year or year > today.year:
             continue
-        names = {_part_name(year, zone) for zone in zones_for_bbox(bbox)}
-        urls.extend(f"{base_url}/year={year}/{name}" for name in sorted(names))
+        if collection == COLLECTION_C1:
+            urls.append(f"{base_url}/year={year}/items.parquet")
+        else:
+            names = {_part_name(year, zone) for zone in zones_for_bbox(bbox)}
+            urls.extend(f"{base_url}/year={year}/{name}" for name in sorted(names))
         if year == today.year:
             urls.append(f"{base_url}/year={year}/live.parquet")
     return urls
@@ -185,11 +279,25 @@ _ASSET_FILES = {
 }
 
 _COG_BASE = "https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs"
+_C1_COG_BASE = "https://e84-earth-search-sentinel-data.s3.us-west-2.amazonaws.com/sentinel-2-c1-l2a"
+# Extra COGs c1 products carry beyond the shared band set.
+_C1_EXTRA_FILES = {"aot": "AOT", "wvp": "WVP", "cloud": "CLD_20m", "snow": "SNW_20m"}
 MEDIA_TYPE_COG = "image/tiff; application=geotiff; profile=cloud-optimized"
 
 
+def _assets_from_layout(base: str, files: dict[str, str]) -> dict[str, pystac.Asset]:
+    return {
+        key: pystac.Asset(
+            href=f"{base}/{filename}.tif",
+            media_type=MEDIA_TYPE_COG,
+            roles=["visual"] if key == "visual" else ["data"],
+        )
+        for key, filename in files.items()
+    }
+
+
 def _synthesize_assets(item_id: str) -> dict[str, pystac.Asset]:
-    """Rebuild a scene's COG assets from its id.
+    """Rebuild an old-collection scene's COG assets from its id.
 
     An id like ``S2B_33TVL_20250610_0_L2A`` names tile 33TVL acquired
     2025-06-10, whose files live under
@@ -199,14 +307,22 @@ def _synthesize_assets(item_id: str) -> dict[str, pystac.Asset]:
     zone, band, square = tile[:-3], tile[-3], tile[-2:]
     year, month = int(date_s[:4]), int(date_s[4:6])
     base = f"{_COG_BASE}/{zone}/{band}/{square}/{year}/{month}/{item_id}"
-    return {
-        key: pystac.Asset(
-            href=f"{base}/{filename}.tif",
-            media_type=MEDIA_TYPE_COG,
-            roles=["visual"] if key == "visual" else ["data"],
-        )
-        for key, filename in _ASSET_FILES.items()
-    }
+    return _assets_from_layout(base, _ASSET_FILES)
+
+
+def _synthesize_assets_c1(item_id: str) -> dict[str, pystac.Asset]:
+    """Rebuild a c1 scene's COG assets from its id.
+
+    An id like ``S2B_T31UGR_20250403T103147_L2A`` names tile 31UGR acquired
+    2025-04-03, whose files live under
+    ``{bucket}/31/U/GR/2025/4/S2B_T31UGR_20250403T103147_L2A/``.
+    """
+    _, tile_token, date_s = item_id.split("_")[:3]
+    tile = tile_token[1:]  # strip the leading T
+    zone, band, square = int(tile[:-3]), tile[-3], tile[-2:]
+    year, month = int(date_s[:4]), int(date_s[4:6])
+    base = f"{_C1_COG_BASE}/{zone}/{band}/{square}/{year}/{month}/{item_id}"
+    return _assets_from_layout(base, {**_ASSET_FILES, **_C1_EXTRA_FILES})
 
 
 def _row_to_item(
@@ -216,6 +332,7 @@ def _row_to_item(
     tile: str,
     cloud_cover: float | None,
     nodata_pct: float | None,
+    collection: str,
 ) -> pystac.Item:
     """Reconstruct a pystac Item from a mirror row."""
     properties: dict = {"s2:mgrs_tile": tile}
@@ -233,11 +350,41 @@ def _row_to_item(
     # Selection reads cloud cover through EOExtension, which requires the
     # extension to be declared on the item.
     EOExtension.ext(item, add_if_missing=True)
-    for key, asset in _synthesize_assets(item_id).items():
+    synthesize = _synthesize_assets_c1 if collection == COLLECTION_C1 else _synthesize_assets
+    for key, asset in synthesize(item_id).items():
         item.add_asset(key, asset)
     # A stable provenance URL for the scene; never used for search.
-    item.set_self_href(f"{STAC_URL}/collections/{PARQUET_COLLECTION}/items/{item_id}")
+    item.set_self_href(f"{STAC_URL}/collections/{collection}/items/{item_id}")
     return item
+
+
+def _scene_sql(collection: str, urls: list[str], bbox, start, end) -> str:
+    """The candidate-scene query for a collection's layout.
+
+    The old collection's parts are ``(_month, _hilbert)``-sorted, so month
+    membership prunes row groups. The c1 parts are ``(_tile, datetime)``-sorted
+    whole-world year files, so a tile-set filter is what prunes; a bbox scan
+    there would read the entire year.
+    """
+    url_list = ", ".join("'" + u.replace("'", "''") + "'" for u in urls)
+    if collection == COLLECTION_C1:
+        tiles = mgrs_tiles_for_bbox(bbox)
+        tile_list = ", ".join("'" + t + "'" for t in sorted(tiles))
+        tile_col, prune = "_tile", f"_tile IN ({tile_list})"
+    else:
+        months = ", ".join(str(m) for m in _months_in_window(start, end))
+        tile_col, prune = '"s2:mgrs_tile"', f"_month IN ({months})"
+    return f"""
+        SELECT id, bbox, datetime, {tile_col}, "eo:cloud_cover",
+               "s2:nodata_pixel_percentage"
+        FROM read_parquet([{url_list}], union_by_name = true)
+        WHERE {prune}
+          AND datetime BETWEEN ? AND ?
+          AND "eo:cloud_cover" < ?
+          AND bbox[1] <= ? AND bbox[3] >= ?
+          AND bbox[2] <= ? AND bbox[4] >= ?
+        ORDER BY "eo:cloud_cover" NULLS LAST, id
+    """
 
 
 def query_scenes(
@@ -246,7 +393,8 @@ def query_scenes(
     end: datetime,
     cloud_cover_max: int,
     *,
-    base_url: str = DEFAULT_PARQUET_URL,
+    collection: str = COLLECTION_C1,
+    base_url: str | None = None,
     today: date | None = None,
 ) -> list[pystac.Item]:
     """Scenes intersecting a bbox in a date window, sorted by cloud cover.
@@ -255,23 +403,13 @@ def query_scenes(
     datetime window, and ``eo:cloud_cover < cloud_cover_max``, ordered
     ascending by cloud cover.
     """
-    urls = part_urls_for_query(bbox, start, end, base_url=base_url, today=today)
+    urls = part_urls_for_query(
+        bbox, start, end, collection=collection, base_url=base_url, today=today
+    )
     if not urls:
         return []
-    url_list = ", ".join("'" + u.replace("'", "''") + "'" for u in urls)
-    months = ", ".join(str(m) for m in _months_in_window(start, end))
     west, south, east, north = bbox
-    sql = f"""
-        SELECT id, bbox, datetime, "s2:mgrs_tile", "eo:cloud_cover",
-               "s2:nodata_pixel_percentage"
-        FROM read_parquet([{url_list}], union_by_name = true)
-        WHERE _month IN ({months})
-          AND datetime BETWEEN ? AND ?
-          AND "eo:cloud_cover" < ?
-          AND bbox[1] <= ? AND bbox[3] >= ?
-          AND bbox[2] <= ? AND bbox[4] >= ?
-        ORDER BY "eo:cloud_cover" NULLS LAST, id
-    """
+    sql = _scene_sql(collection, urls, bbox, start, end)
     rows = (
         _connection()
         .execute(sql, [start, end, cloud_cover_max, east, west, north, south])
@@ -283,5 +421,5 @@ def query_scenes(
         if item_id in seen:
             continue
         seen.add(item_id)
-        items.append(_row_to_item(item_id, row_bbox, dt, tile, cloud, nodata))
+        items.append(_row_to_item(item_id, row_bbox, dt, tile, cloud, nodata, collection))
     return items
