@@ -1,4 +1,4 @@
-"""JPEG thumbnail generation for satellite imagery."""
+"""Preview thumbnail generation for satellite imagery."""
 
 from __future__ import annotations
 
@@ -17,6 +17,31 @@ class ThumbnailError(Exception):
     """Error generating thumbnail."""
 
 
+#: Previews are written as WebP: every chip item carries one, so a browser
+#: rendering a collection loads one per card, making it the most-fetched image in
+#: the catalog. WebP runs 25-35% smaller than JPEG at equivalent quality, and it is
+#: what the collection-level thumbnails already use.
+PREVIEW_FORMAT = "WEBP"
+PREVIEW_SUFFIX = ".webp"
+PREVIEW_MEDIA_TYPE = "image/webp"
+
+#: Previews written before the WebP switch. Nothing produces these any more, but
+#: they are still read: a catalog built earlier has them on disk, and its STAC must
+#: keep describing them correctly until it is converted.
+LEGACY_PREVIEW_SUFFIXES = (".jpg", ".jpeg")
+LEGACY_PREVIEW_MEDIA_TYPE = "image/jpeg"
+
+#: Every extension a chip preview may carry on disk, current format first. Use this
+#: wherever previews are looked up rather than written, so a catalog part-way through
+#: conversion is still handled whole.
+PREVIEW_EXTENSIONS = (PREVIEW_SUFFIX, *LEGACY_PREVIEW_SUFFIXES)
+
+#: Slowest, smallest setting of the WebP encoder. A preview is written once and
+#: served many times, and at chip size the extra encode cost is far below the
+#: network read it follows.
+_WEBP_METHOD = 6
+
+
 # Default colors for semantic 3-class mask overlay
 DEFAULT_MASK_COLORS: dict[int, tuple[int, int, int]] = {
     1: (0, 200, 0),  # Green for field interiors
@@ -29,6 +54,24 @@ RGB_BAND_SETS = [
     ("red", "green", "blue"),
     ("nir", "red", "green"),  # False color composite
 ]
+
+
+def preview_media_type(filename: str | Path) -> str:
+    """The media type to describe a preview file with, taken from its extension.
+
+    Previews are written as WebP; a ``.jpg`` left from an earlier build is still
+    described as JPEG rather than mislabelled, so a catalog stays correct between
+    the format switch and its conversion.
+
+    Args:
+        filename: Preview filename or path
+
+    Returns:
+        The asset media type for that file
+    """
+    if str(filename).lower().endswith(LEGACY_PREVIEW_SUFFIXES):
+        return LEGACY_PREVIEW_MEDIA_TYPE
+    return PREVIEW_MEDIA_TYPE
 
 
 def has_rgb_bands(band_list: list[str]) -> bool:
@@ -49,12 +92,12 @@ def generate_thumbnail(
     output_path: str | Path,
     quality: int = 85,
 ) -> Path:
-    """Generate JPEG thumbnail from a multi-band GeoTIFF.
+    """Generate a WebP thumbnail from a multi-band GeoTIFF.
 
     Args:
         tif_path: Path to GeoTIFF (must have at least 3 bands for RGB)
-        output_path: Output path for JPEG
-        quality: JPEG quality (1-100)
+        output_path: Output path for the preview
+        quality: WebP quality (1-100)
 
     Returns:
         Path to generated thumbnail
@@ -89,7 +132,7 @@ def generate_thumbnail(
         # Convert to PIL image
         rgb_array = np.transpose(data, (1, 2, 0)).astype(np.uint8)
         img = Image.fromarray(rgb_array, mode="RGB")
-        img.save(output_path, "JPEG", quality=quality, optimize=True)
+        img.save(output_path, PREVIEW_FORMAT, quality=quality, method=_WEBP_METHOD)
 
     except RasterioIOError as e:
         raise ThumbnailError(f"Failed to read {tif_path}: {e}") from e
@@ -130,7 +173,7 @@ def generate_scene_thumbnail(
     max_size: int = 512,
     quality: int = 85,
 ) -> Path:
-    """Write a JPEG preview of one chip read straight from a remote true-colour COG.
+    """Write a WebP preview of one chip read straight from a remote true-colour COG.
 
     The clipped-image path writes a 4-band GeoTIFF per chip and previews that. A
     dataset that keeps the scene COG remote has no such file, so read the chip's
@@ -145,9 +188,9 @@ def generate_scene_thumbnail(
     Args:
         visual_href: URL of the scene's true-colour (8-bit RGB) COG.
         reference_raster: A raster on the chip grid, used for CRS/extent/aspect.
-        output_path: Output path for the JPEG.
+        output_path: Output path for the preview.
         max_size: Longest edge of the preview in pixels.
-        quality: JPEG quality (1-100).
+        quality: WebP quality (1-100).
 
     Returns:
         Path to the generated thumbnail.
@@ -201,7 +244,7 @@ def generate_scene_thumbnail(
 
         rgb_array = np.transpose(data, (1, 2, 0)).astype(np.uint8)
         Image.fromarray(rgb_array, mode="RGB").save(
-            output_path, "JPEG", quality=quality, optimize=True
+            output_path, PREVIEW_FORMAT, quality=quality, method=_WEBP_METHOD
         )
     except RasterioIOError as err:
         raise ThumbnailError(f"Failed to read {visual_href}: {err}") from err
@@ -223,18 +266,18 @@ def generate_overlay_thumbnail(
 ) -> Path:
     """Generate thumbnail with semantic mask overlay.
 
-    Composites a colorized mask onto a base JPEG image at the specified opacity.
+    Composites a colorized mask onto a base preview image at the specified opacity.
     Class 0 (background) is rendered as transparent; other classes get colors
     from mask_colors.
 
     Args:
-        base_image_path: Path to base JPEG thumbnail
+        base_image_path: Path to base preview thumbnail
         mask_path: Path to semantic mask GeoTIFF
-        output_path: Output path for overlay JPEG
+        output_path: Output path for the overlay preview
         mask_colors: Class value to RGB color mapping. Defaults to green for
             class 1 (field interiors) and orange for class 2 (boundaries).
         opacity: Opacity of mask overlay (0.0-1.0)
-        quality: JPEG quality (1-100)
+        quality: WebP quality (1-100)
 
     Returns:
         Path to generated overlay thumbnail
@@ -255,7 +298,7 @@ def generate_overlay_thumbnail(
         mask_colors = DEFAULT_MASK_COLORS
 
     try:
-        # Load base JPEG and convert to RGBA
+        # Load base preview and convert to RGBA
         base_img = Image.open(base_image_path).convert("RGBA")
         thumb_width, thumb_height = base_img.size
 
@@ -282,9 +325,9 @@ def generate_overlay_thumbnail(
         overlay_img = Image.fromarray(overlay_rgba, mode="RGBA")
         composite = Image.alpha_composite(base_img, overlay_img)
 
-        # Convert to RGB and save as JPEG
+        # Convert to RGB and save as WebP
         composite_rgb = composite.convert("RGB")
-        composite_rgb.save(output_path, "JPEG", quality=quality, optimize=True)
+        composite_rgb.save(output_path, PREVIEW_FORMAT, quality=quality, method=_WEBP_METHOD)
 
     except RasterioIOError as e:
         raise ThumbnailError(f"Failed to read mask {mask_path}: {e}") from e

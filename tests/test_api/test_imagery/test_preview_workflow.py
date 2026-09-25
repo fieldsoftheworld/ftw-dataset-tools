@@ -151,12 +151,13 @@ class TestPreviewImageryForCatalog:
         result = preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
 
         assert (result.successful, result.skipped, result.failed) == (1, 0, 0)
-        overlay = out / "chips" / "33TXM" / "chip_a" / "chip_a_overlay.jpg"
+        overlay = out / "chips" / "33TXM" / "chip_a" / "chip_a_overlay.webp"
         assert overlay.exists() and overlay.stat().st_size > 0
 
         item = pystac.Item.from_file(str(out / "chips" / "33TXM" / "chip_a" / "chip_a.json"))
         assert "thumbnail" in item.assets
-        assert item.assets["thumbnail"].href == "./chip_a_overlay.jpg"
+        assert item.assets["thumbnail"].href == "./chip_a_overlay.webp"
+        assert item.assets["thumbnail"].media_type == "image/webp"
 
     def test_leaves_no_intermediate_base_file(self, tmp_path: Path) -> None:
         out = _collection(tmp_path)

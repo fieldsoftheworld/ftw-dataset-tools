@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pystac
 
+from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_EXTENSIONS
 from ftw_dataset_tools.api.stac_items import write_item
 
 __all__ = [
@@ -294,14 +295,18 @@ def clear_chip_selections(item: pystac.Item) -> ClearResult:
             tif.unlink()
             result.geotiffs_deleted += 1
 
-        # Delete thumbnails
-        for jpg in chip_dir.glob(f"{item.id}_{season}_*.jpg"):
-            jpg.unlink()
+        # Delete thumbnails. Both extensions: previews are written as WebP, but a
+        # catalog built before that switch still has .jpg here, and leaving either
+        # behind strands a preview for imagery that no longer exists.
+        for ext in PREVIEW_EXTENSIONS:
+            for thumb in chip_dir.glob(f"{item.id}_{season}_*{ext}"):
+                thumb.unlink()
 
     # Delete overlay thumbnail if it exists
-    overlay_jpg = chip_dir / f"{item.id}_overlay.jpg"
-    if overlay_jpg.exists():
-        overlay_jpg.unlink()
+    for ext in PREVIEW_EXTENSIONS:
+        overlay = chip_dir / f"{item.id}_overlay{ext}"
+        if overlay.exists():
+            overlay.unlink()
 
     # Remove ftw:planting and ftw:harvest links from parent item
     item.links = [link for link in item.links if link.rel not in IMAGERY_LINK_RELS]

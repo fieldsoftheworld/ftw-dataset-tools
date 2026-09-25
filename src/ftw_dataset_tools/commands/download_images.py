@@ -192,7 +192,7 @@ def _update_stac_items(
     "--preview/--no-preview",
     default=True,
     show_default=True,
-    help="Generate JPEG preview thumbnails for downloaded images.",
+    help="Generate WebP preview thumbnails for downloaded images.",
 )
 @click.option(
     "--workers",

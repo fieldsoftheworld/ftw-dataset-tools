@@ -118,7 +118,7 @@ def download_imagery_for_catalog(
         catalog_dir: Path to the chips collection directory
         bands: List of bands to download. Default: ["red", "green", "blue", "nir"]
         resolution: Target resolution in meters
-        generate_thumbnails: Whether to generate JPEG preview thumbnails
+        generate_thumbnails: Whether to generate WebP preview thumbnails
         resume: Skip items that already have local imagery. Defaults to True: a
             completed download replaces the child's band assets with the local
             `image`, so re-attempting one leaves no band hrefs to fetch and fails.

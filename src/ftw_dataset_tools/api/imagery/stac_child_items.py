@@ -15,6 +15,11 @@ import pystac
 from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
 from ftw_dataset_tools.api.imagery.catalog_ops import IMAGERY_ASSET_KEYS
 from ftw_dataset_tools.api.imagery.settings import CHILD_ITEM_BANDS
+from ftw_dataset_tools.api.imagery.thumbnails import (
+    LEGACY_PREVIEW_MEDIA_TYPE,
+    PREVIEW_MEDIA_TYPE,
+    PREVIEW_SUFFIX,
+)
 from ftw_dataset_tools.api.stac import MEDIA_TYPE_COG, _add_portolan_schema
 from ftw_dataset_tools.api.stac_items import write_item
 
@@ -390,10 +395,22 @@ def attach_season_to_parent(
 
 #: Chip preview candidates, in the order ``image_download`` itself prefers them:
 #: the mask overlay when it could be drawn, otherwise the plain planting preview.
-#: Each entry is (filename suffix, asset title).
+#: Each entry is (filename suffix, media type, asset title).
+#:
+#: Previews are written as WebP, but the ``.jpg`` entries stay on as a fallback
+#: *after* them: a catalog built before that switch still has ``.jpg`` on disk, and
+#: its next STAC rerun must keep finding it, or the rerun silently drops the
+#: thumbnail asset from every item. Nothing writes a ``.jpg`` preview any more --
+#: these entries only read what is already there.
 _THUMBNAIL_CANDIDATES = (
-    ("_overlay.jpg", "Chip preview with field overlay"),
-    ("_planting_image_s2.jpg", "Chip preview (planting season)"),
+    (f"_overlay{PREVIEW_SUFFIX}", PREVIEW_MEDIA_TYPE, "Chip preview with field overlay"),
+    (
+        f"_planting_image_s2{PREVIEW_SUFFIX}",
+        PREVIEW_MEDIA_TYPE,
+        "Chip preview (planting season)",
+    ),
+    ("_overlay.jpg", LEGACY_PREVIEW_MEDIA_TYPE, "Chip preview with field overlay"),
+    ("_planting_image_s2.jpg", LEGACY_PREVIEW_MEDIA_TYPE, "Chip preview (planting season)"),
 )
 
 
@@ -410,14 +427,14 @@ def attach_thumbnail_to_parent(
         chip_dir: Directory holding the chip's files
         checksums: Also compute ``file:checksum`` for the thumbnail
     """
-    for suffix, title in _THUMBNAIL_CANDIDATES:
+    for suffix, media_type, title in _THUMBNAIL_CANDIDATES:
         filename = f"{parent_item.id}{suffix}"
         path = chip_dir / filename
         if not path.exists():
             continue
         asset = pystac.Asset(
             href=f"./{filename}",
-            media_type=pystac.MediaType.JPEG,
+            media_type=media_type,
             title=title,
             roles=["thumbnail"],
         )

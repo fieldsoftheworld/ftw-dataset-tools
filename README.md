@@ -293,8 +293,9 @@ The output directory is a self-contained STAC collection with chip items grouped
     │       ├── {item_id}.json                   # Chip item
     │       ├── {item_id}_{mask_type}.tif        # Masks (if masks generated)
     │       ├── {item_id}_{season}_s2.json       # Scene items (if imagery selected)
-    │       ├── {item_id}_{season}_image_s2.tif  # Clipped imagery (if downloaded)
-    │       └── {item_id}_{season}_image_s2.jpg  # Thumbnails (if downloaded)
+    │       ├── {item_id}_{season}_image_s2.tif   # Clipped imagery (if downloaded)
+    │       ├── {item_id}_{season}_image_s2.webp  # Previews (if downloaded)
+    │       └── {item_id}_overlay.webp            # Preview with the mask drawn over it
     └── other/                        # For non-FTW grid ids
         ├── catalog.json
         └── {item_id}/...

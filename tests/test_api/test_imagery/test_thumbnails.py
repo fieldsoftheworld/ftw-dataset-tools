@@ -41,25 +41,26 @@ def test_generate_thumbnail_matches_tif_dimensions(
     width: int,
     height: int,
 ) -> None:
-    """JPG previews retain the source TIF's native dimensions."""
+    """WebP previews retain the source TIF's native dimensions."""
     tif_path = tmp_path / f"sample_{width}x{height}.tif"
-    jpg_path = tmp_path / f"sample_{width}x{height}.jpg"
+    webp_path = tmp_path / f"sample_{width}x{height}.webp"
     _write_rgb_tif(tif_path, width, height)
 
-    result = generate_thumbnail(tif_path, jpg_path)
+    result = generate_thumbnail(tif_path, webp_path)
 
-    assert result == jpg_path
-    with Image.open(jpg_path) as preview:
+    assert result == webp_path
+    with Image.open(webp_path) as preview:
+        assert preview.format == "WEBP"
         assert preview.size == (width, height)
 
 
 def test_generate_thumbnail_raises_for_missing_tif(tmp_path: Path) -> None:
     """Missing input files raise a clear thumbnail error."""
     tif_path = tmp_path / "missing.tif"
-    jpg_path = tmp_path / "preview.jpg"
+    webp_path = tmp_path / "preview.webp"
 
     with pytest.raises(ThumbnailError, match="Input file does not exist"):
-        generate_thumbnail(tif_path, jpg_path)
+        generate_thumbnail(tif_path, webp_path)
 
 
 class TestSceneThumbnail:
@@ -125,10 +126,11 @@ class TestSceneThumbnail:
 
         scene = self._scene(tmp_path / "scene.tif")
         mask = self._chip_mask(tmp_path / "chip_semantic_3_class.tif")
-        out = generate_scene_thumbnail(str(scene), mask, tmp_path / "preview.jpg")
+        out = generate_scene_thumbnail(str(scene), mask, tmp_path / "preview.webp")
 
         assert out.exists()
         with Image.open(out) as img:
+            assert img.format == "WEBP"
             assert img.mode == "RGB"
             # Square chip grid -> square preview, capped by max_size.
             assert img.width == img.height
