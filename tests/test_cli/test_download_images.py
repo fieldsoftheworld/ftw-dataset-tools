@@ -364,7 +364,18 @@ class TestDownloadImagesResumeDefault:
         assert result.exit_code == 0, result.output
         assert "Failed: 2" in result.output
         assert "already downloaded" in result.output
-        assert "select-images" in result.output
+        assert "select-images --force" in result.output
+
+    def test_no_resume_help_points_at_the_command_that_restores_band_refs(self) -> None:
+        """Plain `select-images` skips chips that already have a selection.
+
+        Telling the user to re-run it without --force sends them round a loop
+        that changes nothing.
+        """
+        result = CliRunner().invoke(cli, ["download-images", "--help"])
+
+        assert result.exit_code == 0, result.output
+        assert "select-images --force" in " ".join(result.output.split())
 
 
 class TestDownloadImagesWorkerValidation:

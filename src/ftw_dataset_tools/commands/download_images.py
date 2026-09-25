@@ -173,7 +173,7 @@ def _update_stac_items(
         "Leave chips that already have local imagery alone. Use --no-resume to fetch "
         "every chip again, which is the only way to pick up a changed --bands or "
         "--resolution (the skip is on the local file existing, not on what is inside it). "
-        "--no-resume needs remote band refs, so re-run select-images first."
+        "--no-resume needs remote band refs, so re-run select-images --force first."
     ),
 )
 @click.option(
