@@ -325,6 +325,8 @@ ftwd create-chips fields.parquet --reproject
 - `-o, --output` - Output file path (defaults to `chips_<fields_basename>.parquet`)
 - `--coverage-col` - Name for coverage column (default: `field_coverage_pct`)
 - `--min-coverage` - Exclude grid cells below this coverage percentage
+- `--min-chip-area` - Exclude chips smaller than this percentage of a full `--km-size` cell (default: 99.5, so chips truncated at UTM zone boundaries are removed - about 1.4% of cells - while every full cell is kept; pass 0 to keep them)
+- `--km-size` - Nominal chip edge length in km, the reference for `--min-chip-area` (default: 2.0)
 - `--reproject` - Reproject both inputs to EPSG:4326 if CRS don't match
 - `--grid-geom-col`, `--fields-geom-col` - Geometry column names (auto-detected)
 - `--grid-bbox-col`, `--fields-bbox-col` - Bbox column names (auto-detected)

@@ -68,6 +68,13 @@ stages:
     crop_stats: true
     # Grid cells per coverage batch. Lower it if the coverage step runs out of memory.
     coverage_batch_size: 2000
+    # Minimum chip area, as a percentage of a full km_size x km_size cell. MGRS cells
+    # are clipped at UTM zone boundaries, so chips on a seam can be only metres wide;
+    # 99.5 drops those while keeping every full cell. Set to 0 to keep them.
+    min_chip_area: 99.5
+    # Nominal chip edge length in km, the reference for min_chip_area. Change it to
+    # match grid_file when that grid was not built at 2 km.
+    km_size: 2.0
 
   splits:
     # One of: block3x3, predefined, random-uniform.
