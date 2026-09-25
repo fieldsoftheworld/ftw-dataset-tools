@@ -84,7 +84,14 @@ from ftw_dataset_tools.api.geo import CRSMismatchError
     "--drop-border-chips",
     is_flag=True,
     default=False,
-    help="Remove chips along the outer border of the dataset (where fields may have partial coverage).",
+    help="Remove chips on the edge of any labelled cluster (where fields may have partial coverage).",
+)
+@click.option(
+    "--border-gap-chips",
+    type=click.IntRange(min=0),
+    default=field_stats.DEFAULT_BORDER_GAP_CHIPS,
+    show_default=True,
+    help="How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.",
 )
 @click.option(
     "--batch-size",
@@ -107,6 +114,7 @@ def create_chips_cmd(
     km_size: float,
     reproject_to_4326: bool,
     drop_border_chips: bool,
+    border_gap_chips: int,
     batch_size: int,
 ) -> None:
     """Create chip definitions with field coverage statistics.
@@ -171,6 +179,7 @@ def create_chips_cmd(
                 km_size=km_size,
                 reproject_to_4326=reproject_to_4326,
                 drop_border_chips=drop_border_chips,
+                border_gap_chips=border_gap_chips,
                 batch_size=batch_size,
                 on_progress=on_progress,
             )

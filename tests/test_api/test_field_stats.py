@@ -473,13 +473,15 @@ class TestSparseRowids:
         )
 
         assert any("Removed" in msg and "border chips" in msg for msg in messages)
-        assert result.total_cells == 16  # the inner 4x4 block survives the convex hull
-        assert result.cells_with_coverage == 16
+        # The labelled 4x4 block is one cluster, so its own ring is the cluster edge and
+        # only the inner 2x2 is safely interior.
+        assert result.total_cells == 4
+        assert result.cells_with_coverage == 4
 
-        # Progress counts the cells that exist, not the rowid span they are spread over.
+        # Coverage now runs before the border step, so it sees the whole 6x6 grid.
         coverage_msgs = [m for m in messages if m.strip().startswith("Coverage:")]
-        assert coverage_msgs[-1].strip() == f"Coverage: {result.total_cells:,}/16 grid cells"
-        assert len(coverage_msgs) == 8  # 16 cells at 2 per batch
+        assert coverage_msgs[-1].strip() == "Coverage: 36/36 grid cells"
+        assert len(coverage_msgs) == 18  # 36 cells at 2 per batch
 
     def test_sparse_rowids_give_the_same_coverage_at_every_batch_size(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.field_stats import add_field_stats
@@ -502,7 +504,7 @@ class TestSparseRowids:
             con.close()
 
         assert all(r == rows[0] for r in rows)
-        assert len(rows[0]) == 16
+        assert len(rows[0]) == 4
 
 
 class TestChipOrderByFallback:

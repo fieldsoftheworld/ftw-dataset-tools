@@ -11,6 +11,10 @@ from typing import TYPE_CHECKING
 import duckdb
 import pyproj
 
+from ftw_dataset_tools.api.chip_borders import (
+    DEFAULT_BORDER_GAP_CHIPS,
+    find_border_chips,
+)
 from ftw_dataset_tools.api.geo import (
     CRSMismatchError,
     configure_source_coop_s3,
@@ -410,6 +414,7 @@ def add_field_stats(
     km_size: float = DEFAULT_CHIP_KM_SIZE,
     reproject_to_4326: bool = False,
     drop_border_chips: bool = False,
+    border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS,
     grid_source: str = DEFAULT_FTW_GRID_SOURCE,
     on_progress: Callable[[str], None] | None = None,
     batch_size: int = DEFAULT_COVERAGE_BATCH_SIZE,
@@ -443,8 +448,10 @@ def add_field_stats(
         km_size: Nominal chip edge length in km, used as the reference for min_chip_area
             (default 2.0, matching the FTW grid on Source Coop)
         reproject_to_4326: If True, reproject both inputs to EPSG:4326 before processing
-        drop_border_chips: If True, remove chips along the outer border of the dataset
+        drop_border_chips: If True, remove chips on the edge of any labelled cluster
             (where fields may have partial coverage)
+        border_gap_chips: How wide an unlabelled gap must be, in chips, before it counts
+            as a cluster edge
         grid_source: URL/path to fetch grid from when grid_file is None
             (default: FTW grid on Source Coop)
         on_progress: Optional callback for progress messages
@@ -630,50 +637,6 @@ def add_field_stats(
             )
             grid_count -= cells_dropped_undersized
 
-        # Filter out border chips if requested
-        if drop_border_chips:
-            log("Identifying border chips to remove...")
-
-            # Strategy: Remove chips not completely within the convex hull of field polygons
-            # This identifies chips on the boundary that may have partial field coverage
-
-            # Create convex hull of all field geometries
-            conn.execute(f"""
-                CREATE TABLE fields_hull AS
-                SELECT ST_ConvexHull(ST_Union_Agg({fields_geom_col})) as hull
-                FROM fields_table
-            """)
-
-            # Identify chips that are NOT completely within the convex hull
-            # ST_Within returns true only if the chip geometry is completely inside the hull
-            conn.execute(f"""
-                CREATE TABLE border_chips AS
-                SELECT g.rowid
-                FROM grid_table g, fields_hull h
-                WHERE NOT ST_Within(g.{grid_geom_col}, h.hull)
-            """)
-
-            border_count = conn.execute("SELECT COUNT(*) FROM border_chips").fetchone()[0]
-
-            if border_count > 0:
-                # Remove border chips from grid_table
-                conn.execute("""
-                    DELETE FROM grid_table
-                    WHERE rowid IN (SELECT rowid FROM border_chips)
-                """)
-
-                remaining_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
-                log(
-                    f"Removed {border_count:,} border chips (outside convex hull), "
-                    f"{remaining_count:,} chips remaining"
-                )
-                grid_count = remaining_count
-            else:
-                log("No border chips found to remove")
-
-            # Clean up temporary tables
-            conn.execute("DROP TABLE fields_hull")
-
         # Auto-detect bbox columns if not specified
         detected_grid_bbox = grid_bbox_col
         detected_fields_bbox = fields_bbox_col
@@ -726,6 +689,32 @@ def add_field_stats(
             after_count = conn.execute("SELECT COUNT(*) FROM result").fetchone()[0]
             removed = before_count - after_count
             log(f"Filtered out {removed:,} cells with coverage < {min_coverage}%")
+
+        # Border chips are dropped here, after coverage is known: the labelled region is
+        # estimated from the chips that actually hold fields.
+        if drop_border_chips:
+            log("Identifying border chips to remove...")
+            borders = find_border_chips(
+                conn,
+                "result",
+                grid_geom_col,
+                coverage_col,
+                gap_chips=border_gap_chips,
+            )
+            if borders.border_count > 0:
+                # list_contains() raises an internal error against a table holding a
+                # GEOMETRY column, so match through unnest instead.
+                conn.execute(
+                    "DELETE FROM result WHERE rowid IN (SELECT unnest(?::BIGINT[]))",
+                    [borders.border_rowids],
+                )
+                remaining = conn.execute("SELECT COUNT(*) FROM result").fetchone()[0]
+                log(
+                    f"Removed {borders.border_count:,} border chips across "
+                    f"{borders.cluster_count:,} cluster(s), {remaining:,} chips remaining"
+                )
+            else:
+                log(f"No border chips found across {borders.cluster_count:,} cluster(s)")
 
         # Calculate summary statistics
         stats = conn.execute(f"""

@@ -562,6 +562,7 @@ def stage_chips(ctx: PipelineContext) -> None:
         min_chip_area=chips_cfg.min_chip_area if chips_cfg.min_chip_area > 0 else None,
         km_size=chips_cfg.km_size,
         drop_border_chips=ctx.config.stages.chips.drop_border_chips,
+        border_gap_chips=ctx.config.stages.chips.border_gap_chips,
         batch_size=chips_cfg.coverage_batch_size,
         on_progress=ctx.log,
     )

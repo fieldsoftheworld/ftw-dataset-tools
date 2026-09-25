@@ -147,8 +147,17 @@ Datasets whose fields lack `hcat:code` skip this step with a note in the run out
 reused as-is by every later stage, so a run started with `--from` or `--stage` after
 `chips` publishes whatever that file already holds. Turning `stages.chips.crop_stats` off
 is handled: the stac stage drops any stale composition columns before publishing. Other
-chips settings are not — change `min_coverage`, `drop_border_chips`, `grid_file` or the
-class filter and you must re-run the `chips` stage for the change to reach the output.
+chips settings are not — change `min_coverage`, `drop_border_chips`, `border_gap_chips`,
+`grid_file` or the class filter and you must re-run the `chips` stage for the change to
+reach the output.
+
+**Border chips.** `drop_border_chips` removes chips on the edge of a labelled cluster,
+where part of the chip falls outside the labelled area and its unlabelled side would be
+rasterised as background. Label collections are often sampled as separate blocks, so this
+is applied per cluster rather than once over the whole dataset. `border_gap_chips`
+(default 2) sets how wide an unlabelled gap must be, in chips, before it counts as a
+cluster edge; gaps narrower than that, and holes fully enclosed by labelled chips such as
+lakes or towns, are treated as interior.
 
 #### Class filter (optional)
 
