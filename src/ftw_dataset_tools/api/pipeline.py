@@ -44,6 +44,7 @@ from ftw_dataset_tools.api.geo import (
     detect_geometry_column,
     ensure_spatial_loaded,
     reproject,
+    sql_path,
 )
 from ftw_dataset_tools.api.imagery import (
     download_imagery_for_catalog,
@@ -514,7 +515,8 @@ def _subset_local_grid(ctx: PipelineContext, grid_file: str) -> str:
     conn = duckdb.connect(":memory:")
     ensure_spatial_loaded(conn)
     try:
-        grid_cols = [r[0] for r in conn.execute(f"DESCRIBE SELECT * FROM '{grid_file}'").fetchall()]
+        grid_sql = sql_path(grid_file)
+        grid_cols = [r[0] for r in conn.execute(f"DESCRIBE SELECT * FROM '{grid_sql}'").fetchall()]
         if "bbox" not in grid_cols:
             ctx.log("Local grid has no bbox column; loading it in full (may be slow).")
             return grid_file
@@ -522,16 +524,17 @@ def _subset_local_grid(ctx: PipelineContext, grid_file: str) -> str:
         # Fields bounds from their bbox column (present after reproject/filter).
         xmin, ymin, xmax, ymax = conn.execute(
             f"SELECT MIN(bbox.xmin), MIN(bbox.ymin), MAX(bbox.xmax), MAX(bbox.ymax) "
-            f"FROM '{ctx.field_polygons_path}'"
+            f"FROM '{sql_path(ctx.field_polygons_path)}'"
         ).fetchone()
 
         subset_path = ctx.output_dir / f"{ctx.field_dataset}_grid.parquet"
+        subset_sql = sql_path(subset_path)
         conn.execute(
-            f"COPY (SELECT * FROM '{grid_file}' WHERE bbox.xmin <= {xmax} "
+            f"COPY (SELECT * FROM '{grid_sql}' WHERE bbox.xmin <= {xmax} "
             f"AND bbox.xmax >= {xmin} AND bbox.ymin <= {ymax} AND bbox.ymax >= {ymin}) "
-            f"TO '{subset_path}' (FORMAT PARQUET)"
+            f"TO '{subset_sql}' (FORMAT PARQUET)"
         )
-        n = conn.execute(f"SELECT COUNT(*) FROM '{subset_path}'").fetchone()[0]
+        n = conn.execute(f"SELECT COUNT(*) FROM '{subset_sql}'").fetchone()[0]
         ctx.log(f"Subset local grid to {n:,} cells within fields bounds -> {subset_path.name}")
         return str(subset_path)
     finally:
