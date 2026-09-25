@@ -34,7 +34,7 @@ from ftw_dataset_tools.api.assets import (
     add_raster_bands,
     add_table_columns,
 )
-from ftw_dataset_tools.api.geo import ensure_spatial_loaded, sql_path
+from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.masks import MaskType, get_mgrs_square
 from ftw_dataset_tools.api.renders import (
     RENDER_ORDER_PROP,
@@ -742,6 +742,7 @@ def generate_stac_catalog(
     boundary_lines_file: Path | str,
     *,
     filtered_fields_file: Path | None = None,
+    grid_id_col: str = "id",
     year: int | None = None,
     provenance: dict | None = None,
     config: DatasetConfig | None = None,
@@ -769,6 +770,8 @@ def generate_stac_catalog(
         boundary_lines_file: Path to boundary lines parquet file
         filtered_fields_file: Optional path to the class-filtered fields parquet file;
             when given, a ``fields_filtered`` asset is added to the collection.
+        grid_id_col: Column in the chips file holding the grid cell id. Must match the
+            column the masks were written from, or no item lines up with its chip dir.
         year: Optional year for temporal extent (required if no determination_datetime)
         provenance: Optional resolved-config record embedded on the collection under
                     the ``ftw:config`` extra field for reproducibility.
@@ -813,11 +816,19 @@ def generate_stac_catalog(
 
     # Get spatial extent from fields
     log("Calculating spatial extent...")
-    spatial_extent = _get_dataset_bounds(fields_file)
+    spatial_extent = _get_dataset_bounds(
+        fields_file, detect_geometry_column(fields_file) or "geometry"
+    )
 
-    # Extract chip info (pass year for year-based naming)
+    # Extract chip info (pass year for year-based naming). The geometry column is
+    # detected rather than assumed, matching how the masks were rasterized.
     log("Extracting chip information...")
-    chip_infos = _extract_chips_info(chips_file, year=year)
+    chip_infos = _extract_chips_info(
+        chips_file,
+        grid_id_col=grid_id_col,
+        geom_col=detect_geometry_column(chips_file) or "geometry",
+        year=year,
+    )
     log(f"Found {len(chip_infos)} chips")
 
     # Create items for each chip, nested by MGRS square
