@@ -7,7 +7,7 @@
 # Pure/forage grass and permanent grass are background.
 # Notable inclusions: cereals (incl. green fodder), legumes (incl. clover/lucerne/galega/melilot leys),
 # oilseeds, potatoes, beet, field vegetables, herbs/medicinal, flax, hemp, hops, strawberries, and grass
-# grown for seed. 
+# grown for seed.
 # Covers fi year 2023 (only year published). Codes are the Finnish crop:code from the harmonized
 # ftw/harmonized-field-data fi dataset; HCAT English names shown as comments.
 
@@ -61,7 +61,7 @@ include:
   - 3130  # Starch potato
   - 3150  # Early potato (under cover)
   - 3160  # Seed potatoes
-  - 3190  # Seed potatoes 
+  - 3190  # Seed potatoes
   - 3210  # Sugar beet for sugar production
   - 3330  # Fodder root vegetables
   - 3340  # Fodder cabbage
