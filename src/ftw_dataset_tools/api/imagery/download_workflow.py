@@ -100,7 +100,7 @@ def download_imagery_for_catalog(
     bands: list[str] | None = None,
     resolution: float = 10.0,
     generate_thumbnails: bool = True,
-    resume: bool = False,
+    resume: bool = True,
     on_progress: Callable[[int, int], None] | None = None,
     show_progress_bar: bool = True,
     workers: int = DEFAULT_WORKERS,
@@ -119,7 +119,11 @@ def download_imagery_for_catalog(
         bands: List of bands to download. Default: ["red", "green", "blue", "nir"]
         resolution: Target resolution in meters
         generate_thumbnails: Whether to generate JPEG preview thumbnails
-        resume: If True, skip items that already have local imagery
+        resume: Skip items that already have local imagery. Defaults to True: a
+            completed download replaces the child's band assets with the local
+            `image`, so re-attempting one leaves no band hrefs to fetch and fails.
+            Pass False to force a re-download, which is what a changed `bands` or
+            `resolution` needs - and which needs the remote band refs back first.
         on_progress: Optional callback (current, total) for progress updates
         show_progress_bar: If True, show tqdm progress bar
         workers: Number of scenes to download concurrently

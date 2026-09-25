@@ -177,6 +177,18 @@ class TestPreviewImageryForCatalog:
         assert again.skipped == 1
         assert again.skipped_details[0]["reason"] == "Already rendered"
 
+    def test_resume_is_the_default(self, tmp_path: Path) -> None:
+        """No caller should inherit a re-render of everything by omitting the flag."""
+        out = _collection(tmp_path)
+        scene = _scene(tmp_path / "scene.tif")
+        _chip(out, "chip_a", scene=scene)
+        preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
+
+        again = preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
+
+        assert (again.successful, again.skipped) == (0, 1)
+        assert again.skipped_details[0]["reason"] == "Already rendered"
+
     def test_an_unreadable_scene_is_reported_not_swallowed(self, tmp_path: Path) -> None:
         out = _collection(tmp_path)
         broken = tmp_path / "broken.tif"

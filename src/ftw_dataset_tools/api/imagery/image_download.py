@@ -15,7 +15,11 @@ from rasterio.vrt import WarpedVRT
 from rasterio.warp import Resampling
 
 from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
-from ftw_dataset_tools.api.imagery.settings import BANDS_OF_INTEREST, REFLECTANCE_BANDS
+from ftw_dataset_tools.api.imagery.settings import (
+    BANDS_OF_INTEREST,
+    CHILD_ITEM_BAND_ASSETS,
+    REFLECTANCE_BANDS,
+)
 from ftw_dataset_tools.api.imagery.thumbnails import (
     ThumbnailError,
     generate_overlay_thumbnail,
@@ -94,6 +98,30 @@ def _get_band_hrefs(
         if asset:
             hrefs[band] = asset.href
     return hrefs
+
+
+def _missing_bands_error(item: pystac.Item, bands: list[str]) -> str:
+    """Explain why an item carries no asset for any of the requested `bands`.
+
+    A completed download replaces the child's band assets with a single local
+    `image` (or adds `clipped` under --keep-remote-refs), so one cause of an empty
+    band set is that this scene is already on disk - a symptom worth naming, since
+    "no matching band assets" reads like a broken catalog.
+
+    That only holds for bands a child item ever carries. A request for, say,
+    swir16 fails on an untouched catalog too, so blaming the local asset there
+    would be a false diagnosis - and would hide the list of what is available.
+    """
+    local_asset = next((key for key in ("image", "clipped") if key in item.assets), None)
+    never_carried = [band for band in bands if band not in CHILD_ITEM_BAND_ASSETS]
+    if local_asset is not None and not never_carried:
+        return (
+            "Scene is already downloaded: its band assets were replaced by the local "
+            f"'{local_asset}' asset, leaving nothing to fetch. Resume (the default) skips "
+            "these; to re-download, run select-images --force first to restore the remote "
+            "band refs (plain select-images skips chips that already have a selection)."
+        )
+    return f"No matching band assets found in scene. Available: {list(item.assets.keys())}"
 
 
 def find_reference_mask_for_output(output_path: Path) -> Path | None:
@@ -339,7 +367,7 @@ def download_and_clip_scene(
             height=0,
             crs="",
             success=False,
-            error=f"No matching band assets found in scene. Available: {list(scene.item.assets.keys())}",
+            error=_missing_bands_error(scene.item, bands),
         )
 
     found_bands = list(band_hrefs.keys())
