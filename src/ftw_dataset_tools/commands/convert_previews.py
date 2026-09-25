@@ -67,7 +67,8 @@ def convert_previews(catalog_dir: str, dry_run: bool, workers: int, verbose: boo
     if dry_run:
         click.echo(
             f"Would convert {result.chips_converted} chips "
-            f"({result.previews_written} previews, {result.legacy_removed} JPEGs removed)."
+            f"({result.previews_written} previews, {result.legacy_removed} JPEGs removed), "
+            f"{result.skipped} skipped."
         )
     else:
         click.echo(conversion_summary_line(result))

@@ -49,6 +49,9 @@ __all__ = [
 #: Mask used both as the overlay's grid reference and as the overlay layer.
 _REFERENCE_MASK_SUFFIX = "_semantic_3_class.tif"
 
+#: Reported for a chip whose previews cannot be re-rendered, by a real run or a dry one.
+_NO_SOURCE_REASON = "No imagery to re-render the preview from"
+
 
 @dataclass
 class ConversionResult:
@@ -82,14 +85,26 @@ def legacy_previews(chip_dir: Path, item_id: str) -> list[Path]:
     ]
 
 
-def _render_season_preview(chip_dir: Path, item_id: str, season: str) -> Path | None:
-    """Re-render one season's preview from the chip's local clipped GeoTIFF."""
-    tif_path = chip_dir / f"{item_id}_{season}_image_s2.tif"
-    if not tif_path.exists():
-        return None
-    output_path = chip_dir / f"{item_id}_{season}_image_s2{PREVIEW_SUFFIX}"
-    generate_thumbnail(tif_path, output_path)
-    return output_path
+def _season_sources(chip_dir: Path, item_id: str) -> dict[str, Path]:
+    """The local clipped GeoTIFFs a season preview can be re-rendered from, by season.
+
+    The single source of truth for what this chip can render: the dry run plans from
+    it and the real run renders from it, so the two cannot disagree.
+    """
+    return {
+        season: path
+        for season in SEASONS
+        if (path := chip_dir / f"{item_id}_{season}_image_s2.tif").exists()
+    }
+
+
+def _overlay_is_renderable(item: pystac.Item, item_path: Path, *, has_local_base: bool) -> bool:
+    """Whether the chip's overlay has a source, mirroring what ``_render_overlay`` needs."""
+    if not (item_path.parent / f"{item.id}{_REFERENCE_MASK_SUFFIX}").exists():
+        return False
+    if has_local_base:
+        return True
+    return not isinstance(build_preview_task(item, item_path), str)
 
 
 def _render_overlay(item: pystac.Item, item_path: Path, base_path: Path | None) -> Path | None:
@@ -130,17 +145,60 @@ def render_chip_previews(item: pystac.Item, item_path: Path) -> tuple[Path, ...]
     rendered: list[Path] = []
 
     season_previews: dict[str, Path] = {}
-    for season in SEASONS:
-        written = _render_season_preview(chip_dir, item.id, season)
-        if written is not None:
-            season_previews[season] = written
-            rendered.append(written)
+    for season, tif_path in _season_sources(chip_dir, item.id).items():
+        output_path = chip_dir / f"{item.id}_{season}_image_s2{PREVIEW_SUFFIX}"
+        generate_thumbnail(tif_path, output_path)
+        season_previews[season] = output_path
+        rendered.append(output_path)
 
     overlay = _render_overlay(item, item_path, season_previews.get("planting"))
     if overlay is not None:
         rendered.append(overlay)
 
     return tuple(rendered)
+
+
+@dataclass(frozen=True)
+class ChipConversionPlan:
+    """What a conversion run would do to one chip, worked out without rendering anything."""
+
+    previews: tuple[Path, ...]
+    removable: tuple[Path, ...]
+
+
+def plan_chip_conversion(item: pystac.Item, item_path: Path) -> ChipConversionPlan:
+    """The previews a run would render for this chip and the JPEGs it would then remove.
+
+    This is what ``--dry-run`` reports. It reads the same sources ``render_chip_previews``
+    renders from and applies the same deletion rule as ``commit_chip_conversion``, so a
+    dry run cannot promise a conversion the real run will skip.
+
+    Args:
+        item: The chip item
+        item_path: Path to the chip item JSON
+
+    Returns:
+        ChipConversionPlan; empty ``previews`` means the chip has no source to render from
+    """
+    chip_dir = item_path.parent
+    sources = _season_sources(chip_dir, item.id)
+
+    previews = [chip_dir / f"{item.id}_{season}_image_s2{PREVIEW_SUFFIX}" for season in sources]
+    if _overlay_is_renderable(item, item_path, has_local_base="planting" in sources):
+        previews.append(chip_dir / f"{item.id}_overlay{PREVIEW_SUFFIX}")
+
+    planned = set(previews)
+    removable = tuple(
+        path
+        for path in legacy_previews(chip_dir, item.id)
+        if (webp := path.with_suffix(PREVIEW_SUFFIX)) in planned or webp.exists()
+    )
+    return ChipConversionPlan(previews=tuple(previews), removable=removable)
+
+
+def _asset_has_checksum(asset: pystac.Asset | None) -> bool:
+    """Whether this asset carries ``file:checksum``, i.e. the catalog was built with it."""
+    return asset is not None and "file:checksum" in asset.extra_fields
 
 
 def _repoint_child_items(chip_dir: Path, item_id: str) -> None:
@@ -173,7 +231,9 @@ def _repoint_child_items(chip_dir: Path, item_id: str) -> None:
         thumbnail.href = f"./{preview_path.name}"
         thumbnail.media_type = PREVIEW_MEDIA_TYPE
         thumbnail.title = "WebP preview"
-        add_file_info(thumbnail, preview_path)
+        # The asset object is reused, so a stale JPEG checksum would survive the
+        # repoint and claim to verify the WebP. Recompute it, or there is none.
+        add_file_info(thumbnail, preview_path, checksum=_asset_has_checksum(thumbnail))
         write_item(child, child_path)
 
 
@@ -192,7 +252,10 @@ def commit_chip_conversion(item: pystac.Item, item_path: Path) -> int:
     """
     chip_dir = item_path.parent
 
-    attach_thumbnail_to_parent(item, chip_dir)
+    # A catalog built with --checksums must stay verifiable: the thumbnail asset is
+    # replaced wholesale here, so its checksum has to be recomputed for the WebP.
+    checksums = _asset_has_checksum(item.assets.get("thumbnail"))
+    attach_thumbnail_to_parent(item, chip_dir, checksums=checksums)
     write_item(item, item_path)
     _repoint_child_items(chip_dir, item.id)
 
@@ -267,9 +330,7 @@ def convert_previews_for_catalog(
             return
         if not outcome.value:
             result.skipped += 1
-            result.skipped_details.append(
-                {"chip": item.id, "reason": "No imagery to re-render the preview from"}
-            )
+            result.skipped_details.append({"chip": item.id, "reason": _NO_SOURCE_REASON})
             advance()
             return
         try:
@@ -301,7 +362,12 @@ def _pending_conversions(
     *,
     dry_run: bool,
 ) -> list[tuple[pystac.Item, Path]]:
-    """The chips that still have JPEG previews, counting the rest as skipped."""
+    """The chips that still have JPEG previews, counting the rest as skipped.
+
+    A dry run gets no further than this, so it plans each chip here instead: reporting
+    every chip with a ``.jpg`` as convertible would promise conversions the real run
+    skips for want of a source, and a dry run is the gate before a destructive migration.
+    """
     pending: list[tuple[pystac.Item, Path]] = []
     for item, item_path in chip_items:
         legacy = legacy_previews(item_path.parent, item.id)
@@ -309,12 +375,18 @@ def _pending_conversions(
             result.skipped += 1
             result.skipped_details.append({"chip": item.id, "reason": "No JPEG previews"})
             continue
-        if dry_run:
-            result.chips_converted += 1
-            result.previews_written += len(legacy)
-            result.legacy_removed += len(legacy)
+        if not dry_run:
+            pending.append((item, item_path))
             continue
-        pending.append((item, item_path))
+
+        plan = plan_chip_conversion(item, item_path)
+        if not plan.previews:
+            result.skipped += 1
+            result.skipped_details.append({"chip": item.id, "reason": _NO_SOURCE_REASON})
+            continue
+        result.chips_converted += 1
+        result.previews_written += len(plan.previews)
+        result.legacy_removed += len(plan.removable)
     return pending
 
 

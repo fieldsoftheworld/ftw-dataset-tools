@@ -11,6 +11,7 @@ import rasterio
 from PIL import Image
 from rasterio.transform import from_bounds
 
+from ftw_dataset_tools.api.assets import add_file_info, multihash_sha256
 from ftw_dataset_tools.api.imagery.preview_conversion import (
     convert_previews_for_catalog,
     legacy_previews,
@@ -82,7 +83,7 @@ def _chip_item(chip_dir: Path, chip_id: str) -> pystac.Item:
     return item
 
 
-def _clipped_chip(collection_dir: Path, chip_id: str) -> Path:
+def _clipped_chip(collection_dir: Path, chip_id: str, *, checksums: bool = False) -> Path:
     """A chip built the ``--download-images`` way: local GeoTIFFs and .jpg previews."""
     chip_dir = collection_dir / "chips" / "33TXM" / chip_id
     chip_dir.mkdir(parents=True, exist_ok=True)
@@ -110,6 +111,8 @@ def _clipped_chip(collection_dir: Path, chip_id: str) -> Path:
             roles=["thumbnail"],
         ),
     )
+    if checksums:
+        add_file_info(item.assets["thumbnail"], chip_dir / f"{chip_id}_overlay.jpg", checksum=True)
     item.save_object(include_self_link=False, dest_href=str(chip_dir / f"{chip_id}.json"))
 
     for season in ("planting", "harvest"):
@@ -130,6 +133,12 @@ def _clipped_chip(collection_dir: Path, chip_id: str) -> Path:
                 roles=["thumbnail"],
             ),
         )
+        if checksums:
+            add_file_info(
+                child.assets["thumbnail"],
+                chip_dir / f"{chip_id}_{season}_image_s2.jpg",
+                checksum=True,
+            )
         child_path = chip_dir / f"{chip_id}_{season}_s2.json"
         child.set_self_href(str(child_path))
         child.save_object(include_self_link=False, dest_href=str(child_path))
@@ -164,6 +173,16 @@ def _remote_chip(collection_dir: Path, chip_id: str, scene: Path) -> Path:
     child.set_self_href(str(child_path))
     child.save_object(include_self_link=False, dest_href=str(child_path))
 
+    return chip_dir
+
+
+def _sourceless_chip(collection_dir: Path, chip_id: str) -> Path:
+    """A chip with a .jpg preview but nothing to re-render it from: no mask, no scene."""
+    chip_dir = collection_dir / "chips" / "33TXM" / chip_id
+    chip_dir.mkdir(parents=True, exist_ok=True)
+    item = _chip_item(chip_dir, chip_id)
+    item.save_object(include_self_link=False, dest_href=str(chip_dir / f"{chip_id}.json"))
+    Image.new("RGB", (SIZE, SIZE), (1, 2, 3)).save(chip_dir / f"{chip_id}_overlay.jpg", "JPEG")
     return chip_dir
 
 
@@ -267,13 +286,97 @@ class TestConvertPreviewsForCatalog:
     def test_a_chip_with_nothing_to_render_from_keeps_its_jpeg(self, tmp_path: Path) -> None:
         """Without imagery or a scene there is no source, so the .jpg must survive."""
         out = _collection(tmp_path)
-        chip_dir = out / "chips" / "33TXM" / "chip_c"
-        chip_dir.mkdir(parents=True)
-        item = _chip_item(chip_dir, "chip_c")
-        item.save_object(include_self_link=False, dest_href=str(chip_dir / "chip_c.json"))
-        Image.new("RGB", (SIZE, SIZE), (1, 2, 3)).save(chip_dir / "chip_c_overlay.jpg", "JPEG")
+        chip_dir = _sourceless_chip(out, "chip_c")
 
         result = convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
 
         assert (result.chips_converted, result.skipped) == (0, 1)
         assert (chip_dir / "chip_c_overlay.jpg").exists()
+
+
+class TestConversionChecksums:
+    """A catalog built with ``--checksums`` must come out of conversion with them.
+
+    ``file:checksum`` is the only thing that tells a consumer the preview bytes are
+    the ones the catalog was published with, so a run that drops it - or, worse,
+    leaves the JPEG's checksum on the WebP asset - silently breaks verification.
+    """
+
+    def test_chip_thumbnail_checksum_matches_the_webp(self, tmp_path: Path) -> None:
+        out = _collection(tmp_path)
+        chip_dir = _clipped_chip(out, "chip_a", checksums=True)
+
+        convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+
+        thumbnail = pystac.Item.from_file(str(chip_dir / "chip_a.json")).assets["thumbnail"]
+        assert thumbnail.extra_fields["file:checksum"] == multihash_sha256(
+            chip_dir / "chip_a_overlay.webp"
+        )
+
+    def test_child_thumbnail_checksums_match_the_webp(self, tmp_path: Path) -> None:
+        out = _collection(tmp_path)
+        chip_dir = _clipped_chip(out, "chip_a", checksums=True)
+
+        convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+
+        for season in ("planting", "harvest"):
+            child = pystac.Item.from_file(str(chip_dir / f"chip_a_{season}_s2.json"))
+            preview = chip_dir / f"chip_a_{season}_image_s2.webp"
+            assert child.assets["thumbnail"].extra_fields["file:checksum"] == multihash_sha256(
+                preview
+            )
+
+    def test_a_catalog_without_checksums_gains_none(self, tmp_path: Path) -> None:
+        """Checksums are opt-in, so conversion must not start adding them."""
+        out = _collection(tmp_path)
+        chip_dir = _clipped_chip(out, "chip_a")
+
+        convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+
+        item = pystac.Item.from_file(str(chip_dir / "chip_a.json"))
+        assert "file:checksum" not in item.assets["thumbnail"].extra_fields
+        child = pystac.Item.from_file(str(chip_dir / "chip_a_planting_s2.json"))
+        assert "file:checksum" not in child.assets["thumbnail"].extra_fields
+
+
+class TestDryRunMatchesTheRealRun:
+    """--dry-run is the gate before a destructive migration, so it must not over-report."""
+
+    def test_reports_a_sourceless_chip_as_skipped(self, tmp_path: Path) -> None:
+        out = _collection(tmp_path)
+        _sourceless_chip(out, "chip_c")
+
+        result = convert_previews_for_catalog(out, dry_run=True, show_progress_bar=False)
+
+        assert (result.chips_converted, result.skipped) == (0, 1)
+        assert (result.previews_written, result.legacy_removed) == (0, 0)
+        assert result.skipped_details == [
+            {"chip": "chip_c", "reason": "No imagery to re-render the preview from"}
+        ]
+
+    def test_counts_match_a_real_run_on_a_mixed_catalog(self, tmp_path: Path) -> None:
+        out = _collection(tmp_path)
+        _clipped_chip(out, "chip_a")
+        _sourceless_chip(out, "chip_c")
+
+        dry = convert_previews_for_catalog(out, dry_run=True, show_progress_bar=False)
+        real = convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+
+        assert (dry.chips_converted, dry.previews_written, dry.legacy_removed, dry.skipped) == (
+            real.chips_converted,
+            real.previews_written,
+            real.legacy_removed,
+            real.skipped,
+        )
+
+    def test_counts_only_the_previews_a_partial_source_can_render(self, tmp_path: Path) -> None:
+        """One season's GeoTIFF is gone and no scene is referenced: one preview, one JPEG."""
+        out = _collection(tmp_path)
+        chip_dir = _clipped_chip(out, "chip_a")
+        (chip_dir / "chip_a_planting_image_s2.tif").unlink()
+
+        dry = convert_previews_for_catalog(out, dry_run=True, show_progress_bar=False)
+        real = convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+
+        assert (dry.chips_converted, dry.previews_written, dry.legacy_removed) == (1, 1, 1)
+        assert (real.chips_converted, real.previews_written, real.legacy_removed) == (1, 1, 1)
