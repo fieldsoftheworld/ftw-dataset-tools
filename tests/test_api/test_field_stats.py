@@ -9,6 +9,7 @@ import pytest
 from shapely.geometry import box
 
 from ftw_dataset_tools.api.field_stats import FieldStatsResult
+from ftw_dataset_tools.api.geo import CRSInfo
 
 
 class TestDetectBboxColumn:
@@ -654,12 +655,66 @@ class TestMinChipArea:
 
         assert any("removed 100.0% of cells" in msg for msg in messages)
 
-    def test_unmeasurable_area_skips_filter_with_warning(self, tmp_path: Path) -> None:
-        """Mislabelled CRS must report that the filter was skipped, not silently pass."""
+    def test_geographic_crs_other_than_4326_is_measured_in_degrees(self, tmp_path: Path) -> None:
+        """A grid in ETRS89 is lon/lat too, so it must not be measured as metres.
+
+        EPSG:4258 coordinates are degrees; treating them as projected metres compares
+        a value near 0.0007 against a ~4,000,000 cutoff and deletes every chip.
+        """
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        output_file = tmp_path / "chips.parquet"
+        result = add_field_stats(
+            grid_file=_size_test_grid(tmp_path / "grid.parquet", crs="EPSG:4258"),
+            fields_file=_size_test_fields(tmp_path / "fields.parquet", crs="EPSG:4258"),
+            output_file=output_file,
+            min_chip_area=99.5,
+        )
+
+        assert result.cells_dropped_undersized == 1
+        assert result.total_cells == 1
+        ids = duckdb.connect().execute(f"SELECT id FROM '{output_file}'").fetchall()
+        assert [row[0] for row in ids] == ["full"]
+
+    def test_is_geographic_crs_reads_the_crs_definition(self) -> None:
+        """Geographic-ness comes from the CRS itself, not a list of known codes."""
+        from ftw_dataset_tools.api.field_stats import _is_geographic_crs
+
+        assert _is_geographic_crs(CRSInfo(authority="EPSG", code="4326", wkt=None, projjson=None))
+        assert _is_geographic_crs(CRSInfo(authority="EPSG", code="4258", wkt=None, projjson=None))
+        assert _is_geographic_crs(CRSInfo(authority="EPSG", code="4269", wkt=None, projjson=None))
+        assert (
+            _is_geographic_crs(CRSInfo(authority="EPSG", code="32633", wkt=None, projjson=None))
+            is False
+        )
+        # Nothing to read: the caller falls back to sniffing the coordinates.
+        assert (
+            _is_geographic_crs(CRSInfo(authority=None, code=None, wkt=None, projjson=None)) is None
+        )
+
+    def test_bounds_sniff_used_when_crs_metadata_is_missing(self) -> None:
+        """Without any CRS metadata, degree-range coordinates count as geographic."""
+        from ftw_dataset_tools.api.field_stats import _bounds_look_geographic
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        degrees = gpd.GeoSeries([_FULL_CELL], crs=_UTM_CRS).to_crs("EPSG:4326").iloc[0].wkt
+        conn.execute(f"CREATE TABLE grid_table AS SELECT ST_GeomFromText('{degrees}') AS geometry")
+        assert _bounds_look_geographic(conn, "geometry") is True
+
+        conn.execute("DROP TABLE grid_table")
+        conn.execute(
+            f"CREATE TABLE grid_table AS SELECT ST_GeomFromText('{_FULL_CELL.wkt}') AS geometry"
+        )
+        assert _bounds_look_geographic(conn, "geometry") is False
+        conn.close()
+
+    def test_unmeasurable_area_keeps_only_the_affected_rows(self, tmp_path: Path) -> None:
+        """A mislabelled CRS keeps its rows; it must not switch the filter off."""
         from ftw_dataset_tools.api.field_stats import add_field_stats
 
         # Projected coordinates carrying EPSG:4326 metadata: the spheroid area of
-        # metre coordinates is NaN, so every comparison would quietly succeed.
+        # metre coordinates is NaN, so no cell can be measured and all are kept.
         grid = tmp_path / "grid.parquet"
         gpd.GeoDataFrame(
             {"id": ["full", "sliver"]},
@@ -683,4 +738,30 @@ class TestMinChipArea:
         )
 
         assert result.cells_dropped_undersized == 0
-        assert any("chip size filter was skipped" in msg for msg in messages)
+        assert result.total_cells == 2
+        assert any("could not measure the area of 2 grid cells" in msg for msg in messages)
+
+    def test_one_unmeasurable_row_does_not_disable_the_filter(self, tmp_path: Path) -> None:
+        """A single NULL geometry must not spare every other truncated chip."""
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        grid = tmp_path / "grid.parquet"
+        gdf = gpd.GeoDataFrame(
+            {"id": ["full", "sliver", "broken"]},
+            geometry=[_FULL_CELL, _SLIVER_CELL, None],
+            crs=_UTM_CRS,
+        ).to_crs("EPSG:4326")
+        gdf.to_parquet(grid)
+
+        messages: list[str] = []
+        result = add_field_stats(
+            grid_file=grid,
+            fields_file=_size_test_fields(tmp_path / "fields.parquet"),
+            output_file=tmp_path / "chips.parquet",
+            min_chip_area=99.5,
+            on_progress=messages.append,
+        )
+
+        assert result.cells_dropped_undersized == 1
+        assert result.total_cells == 2  # the full cell plus the unmeasurable row
+        assert any("could not measure the area of 1 grid cells" in msg for msg in messages)

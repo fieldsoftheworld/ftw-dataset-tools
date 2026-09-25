@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
+import pyproj
 
 from ftw_dataset_tools.api.geo import (
     CRSMismatchError,
@@ -22,6 +23,8 @@ from ftw_dataset_tools.api.geo import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from ftw_dataset_tools.api.geo import CRSInfo
 
 # Default FTW grid source on Source Cooperative
 DEFAULT_FTW_GRID_SOURCE = (
@@ -46,9 +49,6 @@ DEFAULT_CHIP_KM_SIZE = 2.0
 # of nominal (the spread is UTM scale factor, not truncation), so 99.5% clears every
 # full cell and rejects every truncated one.
 DEFAULT_MIN_CHIP_AREA = 99.5
-
-# CRS authority codes treated as lon/lat degrees for area measurement.
-_GEOGRAPHIC_CRS_CODES = {"EPSG:4326", "OGC:CRS84"}
 
 # Re-export for convenience
 __all__ = [
@@ -275,10 +275,57 @@ def _chip_order_by(conn: duckdb.DuckDBPyConnection, log: Callable[[str], None]) 
     return ""
 
 
-def _is_geographic_crs(crs_info) -> bool:
-    """Return True when the CRS is lon/lat degrees rather than projected metres."""
-    code = crs_info.authority_code
-    return code is not None and code.upper() in _GEOGRAPHIC_CRS_CODES
+def _is_geographic_crs(crs_info: CRSInfo) -> bool | None:
+    """
+    Report whether a CRS is lon/lat degrees rather than projected metres.
+
+    Read from the CRS definition itself, so every geographic CRS counts - ETRS89
+    (EPSG:4258), NAD83 (EPSG:4269) and the rest are degrees just as EPSG:4326 is.
+    Returns None when the file carries no CRS to read, leaving the caller to sniff
+    the coordinates instead.
+    """
+    for candidate in (crs_info.projjson, crs_info.authority_code, crs_info.wkt):
+        if not candidate:
+            continue
+        try:
+            return bool(pyproj.CRS.from_user_input(candidate).is_geographic)
+        except Exception:
+            continue
+    return None
+
+
+def _bounds_look_geographic(conn: duckdb.DuckDBPyConnection, geom_col: str) -> bool:
+    """
+    Guess from the coordinates whether a grid is in degrees.
+
+    Only used when the file has no CRS metadata at all: anything inside the lon/lat
+    ranges is treated as degrees, since a projected grid in metres is far outside them.
+    """
+    result = conn.execute(f"""
+        SELECT
+            MAX(ABS(ST_XMin("{geom_col}"))) AS max_x,
+            MAX(ABS(ST_XMax("{geom_col}"))) AS max_x2,
+            MAX(ABS(ST_YMin("{geom_col}"))) AS max_y,
+            MAX(ABS(ST_YMax("{geom_col}"))) AS max_y2
+        FROM grid_table
+    """).fetchone()
+    max_x = max((v for v in result[:2] if v is not None), default=0.0)
+    max_y = max((v for v in result[2:] if v is not None), default=0.0)
+    return max_x <= 180 and max_y <= 90
+
+
+def _grid_uses_degrees(
+    conn: duckdb.DuckDBPyConnection,
+    grid_path: str | None,
+    grid_geom_col: str,
+) -> bool:
+    """Decide how to measure grid areas: lon/lat degrees or projected metres."""
+    if grid_path is None:
+        return True  # the remote FTW grid is always EPSG:4326
+    from_crs = _is_geographic_crs(detect_crs(grid_path, grid_geom_col))
+    if from_crs is not None:
+        return from_crs
+    return _bounds_look_geographic(conn, grid_geom_col)
 
 
 def _chip_area_expr(geom_col: str, is_geographic: bool) -> str:
@@ -313,22 +360,22 @@ def _drop_undersized_chips(
     cutoff = nominal_area * min_chip_area / 100
     area_expr = _chip_area_expr(grid_geom_col, is_geographic)
 
-    # A NULL or NaN area means the comparison below silently keeps every cell, which
-    # would disable the filter without saying so. It happens when the CRS metadata
-    # disagrees with the coordinates (spheroid area of projected metres is NaN).
+    # A NULL or NaN area cannot be compared, so those rows are kept and reported
+    # rather than guessed at. It happens for a NULL geometry, or when the CRS metadata
+    # disagrees with the coordinates (the spheroid area of projected metres is NaN).
+    measurable = f"{area_expr} IS NOT NULL AND NOT ISNAN({area_expr})"
     unmeasurable = conn.execute(
-        f"SELECT COUNT(*) FROM grid_table WHERE {area_expr} IS NULL OR ISNAN({area_expr})"
+        f"SELECT COUNT(*) FROM grid_table WHERE NOT ({measurable})"
     ).fetchone()[0]
     if unmeasurable:
         log(
-            f"Warning: could not measure the area of {unmeasurable:,} grid cells, so the "
-            "chip size filter was skipped. This usually means the grid's CRS metadata "
-            "does not match its coordinates."
+            f"Warning: could not measure the area of {unmeasurable:,} grid cells, so those "
+            "cells were kept unchecked. This usually means the grid's CRS metadata does "
+            "not match its coordinates."
         )
-        return 0
 
     before_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
-    conn.execute(f"DELETE FROM grid_table WHERE {area_expr} < {cutoff}")
+    conn.execute(f"DELETE FROM grid_table WHERE {measurable} AND {area_expr} < {cutoff}")
     after_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
     removed = before_count - after_count
 
@@ -570,17 +617,12 @@ def add_field_stats(
         if min_chip_area is not None:
             # grid_path points at the reprojected copy when one was made, so this
             # reflects the CRS the grid_table geometry is actually in.
-            grid_is_geographic = (
-                _is_geographic_crs(detect_crs(grid_path, grid_geom_col))
-                if grid_path is not None
-                else True  # the remote grid is always EPSG:4326
-            )
             cells_dropped_undersized = _drop_undersized_chips(
                 conn,
                 grid_geom_col=grid_geom_col,
                 min_chip_area=min_chip_area,
                 km_size=km_size,
-                is_geographic=grid_is_geographic,
+                is_geographic=_grid_uses_degrees(conn, grid_path, grid_geom_col),
                 log=log,
             )
             grid_count -= cells_dropped_undersized
