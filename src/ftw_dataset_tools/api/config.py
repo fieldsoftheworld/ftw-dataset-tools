@@ -76,6 +76,12 @@ DEFAULT_IMAGERY_WORKERS = 4
 SEARCH_BACKENDS = ("parquet", "earth-search")
 DEFAULT_PARQUET_WORKERS = 16
 
+
+def default_selection_workers(search_backend: str) -> int:
+    """Default selection worker count for a scene search backend."""
+    return DEFAULT_PARQUET_WORKERS if search_backend == "parquet" else DEFAULT_IMAGERY_WORKERS
+
+
 # YAML keys allowed at the top level of a config file. `class_filter` on
 # DatasetConfig is resolved from stages.masks.class_filter, not set via YAML.
 _ALLOWED_TOP_KEYS = (
@@ -440,11 +446,7 @@ class SelectImagesConfig:
         """The worker count to run with: explicit value, else the backend default."""
         if self.workers is not None:
             return self.workers
-        return (
-            DEFAULT_PARQUET_WORKERS
-            if self.search_backend == "parquet"
-            else (DEFAULT_IMAGERY_WORKERS)
-        )
+        return default_selection_workers(self.search_backend)
 
 
 @dataclass

@@ -11,7 +11,7 @@ import click
 import pystac
 from tqdm import tqdm
 
-from ftw_dataset_tools.api.config import DEFAULT_PARQUET_WORKERS
+from ftw_dataset_tools.api.config import default_selection_workers
 from ftw_dataset_tools.api.imagery import (
     ImageryProgressBar,
     clear_chip_selections,
@@ -22,7 +22,6 @@ from ftw_dataset_tools.api.imagery import (
 )
 from ftw_dataset_tools.api.imagery.crop_calendar import ensure_crop_calendar_exists
 from ftw_dataset_tools.api.imagery.parallel import (
-    DEFAULT_WORKERS,
     MAX_WORKERS,
     ParallelOutcome,
     run_in_parallel,
@@ -265,7 +264,7 @@ def select_images_cmd(
     input_path_obj = Path(input_path)
 
     if workers is None:
-        workers = DEFAULT_PARQUET_WORKERS if search_backend == "parquet" else DEFAULT_WORKERS
+        workers = default_selection_workers(search_backend)
 
     # Determine if input is a single chip JSON or a catalog directory
     single_chip_mode = input_path_obj.suffix == ".json"

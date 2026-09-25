@@ -89,6 +89,14 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     ),
 )
 @click.option(
+    "--search-backend",
+    type=click.Choice(["parquet", "earth-search"]),
+    default="parquet",
+    show_default=True,
+    help="Scene search backend for imagery selection: the Sentinel-2 STAC-GeoParquet "
+    "mirror (no API, no rate limit) or the Earth Search STAC API.",
+)
+@click.option(
     "--skip-reproject",
     is_flag=True,
     default=False,
@@ -215,6 +223,7 @@ def create_dataset_cmd(
     resolution: float,
     num_workers: int | None,
     image_workers: int,
+    search_backend: str,
     skip_reproject: bool,
     year: int | None,
     skip_images: bool,
@@ -385,6 +394,7 @@ def create_dataset_cmd(
                 buffer_expansion_size=buffer_expansion_size,
                 force=force_image_selection,
                 workers=image_workers,
+                search_backend=search_backend,
             )
 
             click.echo(f"  Selected: {selection.successful}")

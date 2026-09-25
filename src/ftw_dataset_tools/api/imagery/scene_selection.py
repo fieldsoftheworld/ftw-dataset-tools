@@ -232,13 +232,6 @@ def _query_stac(
     )
 
 
-# Mirror collection per ftwd s2_collection identifier.
-_PARQUET_COLLECTIONS = {
-    "c1": parquet_search.COLLECTION_C1,
-    "old-baseline": parquet_search.COLLECTION_OLD,
-}
-
-
 def _query_parquet(
     bbox: tuple[float, float, float, float],
     center_date: datetime,
@@ -259,7 +252,7 @@ def _query_parquet(
     end = (center_date + timedelta(days=buffer_days)).replace(
         hour=23, minute=59, second=59, microsecond=0
     )
-    collection = _PARQUET_COLLECTIONS.get(s2_collection, parquet_search.COLLECTION_C1)
+    collection = S2_COLLECTIONS.get(s2_collection, parquet_search.COLLECTION_C1)
     items = parquet_search.query_scenes(
         bbox=bbox, start=start, end=end, cloud_cover_max=cloud_cover_max, collection=collection
     )
@@ -384,6 +377,13 @@ def _select_best_scene(
                         log(f"  Skipping {short_dt}: {nodata_pct:.1f}% nodata in chip window")
                         continue
             except Exception as e:
+                # Without the pixel check, fall back to the scene-level value.
+                if scene_nodata is not None and scene_nodata > nodata_max:
+                    log(
+                        f"  Skipping {short_dt}: nodata check failed ({e}), "
+                        f"scene reports {scene_nodata:.1f}% nodata"
+                    )
+                    continue
                 log(f"  {item.id}: nodata check failed ({e}), continuing")
 
         scene_cloud_cover = EOExtension.ext(item).cloud_cover or 0.0
@@ -460,8 +460,8 @@ def select_scenes_for_chip(
         cloud_cover_chip: Maximum chip-level cloud cover percentage (0-100)
         nodata_max: Maximum nodata percentage (0-100). Default 0 rejects any nodata.
         buffer_days: Days to search around crop calendar dates
-        s2_collection: Sentinel-2 collection identifier (Earth Search backend only;
-            the parquet mirror holds the ``sentinel-2-l2a`` collection)
+        s2_collection: Sentinel-2 collection identifier ("c1" or "old-baseline"),
+            used by both backends
         num_buffer_expansions: Number of times to expand buffer for seasons without cloud-free scenes
         buffer_expansion_size: Days to add to buffer on each expansion
         search_backend: "parquet" (the STAC-GeoParquet mirror, default) or

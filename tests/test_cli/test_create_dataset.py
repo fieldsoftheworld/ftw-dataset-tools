@@ -225,6 +225,22 @@ class TestCreateDatasetImageSelection:
         assert kwargs["buffer_days"] == 14
         assert kwargs["catalog_dir"] == tmp_path / "out"
 
+    def test_search_backend_defaults_to_parquet(
+        self, stub_pipeline: SelectionStub, sample_fields_geoparquet: Path
+    ) -> None:
+        result = _invoke(sample_fields_geoparquet)
+
+        assert result.exit_code == 0, result.output
+        assert stub_pipeline.calls[0]["search_backend"] == "parquet"
+
+    def test_search_backend_option_reaches_workflow(
+        self, stub_pipeline: SelectionStub, sample_fields_geoparquet: Path
+    ) -> None:
+        result = _invoke(sample_fields_geoparquet, "--search-backend", "earth-search")
+
+        assert result.exit_code == 0, result.output
+        assert stub_pipeline.calls[0]["search_backend"] == "earth-search"
+
     def test_passes_through_selection_options(
         self, stub_pipeline: SelectionStub, sample_fields_geoparquet: Path
     ) -> None:

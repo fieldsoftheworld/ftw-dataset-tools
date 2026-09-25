@@ -232,3 +232,23 @@ class TestSelectBestSceneNodata:
             [self._item(18.3)], season="planting", bbox=self.BBOX
         )
         assert scene is None
+
+    @staticmethod
+    def _failing_check(_href, _bbox):
+        raise OSError("object not found")
+
+    def test_failed_pixel_check_falls_back_to_scene_nodata(self, monkeypatch):
+        """A scene whose metadata reports nodata is rejected when the pixel check fails."""
+        monkeypatch.setattr(scene_selection, "calculate_nodata_percentage", self._failing_check)
+        scene = scene_selection._select_best_scene(
+            [self._item(18.3)], season="planting", bbox=self.BBOX
+        )
+        assert scene is None
+
+    def test_failed_pixel_check_without_scene_nodata_continues(self, monkeypatch):
+        """With no scene-level value to fall back on, a failed check does not reject."""
+        monkeypatch.setattr(scene_selection, "calculate_nodata_percentage", self._failing_check)
+        scene = scene_selection._select_best_scene(
+            [self._item(None)], season="planting", bbox=self.BBOX
+        )
+        assert scene is not None
