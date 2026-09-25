@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from ftw_dataset_tools.cli import cli
@@ -157,3 +158,43 @@ class TestCreateChipsCommand:
         assert result.exit_code == 0
         assert "Total grid cells: 2" in result.output
         assert "undersized" not in result.output.lower()
+
+    @pytest.mark.parametrize("bad", ["150", "-1"])
+    def test_min_chip_area_outside_percentage_range_rejected(
+        self, sample_fields_geoparquet: Path, tmp_path: Path, bad: str
+    ) -> None:
+        """A percentage outside 0-100 is a mistake, not a licence to drop every chip."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "create-chips",
+                str(sample_fields_geoparquet),
+                "-o",
+                str(tmp_path / "chips.parquet"),
+                "--min-chip-area",
+                bad,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Invalid value for '--min-chip-area'" in result.output
+
+    @pytest.mark.parametrize("bad", ["0", "-2"])
+    def test_non_positive_km_size_rejected(
+        self, sample_fields_geoparquet: Path, tmp_path: Path, bad: str
+    ) -> None:
+        """--km-size 0 would silently disable the filter, so it is refused."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "create-chips",
+                str(sample_fields_geoparquet),
+                "-o",
+                str(tmp_path / "chips.parquet"),
+                "--km-size",
+                bad,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Invalid value for '--km-size'" in result.output

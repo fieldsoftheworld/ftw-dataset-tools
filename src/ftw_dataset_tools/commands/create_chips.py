@@ -57,7 +57,7 @@ from ftw_dataset_tools.api.geo import CRSMismatchError
 )
 @click.option(
     "--min-chip-area",
-    type=float,
+    type=click.FloatRange(0, 100),
     default=field_stats.DEFAULT_MIN_CHIP_AREA,
     show_default=True,
     help=(
@@ -68,7 +68,7 @@ from ftw_dataset_tools.api.geo import CRSMismatchError
 )
 @click.option(
     "--km-size",
-    type=float,
+    type=click.FloatRange(min=0, min_open=True),
     default=field_stats.DEFAULT_CHIP_KM_SIZE,
     show_default=True,
     help="Nominal chip edge length in km, used as the reference for --min-chip-area.",
