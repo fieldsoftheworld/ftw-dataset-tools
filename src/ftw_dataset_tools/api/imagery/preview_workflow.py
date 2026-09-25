@@ -24,6 +24,7 @@ from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, run_in_paral
 from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
 from ftw_dataset_tools.api.imagery.stac_child_items import attach_thumbnail_to_parent
 from ftw_dataset_tools.api.imagery.thumbnails import (
+    PREVIEW_SUFFIX,
     generate_overlay_thumbnail,
     generate_scene_thumbnail,
 )
@@ -99,13 +100,13 @@ def build_preview_task(item: pystac.Item, item_path: Path) -> PreviewTask | str:
         item_path=item_path,
         visual_href=href,
         mask_path=mask_path,
-        output_path=chip_dir / f"{item.id}_overlay.jpg",
+        output_path=chip_dir / f"{item.id}_overlay{PREVIEW_SUFFIX}",
     )
 
 
 def render_preview(task: PreviewTask) -> None:
     """Render one chip's overlay preview from its remote scene."""
-    base_path = task.output_path.with_name(f".{task.output_path.name}.base.jpg")
+    base_path = task.output_path.with_name(f".{task.output_path.name}.base{PREVIEW_SUFFIX}")
     try:
         generate_scene_thumbnail(task.visual_href, task.mask_path, base_path)
         generate_overlay_thumbnail(base_path, task.mask_path, task.output_path)
@@ -116,7 +117,7 @@ def render_preview(task: PreviewTask) -> None:
 def preview_imagery_for_catalog(
     catalog_dir: Path,
     *,
-    resume: bool = False,
+    resume: bool = True,
     on_progress: Callable[[int, int], None] | None = None,
     show_progress_bar: bool = True,
     workers: int = DEFAULT_WORKERS,
@@ -128,7 +129,9 @@ def preview_imagery_for_catalog(
 
     Args:
         catalog_dir: The collection directory holding ``collection.json``.
-        resume: Skip chips that already have a preview on disk.
+        resume: Skip chips that already have a preview on disk. Defaults to True,
+            so a second run picks up where the first stopped; pass False to
+            re-render everything.
         on_progress: Optional ``(done, total)`` callback.
         show_progress_bar: Show a tqdm bar.
         workers: Number of scenes to read concurrently.
@@ -188,7 +191,7 @@ def preview_imagery_for_catalog(
                 attach_thumbnail_to_parent(parent, task.item_path.parent)
                 write_item(parent, task.item_path)
             except (OSError, pystac.STACError) as err:
-                # The JPEG is on disk; only the item update failed. Report it rather
+                # The preview is on disk; only the item update failed. Report it rather
                 # than counting a chip whose item never learned about its preview.
                 result.failed += 1
                 result.failed_details.append({"chip": task.item_id, "error": str(err)})

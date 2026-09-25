@@ -12,6 +12,7 @@ from ftw_dataset_tools.api.geo import (
     detect_crs,
     detect_geometry_column,
     ensure_spatial_loaded,
+    sql_path,
     write_geoparquet,
 )
 
@@ -55,10 +56,11 @@ def _has_polygon_geometries(
     conn: duckdb.DuckDBPyConnection, file_path: Path, geom_col: str
 ) -> bool:
     """Check if a parquet file contains polygon geometries."""
+    file_sql = sql_path(file_path)
     try:
         result = conn.execute(f"""
             SELECT ST_GeometryType("{geom_col}") as geom_type
-            FROM '{file_path}'
+            FROM '{file_sql}'
             WHERE "{geom_col}" IS NOT NULL
             LIMIT 1
         """).fetchone()
@@ -83,14 +85,14 @@ def _extract_boundaries(
     query = f"""
         SELECT * EXCLUDE ("{geom_col}"),
                ST_AsWKB(ST_Boundary("{geom_col}")) AS "{geom_col}"
-        FROM '{input_path}'
+        FROM '{sql_path(input_path)}'
     """
 
     # Write with proper GeoParquet metadata
     write_geoparquet(output_path, conn=conn, query=query)
 
     # Get count
-    count_result = conn.execute(f"SELECT COUNT(*) FROM '{output_path}'").fetchone()
+    count_result = conn.execute(f"SELECT COUNT(*) FROM '{sql_path(output_path)}'").fetchone()
     return count_result[0] if count_result else 0
 
 

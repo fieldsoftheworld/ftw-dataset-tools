@@ -86,6 +86,11 @@ class TestClearChipSelections:
         (chip_dir / "chip1_harvest_s2.json").write_text("{}")
         (chip_dir / "chip1_planting_image_s2.tif").write_bytes(b"tif")
         (chip_dir / "chip1_harvest_image_s2.tif").write_bytes(b"tif")
+        (chip_dir / "chip1_planting_image_s2.webp").write_bytes(b"webp")
+        (chip_dir / "chip1_harvest_image_s2.webp").write_bytes(b"webp")
+        (chip_dir / "chip1_overlay.webp").write_bytes(b"webp")
+        # A catalog part-way through the WebP conversion carries both formats;
+        # leaving either behind strands a preview for imagery that is now gone.
         (chip_dir / "chip1_planting_image_s2.jpg").write_bytes(b"jpg")
         (chip_dir / "chip1_harvest_image_s2.jpg").write_bytes(b"jpg")
         (chip_dir / "chip1_overlay.jpg").write_bytes(b"jpg")
@@ -105,6 +110,9 @@ class TestClearChipSelections:
         assert not (chip_dir / "chip1_harvest_s2.json").exists()
         assert not (chip_dir / "chip1_planting_image_s2.tif").exists()
         assert not (chip_dir / "chip1_harvest_image_s2.tif").exists()
+        assert not (chip_dir / "chip1_planting_image_s2.webp").exists()
+        assert not (chip_dir / "chip1_harvest_image_s2.webp").exists()
+        assert not (chip_dir / "chip1_overlay.webp").exists()
         assert not (chip_dir / "chip1_planting_image_s2.jpg").exists()
         assert not (chip_dir / "chip1_harvest_image_s2.jpg").exists()
         assert not (chip_dir / "chip1_overlay.jpg").exists()

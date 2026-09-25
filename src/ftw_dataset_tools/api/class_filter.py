@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import duckdb
 
 from ftw_dataset_tools.api.config import ClassFilter, ClassFilterError
-from ftw_dataset_tools.api.geo import write_geoparquet
+from ftw_dataset_tools.api.geo import sql_path, write_geoparquet
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -35,10 +35,11 @@ def resolve_column(fields_file: str | Path, class_filter: ClassFilter) -> str:
     Raises:
         ClassFilterError: If none of the candidate columns are present.
     """
+    fields_sql = sql_path(fields_file)
     conn = duckdb.connect(":memory:")
     try:
         columns = [
-            row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM '{fields_file}'").fetchall()
+            row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM '{fields_sql}'").fetchall()
         ]
     finally:
         conn.close()
@@ -55,10 +56,11 @@ def get_distinct_classes(fields_file: str | Path, column: str) -> set[str | None
         ClassFilterError: If the column does not exist in the fields file.
     """
     quoted = _safe_column(column)
+    fields_sql = sql_path(fields_file)
     conn = duckdb.connect(":memory:")
     try:
         columns = [
-            row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM '{fields_file}'").fetchall()
+            row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM '{fields_sql}'").fetchall()
         ]
         if column not in columns:
             raise ClassFilterError(
@@ -66,7 +68,7 @@ def get_distinct_classes(fields_file: str | Path, column: str) -> set[str | None
                 f"Available columns: {sorted(columns)}"
             )
         rows = conn.execute(
-            f"SELECT DISTINCT CAST({quoted} AS VARCHAR) FROM '{fields_file}'"
+            f"SELECT DISTINCT CAST({quoted} AS VARCHAR) FROM '{fields_sql}'"
         ).fetchall()
     finally:
         conn.close()
@@ -98,7 +100,7 @@ def write_filtered_fields(
     else:
         where = "WHERE FALSE"
 
-    query = f"SELECT * FROM '{fields_file}' {where}"
+    query = f"SELECT * FROM '{sql_path(fields_file)}' {where}"
     conn = duckdb.connect(":memory:")
     try:
         return write_geoparquet(output_path, conn=conn, query=query)

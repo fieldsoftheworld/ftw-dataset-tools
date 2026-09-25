@@ -15,7 +15,7 @@ from typing import Any
 
 import duckdb
 
-from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded
+from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 
 # A column is treated as an identifier (value counts skipped) when it is almost
 # entirely unique and has many distinct values.
@@ -117,7 +117,7 @@ def _distinct_and_nulls(
         q = _quote(col)
         selects.append(f"COUNT(DISTINCT {q})")
         selects.append(f"COUNT(*) - COUNT({q})")
-    row = conn.execute(f"SELECT {', '.join(selects)} FROM '{path}'").fetchone()
+    row = conn.execute(f"SELECT {', '.join(selects)} FROM '{sql_path(path)}'").fetchone()
     return {col: (row[2 * i], row[2 * i + 1]) for i, col in enumerate(names)}
 
 
@@ -126,7 +126,7 @@ def _value_counts(
 ) -> list[tuple[str, int]]:
     q = _quote(col)
     rows = conn.execute(
-        f"SELECT CAST({q} AS VARCHAR), COUNT(*) AS n FROM '{path}' "
+        f"SELECT CAST({q} AS VARCHAR), COUNT(*) AS n FROM '{sql_path(path)}' "
         f"WHERE {q} IS NOT NULL GROUP BY 1 ORDER BY n DESC, 1 LIMIT {limit}"
     ).fetchall()
     return [(r[0], r[1]) for r in rows]
@@ -137,7 +137,7 @@ def _numeric_stats(conn: duckdb.DuckDBPyConnection, path: str, col: str) -> dict
     minv, maxv, mean, stddev, p25, median, p75 = conn.execute(
         f"SELECT MIN({q}), MAX({q}), AVG({q}), STDDEV_SAMP({q}), "
         f"QUANTILE_CONT({q}, 0.25), MEDIAN({q}), QUANTILE_CONT({q}, 0.75) "
-        f"FROM '{path}'"
+        f"FROM '{sql_path(path)}'"
     ).fetchone()
     return {
         "min": minv,
@@ -154,7 +154,7 @@ def _temporal_range(conn: duckdb.DuckDBPyConnection, path: str, col: str) -> dic
     q = _quote(col)
     # Cast to VARCHAR so timezone-aware values don't require pytz to fetch.
     minv, maxv = conn.execute(
-        f"SELECT CAST(MIN({q}) AS VARCHAR), CAST(MAX({q}) AS VARCHAR) FROM '{path}'"
+        f"SELECT CAST(MIN({q}) AS VARCHAR), CAST(MAX({q}) AS VARCHAR) FROM '{sql_path(path)}'"
     ).fetchone()
     return {"min": minv, "max": maxv}
 
@@ -204,7 +204,7 @@ def _geometry_summary(path: str, geom_col: str) -> GeometrySummary:
         rows = conn.execute(
             f"SELECT ST_GeometryType({q}) AS gt, COUNT(*) AS n, "
             f"MIN(ST_XMin({q})), MIN(ST_YMin({q})), MAX(ST_XMax({q})), MAX(ST_YMax({q})) "
-            f"FROM '{path}' GROUP BY gt ORDER BY n DESC"
+            f"FROM '{sql_path(path)}' GROUP BY gt ORDER BY n DESC"
         ).fetchall()
     finally:
         conn.close()
@@ -259,8 +259,9 @@ def summarize_fields(
 
     conn = duckdb.connect(":memory:")
     try:
-        schema = conn.execute(f"DESCRIBE SELECT * FROM '{path_str}'").fetchall()
-        num_rows = conn.execute(f"SELECT COUNT(*) FROM '{path_str}'").fetchone()[0]
+        path_sql = sql_path(path_str)
+        schema = conn.execute(f"DESCRIBE SELECT * FROM '{path_sql}'").fetchall()
+        num_rows = conn.execute(f"SELECT COUNT(*) FROM '{path_sql}'").fetchone()[0]
         geom_col = detect_geometry_column(path_str)
 
         column_kinds = [(row[0], row[1], _classify(row[1], geom_col, row[0])) for row in schema]

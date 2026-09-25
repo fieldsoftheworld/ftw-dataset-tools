@@ -44,13 +44,14 @@ from ftw_dataset_tools.api.geo import (
     detect_geometry_column,
     ensure_spatial_loaded,
     reproject,
+    sql_path,
 )
 from ftw_dataset_tools.api.imagery import (
     download_imagery_for_catalog,
     select_imagery_for_catalog,
 )
 from ftw_dataset_tools.api.imagery.preview_workflow import preview_imagery_for_catalog
-from ftw_dataset_tools.api.masks import MaskType, get_item_id, get_mgrs_square
+from ftw_dataset_tools.api.masks import MaskType
 from ftw_dataset_tools.api.source import (
     describe_local_source,
     fetch_source,
@@ -514,7 +515,8 @@ def _subset_local_grid(ctx: PipelineContext, grid_file: str) -> str:
     conn = duckdb.connect(":memory:")
     ensure_spatial_loaded(conn)
     try:
-        grid_cols = [r[0] for r in conn.execute(f"DESCRIBE SELECT * FROM '{grid_file}'").fetchall()]
+        grid_sql = sql_path(grid_file)
+        grid_cols = [r[0] for r in conn.execute(f"DESCRIBE SELECT * FROM '{grid_sql}'").fetchall()]
         if "bbox" not in grid_cols:
             ctx.log("Local grid has no bbox column; loading it in full (may be slow).")
             return grid_file
@@ -522,16 +524,17 @@ def _subset_local_grid(ctx: PipelineContext, grid_file: str) -> str:
         # Fields bounds from their bbox column (present after reproject/filter).
         xmin, ymin, xmax, ymax = conn.execute(
             f"SELECT MIN(bbox.xmin), MIN(bbox.ymin), MAX(bbox.xmax), MAX(bbox.ymax) "
-            f"FROM '{ctx.field_polygons_path}'"
+            f"FROM '{sql_path(ctx.field_polygons_path)}'"
         ).fetchone()
 
         subset_path = ctx.output_dir / f"{ctx.field_dataset}_grid.parquet"
+        subset_sql = sql_path(subset_path)
         conn.execute(
-            f"COPY (SELECT * FROM '{grid_file}' WHERE bbox.xmin <= {xmax} "
+            f"COPY (SELECT * FROM '{grid_sql}' WHERE bbox.xmin <= {xmax} "
             f"AND bbox.xmax >= {xmin} AND bbox.ymin <= {ymax} AND bbox.ymax >= {ymin}) "
-            f"TO '{subset_path}' (FORMAT PARQUET)"
+            f"TO '{subset_sql}' (FORMAT PARQUET)"
         )
-        n = conn.execute(f"SELECT COUNT(*) FROM '{subset_path}'").fetchone()[0]
+        n = conn.execute(f"SELECT COUNT(*) FROM '{subset_sql}'").fetchone()[0]
         ctx.log(f"Subset local grid to {n:,} cells within fields bounds -> {subset_path.name}")
         return str(subset_path)
     finally:
@@ -556,6 +559,8 @@ def stage_chips(ctx: PipelineContext) -> None:
         grid_source=grid_source,
         output_file=str(ctx.chips_path),
         min_coverage=ctx.config.stages.chips.min_coverage,
+        min_chip_area=chips_cfg.min_chip_area if chips_cfg.min_chip_area > 0 else None,
+        km_size=chips_cfg.km_size,
         drop_border_chips=ctx.config.stages.chips.drop_border_chips,
         border_gap_chips=ctx.config.stages.chips.border_gap_chips,
         batch_size=chips_cfg.coverage_batch_size,
@@ -622,21 +627,12 @@ _MASK_TYPE_MAPPING = [
 
 def _build_chip_dirs(ctx: PipelineContext) -> dict[str, Path]:
     """Create per-chip directories for grids above the coverage threshold."""
-    min_coverage = ctx.config.stages.chips.min_coverage
-    conn = duckdb.connect(":memory:")
-    ensure_spatial_loaded(conn)
-    grid_ids = conn.execute(
-        f"SELECT id FROM '{ctx.chips_path}' WHERE field_coverage_pct >= {min_coverage}"
-    ).fetchall()
-    conn.close()
-
-    chip_dirs: dict[str, Path] = {}
-    for (grid_id,) in grid_ids:
-        item_id = get_item_id(str(grid_id), ctx.effective_year)
-        chip_dir = ctx.chips_base_dir / get_mgrs_square(str(grid_id)) / item_id
-        chip_dir.mkdir(parents=True, exist_ok=True)
-        chip_dirs[item_id] = chip_dir
-    return chip_dirs
+    return masks.build_chip_dirs(
+        chips_file=ctx.chips_path,
+        chips_base_dir=ctx.chips_base_dir,
+        min_coverage=ctx.config.stages.chips.min_coverage,
+        year=ctx.effective_year,
+    )
 
 
 # Reasons are truncated before grouping/logging so one exceptionally long

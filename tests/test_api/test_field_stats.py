@@ -9,6 +9,7 @@ import pytest
 from shapely.geometry import box
 
 from ftw_dataset_tools.api.field_stats import FieldStatsResult
+from ftw_dataset_tools.api.geo import CRSInfo
 
 
 class TestDetectBboxColumn:
@@ -529,3 +530,240 @@ class TestChipOrderByFallback:
 
         assert result.total_cells == 3
         assert any("no 'id' column" in msg for msg in messages)
+
+
+# A 2 km cell and a 100 m sliver, both defined in UTM 33N metres so their true
+# ground area is exact. This mirrors what the MGRS grid produces at a UTM zone
+# boundary: full cells inland, truncated ones on the seam.
+_UTM_CRS = "EPSG:32633"
+_FULL_CELL = box(500000, 5000000, 502000, 5002000)
+_SLIVER_CELL = box(502000, 5000000, 502100, 5002000)
+
+
+def _write_size_test_file(path: Path, gdf: gpd.GeoDataFrame, crs: str) -> Path:
+    """Write a size-test input, adding a bbox only when the CRS survives the round-trip.
+
+    gpio rewrites the CRS metadata as EPSG:4326, so a projected fixture has to be
+    written by geopandas alone to keep its real CRS.
+    """
+    gdf.to_crs(crs).to_parquet(path)
+    if crs == "EPSG:4326":
+        gpio.read(str(path)).add_bbox().write(str(path))
+    return path
+
+
+def _size_test_grid(path: Path, crs: str = "EPSG:4326") -> Path:
+    """Write a grid holding one full 2 km cell and one 100 m sliver."""
+    gdf = gpd.GeoDataFrame(
+        {"id": ["full", "sliver"]},
+        geometry=[_FULL_CELL, _SLIVER_CELL],
+        crs=_UTM_CRS,
+    )
+    return _write_size_test_file(path, gdf, crs)
+
+
+def _size_test_fields(path: Path, crs: str = "EPSG:4326") -> Path:
+    """Write one field polygon covering both cells of the size-test grid."""
+    gdf = gpd.GeoDataFrame(
+        {"id": ["f1"]},
+        geometry=[box(500100, 5000100, 502050, 5001900)],
+        crs=_UTM_CRS,
+    )
+    return _write_size_test_file(path, gdf, crs)
+
+
+class TestMinChipArea:
+    """Tests for dropping chips truncated at MGRS/UTM zone boundaries."""
+
+    def test_spheroid_area_requires_flipped_coordinates(self) -> None:
+        """DuckDB's ST_Area_Spheroid reads (lat, lon); lon/lat must be flipped first.
+
+        Pins the assumption _chip_area_expr depends on. Without the flip a full 2 km
+        cell measures far above nominal, which would let truncated chips through.
+        """
+        from ftw_dataset_tools.api.field_stats import _chip_area_expr
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        wkt = gpd.GeoSeries([_FULL_CELL], crs=_UTM_CRS).to_crs("EPSG:4326").iloc[0].wkt
+        conn.execute(f"CREATE TABLE g AS SELECT ST_GeomFromText('{wkt}') AS geometry")
+
+        flipped = conn.execute(
+            f"SELECT {_chip_area_expr('geometry', is_geographic=True)} FROM g"
+        ).fetchone()[0]
+        unflipped = conn.execute("SELECT ST_Area_Spheroid(geometry) FROM g").fetchone()[0]
+        conn.close()
+
+        assert flipped == pytest.approx(4_000_000, rel=0.002)
+        assert unflipped > 4_500_000
+
+    def test_drops_truncated_cells_and_keeps_full_ones(self, tmp_path: Path) -> None:
+        """A 99.5% threshold removes the sliver and keeps the full 2 km cell."""
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        output_file = tmp_path / "chips.parquet"
+        result = add_field_stats(
+            grid_file=_size_test_grid(tmp_path / "grid.parquet"),
+            fields_file=_size_test_fields(tmp_path / "fields.parquet"),
+            output_file=output_file,
+            min_chip_area=99.5,
+        )
+
+        assert result.cells_dropped_undersized == 1
+        assert result.total_cells == 1
+        ids = duckdb.connect().execute(f"SELECT id FROM '{output_file}'").fetchall()
+        assert [row[0] for row in ids] == ["full"]
+
+    def test_disabled_by_default(self, tmp_path: Path) -> None:
+        """The API keeps every cell unless min_chip_area is passed."""
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        result = add_field_stats(
+            grid_file=_size_test_grid(tmp_path / "grid.parquet"),
+            fields_file=_size_test_fields(tmp_path / "fields.parquet"),
+            output_file=tmp_path / "chips.parquet",
+        )
+
+        assert result.cells_dropped_undersized == 0
+        assert result.total_cells == 2
+
+    def test_uses_planar_area_for_projected_grid(self, tmp_path: Path) -> None:
+        """A grid already in metres is measured with planar area, not the spheroid."""
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        result = add_field_stats(
+            grid_file=_size_test_grid(tmp_path / "grid.parquet", crs=_UTM_CRS),
+            fields_file=_size_test_fields(tmp_path / "fields.parquet", crs=_UTM_CRS),
+            output_file=tmp_path / "chips.parquet",
+            min_chip_area=99.5,
+        )
+
+        assert result.cells_dropped_undersized == 1
+        assert result.total_cells == 1
+
+    def test_km_size_mismatch_warns(self, tmp_path: Path) -> None:
+        """Wrong km_size gutting the grid is reported rather than silently applied."""
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        messages: list[str] = []
+        add_field_stats(
+            grid_file=_size_test_grid(tmp_path / "grid.parquet"),
+            fields_file=_size_test_fields(tmp_path / "fields.parquet"),
+            output_file=tmp_path / "chips.parquet",
+            min_chip_area=99.5,
+            km_size=10.0,
+            on_progress=messages.append,
+        )
+
+        assert any("removed 100.0% of cells" in msg for msg in messages)
+
+    def test_geographic_crs_other_than_4326_is_measured_in_degrees(self, tmp_path: Path) -> None:
+        """A grid in ETRS89 is lon/lat too, so it must not be measured as metres.
+
+        EPSG:4258 coordinates are degrees; treating them as projected metres compares
+        a value near 0.0007 against a ~4,000,000 cutoff and deletes every chip.
+        """
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        output_file = tmp_path / "chips.parquet"
+        result = add_field_stats(
+            grid_file=_size_test_grid(tmp_path / "grid.parquet", crs="EPSG:4258"),
+            fields_file=_size_test_fields(tmp_path / "fields.parquet", crs="EPSG:4258"),
+            output_file=output_file,
+            min_chip_area=99.5,
+        )
+
+        assert result.cells_dropped_undersized == 1
+        assert result.total_cells == 1
+        ids = duckdb.connect().execute(f"SELECT id FROM '{output_file}'").fetchall()
+        assert [row[0] for row in ids] == ["full"]
+
+    def test_is_geographic_crs_reads_the_crs_definition(self) -> None:
+        """Geographic-ness comes from the CRS itself, not a list of known codes."""
+        from ftw_dataset_tools.api.field_stats import _is_geographic_crs
+
+        assert _is_geographic_crs(CRSInfo(authority="EPSG", code="4326", wkt=None, projjson=None))
+        assert _is_geographic_crs(CRSInfo(authority="EPSG", code="4258", wkt=None, projjson=None))
+        assert _is_geographic_crs(CRSInfo(authority="EPSG", code="4269", wkt=None, projjson=None))
+        assert (
+            _is_geographic_crs(CRSInfo(authority="EPSG", code="32633", wkt=None, projjson=None))
+            is False
+        )
+        # Nothing to read: the caller falls back to sniffing the coordinates.
+        assert (
+            _is_geographic_crs(CRSInfo(authority=None, code=None, wkt=None, projjson=None)) is None
+        )
+
+    def test_bounds_sniff_used_when_crs_metadata_is_missing(self) -> None:
+        """Without any CRS metadata, degree-range coordinates count as geographic."""
+        from ftw_dataset_tools.api.field_stats import _bounds_look_geographic
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        degrees = gpd.GeoSeries([_FULL_CELL], crs=_UTM_CRS).to_crs("EPSG:4326").iloc[0].wkt
+        conn.execute(f"CREATE TABLE grid_table AS SELECT ST_GeomFromText('{degrees}') AS geometry")
+        assert _bounds_look_geographic(conn, "geometry") is True
+
+        conn.execute("DROP TABLE grid_table")
+        conn.execute(
+            f"CREATE TABLE grid_table AS SELECT ST_GeomFromText('{_FULL_CELL.wkt}') AS geometry"
+        )
+        assert _bounds_look_geographic(conn, "geometry") is False
+        conn.close()
+
+    def test_unmeasurable_area_keeps_only_the_affected_rows(self, tmp_path: Path) -> None:
+        """A mislabelled CRS keeps its rows; it must not switch the filter off."""
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        # Projected coordinates carrying EPSG:4326 metadata: the spheroid area of
+        # metre coordinates is NaN, so no cell can be measured and all are kept.
+        grid = tmp_path / "grid.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["full", "sliver"]},
+            geometry=[_FULL_CELL, _SLIVER_CELL],
+            crs="EPSG:4326",
+        ).to_parquet(grid)
+        fields = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["f1"]},
+            geometry=[box(500100, 5000100, 502050, 5001900)],
+            crs="EPSG:4326",
+        ).to_parquet(fields)
+
+        messages: list[str] = []
+        result = add_field_stats(
+            grid_file=grid,
+            fields_file=fields,
+            output_file=tmp_path / "chips.parquet",
+            min_chip_area=99.5,
+            on_progress=messages.append,
+        )
+
+        assert result.cells_dropped_undersized == 0
+        assert result.total_cells == 2
+        assert any("could not measure the area of 2 grid cells" in msg for msg in messages)
+
+    def test_one_unmeasurable_row_does_not_disable_the_filter(self, tmp_path: Path) -> None:
+        """A single NULL geometry must not spare every other truncated chip."""
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        grid = tmp_path / "grid.parquet"
+        gdf = gpd.GeoDataFrame(
+            {"id": ["full", "sliver", "broken"]},
+            geometry=[_FULL_CELL, _SLIVER_CELL, None],
+            crs=_UTM_CRS,
+        ).to_crs("EPSG:4326")
+        gdf.to_parquet(grid)
+
+        messages: list[str] = []
+        result = add_field_stats(
+            grid_file=grid,
+            fields_file=_size_test_fields(tmp_path / "fields.parquet"),
+            output_file=tmp_path / "chips.parquet",
+            min_chip_area=99.5,
+            on_progress=messages.append,
+        )
+
+        assert result.cells_dropped_undersized == 1
+        assert result.total_cells == 2  # the full cell plus the unmeasurable row
+        assert any("could not measure the area of 1 grid cells" in msg for msg in messages)

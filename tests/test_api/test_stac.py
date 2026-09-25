@@ -1167,17 +1167,53 @@ class TestImageryReattachedOnStacRerun:
         build_catalog(tmp_path)
         chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
         _write_season_child(chip_dir, CHIP_ID, "planting")
+        (chip_dir / f"{CHIP_ID}_overlay.webp").write_bytes(b"RIFF")
+
+        build_catalog(tmp_path)
+
+        thumbnail = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())["assets"]["thumbnail"]
+        assert thumbnail["href"] == f"./{CHIP_ID}_overlay.webp"
+        assert thumbnail["roles"] == ["thumbnail"]
+        assert thumbnail["type"] == "image/webp"
+        assert thumbnail["file:size"] == 4
+
+    def test_legacy_jpeg_overlay_still_comes_back(self, tmp_path: Path) -> None:
+        """A catalog built before the WebP switch must not lose its thumbnail.
+
+        Its previews are still ``.jpg`` on disk, and a STAC rerun that only looked
+        for ``.webp`` would silently drop the asset from every item.
+        """
+        import json
+
+        build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        _write_season_child(chip_dir, CHIP_ID, "planting")
         (chip_dir / f"{CHIP_ID}_overlay.jpg").write_bytes(b"\xff\xd8\xff\xd9")
 
         build_catalog(tmp_path)
 
         thumbnail = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())["assets"]["thumbnail"]
         assert thumbnail["href"] == f"./{CHIP_ID}_overlay.jpg"
-        assert thumbnail["roles"] == ["thumbnail"]
         assert thumbnail["type"] == "image/jpeg"
-        assert thumbnail["file:size"] == 4
 
-    def test_plain_season_thumbnail_is_the_fallback(self, tmp_path: Path) -> None:
+    def test_webp_wins_when_both_formats_are_on_disk(self, tmp_path: Path) -> None:
+        """Mid-conversion, the new format is the one the item points at."""
+        import json
+
+        build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        _write_season_child(chip_dir, CHIP_ID, "planting")
+        (chip_dir / f"{CHIP_ID}_overlay.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+        (chip_dir / f"{CHIP_ID}_overlay.webp").write_bytes(b"RIFF")
+
+        build_catalog(tmp_path)
+
+        thumbnail = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())["assets"]["thumbnail"]
+        assert thumbnail["href"] == f"./{CHIP_ID}_overlay.webp"
+        assert thumbnail["type"] == "image/webp"
+
+    def test_legacy_planting_preview_is_still_the_fallback(self, tmp_path: Path) -> None:
+        """The plain-season fallback needs the same compatibility as the overlay."""
         import json
 
         build_catalog(tmp_path)
@@ -1187,8 +1223,22 @@ class TestImageryReattachedOnStacRerun:
 
         build_catalog(tmp_path)
 
+        thumbnail = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())["assets"]["thumbnail"]
+        assert thumbnail["href"] == f"./{CHIP_ID}_planting_image_s2.jpg"
+        assert thumbnail["type"] == "image/jpeg"
+
+    def test_plain_season_thumbnail_is_the_fallback(self, tmp_path: Path) -> None:
+        import json
+
+        build_catalog(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
+        _write_season_child(chip_dir, CHIP_ID, "planting")
+        (chip_dir / f"{CHIP_ID}_planting_image_s2.webp").write_bytes(b"RIFF")
+
+        build_catalog(tmp_path)
+
         item = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())
-        assert item["assets"]["thumbnail"]["href"] == f"./{CHIP_ID}_planting_image_s2.jpg"
+        assert item["assets"]["thumbnail"]["href"] == f"./{CHIP_ID}_planting_image_s2.webp"
 
     def test_no_thumbnail_file_means_no_thumbnail_asset(self, tmp_path: Path) -> None:
         import json
@@ -1209,7 +1259,7 @@ class TestImageryReattachedOnStacRerun:
         chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
         _write_season_child(chip_dir, CHIP_ID, "planting", with_image=True)
         _write_mask(chip_dir / f"{CHIP_ID}_planting_image_s2.tif", [[1, 2], [3, 4]], dtype="uint16")
-        (chip_dir / f"{CHIP_ID}_overlay.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+        (chip_dir / f"{CHIP_ID}_overlay.webp").write_bytes(b"RIFF")
 
         build_catalog(tmp_path, checksums=True)
 

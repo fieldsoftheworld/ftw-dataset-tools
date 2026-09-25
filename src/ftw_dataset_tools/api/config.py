@@ -242,6 +242,13 @@ class ChipsConfig:
     drop_border_chips: bool = False
     # How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.
     border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS
+    # Minimum chip area as a percentage of a full km_size x km_size cell. Drops the
+    # slivers left where MGRS cells are clipped at UTM zone boundaries. Set to 0 to
+    # keep them.
+    min_chip_area: float = field_stats.DEFAULT_MIN_CHIP_AREA
+    # Nominal chip edge length in km, the reference for min_chip_area. Match this to
+    # the grid in grid_file when it was not built at the default size.
+    km_size: float = field_stats.DEFAULT_CHIP_KM_SIZE
     # Local FTW grid parquet to use instead of fetching from Source Coop. Path is
     # resolved relative to the config file. Optional.
     grid_file: str | None = None
@@ -641,6 +648,21 @@ class DatasetConfig:
             raise ConfigError(
                 f"stages.chips.coverage_batch_size must be a positive integer (got {batch_size!r})"
             )
+
+        min_chip_area = self.stages.chips.min_chip_area
+        if (
+            not isinstance(min_chip_area, int | float)
+            or isinstance(min_chip_area, bool)
+            or not 0 <= min_chip_area <= 100
+        ):
+            raise ConfigError(
+                "stages.chips.min_chip_area must be a percentage between 0 and 100 "
+                f"(got {min_chip_area!r})"
+            )
+
+        km_size = self.stages.chips.km_size
+        if not isinstance(km_size, int | float) or isinstance(km_size, bool) or km_size <= 0:
+            raise ConfigError(f"stages.chips.km_size must be a positive number (got {km_size!r})")
 
         if not isinstance(self.stages.masks.skip_existing, bool):
             raise ConfigError("stages.masks.skip_existing must be true or false")

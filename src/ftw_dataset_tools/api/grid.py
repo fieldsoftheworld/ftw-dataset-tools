@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import duckdb
 
-from ftw_dataset_tools.api.geo import configure_source_coop_s3, detect_crs
+from ftw_dataset_tools.api.geo import configure_source_coop_s3, detect_crs, sql_path
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -121,7 +121,7 @@ def get_grid(
 
     # Load input file
     log("Loading input file...")
-    conn.execute(f"CREATE TABLE input_data AS SELECT * FROM '{input_path}'")
+    conn.execute(f"CREATE TABLE input_data AS SELECT * FROM '{sql_path(input_path)}'")
     feature_count = conn.execute("SELECT COUNT(*) FROM input_data").fetchone()[0]
     log(f"Loaded {feature_count:,} features")
 
@@ -146,7 +146,7 @@ def get_grid(
 
         if cache_file.exists():
             log(f"Using cached grid from {cache_file}")
-            conn.execute(f"CREATE TABLE grid_result AS SELECT * FROM '{cache_file}'")
+            conn.execute(f"CREATE TABLE grid_result AS SELECT * FROM '{sql_path(cache_file)}'")
             grid_count = conn.execute("SELECT COUNT(*) FROM grid_result").fetchone()[0]
             log(f"Loaded {grid_count:,} cached grid cells")
 
@@ -159,7 +159,7 @@ def get_grid(
             log(f"Writing output to: {out_path}")
             out_path.parent.mkdir(parents=True, exist_ok=True)
             conn.execute(f"""
-                COPY grid_result TO '{out_path}'
+                COPY grid_result TO '{sql_path(out_path)}'
                 (FORMAT PARQUET, COMPRESSION 'zstd', COMPRESSION_LEVEL 16)
             """)
             conn.close()
@@ -175,7 +175,7 @@ def get_grid(
     conn.execute(f"""
         CREATE TABLE grid_bbox AS
         SELECT *
-        FROM '{grid_source}'
+        FROM '{sql_path(grid_source)}'
         WHERE "bbox".xmin <= {xmax}
           AND "bbox".xmax >= {xmin}
           AND "bbox".ymin <= {ymax}
@@ -217,7 +217,7 @@ def get_grid(
     if use_cache and cache_file:
         log(f"Caching grid results to {cache_file}")
         conn.execute(f"""
-            COPY grid_result TO '{cache_file}'
+            COPY grid_result TO '{sql_path(cache_file)}'
             (FORMAT PARQUET, COMPRESSION 'zstd', COMPRESSION_LEVEL 16)
         """)
 
@@ -231,7 +231,7 @@ def get_grid(
     log(f"Writing output to: {out_path}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     conn.execute(f"""
-        COPY grid_result TO '{out_path}'
+        COPY grid_result TO '{sql_path(out_path)}'
         (FORMAT PARQUET, COMPRESSION 'zstd', COMPRESSION_LEVEL 16)
     """)
 

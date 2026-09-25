@@ -56,6 +56,24 @@ from ftw_dataset_tools.api.geo import CRSMismatchError
     help="Exclude grid cells with coverage below this percentage (e.g., 0.01 to remove cells with 0%%).",
 )
 @click.option(
+    "--min-chip-area",
+    type=click.FloatRange(0, 100),
+    default=field_stats.DEFAULT_MIN_CHIP_AREA,
+    show_default=True,
+    help=(
+        "Exclude chips whose area is below this percentage of a full "
+        "--km-size cell. Drops the slivers left where MGRS cells are clipped "
+        "at UTM zone boundaries. Pass 0 to keep them."
+    ),
+)
+@click.option(
+    "--km-size",
+    type=click.FloatRange(min=0, min_open=True),
+    default=field_stats.DEFAULT_CHIP_KM_SIZE,
+    show_default=True,
+    help="Nominal chip edge length in km, used as the reference for --min-chip-area.",
+)
+@click.option(
     "--reproject",
     "reproject_to_4326",
     is_flag=True,
@@ -92,6 +110,8 @@ def create_chips_cmd(
     output_file: str | None,
     coverage_col: str,
     min_coverage: float | None,
+    min_chip_area: float,
+    km_size: float,
     reproject_to_4326: bool,
     drop_border_chips: bool,
     border_gap_chips: int,
@@ -155,6 +175,8 @@ def create_chips_cmd(
                 fields_bbox_col=fields_bbox_col,
                 coverage_col=coverage_col,
                 min_coverage=min_coverage,
+                min_chip_area=min_chip_area if min_chip_area > 0 else None,
+                km_size=km_size,
                 reproject_to_4326=reproject_to_4326,
                 drop_border_chips=drop_border_chips,
                 border_gap_chips=border_gap_chips,
@@ -173,6 +195,8 @@ def create_chips_cmd(
         )
         click.echo(f"  Average coverage: {result.average_coverage}%")
         click.echo(f"  Maximum coverage: {result.max_coverage}%")
+        if result.cells_dropped_undersized:
+            click.echo(f"  Undersized chips dropped: {result.cells_dropped_undersized:,}")
         click.echo(f"\nOutput written to: {result.output_path}")
 
         click.echo(click.style("Done!", fg="green"))

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
+import pyproj
 
 from ftw_dataset_tools.api.chip_borders import (
     DEFAULT_BORDER_GAP_CHIPS,
@@ -21,11 +22,14 @@ from ftw_dataset_tools.api.geo import (
     detect_geometry_column,
     ensure_spatial_loaded,
     reproject,
+    sql_path,
     write_geoparquet,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from ftw_dataset_tools.api.geo import CRSInfo
 
 # Default FTW grid source on Source Cooperative
 DEFAULT_FTW_GRID_SOURCE = (
@@ -40,10 +44,23 @@ CHIP_ID_COLUMN = "id"
 # Grid cells per coverage batch (see _compute_coverage_in_batches).
 DEFAULT_COVERAGE_BATCH_SIZE = 2000
 
+# Nominal chip edge length in km. The FTW grid on Source Coop is built at 2 km;
+# a different grid_file needs its own km_size or the size filter misjudges it.
+DEFAULT_CHIP_KM_SIZE = 2.0
+
+# Minimum chip area, as a percentage of a full km_size x km_size cell, for a chip
+# to be kept. Cells on a UTM zone boundary or an MGRS latitude-band boundary are
+# clipped short and can come out only metres wide. Full cells measure 99.83%-100.08%
+# of nominal (the spread is UTM scale factor, not truncation), so 99.5% clears every
+# full cell and rejects every truncated one.
+DEFAULT_MIN_CHIP_AREA = 99.5
+
 # Re-export for convenience
 __all__ = [
+    "DEFAULT_CHIP_KM_SIZE",
     "DEFAULT_COVERAGE_BATCH_SIZE",
     "DEFAULT_FTW_GRID_SOURCE",
+    "DEFAULT_MIN_CHIP_AREA",
     "CRSMismatchError",
     "FieldStatsResult",
     "add_field_stats",
@@ -59,6 +76,9 @@ class FieldStatsResult:
     cells_with_coverage: int
     average_coverage: float
     max_coverage: float
+    # Cells dropped for being truncated below the minimum chip area (0 when the
+    # size filter is disabled).
+    cells_dropped_undersized: int = 0
 
     @property
     def coverage_percentage(self) -> float:
@@ -114,7 +134,7 @@ def detect_bbox_column(
 
     # Fallback: Check schema for bbox-like STRUCT columns
     try:
-        schema = conn.execute(f"DESCRIBE SELECT * FROM '{file_path}'").fetchall()
+        schema = conn.execute(f"DESCRIBE SELECT * FROM '{sql_path(file_path)}'").fetchall()
 
         # Look for common bbox column names
         bbox_candidates = ["bbox", f"{geom_col}_bbox", "geometry_bbox"]
@@ -260,6 +280,126 @@ def _chip_order_by(conn: duckdb.DuckDBPyConnection, log: Callable[[str], None]) 
     return ""
 
 
+def _is_geographic_crs(crs_info: CRSInfo) -> bool | None:
+    """
+    Report whether a CRS is lon/lat degrees rather than projected metres.
+
+    Read from the CRS definition itself, so every geographic CRS counts - ETRS89
+    (EPSG:4258), NAD83 (EPSG:4269) and the rest are degrees just as EPSG:4326 is.
+    Returns None when the file carries no CRS to read, leaving the caller to sniff
+    the coordinates instead.
+    """
+    for candidate in (crs_info.projjson, crs_info.authority_code, crs_info.wkt):
+        if not candidate:
+            continue
+        try:
+            return bool(pyproj.CRS.from_user_input(candidate).is_geographic)
+        except Exception:
+            continue
+    return None
+
+
+def _bounds_look_geographic(conn: duckdb.DuckDBPyConnection, geom_col: str) -> bool:
+    """
+    Guess from the coordinates whether a grid is in degrees.
+
+    Only used when the file has no CRS metadata at all: anything inside the lon/lat
+    ranges is treated as degrees, since a projected grid in metres is far outside them.
+    """
+    result = conn.execute(f"""
+        SELECT
+            MAX(ABS(ST_XMin("{geom_col}"))) AS max_x,
+            MAX(ABS(ST_XMax("{geom_col}"))) AS max_x2,
+            MAX(ABS(ST_YMin("{geom_col}"))) AS max_y,
+            MAX(ABS(ST_YMax("{geom_col}"))) AS max_y2
+        FROM grid_table
+    """).fetchone()
+    max_x = max((v for v in result[:2] if v is not None), default=0.0)
+    max_y = max((v for v in result[2:] if v is not None), default=0.0)
+    return max_x <= 180 and max_y <= 90
+
+
+def _grid_uses_degrees(
+    conn: duckdb.DuckDBPyConnection,
+    grid_path: str | None,
+    grid_geom_col: str,
+) -> bool:
+    """Decide how to measure grid areas: lon/lat degrees or projected metres."""
+    if grid_path is None:
+        return True  # the remote FTW grid is always EPSG:4326
+    from_crs = _is_geographic_crs(detect_crs(grid_path, grid_geom_col))
+    if from_crs is not None:
+        return from_crs
+    return _bounds_look_geographic(conn, grid_geom_col)
+
+
+def _chip_area_expr(geom_col: str, is_geographic: bool) -> str:
+    """
+    Build a SQL expression for a chip's ground area in square metres.
+
+    DuckDB's ST_Area_Spheroid reads coordinates as (latitude, longitude), so lon/lat
+    geometry has to be flipped first. Without the flip the area is over-reported by
+    19-41% depending on latitude, which silently lets badly truncated chips through.
+    """
+    if is_geographic:
+        return f'ST_Area_Spheroid(ST_FlipCoordinates("{geom_col}"))'
+    return f'ST_Area("{geom_col}")'
+
+
+def _drop_undersized_chips(
+    conn: duckdb.DuckDBPyConnection,
+    grid_geom_col: str,
+    min_chip_area: float,
+    km_size: float,
+    is_geographic: bool,
+    log: Callable[[str], None],
+) -> int:
+    """
+    Remove grid cells truncated below min_chip_area percent of a full cell.
+
+    MGRS cells are clipped at UTM zone and latitude-band boundaries, so a cell on a
+    boundary covers only what survives the cut - sometimes a sliver a few metres
+    across. Returns the number of cells removed.
+    """
+    nominal_area = km_size * km_size * 1_000_000
+    cutoff = nominal_area * min_chip_area / 100
+    area_expr = _chip_area_expr(grid_geom_col, is_geographic)
+
+    # A NULL or NaN area cannot be compared, so those rows are kept and reported
+    # rather than guessed at. It happens for a NULL geometry, or when the CRS metadata
+    # disagrees with the coordinates (the spheroid area of projected metres is NaN).
+    measurable = f"{area_expr} IS NOT NULL AND NOT ISNAN({area_expr})"
+    unmeasurable = conn.execute(
+        f"SELECT COUNT(*) FROM grid_table WHERE NOT ({measurable})"
+    ).fetchone()[0]
+    if unmeasurable:
+        log(
+            f"Warning: could not measure the area of {unmeasurable:,} grid cells, so those "
+            "cells were kept unchecked. This usually means the grid's CRS metadata does "
+            "not match its coordinates."
+        )
+
+    before_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
+    conn.execute(f"DELETE FROM grid_table WHERE {measurable} AND {area_expr} < {cutoff}")
+    after_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
+    removed = before_count - after_count
+
+    if removed == 0:
+        log(f"No undersized chips found (all cells at least {min_chip_area}% of {km_size}km)")
+        return 0
+
+    log(
+        f"Removed {removed:,} undersized chips (below {min_chip_area}% of a "
+        f"{km_size}x{km_size}km cell), {after_count:,} chips remaining"
+    )
+    if before_count and removed > before_count / 2:
+        log(
+            f"Warning: the size filter removed {100 * removed / before_count:.1f}% of cells. "
+            f"Check that the grid really is {km_size}km; pass km_size to match a custom grid."
+        )
+    return removed
+
+
 def add_field_stats(
     fields_file: str | Path,
     grid_file: str | Path | None = None,
@@ -270,6 +410,8 @@ def add_field_stats(
     fields_bbox_col: str | None = None,
     coverage_col: str = "field_coverage_pct",
     min_coverage: float | None = None,
+    min_chip_area: float | None = None,
+    km_size: float = DEFAULT_CHIP_KM_SIZE,
     reproject_to_4326: bool = False,
     drop_border_chips: bool = False,
     border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS,
@@ -300,6 +442,11 @@ def add_field_stats(
         coverage_col: Name for the new coverage column (default: "field_coverage_pct")
         min_coverage: If set, exclude grid cells with coverage below this percentage
             (e.g., 0.01 to exclude cells with 0% coverage)
+        min_chip_area: If set, exclude grid cells whose area is below this percentage of
+            a full km_size x km_size cell (e.g., 99.5 to drop the slivers left where MGRS
+            cells are clipped at UTM zone boundaries). None disables the check.
+        km_size: Nominal chip edge length in km, used as the reference for min_chip_area
+            (default 2.0, matching the FTW grid on Source Coop)
         reproject_to_4326: If True, reproject both inputs to EPSG:4326 before processing
         drop_border_chips: If True, remove chips on the edge of any labelled cluster
             (where fields may have partial coverage)
@@ -353,7 +500,7 @@ def add_field_stats(
 
         # Load fields table first (needed for bounds calculation if fetching grid from S3)
         log("Loading fields data...")
-        conn.execute(f"CREATE TABLE fields_table AS SELECT * FROM '{fields_path}'")
+        conn.execute(f"CREATE TABLE fields_table AS SELECT * FROM '{sql_path(fields_path)}'")
         fields_count = conn.execute("SELECT COUNT(*) FROM fields_table").fetchone()[0]
         log(f"Loaded {fields_count:,} field polygons")
 
@@ -392,7 +539,9 @@ def add_field_stats(
                         log(f"Reprojected fields to: {fields_temp}")
                         # Reload fields table with reprojected data
                         conn.execute("DROP TABLE fields_table")
-                        conn.execute(f"CREATE TABLE fields_table AS SELECT * FROM '{fields_path}'")
+                        conn.execute(
+                            f"CREATE TABLE fields_table AS SELECT * FROM '{sql_path(fields_path)}'"
+                        )
                 else:
                     raise CRSMismatchError(
                         crs1=str(grid_crs),
@@ -402,7 +551,7 @@ def add_field_stats(
                     )
 
             log("Loading grid data...")
-            conn.execute(f"CREATE TABLE grid_table AS SELECT * FROM '{grid_path}'")
+            conn.execute(f"CREATE TABLE grid_table AS SELECT * FROM '{sql_path(grid_path)}'")
         else:
             # Fetch grid from S3 based on fields bounds
             # First check that fields file is in EPSG:4326 (required for S3 grid)
@@ -456,7 +605,7 @@ def add_field_stats(
             conn.execute(f"""
                 CREATE TABLE grid_table AS
                 SELECT *
-                FROM '{grid_source}'
+                FROM '{sql_path(grid_source)}'
                 WHERE bbox.xmin <= {xmax}
                   AND bbox.xmax >= {xmin}
                   AND bbox.ymin <= {ymax}
@@ -471,6 +620,22 @@ def add_field_stats(
         # Get grid count
         grid_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
         log(f"Loaded {grid_count:,} grid cells")
+
+        # Drop chips the MGRS grid truncated at a zone or band boundary. Done before
+        # the coverage pass so no work is spent on cells that are about to go.
+        cells_dropped_undersized = 0
+        if min_chip_area is not None:
+            # grid_path points at the reprojected copy when one was made, so this
+            # reflects the CRS the grid_table geometry is actually in.
+            cells_dropped_undersized = _drop_undersized_chips(
+                conn,
+                grid_geom_col=grid_geom_col,
+                min_chip_area=min_chip_area,
+                km_size=km_size,
+                is_geographic=_grid_uses_degrees(conn, grid_path, grid_geom_col),
+                log=log,
+            )
+            grid_count -= cells_dropped_undersized
 
         # Auto-detect bbox columns if not specified
         detected_grid_bbox = grid_bbox_col
@@ -584,6 +749,7 @@ def add_field_stats(
             cells_with_coverage=grids_with_coverage,
             average_coverage=avg_coverage or 0.0,
             max_coverage=max_coverage or 0.0,
+            cells_dropped_undersized=cells_dropped_undersized,
         )
     finally:
         # Clean up temp files from reprojection
