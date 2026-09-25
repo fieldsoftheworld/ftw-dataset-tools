@@ -347,8 +347,8 @@ collection describing them, so standalone output can feed `select-images` and `d
             └── {item_id}_{mask_type}.tif
 ```
 
-`{item_id}` is `{grid_id}_{year}` when `--year` is given, otherwise `{grid_id}`. Pass the same
-`--year` as `create-dataset` to reproduce its item ids.
+`{item_id}` is `{grid_id}_{year}`. The year comes from `--year`, or, when that is omitted, from
+the boundaries file's `determination_datetime` column, exactly as `create-dataset` derives it.
 
 ```bash
 # Create semantic 2-class masks
@@ -364,8 +364,8 @@ ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spa
 **Options:**
 - `-o, --output-dir` - Dataset root; masks go under `{output-dir}/chips/` (default: `./masks`)
 - `--field-dataset` - Dataset name, used as the STAC collection id (required)
-- `--year` - Year folded into item ids and filenames. Required unless the boundaries file has a `determination_datetime` column, since the collection needs a temporal extent
-- `--mask-type` - Type of mask: `instance`, `semantic_2_class`, or `semantic_3_class` (default: `semantic_2_class`)
+- `--year` - Year folded into item ids and filenames. Required unless the boundaries file has a `determination_datetime` column, which the year is otherwise derived from (the collection also needs it for its temporal extent)
+- `--mask-type` - Type of mask: `instance`, `semantic_2_class`, `semantic_3_class`, `decode_boundary`, or `decode_distance` (default: `semantic_3_class`)
 - `--grid-id-col` - Column name for grid cell ID (default: `id`)
 - `--coverage-col` - Column name for coverage percentage (default: `field_coverage_pct`)
 - `--min-coverage` - Minimum coverage to process (default: 0.01)

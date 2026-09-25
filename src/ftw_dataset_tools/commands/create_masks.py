@@ -120,18 +120,26 @@ def create_masks_cmd(
 
     \b
     --year may be omitted when the boundaries file has a determination_datetime
-    column, which the STAC collection's temporal extent is then read from.
+    column: the year is then derived from it, the same way create-dataset does,
+    and the STAC collection's temporal extent is read from it too.
     """
-    # The STAC collection written at the end needs a temporal extent. Checked before
-    # any rasterization so a missing --year fails in a second rather than after a
-    # full mask run.
-    if year is None and stac.detect_datetime_column(boundaries_file) is None:
-        raise click.BadParameter(
-            "Cannot determine the collection's temporal extent: "
-            f"{boundaries_file} has no 'determination_datetime' column. "
-            "Pass --year.",
-            param_hint="--year",
-        )
+    # The STAC collection written at the end needs a temporal extent, and the year
+    # is folded into every item id. Resolved before any rasterization so a missing
+    # --year fails in a second rather than after a full mask run.
+    if year is None:
+        datetime_col = stac.detect_datetime_column(boundaries_file)
+        if datetime_col is None:
+            raise click.BadParameter(
+                "Cannot determine the collection's temporal extent: "
+                f"{boundaries_file} has no 'determination_datetime' column. "
+                "Pass --year.",
+                param_hint="--year",
+            )
+        # Derived the same way the pipeline does, so an omitted --year still
+        # produces create-dataset's {grid_id}_{year} item ids and filenames.
+        year = stac.get_year_from_datetime_column(boundaries_file, datetime_col)
+        if year is not None:
+            click.echo(f"Using year {year} from {datetime_col}")
 
     click.echo(f"Creating {mask_type} masks for {field_dataset}")
     click.echo(f"Output: {Path(output_dir) / 'chips'}")
@@ -215,6 +223,7 @@ def create_masks_cmd(
             fields_file=boundaries_file,
             chips_file=chips_file,
             boundary_lines_file=boundary_lines_file,
+            grid_id_col=grid_id_col,
             year=year,
         )
         click.echo(
