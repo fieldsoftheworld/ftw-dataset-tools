@@ -158,8 +158,17 @@ Datasets whose fields lack `hcat:code` skip this step with a note in the run out
 reused as-is by every later stage, so a run started with `--from` or `--stage` after
 `chips` publishes whatever that file already holds. Turning `stages.chips.crop_stats` off
 is handled: the stac stage drops any stale composition columns before publishing. Other
-chips settings are not — change `min_coverage`, `drop_border_chips`, `grid_file` or the
-class filter and you must re-run the `chips` stage for the change to reach the output.
+chips settings are not — change `min_coverage`, `drop_border_chips`, `border_gap_chips`,
+`grid_file` or the class filter and you must re-run the `chips` stage for the change to
+reach the output.
+
+**Border chips.** `drop_border_chips` removes chips on the edge of a labelled cluster,
+where part of the chip falls outside the labelled area and its unlabelled side would be
+rasterised as background. Label collections are often sampled as separate blocks, so this
+is applied per cluster rather than once over the whole dataset. `border_gap_chips`
+(default 2) sets how wide an unlabelled gap must be, in chips, before it counts as a
+cluster edge; gaps narrower than that, and holes fully enclosed by labelled chips such as
+lakes or towns, are treated as interior.
 
 #### Class filter (optional)
 
@@ -304,8 +313,9 @@ The output directory is a self-contained STAC collection with chip items grouped
     │       ├── {item_id}.json                   # Chip item
     │       ├── {item_id}_{mask_type}.tif        # Masks (if masks generated)
     │       ├── {item_id}_{season}_s2.json       # Scene items (if imagery selected)
-    │       ├── {item_id}_{season}_image_s2.tif  # Clipped imagery (if downloaded)
-    │       └── {item_id}_{season}_image_s2.jpg  # Thumbnails (if downloaded)
+    │       ├── {item_id}_{season}_image_s2.tif   # Clipped imagery (if downloaded)
+    │       ├── {item_id}_{season}_image_s2.webp  # Previews (if downloaded)
+    │       └── {item_id}_overlay.webp            # Preview with the mask drawn over it
     └── other/                        # For non-FTW grid ids
         ├── catalog.json
         └── {item_id}/...
@@ -336,6 +346,8 @@ ftwd create-chips fields.parquet --reproject
 - `-o, --output` - Output file path (defaults to `chips_<fields_basename>.parquet`)
 - `--coverage-col` - Name for coverage column (default: `field_coverage_pct`)
 - `--min-coverage` - Exclude grid cells below this coverage percentage
+- `--min-chip-area` - Exclude chips smaller than this percentage of a full `--km-size` cell (default: 99.5, so chips truncated at UTM zone boundaries are removed - about 1.4% of cells - while every full cell is kept; pass 0 to keep them)
+- `--km-size` - Nominal chip edge length in km, the reference for `--min-chip-area` (default: 2.0)
 - `--reproject` - Reproject both inputs to EPSG:4326 if CRS don't match
 - `--grid-geom-col`, `--fields-geom-col` - Geometry column names (auto-detected)
 - `--grid-bbox-col`, `--fields-bbox-col` - Bbox column names (auto-detected)
@@ -344,26 +356,45 @@ ftwd create-chips fields.parquet --reproject
 
 Create raster masks from vector boundaries for each grid cell. Outputs Cloud Optimized GeoTIFFs (COGs).
 
+Masks are written into the same catalog layout `create-dataset` produces, alongside a STAC
+collection describing them, so standalone output can feed `select-images` and `download-images`:
+
+```
+{output-dir}/
+├── collection.json
+└── chips/
+    └── {mgrs100k}/                 # 'other' for non-FTW grid ids
+        ├── catalog.json
+        └── {item_id}/
+            ├── {item_id}.json
+            └── {item_id}_{mask_type}.tif
+```
+
+`{item_id}` is `{grid_id}_{year}`. The year comes from `--year`, or, when that is omitted, from
+the boundaries file's `determination_datetime` column, exactly as `create-dataset` derives it.
+
 ```bash
 # Create semantic 2-class masks
-ftwd create-masks chips.parquet fields.parquet boundary_lines.parquet --field-dataset austria
+ftwd create-masks chips.parquet fields.parquet boundary_lines.parquet --field-dataset austria --year 2024
 
 # Create instance masks
-ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset france --mask-type instance
+ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset france --mask-type instance --year 2024
 
 # Custom settings
-ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spain --min-coverage 1.0 --resolution 5.0
+ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spain --min-coverage 1.0 --resolution 5.0 --year 2024
 ```
 
 **Options:**
-- `-o, --output-dir` - Output directory (default: `./masks`)
-- `--field-dataset` - Dataset name for output filenames (required)
-- `--mask-type` - Type of mask: `instance`, `semantic_2_class`, or `semantic_3_class` (default: `semantic_2_class`)
+- `-o, --output-dir` - Dataset root; masks go under `{output-dir}/chips/` (default: `./masks`)
+- `--field-dataset` - Dataset name, used as the STAC collection id (required)
+- `--year` - Year folded into item ids and filenames. Required unless the boundaries file has a `determination_datetime` column, which the year is otherwise derived from (the collection also needs it for its temporal extent)
+- `--mask-type` - Type of mask: `instance`, `semantic_2_class`, `semantic_3_class`, `decode_boundary`, or `decode_distance` (default: `semantic_3_class`)
 - `--grid-id-col` - Column name for grid cell ID (default: `id`)
 - `--coverage-col` - Column name for coverage percentage (default: `field_coverage_pct`)
 - `--min-coverage` - Minimum coverage to process (default: 0.01)
 - `--resolution` - Pixel resolution in CRS units (default: 10.0)
-- `--workers` - Number of parallel workers (default: half of CPUs)
+- `--workers` - Number of parallel workers (default: CPU count, capped at 8)
+- `--skip-existing` - Reuse masks already on disk instead of recreating them
 
 ### create-boundaries
 

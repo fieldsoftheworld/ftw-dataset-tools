@@ -7,13 +7,16 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pystac
 import rasterio
 from rasterio.transform import from_origin
 
 from ftw_dataset_tools.api.imagery.image_download import (
+    _missing_bands_error,
     download_and_clip_scene,
     find_reference_mask_for_output,
 )
+from ftw_dataset_tools.api.imagery.settings import BANDS_OF_INTEREST
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -266,6 +269,91 @@ class TestDownloadAndClipScene:
         )
 
         assert "Resolution must be > 0" not in (result.error or "")
+
+
+class TestMissingBandsError:
+    """An item with no band assets gets an explanation, not just the symptom."""
+
+    @staticmethod
+    def _item(assets: dict[str, str]) -> pystac.Item:
+        item = pystac.Item(
+            id="chip_000_planting_s2",
+            geometry=None,
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            datetime=datetime(2024, 6, 1, tzinfo=UTC),
+            properties={},
+        )
+        for key, href in assets.items():
+            item.assets[key] = pystac.Asset(href=href)
+        return item
+
+    def test_local_image_asset_is_reported_as_already_downloaded(self) -> None:
+        message = _missing_bands_error(
+            self._item({"image": "./chip_000_planting_image_s2.tif"}), BANDS_OF_INTEREST
+        )
+
+        assert "already downloaded" in message
+        assert "'image'" in message
+        # Plain `select-images` skips chips that already have a selection, so only
+        # --force actually puts the remote band refs back.
+        assert "select-images --force" in message
+
+    def test_keep_remote_refs_clipped_asset_is_reported_too(self) -> None:
+        message = _missing_bands_error(
+            self._item({"clipped": "./chip_000_planting_image_s2.tif"}), BANDS_OF_INTEREST
+        )
+
+        assert "already downloaded" in message
+        assert "'clipped'" in message
+
+    def test_an_item_with_no_local_imagery_keeps_the_original_message(self) -> None:
+        """Nothing downloaded and no bands either is a genuinely malformed item."""
+        message = _missing_bands_error(
+            self._item({"scl": "https://example.com/scl.tif"}), BANDS_OF_INTEREST
+        )
+
+        assert "No matching band assets found in scene" in message
+        assert "scl" in message
+
+    def test_a_band_the_scene_never_carried_lists_what_is_available(self) -> None:
+        """--keep-remote-refs keeps the band refs, so this is not an already-downloaded item.
+
+        Child items only ever carry red/green/blue/nir/scl/visual (+ cloud
+        probability), so asking for swir16 can never succeed - and saying the
+        bands "were replaced by the local 'clipped' asset" is simply false while
+        they are sitting right there.
+        """
+        item = self._item(
+            {
+                "red": "https://example.com/red.tif",
+                "green": "https://example.com/green.tif",
+                "blue": "https://example.com/blue.tif",
+                "nir": "https://example.com/nir.tif",
+                "clipped": "./chip_000_planting_image_s2.tif",
+            }
+        )
+
+        message = _missing_bands_error(item, ["swir16"])
+
+        assert "already downloaded" not in message
+        assert "No matching band assets found in scene" in message
+        assert "red" in message
+
+    def test_a_stripped_item_that_kept_ancillary_refs_is_still_already_downloaded(self) -> None:
+        """A default download strips red/green/blue/nir but leaves scl and visual behind."""
+        item = self._item(
+            {
+                "scl": "https://example.com/scl.tif",
+                "visual": "https://example.com/visual.tif",
+                "image": "./chip_000_planting_image_s2.tif",
+                "thumbnail": "./chip_000_planting_image_s2.jpg",
+            }
+        )
+
+        message = _missing_bands_error(item, BANDS_OF_INTEREST)
+
+        assert "already downloaded" in message
+        assert "select-images --force" in message
 
 
 class TestWriteCogStats:

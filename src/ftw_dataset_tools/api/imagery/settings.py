@@ -29,6 +29,15 @@ S2_COLLECTIONS = {
 # Default bands of interest
 BANDS_OF_INTEREST = ["red", "green", "blue", "nir"]
 
+# Band assets copied onto a child item from the selected scene. Anything else
+# EarthSearch offers (rededge*, swir*, aot, wvp, ...) never reaches a child, so a
+# request for one can only ever fail - it was never there to download.
+CHILD_ITEM_BANDS = ["red", "green", "blue", "nir", "scl", "visual"]
+
+# Every band asset key a child item can carry, including the renamed cloud
+# probability band.
+CHILD_ITEM_BAND_ASSETS = frozenset({*CHILD_ITEM_BANDS, "cloud_probability"})
+
 # Sentinel-2 L2A bands that carry surface reflectance, for which 0 is the scene
 # fill value. Everything else EarthSearch offers (aot, wvp, scl, cloud, snow,
 # visual) uses 0 as a genuine measurement, so 0 must not be declared as nodata

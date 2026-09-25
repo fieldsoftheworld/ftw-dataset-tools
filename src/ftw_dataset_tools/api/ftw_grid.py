@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import duckdb
 import geoparquet_io as gpio
 
-from ftw_dataset_tools.api.geo import get_bbox_column_name, has_bbox_column
+from ftw_dataset_tools.api.geo import get_bbox_column_name, has_bbox_column, sql_path
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -163,7 +163,7 @@ def _create_ftw_grid_single(
 
     # Load input file
     log("Loading 1km MGRS data...")
-    conn.execute(f"CREATE TABLE mgrs_1km AS SELECT * FROM '{input_path}'")
+    conn.execute(f"CREATE TABLE mgrs_1km AS SELECT * FROM '{sql_path(input_path)}'")
 
     input_count = conn.execute("SELECT COUNT(*) FROM mgrs_1km").fetchone()[0]
     log(f"Loaded {input_count:,} 1km cells")
@@ -344,7 +344,7 @@ def _create_ftw_grid_single_internal(
     conn.execute("INSTALL spatial; LOAD spatial;")
 
     # Load input file
-    conn.execute(f"CREATE TABLE mgrs_1km AS SELECT * FROM '{input_path}'")
+    conn.execute(f"CREATE TABLE mgrs_1km AS SELECT * FROM '{sql_path(input_path)}'")
 
     # Get column mapping for case-insensitive access
     col_map = _normalize_columns(conn)

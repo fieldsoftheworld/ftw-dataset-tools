@@ -34,7 +34,7 @@ from ftw_dataset_tools.api.assets import (
     add_raster_bands,
     add_table_columns,
 )
-from ftw_dataset_tools.api.geo import ensure_spatial_loaded, sql_path
+from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.masks import MaskType, get_mgrs_square
 from ftw_dataset_tools.api.renders import (
     RENDER_ORDER_PROP,
@@ -52,7 +52,9 @@ if TYPE_CHECKING:
 # Media types
 MEDIA_TYPE_PARQUET = "application/vnd.apache.parquet"
 MEDIA_TYPE_COG = "image/tiff; application=geotiff; profile=cloud-optimized"
-MEDIA_TYPE_JPEG = "image/jpeg"
+# Chip previews; kept in step with api/imagery/thumbnails.PREVIEW_MEDIA_TYPE, which
+# cannot be imported here without cycling back through api.imagery's package init.
+MEDIA_TYPE_WEBP = "image/webp"
 
 # Layout strategy for the single collection: sub-catalogs per MGRS square, items
 # co-located with their assets inside the square's sub-catalog directory.
@@ -149,7 +151,7 @@ def detect_datetime_column(file_path: str | Path) -> str | None:
     """
     conn = duckdb.connect(":memory:")
     try:
-        schema = conn.execute(f"DESCRIBE SELECT * FROM '{file_path}'").fetchall()
+        schema = conn.execute(f"DESCRIBE SELECT * FROM '{sql_path(file_path)}'").fetchall()
         col_names = [row[0].lower() for row in schema]
 
         # Check for fiboa determination_datetime column
@@ -181,7 +183,7 @@ def get_temporal_extent_from_data(
             SELECT
                 MIN("{datetime_col}") as min_dt,
                 MAX("{datetime_col}") as max_dt
-            FROM '{file_path}'
+            FROM '{sql_path(file_path)}'
         """).fetchone()
 
         if result and result[0] and result[1]:
@@ -223,7 +225,7 @@ def get_year_from_datetime_column(
         # Get the most common year (mode) from the datetime column
         result = conn.execute(f"""
             SELECT EXTRACT(YEAR FROM "{datetime_col}") as year, COUNT(*) as cnt
-            FROM '{file_path}'
+            FROM '{sql_path(file_path)}'
             WHERE "{datetime_col}" IS NOT NULL
             GROUP BY year
             ORDER BY cnt DESC
@@ -266,7 +268,7 @@ def _get_dataset_bounds(file_path: Path, geom_col: str = "geometry") -> list[flo
                 MIN(ST_YMin("{geom_col}")) as ymin,
                 MAX(ST_XMax("{geom_col}")) as xmax,
                 MAX(ST_YMax("{geom_col}")) as ymax
-            FROM '{file_path}'
+            FROM '{sql_path(file_path)}'
         """).fetchone()
 
         if result:
@@ -488,7 +490,7 @@ def _build_item_assets() -> dict[str, ItemAssetDefinition]:
             }
         )
     defs["thumbnail"] = ItemAssetDefinition(
-        {"type": MEDIA_TYPE_JPEG, "roles": ["thumbnail"], "title": "Chip preview"}
+        {"type": MEDIA_TYPE_WEBP, "roles": ["thumbnail"], "title": "Chip preview"}
     )
     return defs
 
@@ -742,6 +744,7 @@ def generate_stac_catalog(
     boundary_lines_file: Path | str,
     *,
     filtered_fields_file: Path | None = None,
+    grid_id_col: str = "id",
     year: int | None = None,
     provenance: dict | None = None,
     config: DatasetConfig | None = None,
@@ -769,6 +772,8 @@ def generate_stac_catalog(
         boundary_lines_file: Path to boundary lines parquet file
         filtered_fields_file: Optional path to the class-filtered fields parquet file;
             when given, a ``fields_filtered`` asset is added to the collection.
+        grid_id_col: Column in the chips file holding the grid cell id. Must match the
+            column the masks were written from, or no item lines up with its chip dir.
         year: Optional year for temporal extent (required if no determination_datetime)
         provenance: Optional resolved-config record embedded on the collection under
                     the ``ftw:config`` extra field for reproducibility.
@@ -813,11 +818,19 @@ def generate_stac_catalog(
 
     # Get spatial extent from fields
     log("Calculating spatial extent...")
-    spatial_extent = _get_dataset_bounds(fields_file)
+    spatial_extent = _get_dataset_bounds(
+        fields_file, detect_geometry_column(fields_file) or "geometry"
+    )
 
-    # Extract chip info (pass year for year-based naming)
+    # Extract chip info (pass year for year-based naming). The geometry column is
+    # detected rather than assumed, matching how the masks were rasterized.
     log("Extracting chip information...")
-    chip_infos = _extract_chips_info(chips_file, year=year)
+    chip_infos = _extract_chips_info(
+        chips_file,
+        grid_id_col=grid_id_col,
+        geom_col=detect_geometry_column(chips_file) or "geometry",
+        year=year,
+    )
     log(f"Found {len(chip_infos)} chips")
 
     # Create items for each chip, nested by MGRS square

@@ -16,6 +16,7 @@ import numpy as np
 import pystac
 
 from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
+from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_EXTENSIONS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -314,10 +315,32 @@ def _collect_stac_metadata(dataset_dir: Path, log: Callable[[str], None]) -> dic
     }
 
 
+def _find_preview(chip_dir: Path, stem: str) -> Path | None:
+    """The chip's preview file for ``stem``, whichever format it was written in.
+
+    Args:
+        chip_dir: Directory holding the chip's files
+        stem: Preview filename without its extension
+
+    Returns:
+        The preview path, or None if the chip has no preview by that name
+    """
+    for ext in PREVIEW_EXTENSIONS:
+        candidate = chip_dir / f"{stem}{ext}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _select_example_chips(
     planting_items: list[Path], num_examples: int, log: Callable[[str], None]
 ) -> list[str]:
-    """Select example chips with imagery."""
+    """Select example chips with imagery.
+
+    Previews are matched across every known extension: a catalog built before the
+    WebP switch still has ``.jpg`` on disk, and matching only one format would drop
+    every example chip from the summary.
+    """
     example_chips = []
     chip_dir_by_id: dict[str, Path] = {}
 
@@ -340,9 +363,9 @@ def _select_example_chips(
     for chip_id in chip_ids_to_check:
         preview_dir = chip_dir_by_id[chip_id]
         if preview_dir.exists() and preview_dir.is_dir():
-            planting_jpg = preview_dir / f"{chip_id}_planting_image_s2.jpg"
-            harvest_jpg = preview_dir / f"{chip_id}_harvest_image_s2.jpg"
-            if planting_jpg.exists() and harvest_jpg.exists():
+            planting = _find_preview(preview_dir, f"{chip_id}_planting_image_s2")
+            harvest = _find_preview(preview_dir, f"{chip_id}_harvest_image_s2")
+            if planting and harvest:
                 example_chips.append(chip_id)
                 if len(example_chips) >= num_examples:
                     break
@@ -722,22 +745,18 @@ def _write_markdown_summary(
                 # Chips live under chips/<square>/<chip_id>/; find the square.
                 chip_img_dir = next(chips_dir.glob(f"*/{chip_id}"), chips_dir / chip_id)
                 rel_dir = chip_img_dir.relative_to(dataset_dir).as_posix()
-                planting_img = f"{rel_dir}/{chip_id}_planting_image_s2.jpg"
-                harvest_img = f"{rel_dir}/{chip_id}_harvest_image_s2.jpg"
-                overlay_img = f"{rel_dir}/{chip_id}_overlay.jpg"
+                cells = []
+                for label, stem in (
+                    ("planting", f"{chip_id}_planting_image_s2"),
+                    ("harvest", f"{chip_id}_harvest_image_s2"),
+                    ("overlay", f"{chip_id}_overlay"),
+                ):
+                    found = _find_preview(chip_img_dir, stem)
+                    cells.append(
+                        f"![{chip_id} {label}]({rel_dir}/{found.name})" if found else "N/A"
+                    )
 
-                # Check if images exist
-                planting_exists = (chip_img_dir / f"{chip_id}_planting_image_s2.jpg").exists()
-                harvest_exists = (chip_img_dir / f"{chip_id}_harvest_image_s2.jpg").exists()
-                overlay_exists = (chip_img_dir / f"{chip_id}_overlay.jpg").exists()
-
-                planting_cell = (
-                    f"![{chip_id} planting]({planting_img})" if planting_exists else "N/A"
-                )
-                harvest_cell = f"![{chip_id} harvest]({harvest_img})" if harvest_exists else "N/A"
-                overlay_cell = f"![{chip_id} overlay]({overlay_img})" if overlay_exists else "N/A"
-
-                f.write(f"| `{chip_id}` | {planting_cell} | {harvest_cell} | {overlay_cell} |\n")
+                f.write(f"| `{chip_id}` | {cells[0]} | {cells[1]} | {cells[2]} |\n")
 
             f.write("\n")
 
