@@ -372,7 +372,7 @@ exclude:
   - 991  # Not farmer. Areas within the control of the applicant that have been desig
   - 992  # Nicht landwirt. Flächen in folge Genehmigung DGL Umwandlung
   # Christmas trees, forest, storage heaps, other non-crop / admin
-  - 994  # Vorübergehende, unbefestigte Mieten, Stroh-, Futter- oder Dunglagerplätze 
+  - 994  # Vorübergehende, unbefestigte Mieten, Stroh-, Futter- oder Dunglagerplätze
   - 995  # Forstflächen
   - 996  # Vorübergehende, unbefestigte Mieten, Stroh-, Futter oder Dunglagerplätze a
   # Unlabelled / non-agricultural / administrative

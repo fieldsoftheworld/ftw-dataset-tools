@@ -117,7 +117,7 @@ def render_preview(task: PreviewTask) -> None:
 def preview_imagery_for_catalog(
     catalog_dir: Path,
     *,
-    resume: bool = False,
+    resume: bool = True,
     on_progress: Callable[[int, int], None] | None = None,
     show_progress_bar: bool = True,
     workers: int = DEFAULT_WORKERS,
@@ -129,7 +129,9 @@ def preview_imagery_for_catalog(
 
     Args:
         catalog_dir: The collection directory holding ``collection.json``.
-        resume: Skip chips that already have a preview on disk.
+        resume: Skip chips that already have a preview on disk. Defaults to True,
+            so a second run picks up where the first stopped; pass False to
+            re-render everything.
         on_progress: Optional ``(done, total)`` callback.
         show_progress_bar: Show a tqdm bar.
         workers: Number of scenes to read concurrently.

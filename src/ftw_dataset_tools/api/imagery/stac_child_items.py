@@ -14,6 +14,7 @@ import pystac
 
 from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
 from ftw_dataset_tools.api.imagery.catalog_ops import IMAGERY_ASSET_KEYS
+from ftw_dataset_tools.api.imagery.settings import CHILD_ITEM_BANDS
 from ftw_dataset_tools.api.imagery.thumbnails import (
     LEGACY_PREVIEW_MEDIA_TYPE,
     PREVIEW_MEDIA_TYPE,
@@ -192,8 +193,7 @@ def _create_season_child_item(
     child_item.set_self_href(str(child_path))
 
     # Copy relevant band assets from source scene
-    bands_to_copy = ["red", "green", "blue", "nir", "scl", "visual"]
-    for band in bands_to_copy:
+    for band in CHILD_ITEM_BANDS:
         if band in scene.item.assets:
             child_item.assets[band] = scene.item.assets[band].clone()
 
