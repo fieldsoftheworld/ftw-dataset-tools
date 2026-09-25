@@ -84,6 +84,8 @@ src/ftw_dataset_tools/
 **1. Commands/API Separation**
 CLI commands are thin wrappers. Business logic lives in `api/`.
 
+`api/` must be importable without click: no click imports, no `click.echo`, no Click exceptions.
+
 ```python
 # In commands/mycommand.py - CLI wrapper
 @click.command()
@@ -100,16 +102,38 @@ def mycommand_impl(input_file, verbose):
 ```
 
 **2. Error Handling**
-Use Click's error handling for user-facing errors:
+
+`api/` raises domain exceptions and never imports click. Define the exception in the module
+that detects the problem, and carry the relevant context (path, id, value) on it:
+
 ```python
+# In api/assets.py
+class MaskReadError(Exception):
+    """A raster ftwd wrote cannot be read back, so the output on disk is corrupt."""
+
+    def __init__(self, path: Path, message: str) -> None:
+        super().__init__(message)
+        self.path = path
+```
+
+`commands/` translates them for the CLI:
+
+```python
+# In commands/run.py
 from click import ClickException, BadParameter
 
-# For general errors
-raise ClickException("Human readable error message")
-
-# For parameter validation
-raise BadParameter("Invalid value for --option")
+try:
+    run_the_thing()
+except (MaskReadError, StageInputError) as err:
+    raise ClickException(str(err)) from err
 ```
+
+Use `BadParameter` for parameter validation, in `commands/` only.
+
+Existing domain exceptions to reuse or follow: `ConfigError`/`ClassFilterError`
+(`api/config.py`), `StageInputError` (`api/pipeline.py`), `MaskReadError` (`api/assets.py`),
+`CRSMismatchError` (`api/geo.py`), `SourceFetchError` (`api/source.py`), `STACSaveError`
+(`api/stac_items.py`), `ThumbnailError` (`api/imagery/thumbnails.py`).
 
 **3. Command Synchronization: `create-dataset` and Component Commands**
 
