@@ -68,6 +68,17 @@ Stages run in this order: `reproject`, `chips`, `splits`, `boundaries`, `masks`,
 naming convention in the output directory, so individual stages can be re-run on
 their own as long as their inputs already exist.
 
+`select_images` searches for cloud-free Sentinel-2 scenes in the
+[Sentinel-2 STAC-GeoParquet mirror](https://source.coop/portolan-mirrors/sentinel-2-catalog)
+by default: partitioned parquet queried in place with DuckDB, no API and no rate
+limit, so selection runs at 16 workers instead of the 4 the Earth Search API
+tolerates. It reads the mirror's `sentinel-2-c1-l2a` collection (ESA's
+Collection 1 reprocessing, one consistent baseline across the archive), the
+same collection the Earth Search backend queries. Set
+`stages.select_images.search_backend: earth-search` (or
+`--search-backend earth-search` on `ftwd select-images`) to query the Earth
+Search STAC API instead.
+
 Set `stages.stac.checksums: true` to add a `file:checksum` to the assets the `stac` stage
 itself writes: the label masks on every chip item, and the parquet collection assets
 (`fields`, `boundary_lines`, `chips`, `items`). Imagery and thumbnail assets do not get a

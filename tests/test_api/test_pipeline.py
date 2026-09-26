@@ -1619,3 +1619,58 @@ class TestDownloadStageResumes:
         pipeline.stage_download_images(ctx)
 
         assert seen.get("resume") is configured, seen
+
+
+class TestStageSelectImagesWiring:
+    """stage_select_images passes the backend and its worker default through."""
+
+    def _run_stage(
+        self,
+        sample_geoparquet_4326: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        stages: dict | None = None,
+    ) -> dict:
+        out = tmp_path / "out"
+        config = _config(sample_geoparquet_4326, out, year=2024, stages=stages or {})
+        ctx = pipeline.build_context(config)
+        ctx.effective_year = 2024
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "collection.json").write_text("{}")
+
+        seen: dict = {}
+
+        def fake_select(**kwargs: object) -> object:
+            seen.update(kwargs)
+            return SimpleNamespace(
+                successful=0, skipped=0, failed=0, failed_details=[], skipped_details=[]
+            )
+
+        monkeypatch.setattr(pipeline, "select_imagery_for_catalog", fake_select)
+        pipeline.stage_select_images(ctx)
+        return seen
+
+    def test_defaults_to_parquet_backend_and_16_workers(
+        self,
+        sample_geoparquet_4326: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seen = self._run_stage(sample_geoparquet_4326, tmp_path, monkeypatch)
+        assert seen["search_backend"] == "parquet"
+        assert seen["workers"] == 16
+
+    def test_earth_search_backend_gets_4_workers(
+        self,
+        sample_geoparquet_4326: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seen = self._run_stage(
+            sample_geoparquet_4326,
+            tmp_path,
+            monkeypatch,
+            stages={"select_images": {"search_backend": "earth-search"}},
+        )
+        assert seen["search_backend"] == "earth-search"
+        assert seen["workers"] == 4

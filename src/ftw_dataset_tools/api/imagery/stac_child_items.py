@@ -82,7 +82,9 @@ def create_child_items_from_selection(
     parent_item.properties["ftw:calendar_year"] = year
     parent_item.properties["ftw:planting_day"] = result.crop_calendar.planting_day
     parent_item.properties["ftw:harvest_day"] = result.crop_calendar.harvest_day
-    parent_item.properties["ftw:stac_host"] = "earthsearch"  # Always earthsearch
+    parent_item.properties["ftw:stac_host"] = (result.selection_params or {}).get(
+        "stac_host", "earthsearch"
+    )
     parent_item.properties["ftw:cloud_cover_chip_threshold"] = cloud_cover_chip
     parent_item.properties["ftw:buffer_days"] = buffer_days
     parent_item.properties["ftw:num_buffer_expansions"] = num_buffer_expansions

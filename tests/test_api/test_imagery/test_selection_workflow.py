@@ -14,8 +14,10 @@ import pytest
 
 from ftw_dataset_tools.api.imagery.catalog_ops import has_existing_scenes
 from ftw_dataset_tools.api.imagery.selection_workflow import (
+    ChipSelectionJob,
     SelectionWorkflowResult,
     find_chip_items,
+    run_chip_selection,
     select_imagery_for_catalog,
 )
 
@@ -599,6 +601,58 @@ class TestUnreadableChipsAreReported:
         assert result.failed_details[0]["chip"] == "invalid_chip"
         # And it reaches the operator rather than only the counter.
         mock_progress.report_failures.assert_called_once_with(result.failed_details)
+
+
+class TestSearchBackendThreading:
+    """search_backend reaches select_scenes_for_chip from the workflow entry points."""
+
+    @patch("ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip")
+    def test_run_chip_selection_forwards_backend(
+        self, mock_select: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_select.return_value = MagicMock(success=False)
+        job = ChipSelectionJob(
+            item=MagicMock(id="chip_001", bbox=[10.0, 50.0, 10.01, 50.01]),
+            item_path=tmp_path / "chip_001.json",
+            year=2021,
+        )
+
+        run_chip_selection(
+            job,
+            cloud_cover_chip=2.0,
+            nodata_max=0.0,
+            buffer_days=14,
+            num_buffer_expansions=3,
+            buffer_expansion_size=14,
+            search_backend="earth-search",
+        )
+
+        assert mock_select.call_args.kwargs["search_backend"] == "earth-search"
+
+    def test_select_imagery_for_catalog_forwards_backend(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog = _write_chip_catalog(tmp_path, ["chip_000"])
+        seen: dict[str, object] = {}
+
+        def fake_select(**kwargs: object) -> MagicMock:
+            seen.update(kwargs)
+            return MagicMock(success=False, skipped_reason="test")
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip",
+            fake_select,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar",
+            MagicMock(),
+        )
+
+        select_imagery_for_catalog(
+            catalog_dir=catalog, year=2024, workers=1, search_backend="earth-search"
+        )
+
+        assert seen["search_backend"] == "earth-search"
 
 
 def _write_chip_catalog(tmp_path: Path, chip_ids: list[str]) -> Path:

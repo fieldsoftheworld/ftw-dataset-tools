@@ -68,11 +68,12 @@ def run_chip_selection(
     buffer_days: int,
     num_buffer_expansions: int,
     buffer_expansion_size: int,
+    search_backend: str = "parquet",
 ) -> SceneSelectionResult:
     """Select scenes for one chip and write its child items.
 
-    Safe to run on a worker thread: every chip queries STAC on its own and writes
-    only into its own directory.
+    Safe to run on a worker thread: every chip queries the scene catalog on its
+    own and writes only into its own directory.
     """
     selection = select_scenes_for_chip(
         chip_id=job.item.id,
@@ -83,6 +84,7 @@ def run_chip_selection(
         buffer_days=buffer_days,
         num_buffer_expansions=num_buffer_expansions,
         buffer_expansion_size=buffer_expansion_size,
+        search_backend=search_backend,
         on_progress=job.logs.append,
     )
 
@@ -164,6 +166,7 @@ def select_imagery_for_catalog(
     on_missing: Literal["skip", "fail"] = "skip",
     verbose: bool = False,
     workers: int = DEFAULT_WORKERS,
+    search_backend: str = "parquet",
 ) -> SelectionWorkflowResult:
     """Select imagery for all chips in a catalog.
 
@@ -184,6 +187,8 @@ def select_imagery_for_catalog(
                     - "fail": Raise exception
         verbose: If True, show detailed STAC query information
         workers: Number of chips to select for concurrently
+        search_backend: "parquet" (the STAC-GeoParquet mirror, default) or
+                        "earth-search" (the Earth Search STAC API)
 
     Returns:
         SelectionWorkflowResult with success/skipped/failed counts and details
@@ -243,6 +248,7 @@ def select_imagery_for_catalog(
         on_missing=on_missing,
         verbose=verbose,
         workers=workers,
+        search_backend=search_backend,
     )
 
     return result
@@ -261,6 +267,7 @@ def _run_selection(
     on_missing: Literal["skip", "fail"],
     verbose: bool,
     workers: int,
+    search_backend: str = "parquet",
 ) -> None:
     """Select scenes for every chip on a thread pool, recording outcomes as they finish.
 
@@ -282,6 +289,7 @@ def _run_selection(
             buffer_days=buffer_days,
             num_buffer_expansions=num_buffer_expansions,
             buffer_expansion_size=buffer_expansion_size,
+            search_backend=search_backend,
         )
 
     with ImageryProgressBar(total=len(jobs), leave=False, verbose=verbose) as progress:
