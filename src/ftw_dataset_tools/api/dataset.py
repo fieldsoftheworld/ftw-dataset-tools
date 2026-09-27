@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from ftw_dataset_tools.api import (
     boundaries,
+    crop_labels,
     crop_stats,
     field_stats,
     masks,
@@ -36,6 +37,7 @@ class CreateDatasetResult:
     source_crs: str | None = None
     chips_result: field_stats.FieldStatsResult | None = None
     splits_result: splits.CreateSplitsResult | None = None
+    crop_labels_result: crop_labels.CropLabelResult | None = None
     crop_stats_result: crop_stats.CropStatsResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
@@ -65,6 +67,8 @@ def create_dataset(
     border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS,
     checksums: bool = False,
     class_filter: str | Path | None = None,
+    crop_mapping: str | Path | None = None,
+    crop_strict: bool = False,
     on_imagery: Callable[[Path], None] | None = None,
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
@@ -106,6 +110,8 @@ def create_dataset(
         checksums: Compute file:checksum for every asset (slow; default False).
         class_filter: Optional path to a class filter YAML (column + include/exclude
             lists). Include classes count as field; all others become background.
+        crop_mapping: Optional CSV mapping source crop values to HCAT3 codes.
+        crop_strict: Fail when any crop value has no HCAT3 mapping.
         on_imagery: Optional callback given the collection directory, invoked at the
             imagery stages' position in the pipeline. ``create-dataset`` selects and
             downloads imagery itself through this hook, so the documents it writes
@@ -141,6 +147,8 @@ def create_dataset(
         border_gap_chips=border_gap_chips,
     )
     config.stages.stac.checksums = checksums
+    config.stages.crops.mapping = str(crop_mapping) if crop_mapping is not None else None
+    config.stages.crops.strict = crop_strict
     if class_filter is not None:
         config.stages.masks.class_filter = str(class_filter)
         config.class_filter = ClassFilter.from_file(class_filter)
@@ -174,6 +182,7 @@ def create_dataset(
         source_crs=ctx.source_crs,
         chips_result=ctx.chips_result,
         splits_result=ctx.splits_result,
+        crop_labels_result=ctx.crop_labels_result,
         crop_stats_result=ctx.crop_stats_result,
         boundaries_result=ctx.boundaries_result,
         masks_results=ctx.masks_results,

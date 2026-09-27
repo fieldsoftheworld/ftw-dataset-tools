@@ -248,6 +248,19 @@ class ClassFilter:
 
 
 @dataclass
+class CropsConfig:
+    """Settings for the crops stage (HCAT3 crop labels on the fields)."""
+
+    enabled: bool = True
+    # CSV mapping original_code/original_name -> HCAT3_code (relative to the config file).
+    mapping: str | None = None
+    # Source crop column; defaults to crop:code, then crop:name.
+    column: str | None = None
+    # Fail when any crop value has no HCAT3 mapping.
+    strict: bool = False
+
+
+@dataclass
 class ChipsConfig:
     """Settings for the chips stage (field coverage statistics)."""
 
@@ -482,6 +495,7 @@ class DocsConfig:
 class StagesConfig:
     """Per-stage settings. Stages with no options (boundaries) still run."""
 
+    crops: CropsConfig = field(default_factory=CropsConfig)
     chips: ChipsConfig = field(default_factory=ChipsConfig)
     splits: SplitsConfig = field(default_factory=SplitsConfig)
     masks: MasksConfig = field(default_factory=MasksConfig)
@@ -663,6 +677,10 @@ class DatasetConfig:
                 f"mask_types: [{', '.join(fixed)}]"
             )
 
+        for key in ("enabled", "strict"):
+            if not isinstance(getattr(self.stages.crops, key), bool):
+                raise ConfigError(f"stages.crops.{key} must be true or false")
+
         if not isinstance(self.stages.chips.crop_stats, bool):
             raise ConfigError("stages.chips.crop_stats must be true or false")
 
@@ -768,6 +786,10 @@ def load_config(path: str | Path) -> DatasetConfig:
             filter_path = (config_path.parent / filter_path).resolve()
         config.class_filter = ClassFilter.from_file(filter_path)
 
+    mapping_ref = config.stages.crops.mapping
+    if mapping_ref is not None and not Path(mapping_ref).is_absolute():
+        config.stages.crops.mapping = str((config_path.parent / mapping_ref).resolve())
+
     # Resolve an optional local grid file relative to the config file's directory.
     grid_ref = config.stages.chips.grid_file
     if grid_ref is not None:
@@ -852,6 +874,7 @@ def _as_str_list(value: Any, key: str, source: Path) -> list[str]:
 
 
 _STAGE_TYPES: dict[str, type] = {
+    "crops": CropsConfig,
     "chips": ChipsConfig,
     "splits": SplitsConfig,
     "masks": MasksConfig,

@@ -1280,3 +1280,34 @@ class TestImageryReattachedOnStacRerun:
         item = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())
         rels = [link["rel"] for link in item["links"]]
         assert rels.count("ftw:planting") == 1
+
+
+class TestCropLabelsOnCollection:
+    def test_crop_label_provenance_on_collection(self, tmp_path: Path) -> None:
+        import json
+
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.crop_labels import add_crop_labels
+
+        fields_path = tmp_path / "ds_fields.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1], "crop:code": ["A"]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326"
+        ).to_parquet(fields_path)
+        mapping = tmp_path / "mapping.csv"
+        mapping.write_text("original_code,HCAT3_code\nA,3301010100\n")
+        add_crop_labels(fields_path, mapping=mapping)
+
+        result = build_catalog(tmp_path, fields_path=fields_path)
+
+        coll = json.loads(result.collection_path.read_text())
+        assert coll["ftw:crop_labels"]["source"] == "mapping"
+        assert coll["ftw:crop_labels"]["fields_labeled"] == 1
+
+    def test_no_crop_labels_without_provenance(self, tmp_path: Path) -> None:
+        import json
+
+        result = build_catalog(tmp_path)
+
+        assert "ftw:crop_labels" not in json.loads(result.collection_path.read_text())

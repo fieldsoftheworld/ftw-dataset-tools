@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from ftw_dataset_tools.api import chip_borders, crop_stats, dataset, masks, splits
+from ftw_dataset_tools.api import chip_borders, crop_labels, crop_stats, dataset, masks, splits
 from ftw_dataset_tools.api.assets import MaskReadError
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
@@ -208,6 +208,18 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     ),
 )
 @click.option(
+    "--crop-mapping",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="CSV mapping crop codes or names to HCAT3 (original_code/original_name, HCAT3_code).",
+)
+@click.option(
+    "--crop-strict",
+    is_flag=True,
+    default=False,
+    help="Fail when any crop value has no HCAT3 mapping.",
+)
+@click.option(
     "--checksums",
     is_flag=True,
     default=False,
@@ -239,6 +251,8 @@ def create_dataset_cmd(
     drop_border_chips: bool,
     border_gap_chips: int,
     class_filter: str | None,
+    crop_mapping: str | None,
+    crop_strict: bool,
     checksums: bool,
 ) -> None:
     """Create a complete training dataset from a fields file.
@@ -442,6 +456,8 @@ def create_dataset_cmd(
             drop_border_chips=drop_border_chips,
             border_gap_chips=border_gap_chips,
             class_filter=class_filter,
+            crop_mapping=crop_mapping,
+            crop_strict=crop_strict,
             checksums=checksums,
             on_imagery=select_and_download if should_select_images else None,
             on_progress=on_progress,
@@ -462,6 +478,8 @@ def create_dataset_cmd(
         if result.was_reprojected:
             click.echo(f"  Reprojected from: {result.source_crs}")
 
+        if result.crop_labels_result:
+            click.echo(f"  {crop_labels.crop_labels_summary(result.crop_labels_result)}")
         if result.chips_result:
             click.echo(f"  Grid cells: {result.chips_result.total_cells:,}")
             click.echo(f"  Cells with coverage: {result.chips_result.cells_with_coverage:,}")

@@ -3,6 +3,7 @@
 import click
 
 from ftw_dataset_tools import __version__
+from ftw_dataset_tools.commands.add_crop_labels import add_crop_labels
 from ftw_dataset_tools.commands.add_field_stats import add_field_stats
 from ftw_dataset_tools.commands.convert_previews import convert_previews
 from ftw_dataset_tools.commands.create_boundaries import create_boundaries
@@ -35,6 +36,7 @@ def cli() -> None:
 
 
 # Register commands
+cli.add_command(add_crop_labels)
 cli.add_command(add_field_stats)
 cli.add_command(convert_previews)
 cli.add_command(create_boundaries)

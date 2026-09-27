@@ -34,6 +34,7 @@ from ftw_dataset_tools.api.assets import (
     add_raster_bands,
     add_table_columns,
 )
+from ftw_dataset_tools.api.crop_labels import read_provenance as read_crop_labels
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.masks import MaskType, get_mgrs_square
 from ftw_dataset_tools.api.renders import (
@@ -912,6 +913,9 @@ def generate_stac_catalog(
         )
     if config is not None:
         collection.extra_fields.update(_collection_ftw_properties(config))
+    labels = read_crop_labels(fields_file)
+    if labels is not None:
+        collection.extra_fields["ftw:crop_labels"] = labels
     if provenance is not None:
         collection.extra_fields["ftw:config"] = provenance
 

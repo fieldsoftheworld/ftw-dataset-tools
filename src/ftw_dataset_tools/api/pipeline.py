@@ -8,7 +8,7 @@ context and execute the same stages.
 Intermediate outputs live in the output directory under a fixed naming
 convention, so any stage can be re-run on its own as long as its inputs exist:
 
-    {output_dir}/{name}_fields.parquet          (reproject)
+    {output_dir}/{name}_fields.parquet          (reproject, crops)
     {output_dir}/{name}_chips.parquet           (chips, splits)
     {output_dir}/{name}_boundary_lines.parquet  (boundaries)
     {output_dir}/collection.json                 (stac)
@@ -28,6 +28,7 @@ import duckdb
 from ftw_dataset_tools.api import (
     boundaries,
     class_filter,
+    crop_labels,
     crop_stats,
     docs,
     field_stats,
@@ -68,6 +69,7 @@ if TYPE_CHECKING:
 # Ordered list of all pipeline stages.
 STAGE_ORDER = [
     "reproject",
+    "crops",
     "filter",
     "chips",
     "splits",
@@ -160,6 +162,7 @@ class PipelineContext:
     was_reprojected: bool = False
     source_crs: str | None = None
     chips_result: field_stats.FieldStatsResult | None = None
+    crop_labels_result: crop_labels.CropLabelResult | None = None
     crop_stats_result: crop_stats.CropStatsResult | None = None
     splits_result: splits.CreateSplitsResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
@@ -375,6 +378,8 @@ def resolve_stages(
 
 
 def _stage_enabled(stage: str, config: DatasetConfig) -> bool:
+    if stage == "crops":
+        return config.stages.crops.enabled
     if stage == "filter":
         return config.class_filter is not None
     if stage == "select_images":
@@ -479,6 +484,20 @@ def stage_reproject(ctx: PipelineContext) -> None:
     else:
         ctx.log("CRS is already EPSG:4326, copying to output directory...")
         shutil.copy2(ctx.fields_input, ctx.output_fields_path)
+
+
+def stage_crops(ctx: PipelineContext) -> None:
+    """Add HCAT3 crop labels to the published fields file."""
+    _require(ctx.output_fields_path, stage="crops", produced_by="reproject")
+    crops_cfg = ctx.config.stages.crops
+    ctx.crop_labels_result = crop_labels.add_crop_labels(
+        ctx.output_fields_path,
+        mapping=crops_cfg.mapping,
+        column=crops_cfg.column,
+        strict=crops_cfg.strict,
+        template_path=ctx.output_dir / f"{ctx.field_dataset}_crop_mapping_template.csv",
+        on_progress=ctx.log,
+    )
 
 
 def stage_filter(ctx: PipelineContext) -> None:
@@ -909,6 +928,7 @@ def stage_docs(ctx: PipelineContext) -> None:
 
 _STAGE_FUNCS: dict[str, Callable[[PipelineContext], None]] = {
     "reproject": stage_reproject,
+    "crops": stage_crops,
     "filter": stage_filter,
     "chips": stage_chips,
     "splits": stage_splits,

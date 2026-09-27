@@ -6,7 +6,7 @@ import sys
 
 import click
 
-from ftw_dataset_tools.api import assets, crop_stats, masks, pipeline, source
+from ftw_dataset_tools.api import assets, crop_labels, crop_stats, masks, pipeline, source
 from ftw_dataset_tools.api import config as config_module
 
 
@@ -186,6 +186,8 @@ def _print_summary(ctx: pipeline.PipelineContext) -> None:
     click.echo(f"  Output: {ctx.output_dir}")
     click.echo(f"  Provenance: {ctx.output_dir / 'ftwd-config.resolved.yaml'}")
 
+    if ctx.crop_labels_result:
+        click.echo(f"  {crop_labels.crop_labels_summary(ctx.crop_labels_result)}")
     if ctx.chips_result:
         click.echo(f"  Grid cells with coverage: {ctx.chips_result.cells_with_coverage:,}")
     if ctx.splits_result:

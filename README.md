@@ -139,6 +139,15 @@ downloads it. Set `source_via` to the URL of the upstream collection to record i
 `href` is just the filename, so the build machine's directory layout is not published — plus
 `ftwd_git_commit` when `ftwd` itself was installed from a git checkout.
 
+**Crop labels.** The `crops` stage writes HCAT3 labels (`hcat:code`, `hcat:name`,
+`hcat:name_en`) into `{name}_fields.parquet`. Fields that already have `hcat:code` are kept
+as-is. Otherwise `crop:code` (or `crop:name`) is mapped through `stages.crops.mapping`, or
+through the dataset's `crop:code_list` when it is one of the bundled fiboa or EuroCrops
+lists. Unmapped values are written to `{name}_crop_mapping_template.csv`; fill in its
+`HCAT3_code` column and set it as `stages.crops.mapping`, then rerun with `--from crops`.
+`stages.crops.strict: true` fails instead of continuing. `ftwd add-crop-labels` does the
+same for a single fields file.
+
 **Crop composition.** When the fields file carries the fiboa HCAT extension
 (an `hcat:code` column, plus optionally `hcat:name_en`), the chips stage computes each
 chip's area-weighted crop composition from the same class-filtered field polygons the

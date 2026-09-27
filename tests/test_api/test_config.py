@@ -734,3 +734,19 @@ class TestSearchBackendConfig:
             }
         )
         assert config.stages.select_images.effective_workers == 8
+
+
+class TestCropsConfig:
+    def test_mapping_resolved_relative_to_config(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump({"fields_file": "f.parquet", "stages": {"crops": {"mapping": "m.csv"}}})
+        )
+        config = config_module.load_config(config_path)
+        assert config.stages.crops.mapping == str((tmp_path / "m.csv").resolve())
+
+    def test_strict_must_be_boolean(self) -> None:
+        with pytest.raises(ConfigError, match=r"stages\.crops\.strict"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"crops": {"strict": "yes"}}}
+            )

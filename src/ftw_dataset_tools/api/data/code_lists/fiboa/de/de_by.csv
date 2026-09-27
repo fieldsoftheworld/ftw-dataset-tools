@@ -1,0 +1,12 @@
+original_code,original_name,HCAT3_name,HCAT3_code
+1010,Ackerland,arable_crops,3301000000
+1011,Streuobstacker,orchards_fruits,3303010000
+1012,Hopfen,hops,3301060200
+1013,Spargel,asparagus,3301200000
+1014,Hanf,hemp_cannabis,3301061000
+1020,Mahd- und Weideland,pasture_meadow_grassland_grass,3302000000
+1021,Streuobstwiese,orchards_fruits,3303010000
+1030,Gartenbauland,other_arable_land_crops,3301990000
+1040,Rebfläche,vineyards_wine_vine_rebland_grapes,3303060000
+1050,Obst- und Nussplantage,permanent_crops_perennial,3303000000
+1018,Weihnachtsbaumkultur,other_permanent_crops_plantations,3303990000

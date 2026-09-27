@@ -57,6 +57,7 @@ def write_geoparquet(
     conn: duckdb.DuckDBPyConnection | None = None,
     query: str | None = None,
     gdf: gpd.GeoDataFrame | None = None,
+    kv_metadata: dict[str, str] | None = None,
 ) -> Path:
     """
     Write a proper GeoParquet file with bbox column and metadata.
@@ -69,6 +70,7 @@ def write_geoparquet(
         conn: DuckDB connection (required if using query)
         query: SQL query to execute and write results from
         gdf: GeoDataFrame to write (alternative to query)
+        kv_metadata: Extra Parquet key-value metadata (query writes only)
 
     Returns:
         Path to the written file
@@ -89,7 +91,13 @@ def write_geoparquet(
         gdf.to_parquet(out_path)
     else:
         # Write from DuckDB query - COPY exports geometry as WKB
-        conn.execute(f"COPY ({query}) TO '{sql_path(out_path)}' (FORMAT PARQUET)")
+        options = "FORMAT PARQUET"
+        if kv_metadata:
+            entries = ", ".join(
+                f"'{sql_path(key)}': '{sql_path(value)}'" for key, value in kv_metadata.items()
+            )
+            options += f", KV_METADATA {{{entries}}}"
+        conn.execute(f"COPY ({query}) TO '{sql_path(out_path)}' ({options})")
 
     # Add bbox column using gpio fluent API if not already present. Use the
     # temp-file + atomic-rename pattern to prevent corruption on partial writes;

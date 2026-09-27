@@ -146,6 +146,7 @@ class TestPrintSummaryCropComposition:
     def _base_ctx(self, tmp_path: Path) -> Mock:
         ctx = Mock(spec=PipelineContext)
         ctx.output_dir = tmp_path
+        ctx.crop_labels_result = None
         ctx.chips_result = FieldStatsResult(
             output_path=tmp_path / "chips.parquet",
             total_cells=10,
@@ -209,6 +210,7 @@ class TestPrintSummaryMasksSkippedAndReused:
     def _ctx(self, tmp_path: Path, mask_result) -> Mock:
         ctx = Mock(spec=PipelineContext)
         ctx.output_dir = tmp_path
+        ctx.crop_labels_result = None
         ctx.chips_result = None
         ctx.splits_result = None
         ctx.masks_results = {"semantic_2class": mask_result}
@@ -341,6 +343,7 @@ class TestPrintSummaryDocs:
 
         ctx = Mock(spec=PipelineContext)
         ctx.output_dir = tmp_path
+        ctx.crop_labels_result = None
         ctx.chips_result = None
         ctx.crop_stats_result = None
         ctx.splits_result = None
@@ -416,6 +419,7 @@ class TestPrintSummaryImagery:
     def _ctx(self, tmp_path: Path, selection=None, download=None) -> Mock:
         ctx = Mock(spec=PipelineContext)
         ctx.output_dir = tmp_path
+        ctx.crop_labels_result = None
         ctx.chips_result = None
         ctx.crop_stats_result = None
         ctx.splits_result = None

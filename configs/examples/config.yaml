@@ -59,6 +59,14 @@ stages:
     # Re-download even if a cached copy exists.
     refresh: false
 
+  crops:
+    # HCAT3 crop labels on the fields file. Unmapped values go to a template CSV.
+    enabled: true
+    # CSV mapping original_code/original_name -> HCAT3_code (e.g. a filled-in template).
+    mapping: null
+    # Fail when any crop value has no HCAT3 mapping.
+    strict: false
+
   chips:
     # Minimum field-coverage percentage for a grid cell to be kept.
     min_coverage: 0.01

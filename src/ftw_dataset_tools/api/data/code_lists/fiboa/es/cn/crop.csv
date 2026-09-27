@@ -1,0 +1,64 @@
+original_code,original_name,translated_name,HCAT3_name,HCAT3_code
+-,Pastoreo sobre superficie no agrícola,Grazing on non-agricultural land,not_known_and_other,3399000000
+C1000_O,Cereal Otros,Other cereals,other_cereals,3301019900
+C1500,Millo,Maize,grain_maize_corn_popcorn,3301010600
+CROPS_L1_L1_L1,Asociación Cítricos-Hortaliza,Citrus-vegetable association,citrus_plantations,3303040000
+CROPS_L1_L1_L2,Asociación Cítricos-Ornamentales,Citrus-ornamentals association,citrus_plantations,3303040000
+CROPS_L1_L1_L3,Asociación Cítricos-Papa,Citrus-potato association,citrus_plantations,3303040000
+CROPS_L1_L2_L4,Asociación Platanera-Cítricos,Banana-citrus association,orchards_fruits,3303010000
+CROPS_L1_L3,Asociación Templados-Millo,Temperate fruit trees-maize association,unspecified_orchards_fruits,3303019800
+CROPS_L1_L3_L1,Asociación Templados-Papa,Temperate fruit trees-potato association,unspecified_orchards_fruits,3303019800
+CROPS_L1_L3_L1,Asociación Viña-Barbecho,Vineyard-fallow association,vineyards_wine_vine_rebland_grapes,3303060000
+CROPS_L1_L3_L2,Asociación Viña-Cítricos,Vineyard-citrus association,vineyards_wine_vine_rebland_grapes,3303060000
+CROPS_L1_L3_L3,Asociación Viña-Hortaliza,Vineyard-vegetable association,vineyards_wine_vine_rebland_grapes,3303060000
+CROPS_L1_L3_L4,Asociación Viña-Huerta Limpia,Vineyard-bare garden association,vineyards_wine_vine_rebland_grapes,3303060000
+CROPS_L1_L3_L5,Asociación Viña-Papa,Vineyard-potato association,vineyards_wine_vine_rebland_grapes,3303060000
+CROPS_L1_L3_L6,Asociación Viña-Templados,Vineyard-temperate fruit trees association,vineyards_wine_vine_rebland_grapes,3303060000
+CROPS_L1_L3_L7,Asociación Viña-Tunera,Vineyard-prickly pear association,vineyards_wine_vine_rebland_grapes,3303060000
+F1100,Templado Pepita,Temperate pome fruit,unspecified_orchards_fruits,3303019800
+F1200,Templado Hueso,Temperate stone fruit,unspecified_orchards_fruits,3303019800
+F2100,Higuera,Fig,fig,3303010600
+F2300,Aguacate,Avocado,avocado,3303100000
+F2400,Platanera,Banana,orchards_fruits,3303010000
+F2900_L10,Moringa,Moringa,other_arable_land_crops,3301990000
+F2900_L11,Parchita,Passion fruit,orchards_fruits,3303010000
+F2900_L12,Pitaya,Pitaya,orchards_fruits,3303010000
+F2900_L13,Tunera,Prickly pear,other_permanent_crops_plantations,3303990000
+F2900_L14,Subtropicales Otras Mezclas,Other subtropical fruit mixes,orchards_fruits,3303010000
+F2900_L2,Mango,Mango,orchards_fruits,3303010000
+F2900_L3,Papaya,Papaya,orchards_fruits,3303010000
+F2900_L4,Piña,Pineapple,orchards_fruits,3303010000
+F2900_L5,Granado,Pomegranate,pomegranate,3303011400
+F4300,Almendro,Almond,almond,3303030100
+FOP9,Otras Forrajeras,Other fodder crops,plants_harvested_green,3301090000
+H0000_L1,Frutos Rojos,Berries,berries_berry_species,3303020000
+H0000_L2,Templado Otras Mezclas,Other temperate fruit mixes,unspecified_orchards_fruits,3303019800
+I0000,Tabaco,Tobacco,tobacco,3301060100
+I5000_L5,Aloe,Aloe,other_aromatic_medicinal_culinary_plants_spices_herbs,3301061299
+I5000_S1_S1,Aromáticas,Aromatic plants,aromatic_medicinal_culinary_plants_spices_herbs,3301061200
+I9000_L1,Caña de Azúcar,Sugar cane,energy_crops,3304010000
+J0000_L1,Pastos Pastizal,Pasture,pasture_meadow_grassland_grass,3302000000
+J0000_L2,Pastos Tagasaste,Tagasaste pasture,legumes_from_trees,3303110000
+J0000_L2,Tagasaste,Tagasaste,legumes_from_trees,3303110000
+K0000,Huerto Familiar,Family garden,kitchen_gardens,3301120000
+N0000_L0000_O,Viveros,Nurseries,nurseries_nursery,3303070000
+N0000_L1,Próteas,Proteas,other_flowers_ornamental_plants,3301089900
+N0000_L2,Strelitzias,Strelitzias,other_flowers_ornamental_plants,3301089900
+N0000_O,Ornamentales,Ornamentals,flowers_ornamental_plants,3301080000
+NUAA,Pastoreo sobre superficie agrícola no utilizada,Grazing on unused agricultural land,unmaintained,3308000000
+NUAA,Superficie agrícola no utilizada,Unused agricultural land,unmaintained,3308000000
+O1000,Olivo,Olive,olive_plantations,3303050000
+P0000,Leguminosa,Legumes,legumes_dried_pulses_protein_crops,3301020000
+Q0000_L1,Huerta Limpia,Bare vegetable garden,kitchen_gardens,3301120000
+Q0000_O,Barbecho,Fallow,fallow_land_not_crop,3301110000
+R1000,Papa,Potato,potatoes,3301030000
+S0000,Fresas,Strawberries,strawberries,3301130000
+T0000,Cítricos,Citrus,citrus_plantations,3303040000
+V0000_S0000_L1,Hortaliza Otras Mezclas,Other vegetable mixes,fresh_vegetables,3301070000
+V3000,Pepino,Cucumber,cucumber_pickle,3301140100
+V3100,Tomate,Tomato,tomato,3301280000
+V3500,Melón-Sandía,Melon and watermelon,cucurbits,3301140000
+V4200,Cebolla,Onion,onions,3301220400
+V4900_L1,Batata,Sweet potato,sweet_potatoes,3301040000
+V4900_L3,Ñame,Yam,unspecified_root_vegetables,3301299800
+W1000,Viña,Vineyard,vineyards_wine_vine_rebland_grapes,3303060000

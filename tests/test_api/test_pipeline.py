@@ -97,6 +97,7 @@ class TestResolveStages:
         # select_images defaults enabled; download_images defaults disabled.
         assert stages == [
             "reproject",
+            "crops",
             "chips",
             "splits",
             "boundaries",
@@ -129,6 +130,7 @@ class TestResolveStages:
         ]
         assert pipeline.resolve_stages(through_stage="chips", config=config) == [
             "reproject",
+            "crops",
             "chips",
         ]
 
@@ -1674,3 +1676,39 @@ class TestStageSelectImagesWiring:
         )
         assert seen["search_backend"] == "earth-search"
         assert seen["workers"] == 4
+
+
+class TestCropsStage:
+    def test_labels_the_published_fields_before_the_filter(self, tmp_path: Path) -> None:
+        fields = tmp_path / "in.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1, 2], "crop:code": ["A", "B"]},
+            geometry=[box(10.0, 50.0, 10.01, 50.01), box(10.02, 50.0, 10.03, 50.01)],
+            crs="EPSG:4326",
+        ).to_parquet(fields)
+        (tmp_path / "mapping.csv").write_text("original_code,HCAT3_code\nA,3301010100\n")
+        (tmp_path / "filter.yaml").write_text("column: crop:code\ninclude: [A, B]\n")
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            f"fields_file: {fields.as_posix()}\noutput_dir: {(tmp_path / 'out').as_posix()}\n"
+            "name: ds\nyear: 2023\nstages:\n  crops:\n    mapping: mapping.csv\n"
+            "  masks:\n    class_filter: filter.yaml\n"
+        )
+        from ftw_dataset_tools.api.config import load_config
+
+        config = load_config(config_path)
+        ctx = pipeline.build_context(config)
+        pipeline.run_pipeline(ctx, ["reproject", "crops", "filter"])
+
+        con = duckdb.connect()
+        for path in (ctx.output_fields_path, ctx.field_polygons_path):
+            codes = con.execute(f"""SELECT "hcat:code" FROM '{path}' ORDER BY id""").fetchall()
+            assert codes == [(3301010100,), (None,)]
+        assert ctx.crop_labels_result.fields_labeled == 1
+        assert (ctx.output_dir / "ds_crop_mapping_template.csv").exists()
+
+    def test_disabled_crops_stage_is_not_selected(self) -> None:
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"crops": {"enabled": False}}}
+        )
+        assert "crops" not in pipeline.resolve_stages(config=config)
