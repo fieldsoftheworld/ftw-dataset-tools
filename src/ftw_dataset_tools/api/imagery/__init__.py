@@ -10,7 +10,10 @@ from ftw_dataset_tools.api.imagery.catalog_ops import (
     has_existing_scenes,
     iter_chip_dirs,
 )
-from ftw_dataset_tools.api.imagery.cloud_analysis import calculate_pixel_cloud_cover
+from ftw_dataset_tools.api.imagery.cloud_analysis import (
+    calculate_pixel_cloud_cover,
+    read_scl_chip_stats,
+)
 from ftw_dataset_tools.api.imagery.crop_calendar import (
     CropCalendarDates,
     get_crop_calendar_dates,
@@ -89,6 +92,7 @@ __all__ = [
     "preview_imagery_for_catalog",
     "preview_summary_line",
     "process_downloaded_scene",
+    "read_scl_chip_stats",
     "select_imagery_for_catalog",
     "select_scenes_for_chip",
 ]
