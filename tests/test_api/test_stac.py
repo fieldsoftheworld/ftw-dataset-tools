@@ -1280,3 +1280,34 @@ class TestImageryReattachedOnStacRerun:
         item = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())
         rels = [link["rel"] for link in item["links"]]
         assert rels.count("ftw:planting") == 1
+
+
+@pytest.mark.parametrize(
+    "suffixes",
+    [
+        ("_overlay.jpeg",),
+        ("_planting_image_s2.jpeg",),
+        ("_overlay.jpg", "_planting_image_s2.webp"),
+        ("_overlay.webp", "_planting_image_s2.webp", "_overlay.jpg"),
+    ],
+)
+def test_thumbnail_candidates_support_legacy_and_mixed_formats(tmp_path, suffixes):
+    import pystac
+
+    from ftw_dataset_tools.api.imagery.stac_child_items import attach_thumbnail_to_parent
+    from ftw_dataset_tools.api.stac import _build_item_assets
+
+    item = pystac.Item("chip_a", None, None, datetime(2024, 1, 1, tzinfo=UTC), {})
+    for suffix in suffixes:
+        (tmp_path / f"chip_a{suffix}").write_bytes(b"preview")
+
+    attach_thumbnail_to_parent(item, tmp_path)
+
+    expected = next((s for s in suffixes if s.endswith(".webp")), suffixes[0])
+    asset = item.assets["thumbnail"]
+    assert asset.href == f"./chip_a{expected}"
+    assert asset.media_type == ("image/webp" if expected.endswith(".webp") else "image/jpeg")
+    definition = _build_item_assets()["thumbnail"].to_dict()
+    assert "type" not in definition
+    assert definition["roles"] == ["thumbnail"]
+    assert definition["title"] == "Chip preview"

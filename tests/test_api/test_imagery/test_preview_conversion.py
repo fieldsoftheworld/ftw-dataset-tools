@@ -7,6 +7,7 @@ from pathlib import Path  # noqa: TC003 - used at runtime in helpers
 
 import numpy as np
 import pystac
+import pytest
 import rasterio
 from PIL import Image
 from rasterio.transform import from_bounds
@@ -380,3 +381,149 @@ class TestDryRunMatchesTheRealRun:
 
         assert (dry.chips_converted, dry.previews_written, dry.legacy_removed) == (1, 1, 1)
         assert (real.chips_converted, real.previews_written, real.legacy_removed) == (1, 1, 1)
+
+
+@pytest.mark.parametrize("missing", ["all", "harvest", "mask"])
+def test_dry_run_matches_available_sources_without_writing(tmp_path, missing):
+    out = _collection(tmp_path)
+    chip = _clipped_chip(out, "chip_a")
+    pattern = {"all": "*.tif", "harvest": "*harvest*.tif", "mask": "*semantic*.tif"}[missing]
+    for path in chip.glob(pattern):
+        path.unlink()
+    before = {p: p.read_bytes() for p in out.rglob("*") if p.is_file()}
+
+    dry = convert_previews_for_catalog(out, dry_run=True, show_progress_bar=False)
+
+    assert {p: p.read_bytes() for p in out.rglob("*") if p.is_file()} == before
+    actual = convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+    assert dry == actual
+    if missing == "all":
+        assert dry.skipped == 1
+        assert "No imagery" in dry.skipped_details[0]["reason"]
+    else:
+        assert actual.chips_converted == 1
+        assert actual.legacy_removed == 2
+        assert len(legacy_previews(chip, "chip_a")) == 1
+
+
+@pytest.mark.parametrize("child_only", [False, True])
+def test_repairs_missing_referenced_jpegs(tmp_path, child_only):
+    out = _collection(tmp_path)
+    chip = _clipped_chip(out, "chip_a")
+    for path in legacy_previews(chip, "chip_a"):
+        path.unlink()
+    if child_only:
+        path = chip / "chip_a.json"
+        item = pystac.Item.from_file(str(path))
+        item.assets.pop("thumbnail")
+        item.save_object(include_self_link=False, dest_href=str(path))
+
+    dry = convert_previews_for_catalog(out, dry_run=True, show_progress_bar=False)
+    actual = convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+
+    assert dry == actual
+    assert actual.chips_converted == 1
+    assert actual.legacy_removed == 0
+    assert (
+        pystac.Item.from_file(str(chip / "chip_a.json")).assets["thumbnail"].href.endswith(".webp")
+    )
+    child = pystac.Item.from_file(str(chip / "chip_a_planting_s2.json"))
+    assert child.assets["thumbnail"].href.endswith(".webp")
+
+
+def test_unreadable_child_fails_before_any_changes(tmp_path):
+    out = _collection(tmp_path)
+    chip = _clipped_chip(out, "chip_a")
+    (chip / "chip_a_planting_s2.json").write_text("{invalid json")
+    before = {p: p.read_bytes() for p in chip.iterdir()}
+
+    dry = convert_previews_for_catalog(out, dry_run=True, show_progress_bar=False)
+    actual = convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+
+    assert dry == actual
+    assert actual.failed == 1
+    assert "Unreadable child" in actual.failed_details[0]["error"]
+    assert {p: p.read_bytes() for p in chip.iterdir()} == before
+
+
+def test_child_write_failure_keeps_jpegs_and_rerun_finishes(tmp_path, monkeypatch):
+    from ftw_dataset_tools.api.imagery import preview_conversion as conversion
+
+    out = _collection(tmp_path)
+    chip = _clipped_chip(out, "chip_a")
+    write_item = conversion.write_item
+
+    def fail_child(item, path):
+        if path.name.endswith("_planting_s2.json"):
+            raise OSError("Child write failed")
+        return write_item(item, path)
+
+    monkeypatch.setattr(conversion, "write_item", fail_child)
+    failed = convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+    assert failed.failed == 1
+    assert len(legacy_previews(chip, "chip_a")) == 3
+
+    monkeypatch.setattr(conversion, "write_item", write_item)
+    result = convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+    assert result.failed == 0
+    assert result.legacy_removed == 3
+
+
+def test_existing_valid_webps_allow_cleanup_without_imagery(tmp_path):
+    out = _collection(tmp_path)
+    chip = _clipped_chip(out, "chip_a")
+    for path in legacy_previews(chip, "chip_a"):
+        Image.new("RGB", (SIZE, SIZE)).save(path.with_suffix(".webp"), "WEBP")
+    for path in chip.glob("*.tif"):
+        path.unlink()
+
+    dry = convert_previews_for_catalog(out, dry_run=True, show_progress_bar=False)
+    actual = convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+
+    assert dry == actual
+    assert (actual.chips_converted, actual.previews_written, actual.legacy_removed) == (1, 0, 3)
+
+
+def test_corrupt_webp_does_not_allow_cleanup_without_imagery(tmp_path):
+    out = _collection(tmp_path)
+    chip = _clipped_chip(out, "chip_a")
+    (chip / "chip_a_overlay.webp").write_bytes(b"broken")
+    for path in chip.glob("*.tif"):
+        path.unlink()
+
+    actual = convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+
+    assert actual.legacy_removed == 0
+    assert len(legacy_previews(chip, "chip_a")) == 3
+
+
+def test_dry_run_counts_both_jpeg_extensions_once_per_output(tmp_path):
+    out = _collection(tmp_path)
+    chip = _clipped_chip(out, "chip_a")
+    jpeg = chip / "chip_a_overlay.jpg"
+    jpeg.with_suffix(".jpeg").write_bytes(jpeg.read_bytes())
+
+    dry = convert_previews_for_catalog(out, dry_run=True, show_progress_bar=False)
+    actual = convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+
+    assert dry == actual
+    assert (actual.previews_written, actual.legacy_removed) == (3, 4)
+
+
+@pytest.mark.parametrize("file_uri", [False, True])
+def test_preserves_jpeg_referenced_by_another_asset(tmp_path, file_uri):
+    out = _collection(tmp_path)
+    chip = _clipped_chip(out, "chip_a")
+    path = chip / "chip_a.json"
+    item = pystac.Item.from_file(str(path))
+    item.add_asset("original_preview", item.assets["thumbnail"].clone())
+    if file_uri:
+        item.assets["original_preview"].href = (chip / "chip_a_overlay.jpg").as_uri()
+    item.save_object(include_self_link=False, dest_href=str(path))
+
+    dry = convert_previews_for_catalog(out, dry_run=True, show_progress_bar=False)
+    actual = convert_previews_for_catalog(out, show_progress_bar=False, workers=1)
+
+    assert dry == actual
+    assert actual.legacy_removed == 2
+    assert (chip / "chip_a_overlay.jpg").exists()

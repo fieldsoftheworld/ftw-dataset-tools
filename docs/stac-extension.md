@@ -412,6 +412,13 @@ previews and are still described correctly (`image/jpeg`); convert one in place 
 `ftwd convert-previews <catalog_dir>`, which re-renders each preview from the imagery it
 was made from and removes the superseded `.jpg`.
 
+Preview-stage reruns retain old JPEGs; use `convert-previews` for local cleanup.
+Start with `--dry-run -v` to inspect planned work and skips; remote reads can still
+fail during conversion. Existing thumbnail checksums are recomputed for WebP.
+Missing local JPEG references are repaired when source imagery is available.
+Upload the converted catalog before separately removing old objects from the bucket.
+Rebuild STAC to refresh existing collection asset definitions for mixed formats.
+
 **Collection reference:** Every chip item carries a `collection` field and link pointing to the dataset collection (the one holding `collection.json`). The collection's `root` link points to itself (downstream Portolan catalogs rewrite `root` when ingesting the output).
 
 ## Link Relations
