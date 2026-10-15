@@ -461,6 +461,14 @@ ftwd get-grid fields.parquet -o custom_grid.parquet
 - `--precise` - Use geometry union for precise matching (excludes grids in bbox gaps)
 - `--grid-source` - URL/path to the grid source
 
+### export-coco
+
+Write a dataset's instance masks as COCO instance segmentation JSON (`instances_<split>.json`, RLE masks, one `field` category).
+
+```bash
+ftwd export-coco ./austria-dataset -o ./coco --min-area 10
+```
+
 ### Reprojection
 
 For reprojecting GeoParquet files to a different CRS, use [geoparquet-io](https://geoparquet.io/):
