@@ -253,11 +253,9 @@ def crop_calendar_warmup(monkeypatch: pytest.MonkeyPatch):
     from unittest.mock import MagicMock
 
     from ftw_dataset_tools.api.imagery import selection_workflow
-    from ftw_dataset_tools.commands import select_images
 
     warmup = MagicMock(name="ensure_crop_calendar_exists")
     monkeypatch.setattr(selection_workflow, "ensure_crop_calendar_exists", warmup)
-    monkeypatch.setattr(select_images, "ensure_crop_calendar_exists", warmup)
     return warmup
 
 

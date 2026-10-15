@@ -1,12 +1,8 @@
 """Image selection orchestration for STAC catalogs.
 
 This module provides workflow functions for selecting imagery across all chips
-in a catalog. It is used by the `create-dataset` command and the `ftwd run`
-pipeline. The standalone `select-images` command still runs its own loop (it
-supports per-chip year extraction) but shares the per-chip body
-(`run_chip_selection`, which writes via `create_child_items_from_selection`), the
-skip predicate (`has_existing_scenes`) and the thread pool, so selection output
-is identical across all three paths.
+in a catalog. It is used by the `select-images` and `create-dataset` commands and
+the `ftwd run` pipeline, so selection output is identical across all three paths.
 
 Chips are processed concurrently: a chip is several STAC searches' worth of
 network wait, and no two chips touch the same files. Only the calling thread
@@ -15,7 +11,9 @@ reads the results, so the counters and the progress display never race.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
 import pystac
@@ -32,17 +30,46 @@ from ftw_dataset_tools.api.imagery.scene_selection import select_scenes_for_chip
 from ftw_dataset_tools.api.imagery.stac_child_items import create_child_items_from_selection
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
 
 __all__ = [
     "ChipSelectionJob",
+    "NoCloudFreeScenesError",
     "SelectionWorkflowResult",
+    "chip_year",
     "find_chip_items",
     "run_chip_selection",
     "select_imagery_for_catalog",
 ]
+
+NO_YEAR_REASON = "No year provided and could not extract from chip ID or item properties"
+
+
+class NoCloudFreeScenesError(ValueError):
+    """A chip has no cloud-free scenes and the run was asked to fail on that."""
+
+    def __init__(self, chip_id: str, reason: str | None) -> None:
+        super().__init__(f"No cloud-free scenes for {chip_id}: {reason}")
+        self.chip_id = chip_id
+
+
+def chip_year(item: pystac.Item) -> int | None:
+    """Year of a chip's crop cycle, from its id suffix (``_2024``) or its datetime."""
+    match = re.search(r"_(\d{4})$", item.id)
+    if match:
+        return int(match.group(1))
+
+    start = item.properties.get("start_datetime")
+    if isinstance(start, str):
+        try:
+            return datetime.fromisoformat(start.replace("Z", "+00:00")).year
+        except ValueError:
+            pass
+
+    return item.datetime.year if item.datetime else None
 
 
 @dataclass
@@ -156,7 +183,7 @@ def find_chip_items(
 
 def select_imagery_for_catalog(
     catalog_dir: Path,
-    year: int,
+    year: int | None,
     cloud_cover_chip: float = 2.0,
     nodata_max: float = 0.0,
     buffer_days: int = 14,
@@ -167,15 +194,18 @@ def select_imagery_for_catalog(
     verbose: bool = False,
     workers: int = DEFAULT_WORKERS,
     search_backend: str = "parquet",
+    chip_items: list[tuple[pystac.Item, Path]] | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> SelectionWorkflowResult:
     """Select imagery for all chips in a catalog.
 
-    This is the core orchestration function used by the `create-dataset`
-    command and the `ftwd run` pipeline.
+    This is the core orchestration function used by the `select-images` and
+    `create-dataset` commands and the `ftwd run` pipeline.
 
     Args:
         catalog_dir: Path to the chips collection directory
-        year: Calendar year for the crop cycle
+        year: Calendar year for the crop cycle, or None to take each chip's
+              year from its id or datetime (see `chip_year`)
         cloud_cover_chip: Maximum chip-level cloud cover percentage (0-100)
         nodata_max: Maximum nodata percentage (0-100). Default 0 rejects any nodata.
         buffer_days: Days to search around crop calendar dates
@@ -189,57 +219,47 @@ def select_imagery_for_catalog(
         workers: Number of chips to select for concurrently
         search_backend: "parquet" (the STAC-GeoParquet mirror, default) or
                         "earth-search" (the Earth Search STAC API)
+        chip_items: (item, item_path) pairs to select for instead of every chip
+                    found under `catalog_dir`
+        on_progress: Optional callback for crop calendar download messages
 
     Returns:
         SelectionWorkflowResult with success/skipped/failed counts and details
 
     Raises:
-        Exception: If on_missing="fail" and no cloud-free scenes found
+        NoCloudFreeScenesError: If on_missing="fail" and no cloud-free scenes found
+        Exception: If on_missing="fail" and a chip's selection raised
     """
     result = SelectionWorkflowResult()
 
-    # Find all chip items; chips whose JSON cannot be read are reported as
-    # failures rather than silently dropped from the run.
-    unreadable: list[dict] = []
-    chip_items = find_chip_items(catalog_dir, unreadable=unreadable)
-    result.failed += len(unreadable)
-    result.failed_details.extend(unreadable)
+    if chip_items is None:
+        # Chips whose JSON cannot be read are reported as failures rather than
+        # silently dropped from the run.
+        unreadable: list[dict] = []
+        chip_items = find_chip_items(catalog_dir, unreadable=unreadable)
+        result.failed += len(unreadable)
+        result.failed_details.extend(unreadable)
 
-    if not chip_items:
-        return result
-
-    # Pre-filter chips that already have imagery (unless force=True)
-    chips_to_process: list[tuple[pystac.Item, Path]] = []
-
+    jobs: list[ChipSelectionJob] = []
     for item, item_path in chip_items:
-        bbox = tuple(item.bbox) if item.bbox else None
-
-        if bbox is None:
+        job_year = year if year is not None else chip_year(item)
+        reason = _skip_reason(item, force=force, year=job_year)
+        if reason is not None:
             result.skipped += 1
-            result.skipped_details.append({"chip": item.id, "reason": "No bbox in item"})
+            result.skipped_details.append({"chip": item.id, "reason": reason})
             continue
+        jobs.append(ChipSelectionJob(item=item, item_path=item_path, year=job_year))
 
-        # Skip chips that already have scene selections (unless --force)
-        if not force and has_existing_scenes(item):
-            result.skipped += 1
-            result.skipped_details.append(
-                {"chip": item.id, "reason": "Already has imagery selections"}
-            )
-            continue
-
-        chips_to_process.append((item, item_path))
-
-    if not chips_to_process:
+    if not jobs:
         return result
 
     # Warm the crop calendar before fanning out. Every chip needs it, and the
     # first-time download must happen once rather than from every worker at once.
-    ensure_crop_calendar_exists()
+    ensure_crop_calendar_exists(on_progress=on_progress)
 
     _run_selection(
-        chips_to_process,
+        jobs,
         result=result,
-        year=year,
         cloud_cover_chip=cloud_cover_chip,
         nodata_max=nodata_max,
         buffer_days=buffer_days,
@@ -254,11 +274,21 @@ def select_imagery_for_catalog(
     return result
 
 
+def _skip_reason(item: pystac.Item, *, force: bool, year: int | None) -> str | None:
+    """Return why this chip needs no selection, or None if it does."""
+    if not item.bbox:
+        return "No bbox in item"
+    if not force and has_existing_scenes(item):
+        return "Already has imagery selections"
+    if year is None:
+        return NO_YEAR_REASON
+    return None
+
+
 def _run_selection(
-    chips_to_process: list[tuple[pystac.Item, Path]],
+    jobs: list[ChipSelectionJob],
     *,
     result: SelectionWorkflowResult,
-    year: int,
     cloud_cover_chip: float,
     nodata_max: float,
     buffer_days: int,
@@ -274,12 +304,6 @@ def _run_selection(
     Only this function touches the counters and the progress bar, so a chip's log
     lines stay in one block instead of interleaving with the rest of the pool.
     """
-    # Submitted in the order the chips were found, so a run stays reproducible up
-    # to the (inherently unordered) completion times.
-    jobs = [
-        ChipSelectionJob(item=item, item_path=item_path, year=year)
-        for item, item_path in chips_to_process
-    ]
 
     def work(job: ChipSelectionJob) -> SceneSelectionResult:
         return run_chip_selection(
@@ -335,7 +359,7 @@ def _record_chip(
         return
 
     if on_missing == "fail":
-        raise ValueError(f"No cloud-free scenes for {job.item.id}: {selection.skipped_reason}")
+        raise NoCloudFreeScenesError(job.item.id, selection.skipped_reason)
 
     result.skipped += 1
     result.skipped_details.append(
