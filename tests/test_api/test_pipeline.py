@@ -170,6 +170,24 @@ class TestBuildContext:
         assert ctx.has_temporal is False
         assert ctx.effective_year is None
 
+    def test_all_null_datetime_column_fails_before_year_stages(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.stac import TemporalExtentError
+
+        fields = tmp_path / "lu.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1], "determination_datetime": [None]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).astype({"determination_datetime": "datetime64[ns]"}).to_parquet(fields)
+        ctx = pipeline.build_context(_config(fields, tmp_path / "out"))
+
+        assert ctx.has_temporal is False
+        with pytest.raises(TemporalExtentError, match="no usable values"):
+            pipeline.run_pipeline(ctx, ["reproject", "masks"])
+        assert not (tmp_path / "out").exists()
+        # Stages that need no year are not blocked.
+        pipeline._validate_stage_selection(ctx, ["reproject", "chips"])
+
     def test_build_context_does_not_create_output_dir(
         self, sample_geoparquet_4326: Path, tmp_path: Path
     ) -> None:
@@ -697,6 +715,65 @@ class TestMasksStage:
         assert paths["semantic_2class"].parent == paths["decode_distance"].parent
         assert paths["semantic_2class"].name == "cell_001_2024_semantic_2_class.tif"
         assert paths["decode_distance"].name == "cell_001_2024_decode_distance.tif"
+
+    def test_matches_create_masks_when_year_is_derived(self, tmp_path: Path) -> None:
+        """Without a year, the pipeline and create-masks write the same chip layout."""
+        import shutil
+
+        from click.testing import CliRunner
+
+        from ftw_dataset_tools.cli import cli
+
+        fields = tmp_path / "lu.parquet"
+        gpd.GeoDataFrame(
+            {
+                "id": [1, 2],
+                "determination_datetime": [
+                    datetime(2021, 6, 1, tzinfo=UTC),
+                    datetime(2021, 7, 1, tzinfo=UTC),
+                ],
+            },
+            geometry=[box(18.002, 40.002, 18.004, 40.004), box(18.006, 40.002, 18.008, 40.004)],
+            crs="EPSG:4326",
+        ).to_parquet(fields)
+        config = _config(
+            fields,
+            tmp_path / "out",
+            stages={"masks": {"mask_types": ["semantic_2_class"], "workers": 1}},
+        )
+        ctx = pipeline.build_context(config)
+        self._write_stage_inputs(ctx)
+        shutil.copy(fields, ctx.field_polygons_path)
+
+        pipeline.stage_masks(ctx)
+
+        cli_out = tmp_path / "cli"
+        result = CliRunner().invoke(
+            cli,
+            [
+                "create-masks",
+                str(ctx.chips_path),
+                str(ctx.field_polygons_path),
+                str(ctx.boundary_lines_path),
+                "--output-dir",
+                str(cli_out),
+                "--field-dataset",
+                ctx.field_dataset,
+                "--mask-type",
+                "semantic_2_class",
+                "--workers",
+                "1",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+        def tifs(root: Path) -> set[Path]:
+            return {p.relative_to(root) for p in root.rglob("*.tif")}
+
+        pipeline_tifs = tifs(ctx.chips_base_dir)
+        assert ctx.effective_year == 2021
+        assert pipeline_tifs == {Path("other/cell_001_2021/cell_001_2021_semantic_2_class.tif")}
+        assert tifs(cli_out / "chips") == pipeline_tifs
 
 
 class TestStacStageFlags:

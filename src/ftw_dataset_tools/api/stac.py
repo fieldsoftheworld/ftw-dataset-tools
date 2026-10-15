@@ -76,11 +76,22 @@ def chips_base_dir_for(output_dir: Path | str) -> Path:
 __all__ = [
     "PORTOLAN_SCHEMA_URI",
     "STACGenerationResult",
+    "TemporalExtentError",
     "chips_base_dir_for",
     "generate_stac_catalog",
     "get_temporal_extent_from_year",
     "get_year_from_datetime_column",
+    "resolve_year",
 ]
+
+
+class TemporalExtentError(ValueError):
+    """A fields file's datetime column exists but yields no year."""
+
+    def __init__(self, path: str | Path, message: str) -> None:
+        super().__init__(message)
+        self.path = path
+
 
 # Registry of mask asset names. Module-level so the drift-guard tests can
 # assert it stays in sync with the other mask-type registries: a missing entry
@@ -237,6 +248,29 @@ def get_year_from_datetime_column(
         return None
     finally:
         conn.close()
+
+
+def resolve_year(fields_file: str | Path, year: int | None = None) -> int | None:
+    """Return ``year``, else the most common year in the fields file's datetime column.
+
+    Returns None when no year is given and the file has no datetime column.
+
+    Raises:
+        TemporalExtentError: If no year is given and the datetime column has no values.
+    """
+    if year is not None:
+        return year
+    datetime_col = detect_datetime_column(fields_file)
+    if datetime_col is None:
+        return None
+    derived = get_year_from_datetime_column(fields_file, datetime_col)
+    if derived is None:
+        raise TemporalExtentError(
+            fields_file,
+            f"Cannot determine a year: '{datetime_col}' in {fields_file} has no "
+            "usable values. Provide a year.",
+        )
+    return derived
 
 
 def get_temporal_extent_from_year(year: int) -> tuple[datetime, datetime]:
@@ -878,6 +912,13 @@ def generate_stac_catalog(
     # Determine temporal extent
     log("Determining temporal extent...")
     datetime_col = detect_datetime_column(fields_file)
+    # An all-NULL column has no extent to read, so an explicit year takes over.
+    if (
+        datetime_col
+        and year is not None
+        and get_year_from_datetime_column(fields_file, datetime_col) is None
+    ):
+        datetime_col = None
 
     if datetime_col:
         log(f"Using '{datetime_col}' column for temporal extent")

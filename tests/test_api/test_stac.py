@@ -1467,3 +1467,50 @@ def test_thumbnail_candidates_support_legacy_and_mixed_formats(tmp_path, suffixe
     assert "type" not in definition
     assert definition["roles"] == ["thumbnail"]
     assert definition["title"] == "Chip preview"
+
+
+def _write_fields(path: Path, datetimes: list | None) -> Path:
+    import geopandas as gpd
+    import pandas as pd
+    from shapely.geometry import box
+
+    data: dict = {"id": [1, 2, 3]}
+    if datetimes is not None:
+        data["determination_datetime"] = pd.Series(
+            pd.to_datetime(datetimes), dtype="datetime64[ns]"
+        )
+    gpd.GeoDataFrame(data, geometry=[box(0, 0, 1, 1)] * 3, crs="EPSG:4326").to_parquet(path)
+    return path
+
+
+class TestResolveYear:
+    def test_explicit_year_wins(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.stac import resolve_year
+
+        path = _write_fields(tmp_path / "f.parquet", ["2021-06-01"] * 3)
+        assert resolve_year(path, 2024) == 2024
+
+    def test_derives_most_common_year(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.stac import resolve_year
+
+        path = _write_fields(tmp_path / "f.parquet", ["2021-06-01", "2022-06-01", "2022-07-01"])
+        assert resolve_year(path) == 2022
+
+    def test_none_without_datetime_column(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.stac import resolve_year
+
+        assert resolve_year(_write_fields(tmp_path / "f.parquet", None)) is None
+
+    def test_all_null_column_raises(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.stac import TemporalExtentError, resolve_year
+
+        path = _write_fields(tmp_path / "f.parquet", [None, None, None])
+        with pytest.raises(TemporalExtentError, match="no usable values") as exc:
+            resolve_year(path)
+        assert exc.value.path == path
+
+    def test_all_null_column_with_year_uses_year_for_extent(self, tmp_path: Path) -> None:
+        fields = _write_fields(tmp_path / "ds_fields.parquet", [None, None, None])
+        result = build_catalog(tmp_path, fields_path=fields)
+        start, end = result.temporal_extent
+        assert (start.year, end.year) == (2024, 2024)

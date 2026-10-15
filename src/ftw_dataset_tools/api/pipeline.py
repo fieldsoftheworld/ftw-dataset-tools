@@ -150,6 +150,8 @@ class PipelineContext:
     field_dataset: str
     effective_year: int | None = None
     has_temporal: bool = False
+    # Raised by _validate_stage_selection only if a selected stage needs the year.
+    temporal_error: stac.TemporalExtentError | None = None
     provenance: dict[str, Any] | None = None
     source: SourceRecord | None = None
     on_progress: Callable[[str], None] | None = None
@@ -274,21 +276,15 @@ def _detect_temporal(ctx: PipelineContext, *, log: Callable[[str], None]) -> Non
     fields_path = ctx.fields_input
     if fields_path is None and ctx.output_fields_path.exists():
         fields_path = ctx.output_fields_path
-    if fields_path is None:
-        ctx.has_temporal = ctx.config.year is not None
-        return
-
-    log("Checking temporal extent availability...")
-    datetime_col = stac.detect_datetime_column(fields_path)
-    if datetime_col:
-        log(f"Found '{datetime_col}' column for temporal extent")
-        if ctx.effective_year is None:
-            ctx.effective_year = stac.get_year_from_datetime_column(fields_path, datetime_col)
-            if ctx.effective_year:
-                log(f"Using year {ctx.effective_year} from {datetime_col} for chip naming")
-    elif ctx.config.year is not None:
-        log(f"Using year {ctx.config.year} for temporal extent")
-    ctx.has_temporal = datetime_col is not None or ctx.config.year is not None
+    if fields_path is not None and ctx.config.year is None:
+        log("Checking temporal extent availability...")
+        try:
+            ctx.effective_year = stac.resolve_year(fields_path)
+        except stac.TemporalExtentError as err:
+            ctx.temporal_error = err
+        if ctx.effective_year is not None:
+            log(f"Using year {ctx.effective_year} from determination_datetime for chip naming")
+    ctx.has_temporal = ctx.effective_year is not None
 
 
 def build_context(
@@ -430,6 +426,8 @@ def _validate_stage_selection(ctx: PipelineContext, stages_to_run: list[str]) ->
             raise ValueError(f"split_type must be one of: {splits.SPLIT_TYPE_CHOICES_STR}")
 
     if any(s in _YEAR_STAGES for s in stages_to_run) and not ctx.has_temporal:
+        if ctx.temporal_error is not None:
+            raise ctx.temporal_error
         raise ValueError(
             "Cannot determine temporal extent for STAC catalog. "
             "Either provide a 'year' or ensure the fields file has a "

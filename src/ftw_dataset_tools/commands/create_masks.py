@@ -127,19 +127,18 @@ def create_masks_cmd(
     # is folded into every item id. Resolved before any rasterization so a missing
     # --year fails in a second rather than after a full mask run.
     if year is None:
-        datetime_col = stac.detect_datetime_column(boundaries_file)
-        if datetime_col is None:
+        try:
+            year = stac.resolve_year(boundaries_file)
+        except stac.TemporalExtentError as err:
+            raise click.BadParameter(str(err), param_hint="--year") from err
+        if year is None:
             raise click.BadParameter(
                 "Cannot determine the collection's temporal extent: "
                 f"{boundaries_file} has no 'determination_datetime' column. "
                 "Pass --year.",
                 param_hint="--year",
             )
-        # Derived the same way the pipeline does, so an omitted --year still
-        # produces create-dataset's {grid_id}_{year} item ids and filenames.
-        year = stac.get_year_from_datetime_column(boundaries_file, datetime_col)
-        if year is not None:
-            click.echo(f"Using year {year} from {datetime_col}")
+        click.echo(f"Using year {year} from determination_datetime")
 
     click.echo(f"Creating {mask_type} masks for {field_dataset}")
     click.echo(f"Output: {Path(output_dir) / 'chips'}")

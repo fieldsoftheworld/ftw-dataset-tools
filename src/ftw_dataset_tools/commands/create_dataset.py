@@ -16,7 +16,7 @@ from ftw_dataset_tools.api.imagery import (
 )
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
 from ftw_dataset_tools.api.pipeline import docs_summary_line
-from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_datetime_column
+from ftw_dataset_tools.api.stac import resolve_year
 
 
 @click.command("create-dataset")
@@ -363,14 +363,9 @@ def create_dataset_cmd(
             README and AGENTS.md the docs stage writes then describe a collection
             that already has its imagery.
             """
-            # Try to extract year from determination_datetime if not provided
-            effective_year = year
-            if effective_year is None:
-                datetime_col = detect_datetime_column(fields_file)
-                if datetime_col:
-                    effective_year = get_year_from_datetime_column(fields_file, datetime_col)
-                    if effective_year:
-                        click.echo(f"  Year: {effective_year} (from {datetime_col})")
+            effective_year = resolve_year(fields_file, year)
+            if year is None and effective_year is not None:
+                click.echo(f"  Year: {effective_year} (from determination_datetime)")
 
             if effective_year is None:
                 raise click.ClickException(
