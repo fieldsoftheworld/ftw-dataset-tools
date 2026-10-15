@@ -3,7 +3,6 @@
 import click
 
 from ftw_dataset_tools import __version__
-from ftw_dataset_tools.commands.add_field_stats import add_field_stats
 from ftw_dataset_tools.commands.convert_previews import convert_previews
 from ftw_dataset_tools.commands.create_boundaries import create_boundaries
 from ftw_dataset_tools.commands.create_chips import create_chips
@@ -18,8 +17,26 @@ from ftw_dataset_tools.commands.inspect_fields import inspect_fields
 from ftw_dataset_tools.commands.run import run
 from ftw_dataset_tools.commands.select_images import select_images
 
+REMOVED_COMMANDS = {
+    "add-field-stats": (
+        "use 'ftwd create-chips FIELDS_FILE --grid-file GRID_FILE' instead "
+        "(add --min-chip-area 0 to keep truncated chips)"
+    ),
+}
 
-@click.group()
+
+class FtwdGroup(click.Group):
+    """Click group that points removed commands at their replacement."""
+
+    def resolve_command(
+        self, ctx: click.Context, args: list[str]
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        if args and args[0] in REMOVED_COMMANDS:
+            ctx.fail(f"'{args[0]}' was removed; {REMOVED_COMMANDS[args[0]]}.")
+        return super().resolve_command(ctx, args)
+
+
+@click.group(cls=FtwdGroup)
 @click.version_option(version=__version__, prog_name="ftwd")
 def cli() -> None:
     """FTW Dataset Tools - CLI for creating Fields of the World benchmark dataset.
@@ -35,7 +52,6 @@ def cli() -> None:
 
 
 # Register commands
-cli.add_command(add_field_stats)
 cli.add_command(convert_previews)
 cli.add_command(create_boundaries)
 cli.add_command(create_chips)
