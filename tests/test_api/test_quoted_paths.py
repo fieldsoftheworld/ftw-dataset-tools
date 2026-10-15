@@ -143,6 +143,93 @@ class TestQuotedPathsFtwGrid:
             pass
 
 
+def _write_bbox_grid(path: Path) -> None:
+    """Write a two-cell grid with only a ``bbox`` column; one cell overlaps the fixtures."""
+    import duckdb
+
+    from ftw_dataset_tools.api.geo import sql_path
+
+    con = duckdb.connect(":memory:")
+    try:
+        con.execute(
+            f"""
+            COPY (
+                SELECT * FROM (VALUES
+                    ('a', {{'xmin': 10.0, 'ymin': 50.0, 'xmax': 10.04, 'ymax': 50.04}}),
+                    ('b', {{'xmin': 20.0, 'ymin': 60.0, 'xmax': 20.04, 'ymax': 60.04}})
+                ) AS t(id, bbox)
+            ) TO '{sql_path(path)}' (FORMAT PARQUET)
+            """
+        )
+    finally:
+        con.close()
+
+
+class TestQuotedPathsGrid:
+    """api.grid survives an apostrophe in the output and cache paths."""
+
+    def test_get_grid_writes_output_and_cache(
+        self, sample_fields_geoparquet: Path, quoted_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api.grid import get_grid
+
+        monkeypatch.setenv("FTW_CACHE_DIR", str(quoted_dir / "cache"))
+        fields = _copy_into(sample_fields_geoparquet, quoted_dir)
+        grid = quoted_dir / "grid.parquet"
+        _write_bbox_grid(grid)
+
+        fresh = get_grid(fields, output_file=quoted_dir / "fresh.parquet", grid_source=str(grid))
+        cached = get_grid(fields, output_file=quoted_dir / "cached.parquet", grid_source=str(grid))
+
+        assert fresh.grid_count == cached.grid_count == 1
+        assert fresh.output_path.exists()
+        assert cached.output_path.exists()
+        assert list((quoted_dir / "cache" / "grid").glob("grid_*.parquet"))
+
+
+class TestQuotedPathsPipeline:
+    """api.pipeline local-grid subsetting survives an apostrophe in the path."""
+
+    def test_subset_local_grid(self, quoted_dir: Path) -> None:
+        import duckdb
+
+        from ftw_dataset_tools.api import pipeline
+        from ftw_dataset_tools.api.config import DatasetConfig
+        from ftw_dataset_tools.api.geo import sql_path
+
+        fields = quoted_dir / "fields.parquet"
+        grid = quoted_dir / "grid.parquet"
+        con = duckdb.connect(":memory:")
+        try:
+            con.execute(
+                "COPY (SELECT 1 AS id, "
+                "{'xmin': 10.0, 'ymin': 50.0, 'xmax': 10.03, 'ymax': 50.03} AS bbox) "
+                f"TO '{sql_path(fields)}' (FORMAT PARQUET)"
+            )
+        finally:
+            con.close()
+        _write_bbox_grid(grid)
+        ctx = pipeline.PipelineContext(
+            config=DatasetConfig.from_dict({"fields_file": str(fields)}),
+            fields_input=fields,
+            output_dir=quoted_dir,
+            field_dataset="t",
+            effective_year=None,
+            has_temporal=False,
+        )
+        ctx.field_polygons_path = fields
+
+        subset = pipeline._subset_local_grid(ctx, str(grid))
+
+        assert subset == str(quoted_dir / "t_grid.parquet")
+        con = duckdb.connect(":memory:")
+        try:
+            ids = [r[0] for r in con.execute(f"SELECT id FROM '{sql_path(subset)}'").fetchall()]
+        finally:
+            con.close()
+        assert ids == ["a"]
+
+
 class TestQuotedPathsStac:
     """api.stac column/extent helpers survive an apostrophe in the path."""
 
