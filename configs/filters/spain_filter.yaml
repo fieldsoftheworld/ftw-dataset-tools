@@ -4,19 +4,22 @@
 # dataset - the Cataluña (es_cat), Canarias (es_cn) and coarse SIGPAC-uso regional datasets use
 # different code schemes and have their own filters.
 #
-# Excluded (background): olive groves, vineyards & grapevine rootstocks; all fruit trees, citrus,
-# subtropical fruit (avocado, mango, banana, pineapple, ...), berries, nuts and their
-# associations; permanent & temporary pastures and forage/energy grasses (ryegrass, fescue,
-# timothy, reed canary grass, Miscanthus); ryegrass-predominant leys; traditional/environmental/
-# biodiversity fallow and permanent-crop headlands; forest & ornamental trees, nurseries,
-# ornamental plants & flowers; truffle, mushrooms; tagasaste (tree lucerne); and unknown codes.
+# Excluded (background): permanent & temporary pastures and forage/energy grasses (ryegrass,
+# fescue, timothy, reed canary grass, Miscanthus); ryegrass-predominant leys; traditional/
+# environmental/biodiversity fallow and permanent-crop headlands; forest & ornamental trees
+# (oaks, conifers, birch, alder, ...), ornamental plants & flowers; mushrooms; and
+# unknown codes.
 #
 # Notable inclusions: all cereals & maize, sorghum, rice; oilseeds (sunflower, rape, camelina,
 # safflower, poppy, sesame, mustard); cotton, hemp, flax, tobacco, hops, sugar cane, chufa,
 # licorice; legumes & pulses; fodder legumes (alfalfa, sainfoin, clover, vetch, lupine, sulla,
 # trefoil) and cereal/legume mixtures (incl. nitrogen-fixing-predominant meadow mixes); potatoes,
 # sugar beet; all vegetables; culinary/medicinal/aromatic herbs (incl. lavender, saffron, aloe);
-# and strawberries.
+# strawberries; and permanent & tree crops: olive groves, vineyards & grapevine rootstocks, all
+# fruit trees, citrus, subtropical fruit (avocado, mango, banana, pineapple, ...), berries, nuts
+# and their associations (incl. carob-cereal mixes), nurseries, truffle, tagasaste (tree
+# lucerne), osier, and short-rotation woody crops (poplar, willow, eucalyptus, acacia,
+# paulownia).
 
 column: ["crop:code", "crop_code"]
 
@@ -136,6 +139,7 @@ include:
   - 262  # SAFFRON
   - 263  # THYME
   - 264  # BASIL
+  - 265  # Lemon balm
   - 266  # MINT
   - 267  # OREGANO
   - 268  # SAGE
@@ -169,6 +173,7 @@ include:
   - 316  # MARSHMALLOW
   - 317  # BITTER CHAMOMILE
   - 318  # SWEET CHAMOMILE
+  - 467  # LEMONGRASS
   - 319  # YARROW
   - 322  # Lepidium latifolium
   - 323  # Common Knotgrass
@@ -252,22 +257,7 @@ include:
   - 956  # TRITICALE-PEA MIXTURE
   - 957  # MUNG BEAN
   - 958  # TRITICALE-BARLEY MIXTURE
-
-exclude:
-  - "0"  # UNKNOWN PRODUCT
-  - 20  # TRADITIONAL FALLOW
-  - 23  # ENVIRONMENTAL FALLOW
-  - 62  # PERMANENT PASTURES OF 5 OR MORE YEARS
-  - 63  # PASTURES LESS THAN 5 YEARS OLD
-  - 68  # Fescue
-  - 69  # PERENNIAL RYEGRASS
-  - 70  # Bent grass
-  - 72  # Cat grass
-  - 73  # Timothy
-  - 74  # Poa grass
-  - 78  # Ryegrass annual
-  - 91  # FLOWERS
-  - 97  # MUSHROOMS
+  # Permanent and tree crops
   - 101  # OLIVE
   - 102  # VINEYARD
   - 104  # ALMOND
@@ -288,11 +278,8 @@ exclude:
   - 123  # HAZEL
   - 124  # PISTACHIO
   - 125  # NUTS
-  - 139  # Reed Canary Grass
-  - 147  # HOLM OAK
   - 149  # blackberry
   - 192  # RASPBERRY
-  - 194  # MUSHROOM
   - 200  # Paulownia
   - 201  # Peach
   - 202  # Flat Peach
@@ -312,29 +299,18 @@ exclude:
   - 216  # BLUEBERRY
   - 217  # POMEGRANATE
   - 218  # FIG TREE
-  - 223  # MISCANTHUS
   - 225  # EUCALYPTUS
   - 226  # Prickly Pear
   - 227  # WILLOW
   - 228  # Acacia
   - 248  # CAROB TREE
-  - 265  # Lemon balm
   - 278  # Berry
   - 280  # TRUFFLE
-  - 286  # Strawflower
   - 287  # Lemon Verbena
-  - 293  # OAK
-  - 295  # Cork Oat
-  - 296  # Fir
-  - 297  # JUNIPER
-  - 300  # Sabina (type of Junipers)
   - 331  # MORINGA
   - 333  # GRAPEVINE ROOTSTOCKS
-  - 334  # BIODIVERSITY FALLOW (INCLUDING MELLIFERS)
-  - 335  # PERMANENT CROP HEADLAND AND BORDERS
   - 336  # CAROB-OAT MIXTURE
   - 337  # CAROB-BARLEY MIXTURE
-  - 338  # Ryegrass Vetch mixture
   - 343  # AVOCADO
   - 344  # MANGO
   - 345  # cherimoya
@@ -347,40 +323,12 @@ exclude:
   - 353  # CHERRY-OLIVE TREE
   - 354  # CHERRY-CAROB
   - 356  # BITTER ORANGE
-  - 358  # FOREST MIX
-  - 360  # BIRCH
-  - 361  # DOUGLAS FIR
-  - 362  # Christmas HOLLY
-  - 363  # Wild Olive
-  - 364  # POPLAR
-  - 367  # Adler
-  - 370  # MAPLE
-  - 372  # CEDAR
-  - 373  # Kermes Oak
-  - 375  # CYPRESS
-  - 376  # ASH TREE
-  - 377  # Strawberry Tree
-  - 378  # ELM
-  - 381  # Portuguese oak
-  - 383  # RETAMA
-  - 385  # Tamarix
-  - 387  # Tilia tree
-  - 389  # PINE TREE
-  - 391  # Mahaleb Cherrz
   - 430  # Bergamot
   - 436  # Mediterranean Medlar (crataegus azarolus)
   - 437  # Sour Cherry
   - 442  # Osier
-  - 443  # BAMBOO
-  - 444  # SUMAC
-  - 467  # LEMONGRASS
   - 481  # Kola nut
   - 485  # GOJI BERRIES
-  - 489  # Scutch grass
-  - 491  # Soft brome
-  - 494  # (unlabelled source code)
-  - 495  # (unlabelled source code)
-  - 496  # RYEGRASS-CLOVER MIXTURE
   - 501  # PECAN
   - 905  # Banana
   - 906  # PINEAPPLE
@@ -395,7 +343,6 @@ exclude:
   - 919  # Dragonfruit
   - 923  # Guava
   - 924  # Sapote
-  - 932  # ORNAMENTAL PLANTS
   - 936  # Tree Lucerne
   - 939  # ALMOND-OLIVE
   - 940  # ORANGE.KAKI
@@ -407,4 +354,61 @@ exclude:
   - 948  # CLEMENTINE-KAKI
   - 949  # SATSUMA-KHAKI
   - 955  # YUZU
+  - 364  # POPLAR
+
+exclude:
+  - "0"  # UNKNOWN PRODUCT
+  - 20  # TRADITIONAL FALLOW
+  - 23  # ENVIRONMENTAL FALLOW
+  - 62  # PERMANENT PASTURES OF 5 OR MORE YEARS
+  - 63  # PASTURES LESS THAN 5 YEARS OLD
+  - 68  # Fescue
+  - 69  # PERENNIAL RYEGRASS
+  - 70  # Bent grass
+  - 72  # Cat grass
+  - 73  # Timothy
+  - 74  # Poa grass
+  - 78  # Ryegrass annual
+  - 91  # FLOWERS
+  - 97  # MUSHROOMS
+  - 139  # Reed Canary Grass
+  - 147  # HOLM OAK
+  - 194  # MUSHROOM
+  - 223  # MISCANTHUS
+  - 286  # Strawflower
+  - 293  # OAK
+  - 295  # Cork Oat
+  - 296  # Fir
+  - 297  # JUNIPER
+  - 300  # Sabina (type of Junipers)
+  - 334  # BIODIVERSITY FALLOW (INCLUDING MELLIFERS)
+  - 335  # PERMANENT CROP HEADLAND AND BORDERS
+  - 338  # Ryegrass Vetch mixture
+  - 358  # FOREST MIX
+  - 360  # BIRCH
+  - 361  # DOUGLAS FIR
+  - 362  # Christmas HOLLY
+  - 363  # Wild Olive
+  - 367  # Adler
+  - 370  # MAPLE
+  - 372  # CEDAR
+  - 373  # Kermes Oak
+  - 375  # CYPRESS
+  - 376  # ASH TREE
+  - 377  # Strawberry Tree
+  - 378  # ELM
+  - 381  # Portuguese oak
+  - 383  # RETAMA
+  - 385  # Tamarix
+  - 387  # Tilia tree
+  - 389  # PINE TREE
+  - 391  # Mahaleb Cherrz
+  - 443  # BAMBOO
+  - 444  # SUMAC
+  - 489  # Scutch grass
+  - 491  # Soft brome
+  - 494  # (unlabelled source code)
+  - 495  # (unlabelled source code)
+  - 496  # RYEGRASS-CLOVER MIXTURE
+  - 932  # ORNAMENTAL PLANTS
   - 959  # RYEGRASS MIXTURE

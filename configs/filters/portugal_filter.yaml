@@ -7,16 +7,18 @@
 #
 # Excluded (background): permanent, temporary & natural pasture/meadow, forage grasses (ryegrass,
 # Maralfalfa), greenhouse vegetables, fallow; oak montado (cork & holm oak), eucalyptus, forest,
-# shrubs; orchards, fruit, berries, nuts, chestnuts, citrus, olive groves and vineyards;
-# ornamental flowers & nurseries; and all non-agricultural / infrastructure / landscape features
-# (roads, buildings, water lines, riparian galleries, headlands, hydroponic/soilless cultures).
+# shrubs, bamboo; ornamental flowers; and all non-agricultural / infrastructure / landscape
+# features (roads, buildings, water lines, riparian galleries, headlands, hydroponic/soilless
+# cultures).
 # Unlabelled codes - the blank code, a single-space code, and source codes absent from the code
 # list - are treated as background (no crop can be affirmed).
 #
 # Notable inclusions: cereals, maize & rice, oilseeds, cotton, hemp, flax, tobacco, sugar cane,
 # groundnut, legumes & pulses, fodder legumes (clover, alfalfa, serradella, vetch), potatoes &
-# roots, all open-field vegetables (incl. melon/watermelon), herbs, tea, strawberries, and
-# annual forage / other temporary arable crops.
+# roots, all open-field vegetables (incl. melon/watermelon), herbs, tea, strawberries, annual
+# forage / other temporary arable crops; and permanent & tree crops: orchards, fruit, berries,
+# nuts, chestnuts, pine nuts, citrus, olive groves, vineyards, other/mixed permanent crops,
+# nurseries and short-rotation coppice.
 
 column: ["crop:code", "crop_code"]
 
@@ -118,24 +120,7 @@ include:
   - 267  # ANNUAL AND OTHER CULT. FORAGE ANNUALS
   - 307  # OTHER TEMPORARY CROPS
   - 323  # FENNEL
-
-exclude:
-  # Grassland, pasture, forage grass, greenhouse & fallow
-  - "067"  # ryegrass
-  - "077"  # GREENHOUSE VEGETABLES
-  - 77  # GREENHOUSE VEGETABLES
-  - "089"  # FALLOWING/ INTERCROPPING (INTERRUPTED CULTIVATEN TO MAKE SOI
-  - 89  # FALLOWING/ INTERCROPPING (INTERRUPTED CULTIVATEN TO MAKE SOI
-  - 142  # TEMPORARY MEADOWS
-  - 143  # PERMANENT PASTURES
-  - 280  # PASTURE WITH BUSHES
-  - 283  # COMMON LAND PASTURE
-  - 288  # FESCUE
-  - 289  # HALFA GRASS
-  - 290  # BROME GRASS
-  - 291  # MARALFALFA
-  - 292  # ANAFA
-  # Orchards, fruit, berries, nuts, citrus, olive & vineyards
+  # Permanent and tree crops
   - "034"  # VINEYARD
   - 34  # VINEYARD
   - "060"  # OTHER PERMANENT CROPS
@@ -201,11 +186,29 @@ exclude:
   - 311  # STRAWBERRY GUAVA
   - 312  # DRAGON FRUIT
   - 313  # PHYSALIS
-  # Oak montado, forest, eucalyptus, shrubs, ornamentals & nurseries
-  - "091"  # ORNAMENTAL FLOWERS AND PLANTS
-  - 91  # ORNAMENTAL FLOWERS AND PLANTS
   - 101  # NURSERY
   - 135  # PINE NUTS
+  - 294  # SHORT ROTATION COPPICE
+
+exclude:
+  # Grassland, pasture, forage grass, greenhouse & fallow
+  - "067"  # ryegrass
+  - "077"  # GREENHOUSE VEGETABLES
+  - 77  # GREENHOUSE VEGETABLES
+  - "089"  # FALLOWING/ INTERCROPPING (INTERRUPTED CULTIVATEN TO MAKE SOI
+  - 89  # FALLOWING/ INTERCROPPING (INTERRUPTED CULTIVATEN TO MAKE SOI
+  - 142  # TEMPORARY MEADOWS
+  - 143  # PERMANENT PASTURES
+  - 280  # PASTURE WITH BUSHES
+  - 283  # COMMON LAND PASTURE
+  - 288  # FESCUE
+  - 289  # HALFA GRASS
+  - 290  # BROME GRASS
+  - 291  # MARALFALFA
+  - 292  # ANAFA
+  # Oak montado, forest, eucalyptus, shrubs & ornamentals
+  - "091"  # ORNAMENTAL FLOWERS AND PLANTS
+  - 91  # ORNAMENTAL FLOWERS AND PLANTS
   - 139  # groves
   - 162  # CORK OAK PLANTATION
   - 163  # EVERGREEN OAK PLANTATION
@@ -222,7 +225,6 @@ exclude:
   - 262  # CORK OAK FOR CORK PRODUCTION
   - 265  # non-grazable shrub area
   - 268  # RIPARIAN GALLERY FOREST
-  - 294  # SHORT ROTATION COPPICE
   - 308  # BROOM SHRUB
   - 322  # BAMBOO
   - 939  # Usable Area

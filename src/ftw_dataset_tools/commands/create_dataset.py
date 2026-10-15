@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from ftw_dataset_tools.api import chip_borders, crop_stats, dataset, masks, splits
+from ftw_dataset_tools.api import chip_borders, crop_stats, dataset, field_stats, masks, splits
 from ftw_dataset_tools.api.assets import MaskReadError
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
@@ -57,9 +57,9 @@ from ftw_dataset_tools.api.stac import resolve_year
 @click.option(
     "--min-coverage",
     type=float,
-    default=0.01,
+    default=field_stats.DEFAULT_MIN_COVERAGE,
     show_default=True,
-    help="Minimum coverage percentage to include grids.",
+    help="Minimum coverage percentage (0-100) to include grids.",
 )
 @click.option(
     "--resolution",
@@ -181,7 +181,7 @@ from ftw_dataset_tools.api.stac import resolve_year
     "--presence-only",
     is_flag=True,
     default=False,
-    help="Indicates labels are presence-only; background class value will be 3 instead of 0.",
+    help="Indicates labels are presence-only; semantic mask background will be 3 instead of 0.",
 )
 @click.option(
     "--drop-border-chips",
@@ -194,7 +194,10 @@ from ftw_dataset_tools.api.stac import resolve_year
     type=click.IntRange(min=0),
     default=chip_borders.DEFAULT_BORDER_GAP_CHIPS,
     show_default=True,
-    help="How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.",
+    help=(
+        "How wide an unlabelled gap must be, in chips, before it counts as a cluster edge. "
+        "Below 2, UTM zone seams count as edges."
+    ),
 )
 @click.option(
     "--class-filter",

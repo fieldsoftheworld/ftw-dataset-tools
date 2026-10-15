@@ -4,16 +4,16 @@
 #
 # Excluded (background): permanent, extensively-grazed & low-input grassland, hay meadows, grass
 # leys (Grass Year 1-5) and grass silage/grassmeal, reed canary grass; fallow; forestry, woodland,
-# short-rotation coppice, willow, Miscanthus, scrub, foliage, tree belts, Christmas trees; orchards,
-# fruit, berries & grapes; daffodils, cut-flower/bulb crops & nurseries; glasshouse crops; riparian
-# & planted buffer zones, bird-food & wildlife-cover plots, designated habitats, bog, farmyards,
-# roads, buildings, quarries, recreational & water areas and other non-crop/unknown land.
+# Miscanthus, scrub, foliage, tree belts; daffodils & cut-flower/bulb crops; glasshouse crops;
+# riparian & planted buffer zones, bird-food & wildlife-cover plots, designated habitats, bog,
+# farmyards, roads, buildings, quarries, recreational & water areas and other non-crop/unknown land.
 #
 # Notable inclusions: cereals (barley, wheat, oats, rye, triticale), maize & sweetcorn; oilseed
 # rape, forage rape, mustard, sunflower, linseed, flax, camelina, hemp; beans, peas, vetch, lupins,
 # soya, protein/cereal mixes; clover, alfalfa/lucerne; fodder & sugar beet, potatoes and all field
-# vegetables & roots; herbs; arable silage (non-grass) & mixed cropping; grass grown for seed; and
-# strawberries.
+# vegetables & roots; herbs; arable silage (non-grass) & mixed cropping; grass grown for seed;
+# strawberries; and permanent & tree crops: orchards, fruit, berries & grapes, nurseries, Christmas
+# trees, short-rotation coppice and willow.
 
 column: ["crop:name", "crop_name"]
 
@@ -104,6 +104,24 @@ include:
   - "Calabrese"  # broccoli
   - "Cucumbers"  # cucumber_pickle
   - "Shallot"  # shallot
+  # Permanent and tree crops
+  - "Orchard"  # orchards_fruits
+  - "Willow"  # willows_osiers
+  - "Short Rotation Coppice"  # tree_wood_forest
+  - "Nursery"  # nurseries_nursery
+  - "Apples"  # apples
+  - "Raspberries"  # raspberry_raspberries
+  - "Blueberries"  # blueberry
+  - "Blackcurrants"  # blackcurrant_cassis
+  - "Blackberries"  # blackberry
+  - "Plums"  # plums
+  - "Cherries"  # cherry_cherries
+  - "Grapes"  # vineyards_wine_vine_rebland_grapes
+  - "Gooseberries"  # gooseberry_gooseberries_cranberries
+  - "Loganberries"  # berries_berry_species
+  - "Redcurrants"  # redcurrant
+  - "Pears"  # pears
+  - "Christmas Trees"  # other_tree_wood_forest
 
 exclude:
   - "Permanent Pasture"  # pasture_meadow_grassland_grass
@@ -122,7 +140,6 @@ exclude:
   - "Grass Year 3"  # temporary_grass
   - "Riparian Buffer Zone - Arable"  # not_known_and_other
   - "Designated Habitat"  # not_known_and_other
-  - "Orchard"  # orchards_fruits
   - "Fallow"  # fallow_land_not_crop
   - "Permanent Pasture (MSS Measure)"  # pasture_meadow_grassland_grass
   - "Permanent Pasture (MSS)"  # pasture_meadow_grassland_grass
@@ -133,15 +150,11 @@ exclude:
   - "Riparian Zone"  # not_known_and_other
   - "Grass Year 1 (MSS Measure)"  # temporary_grass
   - "Grass Year 1 (MSS)"  # temporary_grass
-  - "Willow"  # willows_osiers
   - "Grass Year 2 (MSS)"  # temporary_grass
   - "Miscanthus Sinensis"  # miscanthus_silvergrass
   - "Tree belts for ammonia capture from farmyards"  # tree_wood_forest
-  - "Short Rotation Coppice"  # tree_wood_forest
   - "Foliage"  # tree_wood_forest
   - "Grass Year 3 (MSS)"  # temporary_grass
-  - "Nursery"  # nurseries_nursery
-  - "Apples"  # apples
   - "Building"  # not_known_and_other
   - "Permanent Pasture (MSS Eco-Scheme 2023)"  # pasture_meadow_grassland_grass
   - "Daffodils"  # narcissus_daffodil
@@ -153,37 +166,25 @@ exclude:
   - "Habitat"  # not_known_and_other
   - "Scrub"  # shrubberries_shrubs
   - "Inactive"  # not_known_and_other
-  - "Raspberries"  # raspberry_raspberries
-  - "Blueberries"  # blueberry
   - "Arable Habitat"  # arable_crops
   - "Reed Canary Grass"  # poaceae_grasses
-  - "Blackcurrants"  # blackcurrant_cassis
   - "Grass Year 1 (MSS Eco-Scheme)"  # temporary_grass
   - "Rocky Outcrop"  # not_known_and_other
   - "Woodland"  # tree_wood_forest
   - "Grass Year 5 (MSS)"  # temporary_grass
   - "Access Road / Roadways"  # not_known_and_other
-  - "Blackberries"  # blackberry
   - "Grass Year 4 (MSS)"  # temporary_grass
   - "Grassmeal"  # temporary_grass
   - "Farm Road"  # not_known_and_other
   - "Lake / Waterway / Pond"  # not_known_and_other
   - "Forestry Setaside"  # tree_wood_forest
-  - "Plums"  # plums
   - "Management of Environmental Fallow (horticulture)"  # fallow_land_not_crop
   - "Forestry Ineligible"  # tree_wood_forest
   - "Forestry"  # tree_wood_forest
   - "Linnet Habitat"  # not_known_and_other
-  - "Cherries"  # cherry_cherries
   - "Unknown"  # not_known_and_other
   - "Recreational Area"  # not_known_and_other
-  - "Grapes"  # vineyards_wine_vine_rebland_grapes
   - "Quarry"  # not_known_and_other
   - "Forestry Pre-2009"  # tree_wood_forest
-  - "Gooseberries"  # gooseberry_gooseberries_cranberries
-  - "Loganberries"  # berries_berry_species
-  - "Redcurrants"  # redcurrant
   - "Gardens"  # kitchen_gardens
-  - "Pears"  # pears
-  - "Christmas Trees"  # other_tree_wood_forest
   - "Planted Buffer Zone"  # not_known_and_other

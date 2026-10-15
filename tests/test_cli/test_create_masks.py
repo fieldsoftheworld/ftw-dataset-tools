@@ -85,6 +85,10 @@ def _create_masks_args(
 class TestCreateMasksCommand:
     """Tests for create-masks command."""
 
+    def test_min_coverage_defaults_to_one_percent(self) -> None:
+        params = {p.name: p for p in cli.commands["create-masks"].params}
+        assert params["min_coverage"].default == 1.0
+
     def test_help(self) -> None:
         """Test --help works."""
         runner = CliRunner()

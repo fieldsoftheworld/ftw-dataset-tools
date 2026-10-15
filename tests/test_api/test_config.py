@@ -24,7 +24,7 @@ class TestFromDict:
         assert config.name is None
         assert config.skip_reproject is False
         # Stage defaults
-        assert config.stages.chips.min_coverage == 0.01
+        assert config.stages.chips.min_coverage == 1.0
         assert config.stages.chips.coverage_batch_size == 2000
         assert config.stages.chips.min_chip_area == 99.5
         assert config.stages.chips.km_size == 2.0
@@ -183,6 +183,7 @@ class TestFromDict:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
 
         assert config.stages.stac.checksums is False
+        assert config.stages.stac.crop_calendar is True
 
     def test_stac_checksums_enabled(self) -> None:
         config = DatasetConfig.from_dict(

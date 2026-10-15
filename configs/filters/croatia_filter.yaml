@@ -1,10 +1,12 @@
 # Class filter used for Croatia (HR) field boundaries.
 # Croatia's national crop:code is a coarse ARKOD land-use scheme, so this is essentially
-# "arable land = field, everything else = background".
-# Excluded classes are those that are not open arable fields: grassland/meadow/pasture,
-# vineyards, olive groves, orchards and other permanent crops, greenhouses, nurseries,
-# short-rotation coppice, temporarily uncultivated land, and other/unknown agricultural land.
-# Notable inclusion: 200 "Arable land" (covers all annual crops together).
+# "arable land and permanent crops = field, everything else = background".
+# Excluded classes are those that are not open arable fields or permanent crops:
+# grassland/meadow/pasture, grubbed-up vineyards, greenhouses, temporarily uncultivated land,
+# and other/unknown agricultural land.
+# Notable inclusions: 200 "Arable land" (covers all annual crops together); vineyards, olive
+# groves, orchards and other permanent crops, nurseries, vine mother blocks and short-rotation
+# coppice.
 # Covers hr years 2011-2024. Codes are ARKOD land-use categories from the harmonized
 # ftw/harmonized-field-data hr datasets (crop:code); HCAT names shown where mapped.
 
@@ -12,16 +14,8 @@ column: ["crop:code", "crop_code"]
 
 include:
   - 200  # Arable land (all annual crops)
-
-exclude:
-  - 210  # Greenhouses on arable land
-  - 220  # Rare code, no HCAT mapping (18 parcels)
-  - 300  # Permanent grassland (parent category); no HCAT mapping
-  - 310  # Meadow
-  - 320  # Pasture
-  - 321  # Karstic pasture
+  # Permanent and tree crops
   - 410  # Vineyard
-  - 411  # Grubbed-up vineyard
   - 421  # Olive grove
   - 422  # Orchard
   - 423  # Permanent crop, no HCAT (citrus/orchard type)
@@ -30,6 +24,15 @@ exclude:
   - 450  # Nursery
   - 451  # Mother block of vines
   - 490  # Mixed perennial crops
+
+exclude:
+  - 210  # Greenhouses on arable land
+  - 220  # Rare code, no HCAT mapping (18 parcels)
+  - 300  # Permanent grassland (parent category); no HCAT mapping
+  - 310  # Meadow
+  - 320  # Pasture
+  - 321  # Karstic pasture
+  - 411  # Grubbed-up vineyard
   - 500  # Homestead / okucnica (no HCAT)
   - 900  # Other agricultural land
   - 910  # Temporary non-cultivated land

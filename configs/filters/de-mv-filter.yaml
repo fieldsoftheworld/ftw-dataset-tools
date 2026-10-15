@@ -2,16 +2,17 @@
 # MV publishes only a coarse land-use crop:code with no crop names (13 categories). Codes are
 # the crop:code from the harmonized ftw/harmonized-field-data de_mv dataset
 # (code list: fiboa.org/code/de/de_mv.csv). This is a land-use-level filter, not a crop-type
-# filter: only arable land (AF) is field; permanent grassland, orchards/permanent crops,
+# filter: arable land (AF) and orchards/permanent crops (DK) are field; permanent grassland,
 # afforestation, forest, riverside vegetation, special/Article-32 areas are background.
 column: ["crop:code", "crop_code"]
 
 include:
   - AF  # Ackerfläche (arable land)
+  # Permanent and tree crops
+  - DK  # Obstpl., Dauerkulturen (orchards, permanent crops)
 
 exclude:
   - DGL     # Dauergrünland (permanent grassland)
-  - DK      # Obstpl., Dauerkulturen (orchards, permanent crops)
   - AAF     # Aufforstung auf AF (afforestation on arable land)
   - AGL     # Aufforstung auf GL (afforestation on grassland)
   - AÖD     # Aufforstung auf ÖD (afforestation on wasteland)
