@@ -181,7 +181,7 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     "--presence-only",
     is_flag=True,
     default=False,
-    help="Indicates labels are presence-only; background class value will be 3 instead of 0.",
+    help="Indicates labels are presence-only; semantic mask background will be 3 instead of 0.",
 )
 @click.option(
     "--drop-border-chips",

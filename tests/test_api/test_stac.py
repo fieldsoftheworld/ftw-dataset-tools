@@ -1141,6 +1141,7 @@ class TestRendersOnCatalog:
         assert item["properties"]["renders"]["semantic_2class"]["nodata"] == 3
         coll = json.loads(result.collection_path.read_text())
         assert coll["renders"]["semantic_2class_mask"]["nodata"] == 3
+        assert coll["renders"]["instance_mask"]["nodata"] == 0
 
     def test_collection_renders_keyed_by_asset_name(self, tmp_path: Path) -> None:
         import json

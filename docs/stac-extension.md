@@ -87,7 +87,7 @@ describing how the whole dataset was built:
 | `ftw:split_percents` | integer[3] | Train/val/test split percentages |
 | `ftw:mask_types` | string[] | Mask types generated for the dataset |
 | `ftw:mask_resolution_m` | number | Mask pixel resolution in meters |
-| `ftw:presence_only` | boolean | Whether labels are presence-only (background class value is 3 instead of 0) |
+| `ftw:presence_only` | boolean | Whether labels are presence-only (semantic mask background is 3 instead of 0) |
 | `ftw:min_coverage_pct` | number | Minimum field-coverage percentage required to keep a grid cell |
 | `ftw:cloud_cover_chip_threshold` | number | Chip-level cloud cover threshold percentage (present only when image selection is enabled) |
 | `ftw:nodata_max` | number | Maximum allowed nodata percentage (0-100) for a selected scene (present only when image selection is enabled) |
@@ -202,10 +202,7 @@ Checksums are off by default because they are slow on large datasets.
 Raster assets (masks and clipped imagery) carry `raster:bands`
 ([raster extension](https://github.com/stac-extensions/raster)) with `data_type`,
 `nodata` when set, `spatial_resolution`, and `statistics` (minimum, maximum, mean,
-stddev, and valid_percent whenever a value was excluded from them). A presence-only
-instance mask is the case where those come apart: its background is excluded from the
-statistics, so `valid_percent` is present, while the band declares no `nodata` at all.
-The same statistics are embedded in the
+stddev, and valid_percent whenever a value was excluded from them). The same statistics are embedded in the
 COG as GDAL `STATISTICS_*` band tags, never in an `.aux.xml` sidecar.
 
 Semantic mask assets add `classification:classes`
@@ -215,7 +212,7 @@ Semantic mask assets add `classification:classes`
 |------|---------|
 | `semantic_2class_mask` | 0 background, 1 field (background is 3 when `presence_only` is set) |
 | `semantic_3class_mask` | 0 background, 1 field, 2 boundary |
-| `instance_mask` | no class list; background (0, or 3 for presence-only) marks non-field pixels and is excluded from the band statistics — declared as the band's `nodata` only when it is 0 — other values are instance ids |
+| `instance_mask` | no class list; 0 marks non-field pixels (also when `presence_only` is set) and is the band's `nodata`; other values are instance ids |
 | | Field ids that are float-like (e.g. `'111205887.0'`) or otherwise non-numeric are coerced to integers, or replaced with sequential ids (1..n) for that chip when any id in it can't be coerced. |
 | `decode_boundary_mask` | 0 background, 1 boundary |
 | `decode_distance_mask` | no class list; float32 normalized distance in [0, 1], with a `decode_distance_max_px` dataset tag |
@@ -274,14 +271,13 @@ gets a true-colour render per season:
 | `semantic_3class` | `semantic_3class_mask` | `nodata`: the background value |
 | `decode_boundary` | `decode_boundary_mask` | `nodata: 0` |
 | `decode_distance` | `decode_distance_mask` | `rescale: [[0, 1]]`, `nodata` from the band, else 0 |
-| `instance` | `instance_mask` | `rescale: [[band minimum, band maximum]]`, `nodata`: the background value, `colormap_name: viridis` |
+| `instance` | `instance_mask` | `rescale: [[band minimum, band maximum]]`, `nodata: 0`, `colormap_name: viridis` |
 | `planting_rgb` | `planting_image`, else `planting_visual` | `bidx` + `rescale` — see below |
 | `harvest_rgb` | `harvest_image`, else `harvest_visual` | `bidx` + `rescale` — see below |
 
 `nodata` is the dataset's background pixel value — 0 normally, **3** when
-`presence_only` is set — for the three class-valued masks (`semantic_2class`,
-`semantic_3class`, `instance`). The DECODE layers always fold their background into 0, so
-they always use 0.
+`presence_only` is set — for the semantic masks (`semantic_2class`, `semantic_3class`).
+The DECODE layers and the instance mask always use 0.
 
 Instance ids are global rather than per-chip, so the instance mask's background is excluded
 from its embedded statistics: the render then stretches from the chip's smallest field id
@@ -289,16 +285,9 @@ to its largest instead of from zero, and a chip whose ids all sit in the hundred
 thousands still shows its fields apart. Where those statistics are missing or degenerate
 the render falls back to `[[0, 1]]`.
 
-Two caveats on that:
-
-- The instance band declares `nodata` **only when the background is 0**. A presence-only
-  background of 3 is also a legal instance id (ids are renumbered `1..n` for a chip whose
-  raw ids cannot be coerced), so declaring it would make a real field vanish for any
-  nodata-respecting reader. Presence-only instance masks therefore exclude 3 from their
-  statistics but leave the band's `nodata` unset.
-- Masks written before this behaviour existed carry statistics that include the background
-  and so still yield a `[[0, maximum]]` stretch. Re-run the `masks` stage (then `stac`) to
-  pick up the tighter range.
+Masks written before this behaviour existed carry statistics that include the background
+and so still yield a `[[0, maximum]]` stretch, and presence-only instance masks from then
+use 3 as background. Re-run the `masks` stage (then `stac`) to pick up both.
 
 Item mask renders are keyed by mask kind and only cover the masks that chip actually has;
 the collection mirrors the same definitions keyed by asset name, as a default for clients
