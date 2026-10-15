@@ -590,9 +590,6 @@ def process_downloaded_scene(
         except ThumbnailError:
             pass
 
-    # Save the child item
-    write_item(item, item_path)
-
     # Update parent chip item with asset reference
     parent_item_path = item_path.parent / f"{base_id}.json"
     if parent_item_path.exists():
@@ -633,5 +630,8 @@ def process_downloaded_scene(
             thumbnail_filename=thumb_for_parent,
             is_overlay=is_overlay,
         )
+
+    # Save the child last so a parent failure leaves it re-downloadable on resume.
+    write_item(item, item_path)
 
     return result
