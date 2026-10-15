@@ -450,6 +450,54 @@ def _collection_ftw_properties(config: DatasetConfig) -> dict:
     return {k: v for k, v in props.items() if v is not None}
 
 
+def _read_previous_collection(output_dir: Path, collection_id: str) -> dict | None:
+    """The collection.json an earlier run wrote for this dataset, if any."""
+    path = output_dir / "collection.json"
+    if not path.is_file():
+        return None
+    try:
+        previous = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None
+    return previous if previous.get("id") == collection_id else None
+
+
+def _previous_filtered_fields(previous: dict, output_dir: Path) -> Path | None:
+    """The filtered fields file the earlier collection published, if still on disk."""
+    asset = previous.get("assets", {}).get("fields_filtered")
+    if not asset:
+        return None
+    path = output_dir / asset["href"]
+    return path if path.is_file() else None
+
+
+def _has_license(collection: dict | None) -> bool:
+    """Whether a collection dict carries a license beyond pystac's 'other' default."""
+    if not collection:
+        return False
+    links = collection.get("links", [])
+    return collection.get("license", "other") != "other" or any(
+        link.get("rel") == "license" for link in links
+    )
+
+
+def _restore_collection_metadata(collection: Collection, previous: dict) -> None:
+    """Carry over the metadata only a config-driven build can produce."""
+    for key in ("title", "description", "license"):
+        if previous.get(key):
+            setattr(collection, key, previous[key])
+    if previous.get("keywords"):
+        collection.keywords = list(previous["keywords"])
+    if previous.get("providers"):
+        collection.providers = [Provider.from_dict(p) for p in previous["providers"]]
+    if previous.get("version"):
+        VersionExtension.ext(collection, add_if_missing=True).version = previous["version"]
+    for link in previous.get("links", []):
+        if link.get("rel") in ("license", "via"):
+            collection.add_link(Link.from_dict(link))
+    collection.extra_fields.update({k: v for k, v in previous.items() if k.startswith("ftw:")})
+
+
 def _group_items_by_square(items: list[Item], squares: dict[str, str]) -> dict[str, list[Item]]:
     """Group chip items by MGRS 100 km square, keyed by the square id, sorted.
 
@@ -869,8 +917,14 @@ def generate_stac_catalog(
 
     # Create the single collection
     log("Creating collection...")
+    # Without a config (e.g. create-masks over a pipeline output), keep what the
+    # earlier build published rather than silently dropping it.
+    previous = _read_previous_collection(output_dir, field_dataset) if config is None else None
+    if previous is not None and filtered_fields_file is None:
+        filtered_fields_file = _previous_filtered_fields(previous, output_dir)
+
     metadata = config.metadata if config is not None else None
-    if metadata is None or not metadata.license:
+    if not (metadata and metadata.license) and not _has_license(previous):
         log("Warning: no metadata.license; the collection is not Portolan-publishable without one")
 
     collection = _create_collection(
@@ -907,6 +961,8 @@ def generate_stac_catalog(
         )
     if config is not None:
         collection.extra_fields.update(_collection_ftw_properties(config))
+    if previous is not None:
+        _restore_collection_metadata(collection, previous)
     if provenance is not None:
         collection.extra_fields["ftw:config"] = provenance
 

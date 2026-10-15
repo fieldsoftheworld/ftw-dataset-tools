@@ -779,6 +779,102 @@ class TestCollectionMetadata:
         ]
 
 
+class TestConfiglessRerunPreservesMetadata:
+    """create-masks rebuilds the catalog without a config over a pipeline output."""
+
+    def _config(self):
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        return DatasetConfig.from_dict(
+            {
+                "fields_file": "unused.parquet",
+                "source_via": "https://x/collection.json",
+                "stages": {"splits": {"split_type": "block3x3", "random_seed": 7}},
+                "metadata": {
+                    "title": "Austria",
+                    "license": "other",
+                    "license_url": "https://x/license",
+                    "version": "1.0.0",
+                    "keywords": ["austria"],
+                    "providers": [{"name": "AMA", "roles": ["producer"]}],
+                },
+            }
+        )
+
+    def _pipeline_build(self, tmp_path: Path) -> dict:
+        import json
+
+        config = self._config()
+        result = build_catalog(
+            tmp_path, config=config, provenance=config.provenance_dict(), filtered=True
+        )
+        return json.loads(result.collection_path.read_text())
+
+    def test_metadata_survives_a_configless_rebuild(self, tmp_path: Path) -> None:
+        import json
+
+        before = self._pipeline_build(tmp_path)
+        messages: list[str] = []
+        result = build_catalog(tmp_path, on_progress=messages.append)
+        after = json.loads(result.collection_path.read_text())
+
+        for key in ("title", "license", "keywords", "providers", "version", "ftw:config"):
+            assert after[key] == before[key], key
+        assert after["ftw:split_type"] == "block3x3"
+        assert (
+            "https://stac-extensions.github.io/version/v1.2.0/schema.json"
+            in after["stac_extensions"]
+        )
+        rels = [link["rel"] for link in after["links"]]
+        assert rels.count("via") == 1
+        assert rels.count("license") == 1
+        assert after["assets"]["fields_filtered"]["href"] == "./ds_fields_filtered.parquet"
+        assert not any("not Portolan-publishable" in m for m in messages)
+
+    def test_config_rebuild_does_not_inherit(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        self._pipeline_build(tmp_path)
+        config = DatasetConfig.from_dict({"fields_file": "unused.parquet"})
+        result = build_catalog(tmp_path, config=config)
+        after = json.loads(result.collection_path.read_text())
+
+        assert "keywords" not in after
+        assert "ftw:config" not in after
+        assert "fields_filtered" not in after["assets"]
+        assert not [link for link in after["links"] if link["rel"] == "via"]
+
+    def test_other_dataset_is_not_inherited(self, tmp_path: Path) -> None:
+        import json
+
+        self._pipeline_build(tmp_path)
+        path = tmp_path / "collection.json"
+        path.write_text(json.dumps({**json.loads(path.read_text()), "id": "other"}))
+
+        after = json.loads(build_catalog(tmp_path).collection_path.read_text())
+
+        assert "keywords" not in after
+        assert "ftw:config" not in after
+
+    def test_unlicensed_rebuild_still_warns(self, tmp_path: Path) -> None:
+        build_catalog(tmp_path)
+        messages: list[str] = []
+        build_catalog(tmp_path, on_progress=messages.append)
+
+        assert any("not Portolan-publishable" in m for m in messages)
+
+    def test_corrupt_collection_is_rebuilt(self, tmp_path: Path) -> None:
+        import json
+
+        (tmp_path / "collection.json").write_text("{not json")
+
+        after = json.loads(build_catalog(tmp_path).collection_path.read_text())
+
+        assert after["id"] == "ds"
+
+
 class TestChipProperties:
     def test_split_coverage_and_hcat_on_items(self, tmp_path: Path) -> None:
         import json
