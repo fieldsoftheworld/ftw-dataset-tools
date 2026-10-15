@@ -1,12 +1,14 @@
 # Class filter used for Denmark (DK) field boundaries.
-# Excluded classes are those that are not open arable fields: permanent grassland/pasture/meadow and
-# pure grass leys, orchards, fruit & nut trees, berries, vineyards, forest / afforestation / coppice,
-# Christmas trees & woody plants, nurseries, ornamentals & greenhouse / protected cultivation, fallow /
-# set-aside / EFA margins & environmental grass, nature areas, and administrative non-crop codes.
-# Pure grass leys and permanent grass are treated asbackground.
+# Excluded classes are those that are not field crops: permanent grassland/pasture/meadow and pure
+# grass leys, forest / afforestation, agroforestry, perennial energy grasses, container & closed
+# systems, ornamentals & greenhouse / protected cultivation, fallow / set-aside / EFA margins &
+# environmental grass, nature areas, and administrative non-crop codes.
+# Pure grass leys and permanent grass are treated as background.
 # Notable inclusions: cereals (incl. wholecrop & green grain), legumes, oilseeds, potatoes, beet, field
-# vegetables, herbs/medicinal, flax, hemp, hops, strawberries, grass grown FOR SEED, and clover/lucerne
-# forage leys (rotation).
+# vegetables, herbs/medicinal, flax, hemp, hops, strawberries, grass grown FOR SEED, clover/lucerne
+# forage leys (rotation), and permanent & tree crops: orchards, fruit & nut trees, berries (incl.
+# cutting propagation), grapes, woody medicinal plants, woody nurseries, Christmas trees &
+# ornamental greenery, and short-rotation coppice (willow, poplar, alder, incl. EFA variants).
 # Covers dk years 2010-2026 (2008-2009 have no crop column). Codes are Danish afgroedekoder from the
 # harmonized ftw/harmonized-field-data dk datasets (crop:code); HCAT English names shown where mapped.
 
@@ -175,6 +177,8 @@ include:
   - 448  # Medicinal plants annual and biennial
   - 449  # Medicinal plants perennials
   - 450  # Vegetables mixtures
+  - 400  # Gherkin
+  - 510  # Melon
   - 511  # Græskar
   - 512  # Rhubarb
   - 513  # Strawberry
@@ -217,6 +221,60 @@ include:
   - 963  # Kløvergræs, udlæg/eftersl.efter grønkorn
   - 964  # Kløvergræs, udlæg/efterslæt efter helsæd
   - 965  # Kløvergræs, udlæg/efterslæt efter korn
+  # Permanent and tree crops
+  - 489  # Sea buckthorn
+  - 490  # Hassel, træ (Corylus avellana)
+  - 491  # Storfrugtet tranebær
+  - 493  # Black chokeberry
+  - 494  # Japan quince
+  - 495  # Morbær
+  - 496  # Medicinpl., vedplanter
+  - 497  # Nursery cultivation arboreal plants for sale
+  - 504  # Blackcurrant multiplication by cutting
+  - 505  # Ribs, stiklingeopformering
+  - 506  # Gooseberries multiplication by cutting
+  - 507  # Raspberries multiplication by cutting
+  - 508  # Andre af slægten Vaccinium
+  - 509  # Quince
+  - 514  # Blackcurrant
+  - 515  # Red currant
+  - 516  # Gooseberry
+  - 517  # Blackberry
+  - 518  # Raspberry
+  - 519  # Blueberry
+  - 520  # Sour cherry without undergrowth of grass
+  - 521  # Sour cherry with undergrowth of grass
+  - 522  # Plum without undergrowth of grass
+  - 523  # Plum with undergrowth of grass
+  - 524  # Sweet cherry without undergrowth of grass
+  - 525  # Sweet cherry with undergrowth of grass
+  - 526  # Elder
+  - 527  # Hazel
+  - 528  # Apples
+  - 529  # Pear
+  - 530  # Grape
+  - 531  # Other tree fruit
+  - 532  # Other shrub fruit
+  - 533  # Rowanberries
+  - 534  # Rose hip
+  - 535  # Bærmispel
+  - 536  # Food grape
+  - 537  # Walnut common
+  - 538  # Chestnut sweet
+  - 539  # Mixed fruit
+  - 582  # Ornamental green branches organic farming
+  - 583  # Christmas trees and ornamental greenery on agricultural land
+  - 584  # Juletræer i fredsskov
+  - 591  # Coppice forest
+  - 592  # Willow
+  - 593  # Poplar
+  - 594  # Alder
+  - 599  # Poppel (100-400 andre træer pr. ha)
+  - 602  # EFA - Willow
+  - 603  # EFA - Poplar
+  - 604  # MFO - El
+  - 605  # EFA - Coppice forest
+  - 606  # EFA - Poplar (100-400 other trees per hectare)
 
 exclude:
   - 0  # (blank)
@@ -297,7 +355,6 @@ exclude:
   - 360  # Vildtafgrøder
   - 361  # Farmland not warranted for subsidies
   - 363  # Paludikultur, permanent græs
-  - 400  # Gherkin
   - 452  # (blank)
   - 482  # Skovlandbrug med permanent græs
   - 483  # Skovlandbrug med græs i omdrift
@@ -306,53 +363,12 @@ exclude:
   - 486  # Henyard with bare soil
   - 487  # Agroforestry
   - 488  # Henyard permanent grass
-  - 489  # Sea buckthorn
-  - 490  # Hassel, træ (Corylus avellana)
-  - 491  # Storfrugtet tranebær
-  - 493  # Black chokeberry
-  - 494  # Japan quince
-  - 495  # Morbær
-  - 496  # Medicinpl., vedplanter
-  - 497  # Nursery cultivation arboreal plants for sale
   - 498  # Containerplads 4, vedplanter
   - 499  # Closed system
   - 500  # 0
   - 501  # Perennial
   - 502  # Flower bulbs
   - 503  # Annual and biennial plants
-  - 504  # Blackcurrant multiplication by cutting
-  - 505  # Ribs, stiklingeopformering
-  - 506  # Gooseberries multiplication by cutting
-  - 507  # Raspberries multiplication by cutting
-  - 508  # Andre af slægten Vaccinium
-  - 509  # Quince
-  - 510  # Melon
-  - 514  # Blackcurrant
-  - 515  # Red currant
-  - 516  # Gooseberry
-  - 517  # Blackberry
-  - 518  # Raspberry
-  - 519  # Blueberry
-  - 520  # Sour cherry without undergrowth of grass
-  - 521  # Sour cherry with undergrowth of grass
-  - 522  # Plum without undergrowth of grass
-  - 523  # Plum with undergrowth of grass
-  - 524  # Sweet cherry without undergrowth of grass
-  - 525  # Sweet cherry with undergrowth of grass
-  - 526  # Elder
-  - 527  # Hazel
-  - 528  # Apples
-  - 529  # Pear
-  - 530  # Grape
-  - 531  # Other tree fruit
-  - 532  # Other shrub fruit
-  - 533  # Rowanberries
-  - 534  # Rose hip
-  - 535  # Bærmispel
-  - 536  # Food grape
-  - 537  # Walnut common
-  - 538  # Chestnut sweet
-  - 539  # Mixed fruit
   - 540  # Tomatoes
   - 541  # Cucumbers
   - 542  # Lettuce (greenhouse)
@@ -378,27 +394,14 @@ exclude:
   - 578  # Afforestation (private) - improvement of aquatic environment and groundwater protection
   - 580  # Forestry common
   - 581  # Afforestation with treehight below 3 m
-  - 582  # Ornamental green branches organic farming
-  - 583  # Christmas trees and ornamental greenery on agricultural land
-  - 584  # Juletræer i fredsskov
   - 585  # Forest establisment in project areas not included by a scheme
   - 586  # Public forest establisment
   - 587  # Forest establisment on former farmland 3
   - 588  # Statslig skovrejsnin
   - 589  # Sustainable forestry
   - 590  # Sustainable forestry in Natura 2000 area
-  - 591  # Coppice forest
-  - 592  # Willow
-  - 593  # Poplar
-  - 594  # Alder
   - 596  # Elephant grass
   - 597  # Reed canary grass
-  - 599  # Poppel (100-400 andre træer pr. ha)
-  - 602  # EFA - Willow
-  - 603  # EFA - Poplar
-  - 604  # MFO - El
-  - 605  # EFA - Coppice forest
-  - 606  # EFA - Poplar (100-400 other trees per hectare)
   - 650  # Chrysanthemum Garland seeds
   - 668  # Flower seeds
   - 777  # Ex-non-food brak

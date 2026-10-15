@@ -5,19 +5,21 @@
 #
 # Excluded (background): permanent & temporary grassland, pasture, meadow, ryegrass, pure
 # forage grasses (fescue, dactylis, timothy, bromus), fallow/set-aside/EFA & temporarily
-# unused agricultural land, orchards/fruit/berries/vineyards/nut trees/olive groves,
-# greenhouse (off-ground) and open-field ornamental horticulture & ornamental flowers,
-# biomass/energy crops (miscanthus, switchgrass, short-rotation coppice), nurseries, cover
-# crops (phacelia, niger), nitrogen-fixing greening mixes, buffer/forest strips, field
-# margins, agroforestry (grazed/pig-grazed groves, truffle oaks), reed beds/salt marsh,
-# afforested land, pastoral rangeland, and administrative/unknown codes.
+# unused agricultural land, vineyard restructuring, greenhouse (off-ground) and open-field
+# ornamental horticulture & ornamental flowers, perennial biomass grasses (miscanthus,
+# switchgrass, silphie), cover crops (phacelia, niger), nitrogen-fixing greening mixes,
+# buffer/forest strips, field margins, agroforestry (pig/ruminant-grazed oak & chestnut
+# groves), reed beds/salt marsh, afforested land, pastoral rangeland, and administrative/
+# unknown codes.
 #
 # Notable inclusions: cereals (incl. silage maize & forage cereals), oilseeds, protein crops
 # & pulses, fibre hemp/flax, fodder legumes and legume-predominant leys (alfalfa, clover,
 # sainfoin, vetch, lupine, melilot), fodder roots/brassicas (beet, carrot, cabbage, turnip),
 # sugar beet, hops, mustard, tobacco, lavender & other aromatic/medicinal herbs, all field &
-# market-garden vegetables, potatoes, strawberries, and (France-specific) open-field
-# melon/watermelon and inter-row arable declarations.
+# market-garden vegetables, potatoes, strawberries, (France-specific) open-field
+# melon/watermelon and inter-row arable declarations, and permanent & tree crops: orchards,
+# fruit trees, citrus, berries, vineyards, nut trees, olive groves, nurseries, short-rotation
+# coppice, truffle plantations and other perennial crops.
 
 column: ["crop:code", "crop_code"]
 
@@ -278,6 +280,33 @@ include:
   - CID  # Inter-row cultivation: 2 crops each representing more than 25% of the total
   - CIT  # Crops managed in inter-rows: 3 crops representing each more than 25%
   - TBT  # (unmapped)
+  # Orchards, fruit & berries
+  - VRG  # Orchard
+  - PRU  # Plum for processing
+  - PFR  # Berry
+  - CBT  # Bigarreau cherry for processing
+  - PVT  # Pavia peaches for processing
+  - PWT  # Williams pear for processing
+  - AGR  # Citrus
+  - AVO  # Avocado
+  # Vineyards
+  - VRC  # Vine: wine grapes
+  - VRN  # Vine: wine grapes not in production
+  - VRT  # Vine: table grapes
+  # Nut trees
+  - NOX  # Walnuts
+  - CTG  # Chestnut
+  - NOS  # Hazelnut
+  - PIS  # Pistachio
+  - CAB  # Carob
+  # Olive groves
+  - OLI  # Olive grove
+  # Nurseries, short-rotation coppice, truffle plantations, other perennial crops
+  - PEP  # Nursery
+  - PEV  # Nursery (<1 yr in ground)
+  - TCR  # Short rotation coppice
+  - TRU  # Truffle patch (oak grove of mycorrhizal trees)
+  - ACP  # Other perennial crop / fallow in banana groves
 
 exclude:
   # Fallow / set-aside / EFA / temporarily unused
@@ -304,28 +333,8 @@ exclude:
   - PAT  # Other rough blue-grass 5 years or less
   - XFE  # X-Felium 5 years or younger type of forage
   - GAI  # Galium
-  # Orchards, fruit & berries
-  - VRG  # Orchard
-  - PRU  # Plum for processing
-  - PFR  # Berry
-  - CBT  # Bigarreau cherry for processing
-  - PVT  # Pavia peaches for processing
-  - PWT  # Williams pear for processing
-  - AGR  # Citrus
-  - AVO  # Avocado
-  # Vineyards
-  - VRC  # Vine: wine grapes
-  - VRN  # Vine: wine grapes not in production
+  # Vineyard restructuring (replanting)
   - RVI  # Restructuring of the vineyard
-  - VRT  # Vine: table grapes
-  # Nut trees
-  - NOX  # Walnuts
-  - CTG  # Chestnut
-  - NOS  # Hazelnut
-  - PIS  # Pistachio
-  - CAB  # Carob
-  # Olive groves
-  - OLI  # Olive grove
   # Greenhouse & ornamental horticulture (in the veg group)
   - CSS  # Off-ground cultivation in greenhouse
   - HPC  # (unmapped)
@@ -336,27 +345,22 @@ exclude:
   - PSE  # Viola tricolor
   - VER  # (unmapped)
   - BUR  # (unmapped)
-  # Energy/biomass, nurseries, cover crops (phacelia/niger), buffer & forest strips, field margins, agroforestry, reed beds, admin
+  # Energy/biomass, cover crops (phacelia/niger), buffer & forest strips, field margins, agroforestry, reed beds, admin
   - SNE  # Temporarily unused agricultural area
   - BTA  # Buffer strip
   - BOR  # Field margin
   - BFS  # Eligible strip along a forest without production
   - BFP  # Permissible strip along a forest with production
-  - TRU  # Truffle patch (oak grove of mycorrhizal trees)
   - SBO  # Wooded area on former agricultural land
-  - PEP  # Nursery
   - CEE  # Oak grove maintained by pigs or small ruminants
   - MCT  # Miscanthus
   - CAE  # Chestnut grove maintained by pigs or small ruminants
   - MSW  # Biomass energy crops (miscanthus/switchgrass/silphie)
-  - TCR  # Short rotation coppice
   - SIN  # Pastoral area unused this year
   - PCL  # Phacelia 5 years or less
   - GRA  # Pure grass for turf or certified seed
   - MPA  # Other mixture of nitrogen fixing plants
   - MRS  # Salt marsh
-  - ACP  # Other perennial crop / fallow in banana groves
-  - PEV  # Nursery (<1 yr in ground)
   - ROS  # Reed bed
   - BRO  # Bromus grass 5 years or less
   - SNU  # Pastoral area, degraded/bare cover

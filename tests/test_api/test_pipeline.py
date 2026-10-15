@@ -170,6 +170,24 @@ class TestBuildContext:
         assert ctx.has_temporal is False
         assert ctx.effective_year is None
 
+    def test_all_null_datetime_column_fails_before_year_stages(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.stac import TemporalExtentError
+
+        fields = tmp_path / "lu.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1], "determination_datetime": [None]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).astype({"determination_datetime": "datetime64[ns]"}).to_parquet(fields)
+        ctx = pipeline.build_context(_config(fields, tmp_path / "out"))
+
+        assert ctx.has_temporal is False
+        with pytest.raises(TemporalExtentError, match="no usable values"):
+            pipeline.run_pipeline(ctx, ["reproject", "masks"])
+        assert not (tmp_path / "out").exists()
+        # Stages that need no year are not blocked.
+        pipeline._validate_stage_selection(ctx, ["reproject", "chips"])
+
     def test_build_context_does_not_create_output_dir(
         self, sample_geoparquet_4326: Path, tmp_path: Path
     ) -> None:
@@ -698,6 +716,65 @@ class TestMasksStage:
         assert paths["semantic_2class"].name == "cell_001_2024_semantic_2_class.tif"
         assert paths["decode_distance"].name == "cell_001_2024_decode_distance.tif"
 
+    def test_matches_create_masks_when_year_is_derived(self, tmp_path: Path) -> None:
+        """Without a year, the pipeline and create-masks write the same chip layout."""
+        import shutil
+
+        from click.testing import CliRunner
+
+        from ftw_dataset_tools.cli import cli
+
+        fields = tmp_path / "lu.parquet"
+        gpd.GeoDataFrame(
+            {
+                "id": [1, 2],
+                "determination_datetime": [
+                    datetime(2021, 6, 1, tzinfo=UTC),
+                    datetime(2021, 7, 1, tzinfo=UTC),
+                ],
+            },
+            geometry=[box(18.002, 40.002, 18.004, 40.004), box(18.006, 40.002, 18.008, 40.004)],
+            crs="EPSG:4326",
+        ).to_parquet(fields)
+        config = _config(
+            fields,
+            tmp_path / "out",
+            stages={"masks": {"mask_types": ["semantic_2_class"], "workers": 1}},
+        )
+        ctx = pipeline.build_context(config)
+        self._write_stage_inputs(ctx)
+        shutil.copy(fields, ctx.field_polygons_path)
+
+        pipeline.stage_masks(ctx)
+
+        cli_out = tmp_path / "cli"
+        result = CliRunner().invoke(
+            cli,
+            [
+                "create-masks",
+                str(ctx.chips_path),
+                str(ctx.field_polygons_path),
+                str(ctx.boundary_lines_path),
+                "--output-dir",
+                str(cli_out),
+                "--field-dataset",
+                ctx.field_dataset,
+                "--mask-type",
+                "semantic_2_class",
+                "--workers",
+                "1",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+        def tifs(root: Path) -> set[Path]:
+            return {p.relative_to(root) for p in root.rglob("*.tif")}
+
+        pipeline_tifs = tifs(ctx.chips_base_dir)
+        assert ctx.effective_year == 2021
+        assert pipeline_tifs == {Path("other/cell_001_2021/cell_001_2021_semantic_2_class.tif")}
+        assert tifs(cli_out / "chips") == pipeline_tifs
+
 
 class TestStacStageFlags:
     def test_stac_stage_passes_checksums_and_background(
@@ -728,7 +805,10 @@ class TestStacStageFlags:
                 "fields_file": str(sample_geoparquet_4326),
                 "output_dir": str(tmp_path / "out"),
                 "year": 2024,
-                "stages": {"stac": {"checksums": True}, "masks": {"presence_only": True}},
+                "stages": {
+                    "stac": {"checksums": True, "crop_calendar": False},
+                    "masks": {"presence_only": True},
+                },
             }
         )
         ctx = pipeline.build_context(config)
@@ -739,6 +819,7 @@ class TestStacStageFlags:
         pipeline.stage_stac(ctx)
 
         assert captured["checksums"] is True
+        assert captured["crop_calendar"] is False
         assert captured["background_class_value"] == 3
 
     def test_stac_stage_passes_config(
@@ -1031,43 +1112,72 @@ def _fake_field_stats_writing_crop_columns(field_stats_module):
     return fake
 
 
+def _chips_stage_kwargs(fields: Path, tmp_path: Path, monkeypatch, chips_cfg: dict) -> dict:
+    """Run stage_chips with chips_cfg and return the kwargs it passed to add_field_stats."""
+    config = _config(
+        fields,
+        tmp_path / "out",
+        year=2024,
+        stages={"chips": {"crop_stats": False, **chips_cfg}},
+    )
+    ctx = pipeline.build_context(config)
+    ctx.output_dir.mkdir(parents=True)
+    gpd.read_parquet(fields).to_parquet(ctx.field_polygons_path)
+    seen: dict = {}
+
+    def fake_field_stats(**kwargs):
+        seen.update(kwargs)
+        gpd.GeoDataFrame(
+            {"id": ["ftw-33UXP0001"], "field_coverage_pct": [50.0]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(kwargs["output_file"])
+        return field_stats.FieldStatsResult(
+            output_path=Path(kwargs["output_file"]),
+            total_cells=1,
+            cells_with_coverage=1,
+            average_coverage=50.0,
+            max_coverage=50.0,
+        )
+
+    monkeypatch.setattr(field_stats, "add_field_stats", fake_field_stats)
+    pipeline.stage_chips(ctx)
+    return seen
+
+
 class TestChipsStageBatchSize:
     """stages.chips.coverage_batch_size is the only reachable OOM escape hatch."""
 
     def test_config_batch_size_reaches_add_field_stats(
         self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
     ) -> None:
-        config = _config(
-            sample_geoparquet_4326,
-            tmp_path / "out",
-            year=2024,
-            stages={"chips": {"coverage_batch_size": 37, "crop_stats": False}},
+        seen = _chips_stage_kwargs(
+            sample_geoparquet_4326, tmp_path, monkeypatch, {"coverage_batch_size": 37}
         )
-        ctx = pipeline.build_context(config)
-        ctx.output_dir.mkdir(parents=True)
-        gpd.read_parquet(sample_geoparquet_4326).to_parquet(ctx.field_polygons_path)
-        seen: dict = {}
-
-        def fake_field_stats(**kwargs):
-            seen.update(kwargs)
-            gpd.GeoDataFrame(
-                {"id": ["ftw-33UXP0001"], "field_coverage_pct": [50.0]},
-                geometry=[box(0, 0, 1, 1)],
-                crs="EPSG:4326",
-            ).to_parquet(kwargs["output_file"])
-            return field_stats.FieldStatsResult(
-                output_path=Path(kwargs["output_file"]),
-                total_cells=1,
-                cells_with_coverage=1,
-                average_coverage=50.0,
-                max_coverage=50.0,
-            )
-
-        monkeypatch.setattr(field_stats, "add_field_stats", fake_field_stats)
-
-        pipeline.stage_chips(ctx)
-
         assert seen["batch_size"] == 37
+
+
+class TestChipsStageSizeFilter:
+    @pytest.mark.parametrize(
+        ("chips_cfg", "min_chip_area", "km_size"),
+        [
+            ({"min_chip_area": 97, "km_size": 5}, 97, 5),
+            ({}, field_stats.DEFAULT_MIN_CHIP_AREA, field_stats.DEFAULT_CHIP_KM_SIZE),
+            ({"min_chip_area": 0}, None, field_stats.DEFAULT_CHIP_KM_SIZE),
+        ],
+    )
+    def test_config_reaches_add_field_stats(
+        self,
+        sample_geoparquet_4326: Path,
+        tmp_path: Path,
+        monkeypatch,
+        chips_cfg: dict,
+        min_chip_area: float | None,
+        km_size: float,
+    ) -> None:
+        seen = _chips_stage_kwargs(sample_geoparquet_4326, tmp_path, monkeypatch, chips_cfg)
+        assert seen["min_chip_area"] == min_chip_area
+        assert seen["km_size"] == km_size
 
 
 class TestChipsStageCropStats:

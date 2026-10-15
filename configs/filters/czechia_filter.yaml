@@ -1,23 +1,23 @@
 # Class filter used for Czechia (CZ) field boundaries. Codes are the crop:code from the harmonized
 # ftw/harmonized-field-data cz dataset; the English HCAT name (or Czech crop:name) is shown as a
-# comment. Covers cz years 2019-2026 (union of all editions); 494 codes. This is an arable-crop
-# declaration scheme (no orchard/vineyard codes).
+# comment. Covers cz years 2019-2026 (union of all editions); 494 codes. This is mainly an
+# arable-crop declaration scheme (the only orchard code is 28, common apple tree).
 #
 # Excluded (background): temporary grassland, forage & meadow grasses (ryegrass, fescue, timothy,
 # cocksfoot, bluegrass, bent, brome, Yorkshire fog, reed canary grass, ...) and grass-predominant
-# grass-clover/grass-legume leys; poplar/willow/alder/ash short-rotation trees & forest planting
-# material; Miscanthus, cup plant & grass-for-energy; phacelia, niger; fallow and the eco-scheme
-# cover/strip mixtures (nectar & pollinator biobelts, catch crops, erosion/dividing/protective
-# strips, headland & greening-lane mixes, species-rich & non-productive PVN mixes, improved non-
-# market crops); hop-propagation seedlings; ornamental plants; landscape elements;
-# and temporarily-ineligible / crop-less arable areas.
+# grass-clover/grass-legume leys; Miscanthus, cup plant & grass-for-energy; phacelia, niger;
+# fallow and the eco-scheme cover/strip mixtures (nectar & pollinator biobelts, catch crops,
+# erosion/dividing/protective strips, headland & greening-lane mixes, species-rich & non-
+# productive PVN mixes, improved non-market crops); ornamental plants; forest planting material;
+# landscape elements; and temporarily-ineligible / crop-less arable areas.
 #
 # Notable inclusions: all cereals (incl. spelt/emmer/einkorn), maize, sorghum, millet, buckwheat,
 # quinoa, amaranth; oilseeds (rape, sunflower, poppy, flax, camelina, safflower, mustard, oilseed
 # pumpkin), soy, hemp cultivars; legumes & pulses; fodder legumes (alfalfa, clovers, vetches,
 # sainfoin, galega, lupines, trefoil) and legume/protein & cereal mixtures (incl. clover-/alfalfa-
 # predominant leys); potatoes, sugar/fodder beet, all field vegetables & roots; culinary/medicinal/
-# aromatic herbs; grasses grown for seed; Tagetes; and strawberries.
+# aromatic herbs; grasses grown for seed; Tagetes; strawberries; and permanent & tree crops:
+# apple trees, poplar/willow/alder/ash short-rotation trees and hop-propagation seedlings.
 
 column: ["crop:code", "crop_code"]
 
@@ -391,6 +391,23 @@ include:
   - "50348"  # Hemp (Białobrzeskie)
   - "50355"  # Hemp (Tiborszallasi)
   - "50374"  # Unidentified species (chřestnatec)
+  # Permanent and tree crops
+  - "530"  # Hops seedling
+  - "20002"  # Populus maximowiczii Henry
+  - "20004"  # Populus trichocarpa
+  - "20005"  # Populus ×generosa
+  - "20007"  # Populus × canadensis
+  - "20008"  # Populus simonii
+  - "20010"  # Populus balsamifera
+  - "20011"  # Populus nigra
+  - "20012"  # Populus tremula
+  - "20013"  # White willow and its hybrids
+  - "20014"  # goat willow and its hybrids
+  - "20015"  # basket willow and its hybrids
+  - "20017"  # European Ash
+  - "20018"  # European alder
+  - "20019"  # Grey alder
+  - "40275"  # Hops seedling
 
 exclude:
   - "12"  # Lacy phacelia
@@ -448,7 +465,6 @@ exclude:
   - "473"  # Headland mix
   - "474"  # Mixture for catch crops
   - "522"  # Mixture for erosion belt
-  - "530"  # Hops seedling
   - "537"  # A mixture of grasses of the poaceae family
   - "539"  # hair fescue
   - "540"  # hard fescue
@@ -457,20 +473,6 @@ exclude:
   - "556"  # Lemon grass
   - "577"  # Mixture of improved non-market crops (not elsewhere specified)
   - "604"  # niger
-  - "20002"  # Populus maximowiczii Henry
-  - "20004"  # Populus trichocarpa
-  - "20005"  # Populus ×generosa
-  - "20007"  # Populus × canadensis
-  - "20008"  # Populus simonii
-  - "20010"  # Populus balsamifera
-  - "20011"  # Populus nigra
-  - "20012"  # Populus tremula
-  - "20013"  # White willow and its hybrids
-  - "20014"  # goat willow and its hybrids
-  - "20015"  # basket willow and its hybrids
-  - "20017"  # European Ash
-  - "20018"  # European alder
-  - "20019"  # Grey alder
   - "40062"  # Lemon grass
   - "40092"  # Feed mixture (lark)
   - "40093"  # Mixture for pollinators
@@ -488,7 +490,6 @@ exclude:
   - "40156"  # Mixture of improved non-market crops (not elsewhere specified)
   - "40159"  # Red fescue
   - "40164"  # Cocksfoot
-  - "40275"  # Hops seedling
   - "40284"  # Poaceae grasses except cereals
   - "40286"  # Grasses for protective strips
   - "40304"  # Protective strip mixture
@@ -506,7 +507,6 @@ exclude:
   - "50037"  # Mixture for nectar fallow
   - "50038"  # A mixture of grasses with low-growing PVN up to 10%
   - "50040"  # Blue Curls
-  - "50041"  # Forest planting material
   - "50043"  # Headland Mix (Premium)
   - "50044"  # Mixture for erosion belt (premium)
   - "50045"  # Mixture for dividing strip
@@ -518,3 +518,4 @@ exclude:
   - "50138"  # Fallow after a grubbed permanent crop
   - "50371"  # Mixture for a greened tramline
   - "50372"  # Protective strip mixture around a landscape feature
+  - "50041"  # Forest planting material

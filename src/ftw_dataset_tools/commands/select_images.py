@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 import click
 import pystac
@@ -13,112 +12,24 @@ from tqdm import tqdm
 
 from ftw_dataset_tools.api.config import default_selection_workers
 from ftw_dataset_tools.api.imagery import (
-    ImageryProgressBar,
     clear_chip_selections,
     find_chip_items,
     find_collection_dir,
     get_imagery_stats,
     has_existing_scenes,
+    select_imagery_for_catalog,
 )
-from ftw_dataset_tools.api.imagery.crop_calendar import ensure_crop_calendar_exists
-from ftw_dataset_tools.api.imagery.parallel import (
-    MAX_WORKERS,
-    ParallelOutcome,
-    run_in_parallel,
-)
+from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
 from ftw_dataset_tools.api.imagery.selection_workflow import (
-    ChipSelectionJob,
-    run_chip_selection,
+    NoCloudFreeScenesError,
+    SelectionWorkflowResult,
 )
 from ftw_dataset_tools.api.stac_items import copy_catalog
 
-if TYPE_CHECKING:
-    from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
+ChipEntries = list[tuple[pystac.Item, Path]]
 
 
-def _extract_year_from_chip_id(chip_id: str) -> int | None:
-    """Extract year from chip ID (e.g., 'ftw-34UFF1628_2024' -> 2024)."""
-    match = re.search(r"_(\d{4})$", chip_id)
-    if match:
-        return int(match.group(1))
-    return None
-
-
-def _extract_year_from_item(item: pystac.Item) -> int | None:
-    """Extract year from item's temporal properties."""
-    # Try start_datetime first
-    start_dt = item.properties.get("start_datetime")
-    if start_dt:
-        try:
-            from datetime import datetime
-
-            if isinstance(start_dt, str):
-                # Parse ISO format datetime
-                dt = datetime.fromisoformat(start_dt.replace("Z", "+00:00"))
-                return dt.year
-        except (ValueError, TypeError):
-            pass
-
-    # Try datetime property
-    if item.datetime:
-        return item.datetime.year
-
-    return None
-
-
-def _chip_item_path(item: pystac.Item, catalog_dir: Path) -> Path:
-    """Where the chip's own item file lives; its parent is the chip directory."""
-    item_self_href = item.get_self_href()
-    chip_dir = Path(item_self_href).parent if item_self_href else catalog_dir / item.id
-    return chip_dir / f"{item.id}.json"
-
-
-def _record_chip(
-    outcome: ParallelOutcome[ChipSelectionJob, SceneSelectionResult],
-    *,
-    progress: ImageryProgressBar,
-    successful: list[str],
-    skipped: list[dict],
-    failed: list[dict],
-    on_missing: Literal["skip", "fail"],
-) -> None:
-    """Report one finished chip. Runs on the main thread, so the output stays coherent."""
-    job = outcome.task
-    chip_id = job.item.id
-    progress.start_chip(chip_id)
-    for message in job.logs:
-        progress.on_progress(message)
-
-    if outcome.error is not None:
-        if on_missing == "fail":
-            raise outcome.error
-        failed.append({"chip": chip_id, "error": str(outcome.error)})
-        progress.mark_failed(str(outcome.error))
-        return
-
-    result = outcome.value
-    if result is None:  # pragma: no cover - a worker returns a result or raises
-        return
-
-    if result.success:
-        successful.append(chip_id)
-        progress.mark_success(result)
-        return
-
-    if on_missing == "fail":
-        raise click.ClickException(f"No cloud-free scenes for {chip_id}: {result.skipped_reason}")
-
-    skipped.append(
-        {
-            "chip": chip_id,
-            "reason": result.skipped_reason,
-            "candidates_checked": result.candidates_checked,
-        }
-    )
-    progress.mark_skipped(result.skipped_reason or "Unknown reason")
-
-
-def _load_single_chip(chip_path: Path, output_dir: Path | None) -> tuple[list[pystac.Item], Path]:
+def _load_single_chip(chip_path: Path, output_dir: Path | None) -> tuple[ChipEntries, Path]:
     if not chip_path.exists():
         raise click.ClickException(f"Chip file not found: {chip_path}")
 
@@ -135,7 +46,7 @@ def _load_single_chip(chip_path: Path, output_dir: Path | None) -> tuple[list[py
         ) from e
 
     click.echo(f"Single chip: {item.id}")
-    return [item], catalog_dir
+    return [(item, chip_path)], catalog_dir
 
 
 def _copy_catalog_to(catalog_dir: Path, output_dir: Path) -> Path:
@@ -150,9 +61,7 @@ def _copy_catalog_to(catalog_dir: Path, output_dir: Path) -> Path:
     return output_dir
 
 
-def _load_catalog_chips(
-    dataset_dir: Path, output_dir: Path | None
-) -> tuple[list[pystac.Item], Path]:
+def _load_catalog_chips(dataset_dir: Path, output_dir: Path | None) -> tuple[ChipEntries, Path]:
     # Dataset directory - collection.json lives directly in it
     try:
         catalog_dir = find_collection_dir(dataset_dir)
@@ -168,7 +77,7 @@ def _load_catalog_chips(
     # Find all chip items (parent items, not child S2 items). Chips whose JSON
     # cannot be read are reported rather than silently dropped from the run.
     unreadable: list[dict] = []
-    chip_items = [item for item, _item_path in find_chip_items(catalog_dir, unreadable)]
+    chip_entries = find_chip_items(catalog_dir, unreadable)
 
     for detail in unreadable:
         click.echo(
@@ -176,13 +85,13 @@ def _load_catalog_chips(
             err=True,
         )
 
-    if not chip_items:
+    if not chip_entries:
         raise click.ClickException("No chip items found in catalog")
-    return chip_items, catalog_dir
+    return chip_entries, catalog_dir
 
 
-def _load_chip_items(input_path: Path, output_dir: Path | None) -> tuple[list[pystac.Item], Path]:
-    """Chip items to work on and the catalog directory they belong to."""
+def _load_chip_entries(input_path: Path, output_dir: Path | None) -> tuple[ChipEntries, Path]:
+    """Chip items (with their paths) to work on and the catalog directory they belong to."""
     if input_path.suffix == ".json":
         return _load_single_chip(input_path, output_dir)
     return _load_catalog_chips(input_path, output_dir)
@@ -247,68 +156,38 @@ def _clear_all_selections(chip_items: list[pystac.Item]) -> None:
     click.echo(f"  GeoTIFF files deleted: {total_tifs}")
 
 
-def _chip_year(item: pystac.Item, year: int | None) -> int | None:
-    """--year if given, else the year in the chip ID, else the item's own dates."""
-    if year is not None:
-        return year
-    chip_year = _extract_year_from_chip_id(item.id)
-    if chip_year is not None:
-        return chip_year
-    return _extract_year_from_item(item)
+def _echo_settings(
+    year: int | None,
+    cloud_cover_chip: float,
+    buffer_days: int,
+    buffer_expansion_size: int,
+    num_buffer_expansions: int,
+    verbose: bool,
+) -> None:
+    if year:
+        click.echo(f"Year: {year} (from --year option)")
+    else:
+        click.echo("Year: (extracted from chip IDs)")
+    click.echo(f"Cloud cover chip threshold: {cloud_cover_chip}%")
+    click.echo(
+        f"Buffer: {buffer_days} days (expand by {buffer_expansion_size}d x{num_buffer_expansions})"
+    )
+    if verbose:
+        click.echo("Verbose mode: ON")
 
 
-def _prescan_chips(
-    chip_items: list[pystac.Item], year: int | None, force: bool
-) -> tuple[list[tuple[pystac.Item, int]], list[dict]]:
-    """Split chips into (item, year) pairs to process and skip records for the rest."""
-    chips_to_process: list[tuple[pystac.Item, int]] = []
-    skipped: list[dict] = []
-    already_has_count = 0
-
-    for item in chip_items:
-        if not item.bbox:
-            skipped.append({"chip": item.id, "reason": "No bbox in item"})
-            continue
-
-        # Skip chips that already have scene selections (unless --force)
-        if not force and has_existing_scenes(item):
-            skipped.append({"chip": item.id, "reason": "Already has imagery selections"})
-            already_has_count += 1
-            continue
-
-        chip_year = _chip_year(item, year)
-        if chip_year is None:
-            reason = "No year provided and could not extract from chip ID or item properties"
-            skipped.append({"chip": item.id, "reason": reason})
-            continue
-
-        chips_to_process.append((item, chip_year))
-
-    if already_has_count > 0:
-        click.echo(f"  Already have imagery: {already_has_count}")
-    pre_skipped = len(skipped) - already_has_count
-    if pre_skipped > 0:
-        click.echo(f"  Skipped (no bbox/year): {pre_skipped}")
-    click.echo(f"  To process: {len(chips_to_process)}")
-    return chips_to_process, skipped
-
-
-def _echo_first_five(heading: str, color: str, entries: list[dict], detail_key: str) -> None:
+def _echo_first_five(heading: str, entries: list[dict]) -> None:
     if not entries:
         return
-    click.echo(click.style(f"\n{len(entries)} {heading}:", fg=color))
+    click.echo(click.style(f"\n{len(entries)} {heading}:", fg="yellow"))
     for entry in entries[:5]:
-        click.echo(f"  - {entry['chip']}: {entry[detail_key]}")
+        click.echo(f"  - {entry['chip']}: {entry['reason']}")
     if len(entries) > 5:
         click.echo(f"  ... and {len(entries) - 5} more")
 
 
-def _echo_summary(
-    chip_items: list[pystac.Item],
-    successful: list[str],
-    skipped: list[dict],
-    failed: list[dict],
-) -> None:
+def _echo_summary(chip_items: list[pystac.Item], result: SelectionWorkflowResult) -> None:
+    skipped = result.skipped_details
     already_has = [s for s in skipped if s["reason"] == "Already has imagery selections"]
     no_scenes = [s for s in skipped if "No cloud-free" in s.get("reason", "")]
     other_skipped = [s for s in skipped if s not in already_has and s not in no_scenes]
@@ -317,19 +196,35 @@ def _echo_summary(
 
     click.echo("\n" + "=" * 50)
     click.echo("Summary:")
-    click.echo(f"  Newly selected: {len(successful)}")
+    click.echo(f"  Newly selected: {result.successful}")
     click.echo(f"  Already had imagery: {len(already_has)}")
     click.echo(f"  No cloud-free scenes: {len(no_scenes)}")
     if other_skipped:
         click.echo(f"  Other skipped: {len(other_skipped)}")
-    click.echo(f"  Failed: {len(failed)}")
+    click.echo(f"  Failed: {len(result.failed_details)}")
     click.echo("")
     click.echo(f"  Total with imagery: {final_stats.with_imagery}/{final_stats.total}")
     click.echo(f"  Still without imagery: {final_stats.without_imagery}")
 
-    _echo_first_five("chips without cloud-free scenes", "yellow", no_scenes, "reason")
-    _echo_first_five("chips skipped (other)", "yellow", other_skipped, "reason")
-    _echo_first_five("chips failed", "red", failed, "error")
+    _echo_first_five("chips without cloud-free scenes", no_scenes)
+    _echo_first_five("chips skipped (other)", other_skipped)
+
+
+def _write_report(
+    report_path: Path,
+    chip_count: int,
+    result: SelectionWorkflowResult,
+    parameters: dict,
+) -> None:
+    report = {
+        "total_processed": chip_count,
+        "successful": result.successful,
+        "skipped": result.skipped_details,
+        "failed": result.failed_details,
+        "parameters": parameters,
+    }
+    report_path.write_text(json.dumps(report, indent=2))
+    click.echo(f"\nReport written to: {report_path}")
 
 
 @click.command("select-images")
@@ -478,7 +373,8 @@ def select_images_cmd(
     if workers is None:
         workers = default_selection_workers(search_backend)
 
-    chip_items, catalog_dir = _load_chip_items(Path(input_path), output_dir)
+    chip_entries, catalog_dir = _load_chip_entries(Path(input_path), output_dir)
+    chip_items = [item for item, _item_path in chip_entries]
 
     if show_stats:
         _echo_stats(chip_items, catalog_dir)
@@ -488,89 +384,44 @@ def select_images_cmd(
         _clear_all_selections(chip_items)
         return
 
-    if year:
-        click.echo(f"Year: {year} (from --year option)")
-    else:
-        click.echo("Year: (extracted from chip IDs)")
-    click.echo(f"Cloud cover chip threshold: {cloud_cover_chip}%")
-    click.echo(
-        f"Buffer: {buffer_days} days (expand by {buffer_expansion_size}d x{num_buffer_expansions})"
+    _echo_settings(
+        year, cloud_cover_chip, buffer_days, buffer_expansion_size, num_buffer_expansions, verbose
     )
-    if verbose:
-        click.echo("Verbose mode: ON")
-
     click.echo(f"\nFound {len(chip_items)} total chips")
 
-    chips_to_process, skipped = _prescan_chips(chip_items, year, force)
-    if not chips_to_process:
-        click.echo("\nNo chips need processing.")
-        return
-
-    # Track results for detailed reporting
-    successful: list[str] = []
-    failed: list[dict] = []
-
-    # Process only the chips that need work, several at a time: a chip is almost
-    # entirely network wait, and chips never touch each other's directories.
-    jobs = [
-        ChipSelectionJob(
-            item=item,
-            item_path=_chip_item_path(item, catalog_dir),
-            year=chip_year,
-        )
-        for item, chip_year in chips_to_process
-    ]
-
-    # Warm the crop calendar before fanning out: every chip needs it, and the
-    # first-time download must not be entered by several workers at once.
-    ensure_crop_calendar_exists(on_progress=lambda msg: click.echo(f"  {msg}"))
-
-    def work(job: ChipSelectionJob) -> SceneSelectionResult:
-        return run_chip_selection(
-            job,
+    try:
+        result = select_imagery_for_catalog(
+            catalog_dir,
+            year=year,
             cloud_cover_chip=cloud_cover_chip,
             nodata_max=nodata_max,
             buffer_days=buffer_days,
             num_buffer_expansions=num_buffer_expansions,
             buffer_expansion_size=buffer_expansion_size,
+            force=force,
+            on_missing=on_missing,
+            verbose=verbose,
+            workers=workers,
             search_backend=search_backend,
+            chip_items=chip_entries,
+            on_progress=lambda msg: click.echo(f"  {msg}"),
         )
+    except NoCloudFreeScenesError as e:
+        raise click.ClickException(str(e)) from e
 
-    with ImageryProgressBar(total=len(jobs), leave=True, verbose=verbose) as progress:
-
-        def apply(outcome: ParallelOutcome[ChipSelectionJob, SceneSelectionResult]) -> None:
-            _record_chip(
-                outcome,
-                progress=progress,
-                successful=successful,
-                skipped=skipped,
-                failed=failed,
-                on_missing=on_missing,
-            )
-
-        run_in_parallel(jobs, work=work, apply=apply, workers=workers)
-
-    _echo_summary(chip_items, successful, skipped, failed)
+    _echo_summary(chip_items, result)
 
     if output_report:
-        report = {
-            "total_processed": len(chip_items),
-            "successful": len(successful),
-            "skipped": skipped,
-            "failed": failed,
-            "parameters": {
-                "year": year if year else "extracted_from_chip_ids",
-                "cloud_cover_chip": cloud_cover_chip,
-                "buffer_days": buffer_days,
-                "num_buffer_expansions": num_buffer_expansions,
-                "buffer_expansion_size": buffer_expansion_size,
-            },
+        parameters = {
+            "year": year if year else "extracted_from_chip_ids",
+            "cloud_cover_chip": cloud_cover_chip,
+            "buffer_days": buffer_days,
+            "num_buffer_expansions": num_buffer_expansions,
+            "buffer_expansion_size": buffer_expansion_size,
         }
-        report_path = Path(output_report)
-        report_path.write_text(json.dumps(report, indent=2))
-        click.echo(f"\nReport written to: {report_path}")
+        _write_report(Path(output_report), len(chip_items), result, parameters)
 
-    if successful:
+    if result.successful:
         click.echo(click.style("\nDone!", fg="green"))
     else:
         click.echo(click.style("\nNo chips successfully processed.", fg="yellow"))

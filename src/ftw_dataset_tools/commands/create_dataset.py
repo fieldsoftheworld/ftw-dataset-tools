@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from ftw_dataset_tools.api import chip_borders, crop_stats, dataset, masks, splits
+from ftw_dataset_tools.api import chip_borders, crop_stats, dataset, field_stats, masks, splits
 from ftw_dataset_tools.api.assets import MaskReadError
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
@@ -16,7 +16,7 @@ from ftw_dataset_tools.api.imagery import (
 )
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
 from ftw_dataset_tools.api.pipeline import docs_summary_line
-from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_datetime_column
+from ftw_dataset_tools.api.stac import resolve_year
 
 
 @click.command("create-dataset")
@@ -57,9 +57,9 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
 @click.option(
     "--min-coverage",
     type=float,
-    default=0.01,
+    default=field_stats.DEFAULT_MIN_COVERAGE,
     show_default=True,
-    help="Minimum coverage percentage to include grids.",
+    help="Minimum coverage percentage (0-100) to include grids.",
 )
 @click.option(
     "--resolution",
@@ -181,7 +181,7 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     "--presence-only",
     is_flag=True,
     default=False,
-    help="Indicates labels are presence-only; background class value will be 3 instead of 0.",
+    help="Indicates labels are presence-only; semantic mask background will be 3 instead of 0.",
 )
 @click.option(
     "--drop-border-chips",
@@ -194,7 +194,10 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     type=click.IntRange(min=0),
     default=chip_borders.DEFAULT_BORDER_GAP_CHIPS,
     show_default=True,
-    help="How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.",
+    help=(
+        "How wide an unlabelled gap must be, in chips, before it counts as a cluster edge. "
+        "Below 2, UTM zone seams count as edges."
+    ),
 )
 @click.option(
     "--class-filter",
@@ -360,14 +363,9 @@ def create_dataset_cmd(
             README and AGENTS.md the docs stage writes then describe a collection
             that already has its imagery.
             """
-            # Try to extract year from determination_datetime if not provided
-            effective_year = year
-            if effective_year is None:
-                datetime_col = detect_datetime_column(fields_file)
-                if datetime_col:
-                    effective_year = get_year_from_datetime_column(fields_file, datetime_col)
-                    if effective_year:
-                        click.echo(f"  Year: {effective_year} (from {datetime_col})")
+            effective_year = resolve_year(fields_file, year)
+            if year is None and effective_year is not None:
+                click.echo(f"  Year: {effective_year} (from determination_datetime)")
 
             if effective_year is None:
                 raise click.ClickException(
