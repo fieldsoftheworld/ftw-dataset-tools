@@ -728,7 +728,10 @@ class TestStacStageFlags:
                 "fields_file": str(sample_geoparquet_4326),
                 "output_dir": str(tmp_path / "out"),
                 "year": 2024,
-                "stages": {"stac": {"checksums": True}, "masks": {"presence_only": True}},
+                "stages": {
+                    "stac": {"checksums": True, "crop_calendar": False},
+                    "masks": {"presence_only": True},
+                },
             }
         )
         ctx = pipeline.build_context(config)
@@ -739,6 +742,7 @@ class TestStacStageFlags:
         pipeline.stage_stac(ctx)
 
         assert captured["checksums"] is True
+        assert captured["crop_calendar"] is False
         assert captured["background_class_value"] == 3
 
     def test_stac_stage_passes_config(

@@ -254,6 +254,34 @@ def get_temporal_extent_from_year(year: int) -> tuple[datetime, datetime]:
     return (start, end)
 
 
+def _crop_season_extent(
+    bbox: tuple[float, float, float, float],
+    year: int,
+    on_progress: Callable[[str], None] | None = None,
+) -> tuple[datetime, datetime] | None:
+    """Planting day to the end of harvest day for ``bbox``, or None outside the crop calendar."""
+    # Imported here to avoid a circular import: api.imagery imports back into this module.
+    from ftw_dataset_tools.api.imagery.crop_calendar import get_crop_calendar_dates
+
+    try:
+        planting, harvest = get_crop_calendar_dates(bbox, on_progress=on_progress).to_datetime(year)
+    except ValueError:
+        return None
+    return (
+        planting.replace(tzinfo=UTC),
+        harvest.replace(hour=23, minute=59, second=59, tzinfo=UTC),
+    )
+
+
+def _covering_extent(
+    extent: tuple[datetime, datetime], items: list[Item]
+) -> tuple[datetime, datetime]:
+    """Widen ``extent`` to cover every item's start/end datetimes."""
+    starts = [extent[0], *(item.common_metadata.start_datetime for item in items)]
+    ends = [extent[1], *(item.common_metadata.end_datetime for item in items)]
+    return (min(s for s in starts if s), max(e for e in ends if e))
+
+
 def _get_dataset_bounds(file_path: Path, geom_col: str = "geometry") -> list[float]:
     """Get overall bounding box from a parquet file."""
     conn = duckdb.connect(":memory:")
@@ -794,6 +822,7 @@ def generate_stac_catalog(
     on_progress: Callable[[str], None] | None = None,
     checksums: bool = False,
     background_class_value: int = 0,
+    crop_calendar: bool = True,
 ) -> STACGenerationResult:
     """
     Generate a single self-contained STAC collection from dataset outputs.
@@ -825,6 +854,9 @@ def generate_stac_catalog(
         on_progress: Optional callback for progress messages
         checksums: Compute file:checksum (multihash sha256) for every asset. Slow; default False.
         background_class_value: Pixel value used for background in masks (3 for presence-only).
+        crop_calendar: Date each year-tagged chip item by its crop season (planting to
+            harvest) rather than the dataset extent. Chips the calendar does not cover
+            keep the dataset extent.
 
     Returns:
         STACGenerationResult with paths to generated files
@@ -884,6 +916,7 @@ def generate_stac_catalog(
 
     items = []
     resumed = 0
+    outside_calendar = 0
     item_squares: dict[str, str] = {}
     for chip_info in chip_infos:
         square = get_mgrs_square(chip_info.grid_id)
@@ -892,9 +925,17 @@ def generate_stac_catalog(
             # Skip chips without directories (no masks generated)
             continue
 
+        chip_extent = temporal_extent
+        if crop_calendar and chip_info.year is not None:
+            season = _crop_season_extent(chip_info.bbox, chip_info.year, on_progress=log)
+            if season is None:
+                outside_calendar += 1
+            else:
+                chip_extent = season
+
         item = _create_chip_item(
             chip_info=chip_info,
-            temporal_extent=temporal_extent,
+            temporal_extent=chip_extent,
             chip_dir=chip_dir,
             checksums=checksums,
             background_class_value=background_class_value,
@@ -914,6 +955,11 @@ def generate_stac_catalog(
     log(f"Created {len(items)} items with mask assets")
     if resumed:
         log(f"Preserved existing imagery selections for {resumed} items")
+    if outside_calendar:
+        log(f"{outside_calendar} chip(s) outside the crop calendar keep the dataset extent")
+
+    # A southern-hemisphere harvest falls in the following year.
+    temporal_extent = _covering_extent(temporal_extent, items)
 
     # Create the single collection
     log("Creating collection...")

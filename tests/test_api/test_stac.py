@@ -392,6 +392,7 @@ def build_catalog(
     chips_path: Path | None = None,
     fields_path: Path | None = None,
     background_class_value: int = 0,
+    crop_calendar: bool = True,
 ):
     """Build a one-chip STAC catalog in ``tmp_path``; safe to call again on the same tree."""
     import geopandas as gpd
@@ -444,7 +445,65 @@ def build_catalog(
         provenance=provenance,
         on_progress=on_progress,
         background_class_value=background_class_value,
+        crop_calendar=crop_calendar,
     )
+
+
+class TestCropCalendarExtent:
+    def _item(self, tmp_path: Path) -> dict:
+        import json
+
+        chip_id = "ftw-33UXP0410_2024"
+        return json.loads((tmp_path / "chips" / "33UXP" / chip_id / f"{chip_id}.json").read_text())
+
+    def _use_season(self, lookup, planting_day: int, harvest_day: int) -> None:
+        from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
+
+        lookup.side_effect = None
+        lookup.return_value = CropCalendarDates(planting_day, harvest_day)
+
+    def test_item_spans_crop_season(self, tmp_path: Path, stac_crop_calendar) -> None:
+        self._use_season(stac_crop_calendar, 100, 250)
+
+        result = build_catalog(tmp_path)
+
+        props = self._item(tmp_path)["properties"]
+        assert props["start_datetime"] == "2024-04-09T00:00:00+00:00"
+        assert props["end_datetime"] == "2024-09-06T23:59:59+00:00"
+        assert result.temporal_extent == (
+            datetime(2024, 1, 1, tzinfo=UTC),
+            datetime(2024, 12, 31, 23, 59, 59, tzinfo=UTC),
+        )
+
+    def test_next_year_harvest_widens_collection(self, tmp_path: Path, stac_crop_calendar) -> None:
+        import json
+
+        self._use_season(stac_crop_calendar, 300, 60)
+
+        result = build_catalog(tmp_path)
+
+        assert self._item(tmp_path)["properties"]["end_datetime"] == "2025-03-01T23:59:59+00:00"
+        assert result.temporal_extent[1] == datetime(2025, 3, 1, 23, 59, 59, tzinfo=UTC)
+        coll = json.loads(result.collection_path.read_text())
+        assert coll["extent"]["temporal"]["interval"][0][1] == "2025-03-01T23:59:59Z"
+
+    def test_outside_calendar_keeps_year(self, tmp_path: Path) -> None:
+        messages: list[str] = []
+
+        build_catalog(tmp_path, on_progress=messages.append)
+
+        props = self._item(tmp_path)["properties"]
+        assert props["start_datetime"] == "2024-01-01T00:00:00+00:00"
+        assert props["end_datetime"] == "2024-12-31T23:59:59+00:00"
+        assert any("outside the crop calendar" in m for m in messages)
+
+    def test_disabled_skips_lookup(self, tmp_path: Path, stac_crop_calendar) -> None:
+        self._use_season(stac_crop_calendar, 100, 250)
+
+        build_catalog(tmp_path, crop_calendar=False)
+
+        stac_crop_calendar.assert_not_called()
+        assert self._item(tmp_path)["properties"]["start_datetime"] == "2024-01-01T00:00:00+00:00"
 
 
 class TestCollectionAssetMetadata:

@@ -183,6 +183,7 @@ class TestFromDict:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
 
         assert config.stages.stac.checksums is False
+        assert config.stages.stac.crop_calendar is True
 
     def test_stac_checksums_enabled(self) -> None:
         config = DatasetConfig.from_dict(

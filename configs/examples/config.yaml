@@ -114,6 +114,9 @@ stages:
     # Compute file:checksum (multihash sha256) for every asset. Optional and slow
     # on large datasets, so off by default.
     checksums: false
+    # Date chip items by their crop calendar season (planting to harvest) instead
+    # of the whole year.
+    crop_calendar: true
 
   select_images:
     # Set to false to skip imagery selection entirely.

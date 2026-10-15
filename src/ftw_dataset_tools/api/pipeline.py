@@ -749,6 +749,7 @@ def stage_stac(ctx: PipelineContext) -> None:
         year=ctx.effective_year,
         provenance=ctx.provenance,
         checksums=ctx.config.stages.stac.checksums,
+        crop_calendar=ctx.config.stages.stac.crop_calendar,
         background_class_value=3 if ctx.config.stages.masks.presence_only else 0,
         on_progress=ctx.log,
         config=ctx.config,

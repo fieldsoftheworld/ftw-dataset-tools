@@ -148,7 +148,8 @@ After image selection, a parent chip item contains:
 ```
 
 `start_datetime` / `end_datetime` span the acquisition dates of the two selected
-scenes. The `ftw:planting` and `ftw:harvest` links are what mark a chip as having
+scenes. Before selection they span the chip's crop calendar season (planting to harvest),
+or the dataset extent where the calendar has no data or `stages.stac.crop_calendar` is false. The `ftw:planting` and `ftw:harvest` links are what mark a chip as having
 imagery: `ftwd select-images` skips chips that already have both (use `--force` to
 re-select).
 
