@@ -251,7 +251,7 @@ class ClassFilter:
 class ChipsConfig:
     """Settings for the chips stage (field coverage statistics)."""
 
-    min_coverage: float = 0.01
+    min_coverage: float = field_stats.DEFAULT_MIN_COVERAGE
     drop_border_chips: bool = False
     # How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.
     border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS

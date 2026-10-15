@@ -287,7 +287,7 @@ ftwd create-dataset fields.parquet --split-type block3x3 --min-coverage 1.0 --re
 - `-o, --output-dir` - Output directory (defaults to `{input_stem}-dataset/`)
 - `--field-dataset` - Dataset name for output filenames (defaults to input filename stem)
 - `--year` - Year for temporal extent (only required if fields lack `determination_datetime` column)
-- `--min-coverage` - Minimum coverage percentage to include grids (default: 0.01)
+- `--min-coverage` - Minimum coverage percentage (0-100) to include grids (default: 1.0)
 - `--resolution` - Pixel resolution in meters for masks (default: 10.0)
 - `--workers` - Number of parallel workers (default: half of CPUs)
 - `--skip-reproject` - Fail if input is not EPSG:4326 instead of auto-reprojecting
@@ -392,7 +392,7 @@ ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spa
 - `--mask-type` - Type of mask: `instance`, `semantic_2_class`, `semantic_3_class`, `decode_boundary`, or `decode_distance` (default: `semantic_3_class`)
 - `--grid-id-col` - Column name for grid cell ID (default: `id`)
 - `--coverage-col` - Column name for coverage percentage (default: `field_coverage_pct`)
-- `--min-coverage` - Minimum coverage to process (default: 0.01)
+- `--min-coverage` - Minimum coverage percentage (0-100) to process (default: 1.0)
 - `--resolution` - Pixel resolution in CRS units (default: 10.0)
 - `--workers` - Number of parallel workers (default: CPU count, capped at 8)
 - `--skip-existing` - Reuse masks already on disk instead of recreating them

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import click
 
-from ftw_dataset_tools.api import masks, stac
+from ftw_dataset_tools.api import field_stats, masks, stac
 from ftw_dataset_tools.api.config import VALID_MASK_TYPES
 from ftw_dataset_tools.api.masks import MaskType
 
@@ -55,9 +55,9 @@ from ftw_dataset_tools.api.masks import MaskType
 @click.option(
     "--min-coverage",
     type=float,
-    default=0.01,
+    default=field_stats.DEFAULT_MIN_COVERAGE,
     show_default=True,
-    help="Minimum coverage percentage to process (0.01 skips empty grids).",
+    help="Minimum coverage percentage (0-100) to process.",
 )
 @click.option(
     "--resolution",

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from ftw_dataset_tools.api import chip_borders, crop_stats, dataset, masks, splits
+from ftw_dataset_tools.api import chip_borders, crop_stats, dataset, field_stats, masks, splits
 from ftw_dataset_tools.api.assets import MaskReadError
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
@@ -57,9 +57,9 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
 @click.option(
     "--min-coverage",
     type=float,
-    default=0.01,
+    default=field_stats.DEFAULT_MIN_COVERAGE,
     show_default=True,
-    help="Minimum coverage percentage to include grids.",
+    help="Minimum coverage percentage (0-100) to include grids.",
 )
 @click.option(
     "--resolution",

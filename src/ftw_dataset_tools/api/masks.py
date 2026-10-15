@@ -19,7 +19,7 @@ from rasterio import features
 from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 
-from ftw_dataset_tools.api import decode
+from ftw_dataset_tools.api import decode, field_stats
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 
@@ -121,7 +121,7 @@ def chip_dirs_for_ids(
 def build_chip_dirs(
     chips_file: str | Path,
     chips_base_dir: Path | str,
-    min_coverage: float = 0.01,
+    min_coverage: float = field_stats.DEFAULT_MIN_COVERAGE,
     year: int | None = None,
     grid_id_col: str = "id",
     coverage_col: str | None = "field_coverage_pct",
@@ -920,7 +920,7 @@ def create_masks(
     grid_id_col: str = "id",
     mask_types: list[MaskType] | None = None,
     coverage_col: str = "field_coverage_pct",
-    min_coverage: float = 0.01,
+    min_coverage: float = field_stats.DEFAULT_MIN_COVERAGE,
     resolution: float = 10.0,
     num_workers: int | None = None,
     chip_dirs: dict[str, Path] | None = None,
@@ -943,7 +943,7 @@ def create_masks(
         mask_types: Types of mask to create (default: [semantic_2_class]). Types that
                     share a rasterization are burned once and written N times.
         coverage_col: Column name for field coverage percentage (to filter grids)
-        min_coverage: Minimum coverage percentage to process (default: 0.01)
+        min_coverage: Minimum coverage percentage (0-100) to process (default: 1.0)
         resolution: Pixel resolution in CRS units (default: 10.0 meters)
         num_workers: Number of parallel workers (default: CPU count, capped at 8)
         chip_dirs: Optional dict mapping item_id (grid_id or grid_id_year) to output directory.
