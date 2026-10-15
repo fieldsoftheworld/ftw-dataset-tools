@@ -194,7 +194,10 @@ from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_dat
     type=click.IntRange(min=0),
     default=chip_borders.DEFAULT_BORDER_GAP_CHIPS,
     show_default=True,
-    help="How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.",
+    help=(
+        "How wide an unlabelled gap must be, in chips, before it counts as a cluster edge. "
+        "Below 2, UTM zone seams count as edges."
+    ),
 )
 @click.option(
     "--class-filter",

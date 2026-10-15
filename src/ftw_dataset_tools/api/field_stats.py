@@ -50,9 +50,9 @@ DEFAULT_CHIP_KM_SIZE = 2.0
 
 # Minimum chip area, as a percentage of a full km_size x km_size cell, for a chip
 # to be kept. Cells on a UTM zone boundary or an MGRS latitude-band boundary are
-# clipped short and can come out only metres wide. Full cells measure 99.83%-100.08%
-# of nominal (the spread is UTM scale factor, not truncation), so 99.5% clears every
-# full cell and rejects every truncated one.
+# clipped short and can come out only metres wide. Full cells measure 99.74%-100.08%
+# of nominal (the spread is UTM scale factor, not truncation; the low end is on the
+# west edge of the widened zone 32V), so 99.5% clears every full cell.
 DEFAULT_MIN_CHIP_AREA = 99.5
 
 # Re-export for convenience

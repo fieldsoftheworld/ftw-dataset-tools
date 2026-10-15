@@ -1031,43 +1031,72 @@ def _fake_field_stats_writing_crop_columns(field_stats_module):
     return fake
 
 
+def _chips_stage_kwargs(fields: Path, tmp_path: Path, monkeypatch, chips_cfg: dict) -> dict:
+    """Run stage_chips with chips_cfg and return the kwargs it passed to add_field_stats."""
+    config = _config(
+        fields,
+        tmp_path / "out",
+        year=2024,
+        stages={"chips": {"crop_stats": False, **chips_cfg}},
+    )
+    ctx = pipeline.build_context(config)
+    ctx.output_dir.mkdir(parents=True)
+    gpd.read_parquet(fields).to_parquet(ctx.field_polygons_path)
+    seen: dict = {}
+
+    def fake_field_stats(**kwargs):
+        seen.update(kwargs)
+        gpd.GeoDataFrame(
+            {"id": ["ftw-33UXP0001"], "field_coverage_pct": [50.0]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(kwargs["output_file"])
+        return field_stats.FieldStatsResult(
+            output_path=Path(kwargs["output_file"]),
+            total_cells=1,
+            cells_with_coverage=1,
+            average_coverage=50.0,
+            max_coverage=50.0,
+        )
+
+    monkeypatch.setattr(field_stats, "add_field_stats", fake_field_stats)
+    pipeline.stage_chips(ctx)
+    return seen
+
+
 class TestChipsStageBatchSize:
     """stages.chips.coverage_batch_size is the only reachable OOM escape hatch."""
 
     def test_config_batch_size_reaches_add_field_stats(
         self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
     ) -> None:
-        config = _config(
-            sample_geoparquet_4326,
-            tmp_path / "out",
-            year=2024,
-            stages={"chips": {"coverage_batch_size": 37, "crop_stats": False}},
+        seen = _chips_stage_kwargs(
+            sample_geoparquet_4326, tmp_path, monkeypatch, {"coverage_batch_size": 37}
         )
-        ctx = pipeline.build_context(config)
-        ctx.output_dir.mkdir(parents=True)
-        gpd.read_parquet(sample_geoparquet_4326).to_parquet(ctx.field_polygons_path)
-        seen: dict = {}
-
-        def fake_field_stats(**kwargs):
-            seen.update(kwargs)
-            gpd.GeoDataFrame(
-                {"id": ["ftw-33UXP0001"], "field_coverage_pct": [50.0]},
-                geometry=[box(0, 0, 1, 1)],
-                crs="EPSG:4326",
-            ).to_parquet(kwargs["output_file"])
-            return field_stats.FieldStatsResult(
-                output_path=Path(kwargs["output_file"]),
-                total_cells=1,
-                cells_with_coverage=1,
-                average_coverage=50.0,
-                max_coverage=50.0,
-            )
-
-        monkeypatch.setattr(field_stats, "add_field_stats", fake_field_stats)
-
-        pipeline.stage_chips(ctx)
-
         assert seen["batch_size"] == 37
+
+
+class TestChipsStageSizeFilter:
+    @pytest.mark.parametrize(
+        ("chips_cfg", "min_chip_area", "km_size"),
+        [
+            ({"min_chip_area": 97, "km_size": 5}, 97, 5),
+            ({}, field_stats.DEFAULT_MIN_CHIP_AREA, field_stats.DEFAULT_CHIP_KM_SIZE),
+            ({"min_chip_area": 0}, None, field_stats.DEFAULT_CHIP_KM_SIZE),
+        ],
+    )
+    def test_config_reaches_add_field_stats(
+        self,
+        sample_geoparquet_4326: Path,
+        tmp_path: Path,
+        monkeypatch,
+        chips_cfg: dict,
+        min_chip_area: float | None,
+        km_size: float,
+    ) -> None:
+        seen = _chips_stage_kwargs(sample_geoparquet_4326, tmp_path, monkeypatch, chips_cfg)
+        assert seen["min_chip_area"] == min_chip_area
+        assert seen["km_size"] == km_size
 
 
 class TestChipsStageCropStats:

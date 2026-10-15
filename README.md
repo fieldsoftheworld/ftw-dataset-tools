@@ -168,7 +168,8 @@ rasterised as background. Label collections are often sampled as separate blocks
 is applied per cluster rather than once over the whole dataset. `border_gap_chips`
 (default 2) sets how wide an unlabelled gap must be, in chips, before it counts as a
 cluster edge; gaps narrower than that, and holes fully enclosed by labelled chips such as
-lakes or towns, are treated as interior.
+lakes or towns, are treated as interior. Keep it at 2 or more when `min_chip_area` is on:
+the chips it drops along a UTM zone seam leave a gap of up to two chips.
 
 #### Class filter (optional)
 

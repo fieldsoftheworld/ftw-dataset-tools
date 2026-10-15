@@ -614,6 +614,43 @@ class TestMinChipArea:
         ids = duckdb.connect().execute(f"SELECT id FROM '{output_file}'").fetchall()
         assert [row[0] for row in ids] == ["full"]
 
+    def test_default_threshold_keeps_the_smallest_full_cell(self, tmp_path: Path) -> None:
+        """The default must keep ftw-32VJH2824, the smallest full cell on the FTW grid.
+
+        UTM scale factor shrinks it to 99.743% of nominal on the west edge of the
+        widened zone 32V, so a default above that would drop real full cells.
+        """
+        from ftw_dataset_tools.api.field_stats import (
+            DEFAULT_MIN_CHIP_AREA,
+            _chip_area_expr,
+            add_field_stats,
+        )
+
+        cell = gpd.GeoDataFrame(
+            {"id": ["ftw-32VJH2824"]},
+            geometry=[box(128000, 6224000, 130000, 6226000)],
+            crs="EPSG:32632",
+        )
+        grid = _write_size_test_file(tmp_path / "grid.parquet", cell, "EPSG:4326")
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        pct = conn.execute(
+            f"SELECT {_chip_area_expr('geometry', is_geographic=True)} / 4e4 FROM '{grid}'"
+        ).fetchone()[0]
+        conn.close()
+        assert pct == pytest.approx(99.743, abs=0.001)
+
+        result = add_field_stats(
+            grid_file=grid,
+            fields_file=_write_size_test_file(tmp_path / "fields.parquet", cell, "EPSG:4326"),
+            output_file=tmp_path / "chips.parquet",
+            min_chip_area=DEFAULT_MIN_CHIP_AREA,
+        )
+
+        assert result.cells_dropped_undersized == 0
+        assert result.total_cells == 1
+
     def test_disabled_by_default(self, tmp_path: Path) -> None:
         """The API keeps every cell unless min_chip_area is passed."""
         from ftw_dataset_tools.api.field_stats import add_field_stats
@@ -767,3 +804,74 @@ class TestMinChipArea:
         assert result.cells_dropped_undersized == 1
         assert result.total_cells == 2  # the full cell plus the unmeasurable row
         assert any("could not measure the area of 1 grid cells" in msg for msg in messages)
+
+
+# A fully labelled block across the zone 32/33 seam at 12°E. Cells are 2 km squares in
+# each zone's own UTM grid, clipped at the seam as MGRS does, which reproduces the FTW
+# grid there cell for cell.
+_SEAM_LON = 12.0
+_SEAM_LABELLED = box(11.8, 50.0, 12.2, 50.3)
+
+
+def _seam_grid(path: Path) -> tuple[Path, set[str]]:
+    """Write the seam grid and return it with the ids of cells well inside the block."""
+    extent = _SEAM_LABELLED.buffer(0.06, join_style="mitre")
+    ids, geoms = [], []
+    for zone, side in ((32, box(-180, -90, _SEAM_LON, 90)), (33, box(_SEAM_LON, -90, 180, 90))):
+        crs = f"EPSG:326{zone}"
+        x0, y0, x1, y1 = gpd.GeoSeries([extent & side], crs="EPSG:4326").to_crs(crs).total_bounds
+        cells = [
+            box(x, y, x + 2000, y + 2000)
+            for x in range(int(x0 // 2000) * 2000, int(x1) + 1, 2000)
+            for y in range(int(y0 // 2000) * 2000, int(y1) + 1, 2000)
+        ]
+        for i, cell in enumerate(gpd.GeoSeries(cells, crs=crs).to_crs("EPSG:4326")):
+            clipped = cell & side
+            if not clipped.is_empty and clipped.intersects(extent):
+                ids.append(f"{zone}-{i}")
+                geoms.append(clipped)
+    grid = gpd.GeoDataFrame({"id": ids}, geometry=geoms, crs="EPSG:4326")
+    interior = grid[grid.within(_SEAM_LABELLED.buffer(-0.05, join_style="mitre"))]
+    return _write_size_test_file(path, grid, "EPSG:4326"), set(interior["id"])
+
+
+class TestSizeFilterAtUtmSeam:
+    """Dropping seam slivers must not make the seam look like a cluster edge."""
+
+    def _interior_border_drops(self, tmp_path: Path, gap_chips: int) -> tuple[int, int]:
+        """Run the size filter and border drop; count interior chips lost to the border drop."""
+        from ftw_dataset_tools.api.field_stats import DEFAULT_MIN_CHIP_AREA, add_field_stats
+
+        grid, interior = _seam_grid(tmp_path / "grid.parquet")
+        fields = gpd.GeoDataFrame({"id": ["f"]}, geometry=[_SEAM_LABELLED], crs="EPSG:4326")
+        fields_file = _write_size_test_file(tmp_path / "fields.parquet", fields, "EPSG:4326")
+
+        def kept(output: Path, **kwargs: object) -> set[str]:
+            add_field_stats(
+                grid_file=grid,
+                fields_file=fields_file,
+                output_file=output,
+                min_chip_area=DEFAULT_MIN_CHIP_AREA,
+                **kwargs,
+            )
+            return {
+                row[0] for row in duckdb.connect().execute(f"SELECT id FROM '{output}'").fetchall()
+            }
+
+        sized = interior & kept(tmp_path / "sized.parquet")
+        bordered = kept(
+            tmp_path / "bordered.parquet", drop_border_chips=True, border_gap_chips=gap_chips
+        )
+        return len(sized - bordered), len(sized)
+
+    def test_default_gap_bridges_the_seam(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.field_stats import DEFAULT_BORDER_GAP_CHIPS
+
+        lost, interior = self._interior_border_drops(tmp_path, DEFAULT_BORDER_GAP_CHIPS)
+        assert interior > 0
+        assert lost == 0
+
+    def test_one_chip_gap_splits_at_the_seam(self, tmp_path: Path) -> None:
+        """Documented limit: below the default, the seam counts as a cluster edge."""
+        lost, _ = self._interior_border_drops(tmp_path, 1)
+        assert lost > 0
