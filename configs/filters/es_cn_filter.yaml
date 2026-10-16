@@ -2,15 +2,16 @@
 # from the national es, Cataluña es_cat and the coarse SIGPAC-uso regions), with Spanish crop
 # names. Covers es_cn year 2026 (the published edition); 59 codes.
 #
-# Excluded (background): subtropical & temperate fruit (avocado, banana, mango, papaya,
-# pineapple, fig, pome/stone fruit, prickly pear, dragon/passion fruit, moringa), berries,
-# citrus, vineyard, olive, almond, tagasaste fodder shrub, nurseries & ornamentals (protea,
-# strelitzia), all permanent-crop associations, fallow (barbecho), grazing on non-agricultural
-# land, and unused agricultural area (NUAA).
+# Excluded (background): ornamentals (protea, strelitzia, other ornamentals), fallow
+# (barbecho), grazing on non-agricultural land, and unused agricultural area (NUAA).
 #
 # Included (field): cereals & maize, potato, sweet potato, yam, tomato, cucumber, melon/
 # watermelon, onion, vegetable mixtures & market/family gardens (huerta, huerto familiar),
-# strawberries, legumes, forage crops, sugar cane, tobacco, aloe and aromatic plants.
+# strawberries, legumes, forage crops, sugar cane, tobacco, aloe and aromatic plants; and
+# permanent & tree crops: subtropical & temperate fruit (avocado, banana, mango, papaya,
+# pineapple, fig, pome/stone fruit, prickly pear, dragon/passion fruit, moringa), berries,
+# citrus, vineyard, olive, almond, tagasaste fodder shrub, nurseries, and all permanent-crop
+# associations.
 
 column: ["crop:code", "crop_code"]
 
@@ -34,9 +35,7 @@ include:
   - "V4200"  # Cebolla
   - "V4900_L1"  # Batata
   - "V4900_L3"  # Ñame
-
-exclude:
-  - "-"  # Pastoreo sobre superficie no agrícola
+  # Permanent and tree crops
   - "CROPS_L1_L1_L1"  # Asociación Cítricos-Hortaliza
   - "CROPS_L1_L1_L2"  # Asociación Cítricos-Ornamentales
   - "CROPS_L1_L1_L3"  # Asociación Cítricos-Papa
@@ -68,11 +67,14 @@ exclude:
   - "H0000_L2"  # Templado Otras Mezclas
   - "J0000_L2"  # Tagasaste
   - "N0000_L0000_O"  # Viveros
+  - "O1000"  # Olivo
+  - "T0000"  # Cítricos
+  - "W1000"  # Viña
+
+exclude:
+  - "-"  # Pastoreo sobre superficie no agrícola
   - "N0000_L1"  # Próteas
   - "N0000_L2"  # Strelitzias
   - "N0000_O"  # Ornamentales
   - "NUAA"  # Superficie agrícola no utilizada
-  - "O1000"  # Olivo
   - "Q0000_O"  # Barbecho
-  - "T0000"  # Cítricos
-  - "W1000"  # Viña

@@ -1,13 +1,13 @@
 # Class filter used for Estonia (EE) field boundaries.
 # Keyed on crop:code (the zero-padded Estonian crop code; 1:1 with crop:name). The English HCAT
 # name (or the Estonian crop:name) is shown as a comment. Covers ee years 2016-2024.
-# Excluded are classes that are not open arable fields: permanent grassland/pasture, pure/forage
-# grass & grazing, orchards, fruit & nut trees, berries, vineyards, ornamentals & nurseries,
-# greenhouse / protected veg, fallow, mushroom cultivation, willow, and grazing outside
-# agricultural land. Notable inclusions: cereals, legumes (incl. clover/lucerne/melilot/trefoil/
-# N-fixing forage leys), oilseeds, potatoes, beet, field vegetables, herbs/medicinal, flax, hemp,
-# hops, strawberries, and named grass-seed varieties. Pure/forage grass and permanent grass are
-# background.
+# Excluded are classes that are not crop fields: permanent grassland/pasture, pure/forage
+# grass & grazing, ornamentals & flowers, greenhouse / protected veg, fallow, mushroom
+# cultivation, and grazing outside agricultural land. Notable inclusions: cereals, legumes (incl.
+# clover/lucerne/melilot/trefoil/N-fixing forage leys), oilseeds, potatoes, beet, field
+# vegetables, herbs/medicinal, flax, hemp, hops, strawberries, named grass-seed varieties, and
+# permanent & tree crops (orchards, fruit & nut trees, berries, vineyards, nurseries, willow).
+# Pure/forage grass and permanent grass are background.
 
 column: ["crop:code", "crop_code"]
 
@@ -287,65 +287,66 @@ include:
   - "0332"  # Triticale without undersowing
   - "0333"  # Triticale undersown with legumes
   - "0335"  # Great mullein
-
-exclude:
-  - "0009"  # watermelon
+  # Permanent and tree crops
   - "0010"  # chokeberry
   - "0011"  # Sea-buckthorn
   - "0012"  # Chaenomeles
-  - "0013"  # Groundcherry
   - "0014"  # Sour cherry incl. morello cherry
   - "0015"  # Plum tree
   - "0024"  # Rowan
   - "0025"  # common hazel
   - "0033"  # Cranberry
-  - "0046"  # Rough grazings
   - "0049"  # gooseberry
-  - "0062"  # grassland (at least 80% grasses)
   - "0065"  # Kurdish rose
-  - "0067"  # cucumber
-  - "0077"  # flowers and ornamental plants (ornamental plants) in the ope
   - "0082"  # sweet cherry tree
-  - "0084"  # melon
   - "0088"  # black currant
   - "0089"  # blueberry
-  - "0090"  # Fallow land (bare land)
-  - "0092"  # Other mix of grasses
   - "0103"  # Other berries
   - "0104"  # other fruits
-  - "0116"  # Elymus grass
   - "0117"  # apple tree
   - "0119"  # willow
-  - "0120"  # paprika
   - "0123"  # pear tree
   - "0124"  # European plum
   - "0139"  # redcurrant
   - "0142"  # nurseries
-  - "0148"  # grasses
-  - "0155"  # Cornflower
   - "0166"  # honeysuckle
-  - "0167"  # Fallow land
-  - "0211"  # Tomato
-  - "0213"  # Chilli pepper
-  - "0215"  # Annual ryegrass and other annual grasses
   - "0217"  # raspberry
   - "0231"  # White currant
   - "0235"  # grapes
   - "0236"  # Fruits and berries in small area
-  - "0239"  # Other grasses (100% grasses)
   - "0247"  # Table grapes
   - "0255"  # Wine grapes
   - "0256"  # Sour cherry
   - "0257"  # Morello cherry
-  - "0258"  # Timothy grass
   - "0260"  # Black elder
-  - "0269"  # Mixture of flowers
   - "0285"  # Serviceberry (Amelanchier)
   - "0305"  # Sour cherry
   - "0306"  # Damson
   - "0307"  # Damson, cherry plum
   - "0309"  # Table grapes
   - "0317"  # Red and white currant
+  - "0334"  # Wine grapes
+
+exclude:
+  - "0009"  # watermelon
+  - "0013"  # Groundcherry
+  - "0046"  # Rough grazings
+  - "0062"  # grassland (at least 80% grasses)
+  - "0067"  # cucumber
+  - "0077"  # flowers and ornamental plants (ornamental plants) in the ope
+  - "0084"  # melon
+  - "0090"  # Fallow land (bare land)
+  - "0092"  # Other mix of grasses
+  - "0116"  # Elymus grass
+  - "0120"  # paprika
+  - "0148"  # grasses
+  - "0155"  # Cornflower
+  - "0167"  # Fallow land
+  - "0211"  # Tomato
+  - "0213"  # Chilli pepper
+  - "0215"  # Annual ryegrass and other annual grasses
+  - "0239"  # Other grasses (100% grasses)
+  - "0258"  # Timothy grass
+  - "0269"  # Mixture of flowers
   - "0320"  # Mushroom growing on agricultural land
   - "0330"  # Sideflowering skullcap
-  - "0334"  # Wine grapes

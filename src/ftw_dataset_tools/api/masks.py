@@ -19,7 +19,7 @@ from rasterio import features
 from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 
-from ftw_dataset_tools.api import decode
+from ftw_dataset_tools.api import decode, field_stats
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 
@@ -121,7 +121,7 @@ def chip_dirs_for_ids(
 def build_chip_dirs(
     chips_file: str | Path,
     chips_base_dir: Path | str,
-    min_coverage: float = 0.01,
+    min_coverage: float = field_stats.DEFAULT_MIN_COVERAGE,
     year: int | None = None,
     grid_id_col: str = "id",
     coverage_col: str | None = "field_coverage_pct",
@@ -341,40 +341,18 @@ def _instance_value(raw: object) -> int | None:
     return None
 
 
-def _fallback_instance_ids(count: int, background_class_value: int) -> list[int]:
-    """Sequential ids 1, 2, 3, ... with ``background_class_value`` left out.
-
-    Presence-only labels use 3 as background and pre-fill the instance array
-    with it, so a plain 1..n range would burn the third polygon as 3 and make
-    it indistinguishable from background - it would vanish with no skip and no
-    warning. Skipping the value yields 1, 2, 4, 5, ... instead.
-    """
-    ids: list[int] = []
-    candidate = 1
-    while len(ids) < count:
-        if candidate != background_class_value:
-            ids.append(candidate)
-        candidate += 1
-    return ids
-
-
-def _instance_ids_for_shapes(boundaries: list[tuple], background_class_value: int) -> list[int]:
+def _instance_ids_for_shapes(boundaries: list[tuple]) -> list[int]:
     """Return uint32-safe instance ids, one per boundary row.
 
-    Falls back to stable sequential ids (in the order rows come back) for the
+    Falls back to stable sequential ids 1..n (in the order rows come back) for the
     *entire* cell when any raw id is missing, non-numeric, non-positive, or too
     large for uint32 - a partial fallback could collide with valid ids already
-    present in the same cell. Generated ids skip ``background_class_value``.
-
-    Only the *generated* ids avoid the background value. A genuine field id
-    that happens to equal it still collides, because a presence-only instance
-    mask carries both the background sentinel and real ids in one unsigned
-    band; that is a data-model problem tracked separately as issue #67.
+    present in the same cell.
     """
     values = [_instance_value(row[0]) for row in boundaries]
     needs_fallback = any(v is None or v <= 0 or v > _UINT32_MAX for v in values)
     if needs_fallback:
-        return _fallback_instance_ids(len(boundaries), background_class_value)
+        return list(range(1, len(boundaries) + 1))
     return values
 
 
@@ -491,6 +469,11 @@ def _rasterize_mask(
     # Set data type based on mask type
     dtype = np.uint32 if mask_type == MaskType.INSTANCE else np.uint8
 
+    # Instance ids are always positive, so 0 is the only background that cannot
+    # collide with one; presence-only is carried by the ftw:presence_only property.
+    if mask_type == MaskType.INSTANCE:
+        background_class_value = 0
+
     # Initialize mask with background value
     mask = np.full((height, width), background_class_value, dtype=dtype)
 
@@ -506,12 +489,10 @@ def _rasterize_mask(
         )
         # Rasterize with ID values
         if boundaries:
-            ids = _instance_ids_for_shapes(boundaries, background_class_value)
+            ids = _instance_ids_for_shapes(boundaries)
             # A lookup must identify exactly one polygon per raster value.
-            if crop_column is not None and (
-                len(set(ids)) != len(ids) or background_class_value in ids
-            ):
-                ids = _fallback_instance_ids(len(boundaries), background_class_value)
+            if crop_column is not None and len(set(ids)) != len(ids):
+                ids = list(range(1, len(boundaries) + 1))
             shapes = [
                 (_wkt_to_geometry(row[1]), value)
                 for row, value in zip(boundaries, ids, strict=True)
@@ -581,7 +562,6 @@ def _write_mask_raster(
     transform: Affine,
     tags: dict[str, str] | None = None,
     nodata: int | None = None,
-    stats_nodata: int | None = None,
 ) -> None:
     """Write a label array to disk as a Cloud Optimized GeoTIFF with embedded band statistics.
 
@@ -591,15 +571,12 @@ def _write_mask_raster(
     dozen distinct values, so deflate is already compressing long byte runs
     that the predictor would shuffle apart.
 
-    ``stats_nodata``, when given, is excluded from the statistics, so the embedded
-    minimum/maximum describe the labelled pixels only. ``nodata`` additionally
-    declares that value on the band, and is deliberately separate: a value can be
-    worth excluding from statistics while still being a legal pixel value that no
-    reader should treat as missing. The class-valued masks pass neither -- their
-    background is a class.
+    ``nodata``, when given, is declared on the band and excluded from the
+    statistics, so the embedded minimum/maximum describe the labelled pixels only.
+    The class-valued masks pass none -- their background is a class.
     """
     height, width = mask.shape
-    stats = compute_band_stats(mask, nodata=stats_nodata if stats_nodata is not None else nodata)
+    stats = compute_band_stats(mask, nodata=nodata)
 
     # Build the file somewhere else and rename it into place. The destination is
     # created the moment it is opened for writing, so a worker killed mid-write
@@ -730,14 +707,6 @@ def _create_masks_for_cell(
             # Instance ids are arbitrary and often global, so a viewer needs the chip's own
             # id range to stretch over: keeping the background out of the embedded statistics
             # makes the render's rescale start at the smallest field id.
-            #
-            # Declaring it as the band's nodata is only safe when it cannot collide with a
-            # real id. Presence-only datasets use 3, and _instance_ids_for_shapes hands out
-            # sequential ids 1..n whenever a raw id is unusable, so a genuine field with id 3
-            # would vanish for every nodata-respecting reader. Exclude it from the stats
-            # there, but leave the band's nodata unset.
-            stats_nodata = background_class_value if mask_type == MaskType.INSTANCE else None
-            band_nodata = stats_nodata if stats_nodata == 0 else None
             if mask_type == MaskType.INSTANCE:
                 # Missing lookups trigger regeneration on resume; stale ones must not survive.
                 instance_labels_path(output_path).unlink(missing_ok=True)
@@ -747,13 +716,11 @@ def _create_masks_for_cell(
                 crs,
                 transform,
                 tags=tags,
-                nodata=band_nodata,
-                stats_nodata=stats_nodata,
+                nodata=0 if mask_type == MaskType.INSTANCE else None,
             )
             if mask_type == MaskType.INSTANCE and crop_column is not None:
-                _write_instance_labels(
-                    output_path, crop_column, background_class_value, instance_labels
-                )
+                # Instance masks always use 0 as background, whatever the semantic masks use.
+                _write_instance_labels(output_path, crop_column, 0, instance_labels)
         except Exception as e:
             # The earlier outputs are on disk; hand them back with the error.
             raise _PartialCellFailure(results, f"{mask_type.value}: {e}") from e
@@ -1026,6 +993,154 @@ def _run_work_items(
     return created, failures, pool_restarts
 
 
+def _read_grid_cells(
+    conn: duckdb.DuckDBPyConnection,
+    chips_path: Path,
+    grid_id_col: str,
+    grid_geom_col: str,
+    coverage_col: str,
+    min_coverage: float,
+) -> list[tuple]:
+    """(grid_id, minx, miny, maxx, maxy) for each cell passing the coverage filter.
+
+    Raises:
+        ValueError: If the grid id or coverage column is missing from the chips file.
+    """
+    coverage_filter = ""
+    if coverage_col:
+        coverage_filter = f'WHERE "{coverage_col}" >= {min_coverage}'
+
+    query = f"""
+        SELECT
+            "{grid_id_col}" as grid_id,
+            ST_XMin("{grid_geom_col}") as minx,
+            ST_YMin("{grid_geom_col}") as miny,
+            ST_XMax("{grid_geom_col}") as maxx,
+            ST_YMax("{grid_geom_col}") as maxy
+        FROM '{sql_path(chips_path)}'
+        {coverage_filter}
+    """
+
+    try:
+        return conn.execute(query).fetchall()
+    except duckdb.BinderException as e:
+        if grid_id_col in str(e):
+            raise ValueError(f"Grid ID column '{grid_id_col}' not found in grid file") from e
+        if coverage_col and coverage_col in str(e):
+            raise ValueError(f"Coverage column '{coverage_col}' not found in grid file") from e
+        raise
+
+
+def _grid_crs(conn: duckdb.DuckDBPyConnection, chips_path: Path, grid_geom_col: str) -> CRS:
+    """CRS of the chips file's geometry column, from its GeoParquet metadata."""
+    geo_meta_result = conn.execute(
+        "SELECT value FROM parquet_kv_metadata(?) WHERE key = 'geo'", [str(chips_path)]
+    ).fetchone()
+    if not geo_meta_result:
+        return CRS.from_epsg(4326)
+
+    geo_meta = json.loads(geo_meta_result[0])
+    crs_info = geo_meta.get("columns", {}).get(grid_geom_col, {}).get("crs")
+    if crs_info and isinstance(crs_info, dict):
+        # Convert PROJJSON to CRS
+        return CRS.from_user_input(crs_info)
+    # GeoParquet spec: missing CRS means WGS84 (and anything unreadable falls back to it too)
+    return CRS.from_epsg(4326)
+
+
+def _column_names(conn: duckdb.DuckDBPyConnection, path: Path) -> set[str]:
+    schema = conn.execute(f"DESCRIBE SELECT * FROM '{sql_path(path)}'").fetchall()
+    return {row[0] for row in schema}
+
+
+def _instance_id_column(conn: duckdb.DuckDBPyConnection, boundaries_path: Path) -> str | None:
+    """Find an ID column in the boundaries file to number instance masks by."""
+    try:
+        col_names = _column_names(conn, boundaries_path)
+    except Exception:
+        return None
+    for candidate in ["id", "ID", "fid", "FID", "objectid", "OBJECTID"]:
+        if candidate in col_names:
+            return candidate
+    return None
+
+
+def _outputs_to_write(
+    grid_id: str,
+    group: list[MaskType],
+    *,
+    chip_dirs: dict[str, Path] | None,
+    output_path: Path,
+    field_dataset: str,
+    year: int | None,
+    skip_existing: bool,
+    existing: dict[MaskType, int],
+    crop_column: str | None = None,
+) -> list[tuple[MaskType, str]]:
+    """The (mask type, path) outputs of one cell's group that still need writing."""
+    outputs: list[tuple[MaskType, str]] = []
+    for mask_type in group:
+        mask_path = get_mask_output_path(
+            grid_id=grid_id,
+            mask_type=mask_type,
+            chip_dirs=chip_dirs,
+            output_dir=output_path,
+            field_dataset=field_dataset,
+            year=year,
+        )
+
+        # Ensure parent directory exists when using chip_dirs
+        if chip_dirs is not None:
+            mask_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Filter per output rather than per group: a group whose 2-class
+        # mask is already on disk still has to burn when one of the
+        # DECODE layers derived from it is missing.
+        if (
+            skip_existing
+            and mask_path.exists()
+            and mask_path.stat().st_size > 0
+            and (mask_type != MaskType.INSTANCE or _lookup_matches(mask_path, crop_column))
+        ):
+            existing[mask_type] += 1
+            continue
+
+        outputs.append((mask_type, str(mask_path)))
+    return outputs
+
+
+def _build_work_items(
+    grid_cells: list[tuple],
+    groups: dict[MaskType, list[MaskType]],
+    *,
+    shared_task_fields: dict,
+    existing: dict[MaskType, int],
+    crop_column: str | None = None,
+    **output_opts,
+) -> list[_MaskTask]:
+    """One task per (grid cell, group) that still has an output to write."""
+    work_items: list[_MaskTask] = []
+    for grid_id, minx, miny, maxx, maxy in grid_cells:
+        grid_id_str = str(grid_id)
+        for source_type, group in groups.items():
+            outputs = _outputs_to_write(
+                grid_id_str, group, existing=existing, crop_column=crop_column, **output_opts
+            )
+            if not outputs:
+                continue
+            work_items.append(
+                _MaskTask(
+                    grid_id=grid_id_str,
+                    bounds=(minx, miny, maxx, maxy),
+                    source_type=source_type,
+                    outputs=tuple(outputs),
+                    crop_column=crop_column if source_type == MaskType.INSTANCE else None,
+                    **shared_task_fields,
+                )
+            )
+    return work_items
+
+
 def create_masks(
     chips_file: str | Path,
     boundaries_file: str | Path,
@@ -1035,7 +1150,7 @@ def create_masks(
     grid_id_col: str = "id",
     mask_types: list[MaskType] | None = None,
     coverage_col: str = "field_coverage_pct",
-    min_coverage: float = 0.01,
+    min_coverage: float = field_stats.DEFAULT_MIN_COVERAGE,
     resolution: float = 10.0,
     num_workers: int | None = None,
     chip_dirs: dict[str, Path] | None = None,
@@ -1060,7 +1175,7 @@ def create_masks(
         mask_types: Types of mask to create (default: [semantic_2_class]). Types that
                     share a rasterization are burned once and written N times.
         coverage_col: Column name for field coverage percentage (to filter grids)
-        min_coverage: Minimum coverage percentage to process (default: 0.01)
+        min_coverage: Minimum coverage percentage (0-100) to process (default: 1.0)
         resolution: Pixel resolution in CRS units (default: 10.0 meters)
         num_workers: Number of parallel workers (default: CPU count, capped at 8)
         chip_dirs: Optional dict mapping item_id (grid_id or grid_id_year) to output directory.
@@ -1068,7 +1183,7 @@ def create_masks(
                    that pass the coverage filter, matching the pipeline's layout.
         year: Optional year for year-based naming convention (e.g., 2024).
               When provided, item IDs and filenames include the year.
-        background_class_value: Value to use for background pixels (default: 0). Use 3 for presence-only labels.
+        background_class_value: Value to use for background pixels (default: 0). Use 3 for presence-only labels; instance masks always use 0.
         skip_existing: When True, cells whose output file already exists with a non-zero
                        size are not recreated (counted in the result's masks_existing).
         on_progress: Optional callback (current, total) for progress updates
@@ -1126,32 +1241,9 @@ def create_masks(
     total_count_result = conn.execute(f"SELECT COUNT(*) FROM '{sql_path(chips_path)}'").fetchone()
     total_grids = total_count_result[0] if total_count_result else 0
 
-    # Build query with optional coverage filter
-    coverage_filter = ""
-    if coverage_col:
-        coverage_filter = f'WHERE "{coverage_col}" >= {min_coverage}'
-
-    # Get grid cells with bounds
-    query = f"""
-        SELECT
-            "{grid_id_col}" as grid_id,
-            ST_XMin("{grid_geom_col}") as minx,
-            ST_YMin("{grid_geom_col}") as miny,
-            ST_XMax("{grid_geom_col}") as maxx,
-            ST_YMax("{grid_geom_col}") as maxy
-        FROM '{sql_path(chips_path)}'
-        {coverage_filter}
-    """
-
-    try:
-        grid_cells = conn.execute(query).fetchall()
-    except duckdb.BinderException as e:
-        if grid_id_col in str(e):
-            raise ValueError(f"Grid ID column '{grid_id_col}' not found in grid file") from e
-        if coverage_col and coverage_col in str(e):
-            raise ValueError(f"Coverage column '{coverage_col}' not found in grid file") from e
-        raise
-
+    grid_cells = _read_grid_cells(
+        conn, chips_path, grid_id_col, grid_geom_col, coverage_col, min_coverage
+    )
     total_cells = len(grid_cells)
 
     if chip_dirs is None:
@@ -1167,49 +1259,18 @@ def create_masks(
     # One task per (grid cell, group of mask types sharing a rasterization).
     groups = _group_by_source(mask_types)
 
-    # Get CRS from GeoParquet metadata
-    geo_meta_result = conn.execute(
-        "SELECT value FROM parquet_kv_metadata(?) WHERE key = 'geo'", [str(chips_path)]
-    ).fetchone()
+    crs = _grid_crs(conn, chips_path, grid_geom_col)
 
-    crs = None
-    if geo_meta_result:
-        geo_meta = json.loads(geo_meta_result[0])
-        columns = geo_meta.get("columns", {})
-        geom_info = columns.get(grid_geom_col, {})
-        crs_info = geom_info.get("crs")
-        if crs_info and isinstance(crs_info, dict):
-            # Convert PROJJSON to CRS
-            crs = CRS.from_user_input(crs_info)
-        elif crs_info is None:
-            # GeoParquet spec: missing CRS means WGS84
-            crs = CRS.from_epsg(4326)
-
-    if not crs:
-        crs = CRS.from_epsg(4326)
-
-    # Determine ID column for instance masks
     id_col_for_instance = None
-    col_names = []
     if MaskType.INSTANCE in mask_types:
-        # Try to find an ID column in boundaries file
-        try:
-            schema = conn.execute(
-                f"DESCRIBE SELECT * FROM '{sql_path(boundaries_path)}'"
-            ).fetchall()
-            col_names = [row[0] for row in schema]
-            for candidate in ["id", "ID", "fid", "FID", "objectid", "OBJECTID"]:
-                if candidate in col_names:
-                    id_col_for_instance = candidate
-                    break
-        except Exception:
-            pass
+        id_col_for_instance = _instance_id_column(conn, boundaries_path)
 
     # Close the main connection - workers will create their own
-    if crop_column is not None and crop_column not in col_names:
+    try:
+        if crop_column is not None and crop_column not in _column_names(conn, boundaries_path):
+            raise ValueError(f"Crop column '{crop_column}' not found in fields file")
+    finally:
         conn.close()
-        raise ValueError(f"Crop column '{crop_column}' not found in fields file")
-    conn.close()
 
     # Determine number of workers, and each one's DuckDB memory budget so a
     # many-worker run can't oversubscribe the machine's RAM (see
@@ -1222,65 +1283,31 @@ def create_masks(
         _worker_memory_limit_mb(total_ram, num_workers) if total_ram else _FALLBACK_MEMORY_LIMIT_MB
     )
 
-    # Convert CRS to WKT for serialization
-    crs_wkt = crs.to_wkt()
-
-    work_items: list[_MaskTask] = []
     # Per-type tally of outputs left in place because skip_existing found them.
     existing: dict[MaskType, int] = dict.fromkeys(mask_types, 0)
-    for grid_id, minx, miny, maxx, maxy in grid_cells:
-        grid_id_str = str(grid_id)
-        for source_type, group in groups.items():
-            outputs: list[tuple[MaskType, str]] = []
-            for mask_type in group:
-                mask_path = get_mask_output_path(
-                    grid_id=grid_id_str,
-                    mask_type=mask_type,
-                    chip_dirs=chip_dirs,
-                    output_dir=output_path,
-                    field_dataset=field_dataset,
-                    year=year,
-                )
-
-                # Ensure parent directory exists when using chip_dirs
-                if chip_dirs is not None:
-                    mask_path.parent.mkdir(parents=True, exist_ok=True)
-
-                # Filter per output rather than per group: a group whose 2-class
-                # mask is already on disk still has to burn when one of the
-                # DECODE layers derived from it is missing.
-                if (
-                    skip_existing
-                    and mask_path.exists()
-                    and mask_path.stat().st_size > 0
-                    and (mask_type != MaskType.INSTANCE or _lookup_matches(mask_path, crop_column))
-                ):
-                    existing[mask_type] += 1
-                    continue
-
-                outputs.append((mask_type, str(mask_path)))
-
-            if not outputs:
-                continue
-
-            work_items.append(
-                _MaskTask(
-                    grid_id=grid_id_str,
-                    bounds=(minx, miny, maxx, maxy),
-                    crs_wkt=crs_wkt,
-                    boundaries_path=str(boundaries_path),
-                    boundary_lines_path=str(boundary_lines_path),
-                    boundaries_geom_col=boundaries_geom_col,
-                    boundary_lines_geom_col=boundary_lines_geom_col,
-                    source_type=source_type,
-                    outputs=tuple(outputs),
-                    resolution=resolution,
-                    id_col=id_col_for_instance,
-                    background_class_value=background_class_value,
-                    memory_limit_mb=memory_limit_mb,
-                    crop_column=crop_column if source_type == MaskType.INSTANCE else None,
-                )
-            )
+    work_items = _build_work_items(
+        grid_cells,
+        groups,
+        shared_task_fields={
+            # WKT, since the task is pickled to the worker processes
+            "crs_wkt": crs.to_wkt(),
+            "boundaries_path": str(boundaries_path),
+            "boundary_lines_path": str(boundary_lines_path),
+            "boundaries_geom_col": boundaries_geom_col,
+            "boundary_lines_geom_col": boundary_lines_geom_col,
+            "resolution": resolution,
+            "id_col": id_col_for_instance,
+            "background_class_value": background_class_value,
+            "memory_limit_mb": memory_limit_mb,
+        },
+        chip_dirs=chip_dirs,
+        output_path=output_path,
+        field_dataset=field_dataset,
+        year=year,
+        skip_existing=skip_existing,
+        existing=existing,
+        crop_column=crop_column,
+    )
 
     # Announce (and count progress against) the work that is actually queued:
     # taking the total before the skip_existing filter would leave a gap-filling
@@ -1292,7 +1319,18 @@ def create_masks(
     results, failures, pool_restarts = _run_work_items(
         work_items, num_workers, total_tasks, on_progress
     )
+    return _results_by_type(mask_types, results, failures, pool_restarts, existing, field_dataset)
 
+
+def _results_by_type(
+    mask_types: list[MaskType],
+    results: list[tuple[MaskType, MaskResult]],
+    failures: list[tuple[_MaskTask, tuple[str, str], set[MaskType]]],
+    pool_restarts: int,
+    existing: dict[MaskType, int],
+    field_dataset: str,
+) -> dict[MaskType, CreateMasksResult]:
+    """Split the pooled run's outcomes back out into one result per mask type."""
     created: dict[MaskType, list[MaskResult]] = {mask_type: [] for mask_type in mask_types}
     skipped: dict[MaskType, list[tuple[str, str]]] = {mask_type: [] for mask_type in mask_types}
 

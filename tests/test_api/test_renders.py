@@ -142,7 +142,7 @@ class TestBackgroundValue:
 
         assert renders["semantic_2class"]["nodata"] == 3
         assert renders["semantic_3class"]["nodata"] == 3
-        assert renders["instance"]["nodata"] == 3
+        assert renders["instance"]["nodata"] == 0
 
     def test_decode_layers_always_use_zero(self) -> None:
         """The DECODE layers fold presence-only background into 0, so 0 it stays."""
@@ -171,7 +171,7 @@ class TestBackgroundValue:
         renders = build_collection_renders(background_value=3)
 
         assert renders["semantic_2class_mask"]["nodata"] == 3
-        assert renders["instance_mask"]["nodata"] == 3
+        assert renders["instance_mask"]["nodata"] == 0
         assert renders["decode_boundary_mask"]["nodata"] == 0
 
 
@@ -249,6 +249,18 @@ class TestLabelColors:
             assert len(value) == 6
             assert not value.startswith("#")
             int(value, 16)
+
+
+class TestMosaicImageryRenders:
+    def test_quarter_images_get_renders_with_q3_as_base(self) -> None:
+        from ftw_dataset_tools.api.renders import build_item_renders, build_render_order
+
+        item = _item({"q1_image": IMAGE_BANDS, "q3_image": IMAGE_BANDS})
+        renders = build_item_renders(item)
+
+        assert renders["q3_rgb"]["title"] == "Q3 mosaic (true colour)"
+        assert renders["q1_rgb"]["assets"] == ["q1_image"]
+        assert build_render_order(renders)[0] == "q3_rgb"
 
 
 class TestSeasonImageryRenders:

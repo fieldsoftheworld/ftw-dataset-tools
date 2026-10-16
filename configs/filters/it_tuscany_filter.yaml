@@ -1,22 +1,24 @@
 # Class filter used for Tuscany, Italy (it_1) field boundaries. Codes are the regional crop:code
 # from the harmonized ftw/harmonized-field-data it_1 dataset; the English HCAT name is shown as a
 # comment. Covers it_1 year 2023 (the published edition); 320 codes. Tuscany is dominated by
-# olive groves, vineyards and woodland, so most parcels fall in the background class.
+# olive groves, vineyards and woodland.
 #
-# Excluded (background): olive groves & olive nurseries, vineyards & vine nurseries; woodland,
-# arboriculture, specialized tree crops, hedges, poplar/oak/eucalyptus/pine and other forest &
-# ornamental trees; permanent & multifloral pasture/meadow, wooded pasture, forage grasses,
-# ryegrass, fescue, bamboo, giant reed, turf; orchards, fruit trees, citrus, nuts, chestnuts &
-# berries; ornamental flowers & plants, iris, lilies, roses, nurseries & greenhouses; shrubs,
-# hawthorn, phacelia, Silphium, truffle & mushrooms; land withdrawn from production, field
-# margins/edges, buffer strips, and non-agricultural areas.
+# Excluded (background): woodland, hedges, tree rows/groups, oak/pine/fir/cypress and other
+# forest & ornamental trees; permanent & multifloral
+# pasture/meadow, wooded pasture, forage grasses, ryegrass, fescue, bamboo, giant reed, turf;
+# ornamental flowers & plants/shrubs, iris, lilies, roses, greenhouses; wild shrubs (hawthorn,
+# blackthorn, dog rose, cistus, juniper), phacelia, Silphium, meadow truffle & mushrooms; land
+# withdrawn from production, field margins/edges, buffer strips, and non-agricultural areas.
 #
 # Notable inclusions: all cereals & pseudocereals, maize, sorghum, millet; oilseeds (sunflower,
 # rape, mustard, flax, safflower, poppy, castor), hemp, tobacco, saffron; legumes & pulses,
 # fodder legumes (alfalfa, clovers, sainfoin, vetches, trefoil, galega, lupin) & nitrogen-fixing
 # mixes; potatoes, all field & horticultural vegetables; culinary/medicinal/aromatic herbs
 # (lavender, rosemary, sage, thyme, helichrysum, chamomile, echinacea, ...); hops; family gardens;
-# and strawberries.
+# strawberries; and permanent & tree crops: olive groves, vineyards, orchards, fruit trees,
+# citrus, nuts, chestnuts, berries, specialized/mixed tree crops, truffle plantations, ginkgo,
+# timber arboriculture & short-rotation trees (poplar, robinia, paulownia, eucalyptus), and
+# fruit, vine, olive, forestry, ornamental & horticultural nurseries.
 
 column: ["crop:code", "crop_code"]
 
@@ -186,84 +188,24 @@ include:
   - "1451"  # Clover
   - "1482"  # Fava bean
   - "1904"  # Sunflower
-
-exclude:
-  - "7"  # ARALIA
-  - "13"  # CALLA lily
-  - "23"  # HYDRANGEA
-  - "35"  # ROSE
-  - "43"  # Butcher's Broom
-  - "46"  # PERENNIAL RYEGRASS
-  - "47"  # RYEGRASS PERENNIAL
-  - "48"  # VIBURNUM
-  - "60"  # CEDAR
-  - "65"  # Multifloral Pasture
-  - "69"  # POPLAR
-  - "80"  # CHRYSANTHEMUM
-  - "92"  # LILY
-  - "150"  # MEADOW TRUFFLE
-  - "156"  # NON-AGRICULTURAL USE - OTHER
+  # Permanent and tree crops
   - "171"  # STRAWBERRY TREE
   - "176"  # Sorbus trees
   - "177"  # MULBERRY
-  - "178"  # MAPLE
-  - "179"  # ALDER
-  - "183"  # ELM
-  - "188"  # PAULOWNIA TOMENTOSA Princess tree
   - "191"  # cooking bananas
-  - "192"  # English Oak
-  - "193"  # Downy oak
-  - "194"  # LINDEN
-  - "195"  # FIR
-  - "197"  # douglas fir
-  - "199"  # CYPRESS
   - "201"  # ORANGE
   - "204"  # LEMON
-  - "208"  # PINE
-  - "209"  # LAWN IN ROLL (TURF)
   - "213"  # LYCIUM BARBARUM (GOJI)
-  - "218"  # PASTURE WITH TRADITIONAL PRACTICES TARE 50%
   - "228"  # JUJUBE
   - "292"  # BLACK ARONIA
-  - "298"  # BIRCH
-  - "300"  # WHITE POPLAR
-  - "301"  # BLACK POPLAR
-  - "304"  # HAWTHORN
   - "305"  # BIRICOCCOLO Apricot
-  - "309"  # ASH narrow-leaved OR SOUTHERN
-  - "310"  # GINKGO BILOBA
-  - "311"  # HOLM OAK
-  - "314"  # CORK OAK
   - "315"  # elderberry
   - "316"  # SEA BUCKTHORN
-  - "317"  # JUNIPER
-  - "318"  # MYRTLE
-  - "319"  # BUTCHER'S BROOM
-  - "320"  # grey-leaved cistus
-  - "329"  # inula
-  - "332"  # phacelia
-  - "336"  # Multifloral Meadow
-  - "338"  # Iris
-  - "340"  # White Iris
-  - "359"  # Tall fescue
-  - "361"  # Meadow Fescue
-  - "369"  # Ryegrass (Lolium x boucheanum)
-  - "380"  # Natural Permanent Grasslands with Environmental Constraints - Tare 20%
-  - "382"  # Natural Permanent Grasslands with Environmental Constraints - Tare 50%
-  - "386"  # Edges of Arable Fields
-  - "391"  # Natural Permanent Grasslands with Environmental Constraints
   - "394"  # passionflower
   - "405"  # AVOCADO
   - "407"  # Prickly Pear
   - "408"  # Pomegranate
-  - "411"  # dog rose
-  - "422"  # Bamboo
-  - "424"  # Giant Bamboo
-  - "428"  # Black Pine
   - "430"  # Citrus Fruits
-  - "446"  # Annual bluegrass
-  - "447"  # MUSHROOMS
-  - "463"  # Mountain Pine
   - "466"  # BEARBERRY
   - "468"  # SOUR CHERRY (MARASCA, SOUR CHERRY, BLACK CHERRY)
   - "471"  # Persimmon
@@ -282,28 +224,102 @@ exclude:
   - "493"  # ALMOND TREE
   - "494"  # HAZELNUT
   - "497"  # PISTACHIO
-  - "499"  # blackthorn
-  - "500"  # ARBORICULTURE
   - "501"  # TRUFFLE
   - "503"  # HORTICULTURAL NURSERY
-  - "524"  # CAMELLIA
-  - "535"  # GERANIUM
   - "552"  # FRUIT NURSERY
   - "553"  # VINEYARD NURSERY
   - "554"  # OLIVE NURSERY
   - "555"  # FORESTRY NURSERY
   - "556"  # NURSERY - OTHERS
-  - "557"  # GREENHOUSES
-  - "646"  # ORNAMENTAL PLANTS
   - "651"  # SPECIALIZED TREE CROPS
-  - "653"  # Giant Reed
   - "655"  # COMBINABLE ARBORETUM (WITH HERBACEOUS CROPS)
-  - "660"  # non agricultural area
   - "661"  # QUINCE
-  - "668"  # EUCALYPTUS
-  - "669"  # ROBINIA
   - "679"  # FAMILY ORCHARDS
   - "685"  # Mixed Tree Cultivations (Multiple Tree Species)
+  - "804"  # PEACH TREE NECTARINE
+  - "831"  # ACTINIDIA (KIWI)
+  - "950"  # PLUMS
+  - "1098"  # Ornamental species nursery
+  - "2101"  # Apricot
+  - "2103"  # Cherry
+  - "2107"  # Peach
+  - "2109"  # PLUM TREE
+  - "2201"  # APPLE TREE
+  - "2202"  # PEAR TREE
+  - "2302"  # GRAPE
+  - "2402"  # Olive for processing
+  - "3080"  # WALNUT
+  - "69"  # POPLAR
+  - "300"  # WHITE POPLAR
+  - "301"  # BLACK POPLAR
+  - "188"  # PAULOWNIA TOMENTOSA Princess tree
+  - "668"  # EUCALYPTUS
+  - "669"  # ROBINIA
+  - "500"  # ARBORICULTURE
+  - "310"  # GINKGO BILOBA
+
+exclude:
+  - "7"  # ARALIA
+  - "13"  # CALLA lily
+  - "23"  # HYDRANGEA
+  - "35"  # ROSE
+  - "43"  # Butcher's Broom
+  - "46"  # PERENNIAL RYEGRASS
+  - "47"  # RYEGRASS PERENNIAL
+  - "48"  # VIBURNUM
+  - "60"  # CEDAR
+  - "65"  # Multifloral Pasture
+  - "80"  # CHRYSANTHEMUM
+  - "92"  # LILY
+  - "150"  # MEADOW TRUFFLE
+  - "156"  # NON-AGRICULTURAL USE - OTHER
+  - "178"  # MAPLE
+  - "179"  # ALDER
+  - "183"  # ELM
+  - "192"  # English Oak
+  - "193"  # Downy oak
+  - "194"  # LINDEN
+  - "195"  # FIR
+  - "197"  # douglas fir
+  - "199"  # CYPRESS
+  - "208"  # PINE
+  - "209"  # LAWN IN ROLL (TURF)
+  - "218"  # PASTURE WITH TRADITIONAL PRACTICES TARE 50%
+  - "298"  # BIRCH
+  - "304"  # HAWTHORN
+  - "309"  # ASH narrow-leaved OR SOUTHERN
+  - "311"  # HOLM OAK
+  - "314"  # CORK OAK
+  - "317"  # JUNIPER
+  - "318"  # MYRTLE
+  - "319"  # BUTCHER'S BROOM
+  - "320"  # grey-leaved cistus
+  - "329"  # inula
+  - "332"  # phacelia
+  - "336"  # Multifloral Meadow
+  - "338"  # Iris
+  - "340"  # White Iris
+  - "359"  # Tall fescue
+  - "361"  # Meadow Fescue
+  - "369"  # Ryegrass (Lolium x boucheanum)
+  - "380"  # Natural Permanent Grasslands with Environmental Constraints - Tare 20%
+  - "382"  # Natural Permanent Grasslands with Environmental Constraints - Tare 50%
+  - "386"  # Edges of Arable Fields
+  - "391"  # Natural Permanent Grasslands with Environmental Constraints
+  - "411"  # dog rose
+  - "422"  # Bamboo
+  - "424"  # Giant Bamboo
+  - "428"  # Black Pine
+  - "446"  # Annual bluegrass
+  - "447"  # MUSHROOMS
+  - "463"  # Mountain Pine
+  - "499"  # blackthorn
+  - "524"  # CAMELLIA
+  - "535"  # GERANIUM
+  - "557"  # GREENHOUSES
+  - "646"  # ORNAMENTAL PLANTS
+  - "653"  # Giant Reed
+  - "660"  # non agricultural area
   - "692"  # SILENE
   - "732"  # SPIRULINA -cyanobacteria
   - "736"  # SILPHUM Silphium perfoliatum
@@ -318,28 +334,15 @@ exclude:
   - "791"  # RIPARIAN BUFFER STRIPS
   - "792"  # NON-RIPARIAN BUFFER STRIPS
   - "793"  # TREES ISOLATED
-  - "804"  # PEACH TREE NECTARINE
   - "826"  # DOMESTIC PINE
-  - "831"  # ACTINIDIA (KIWI)
   - "899"  # PASTURE
-  - "950"  # PLUMS
   - "967"  # ASH
   - "1095"  # Woodland
-  - "1098"  # Ornamental species nursery
   - "1172"  # Wooded Pasture - Shrubby Tare 20%
   - "1173"  # Wooded Pasture - Tare 50%
   - "1464"  # forage grass less than a year
   - "1700"  # Land withdrawn from production
   - "1905"  # Multifloral Pasture with Exposed Rock - Tare 20%
   - "1906"  # Multifloral Pasture with Exposed Rock  TARE 50%
-  - "2101"  # Apricot
-  - "2103"  # Cherry
-  - "2107"  # Peach
-  - "2109"  # PLUM TREE
-  - "2201"  # APPLE TREE
-  - "2202"  # PEAR TREE
-  - "2302"  # GRAPE
-  - "2402"  # Olive for processing
   - "2706"  # non agricultural area
-  - "3080"  # WALNUT
   - "7001"  # Buildings

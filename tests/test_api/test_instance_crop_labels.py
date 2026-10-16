@@ -80,10 +80,12 @@ def test_labels_match_pixels_with_arbitrary_ids(tmp_path, ids, background):
     kwargs["background_class_value"] = background
     path, labels = create(kwargs)
     assert labels["crop_column"] == "crop:name"
-    assert labels["background_value"] == background
+    # Instance masks use 0 as background even for presence-only datasets (semantic 3),
+    # so a genuine field id of 3 keeps its own label.
+    assert labels["background_value"] == 0
     with rasterio.open(path) as src:
         raster = src.read(1)
-        values = set(np.unique(raster)) - {background}
+        values = set(np.unique(raster)) - {0}
         by_value = {row["instance_value"]: row for row in labels["instances"]}
         assert set(by_value) == values
         assert len(by_value) == 2

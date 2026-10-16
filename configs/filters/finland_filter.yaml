@@ -1,13 +1,13 @@
 # Class filter used for Finland (FI) field boundaries.
-# Excluded classes are those that are not open arable fields: grassland/pasture/meadow, forage grass, turf,
-# reed canary grass, orchards, fruit & nut trees, berries, vineyards, ornamentals, nurseries, ornamental
-# willow, energy trees/wood, fallow (open/stump/uncultivated), protection zones/strips, environmental-
+# Excluded classes are those that are not cultivated fields: grassland/pasture/meadow, forage grass, turf,
+# reed canary grass, ornamentals, fallow (open/stump/uncultivated), protection zones/strips, environmental-
 # agreement & natural-pasture areas, biodiversity/pollinator/green-cover & green-manure/soil-improvement
 # plantings, greenhouse veg (melon), and administrative non-crop codes.
 # Pure/forage grass and permanent grass are background.
 # Notable inclusions: cereals (incl. green fodder), legumes (incl. clover/lucerne/galega/melilot leys),
-# oilseeds, potatoes, beet, field vegetables, herbs/medicinal, flax, hemp, hops, strawberries, and grass
-# grown for seed.
+# oilseeds, potatoes, beet, field vegetables, herbs/medicinal, flax, hemp, hops, strawberries, grass
+# grown for seed, and permanent & tree crops: orchards, fruit trees, berries, grapevine, nurseries,
+# ornamental willow and short-rotation energy wood/trees.
 # Covers fi year 2023 (only year published). Codes are the Finnish crop:code from the harmonized
 # ftw/harmonized-field-data fi dataset; HCAT English names shown as comments.
 
@@ -142,13 +142,9 @@ include:
   - 6565  # Meadow fescue seed
   - 9061  # Lacy phacelia
   - 9630  # Garden plot
-
-exclude:
-  - 4904  # reed canary grass (feed)
-  - 4905  # reed canary grass (energy)
+  # Permanent and tree crops
   - 4913  # Energy wood, short rotation (aspen and willow)
   - 4914  # Energy trees, short cycle time (hybrid aspen and poplar)
-  - 5173  # Melon
   - 5210  # Apple
   - 5212  # Rowan (berry production)
   - 5213  # Pear
@@ -165,14 +161,19 @@ exclude:
   - 5314  # Aronia berry
   - 5318  # Serviceberry
   - 5319  # Other berry plants
-  - 5410  # Ornamental plants, under 5 years
-  - 5420  # Ornamentals, 5 years -, continuous outdoor harvest
   - 5442  # Ornamental willow for braiding, under 5 years
   - 5443  # Ornamental willow for braiding, 5 - 20 years
   - 5451  # Sea buckthorn
   - 5452  # Cherry
   - 5512  # Nursery (berries, fruits, ornamental plants under 5 years)
   - 5537  # Nursery (berries, fruits, ornamental plants at least 5 years old)
+
+exclude:
+  - 4904  # reed canary grass (feed)
+  - 4905  # reed canary grass (energy)
+  - 5173  # Melon
+  - 5410  # Ornamental plants, under 5 years
+  - 5420  # Ornamentals, 5 years -, continuous outdoor harvest
   - 5854  # Land improvement and renovation plant mixture
   - 6050  # Green manure lawn
   - 6060  # Turf

@@ -16,12 +16,49 @@ class TestCreateChipsCommand:
         runner = CliRunner()
         result = runner.invoke(cli, ["create-chips", "--help"])
         assert result.exit_code == 0
+        assert "Create chip definitions" in result.output
+        assert "FIELDS_FILE" in result.output
 
     def test_missing_input(self) -> None:
         """Test error for missing input argument."""
         runner = CliRunner()
         result = runner.invoke(cli, ["create-chips"])
         assert result.exit_code != 0
+        assert "Missing argument" in result.output
+
+    def test_nonexistent_file(self) -> None:
+        """Test that nonexistent files produce an error."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "create-chips",
+                "/nonexistent/fields.parquet",
+                "--grid-file",
+                "/nonexistent/grid.parquet",
+            ],
+        )
+        assert result.exit_code != 0
+
+    def test_output_long_option(
+        self, sample_fields_geoparquet: Path, sample_grid_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        """Test --output option."""
+        output_file = tmp_path / "custom_output.parquet"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "create-chips",
+                str(sample_fields_geoparquet),
+                "--grid-file",
+                str(sample_grid_geoparquet),
+                "--output",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code == 0
+        assert output_file.exists()
 
     def test_valid_input_with_local_grid(
         self, sample_fields_geoparquet: Path, sample_grid_geoparquet: Path, tmp_path: Path
@@ -241,3 +278,36 @@ class TestCreateChipsCommand:
         )
         assert result.exit_code != 0
         assert "Invalid value for '--km-size'" in result.output
+
+
+class TestCli:
+    """Tests for the main CLI."""
+
+    def test_version(self) -> None:
+        """Test that --version works."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--version"])
+        assert result.exit_code == 0
+        assert "ftwd" in result.output
+        assert "0.1.0" in result.output
+
+    def test_help(self) -> None:
+        """Test that --help works for main CLI."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--help"])
+        assert result.exit_code == 0
+        assert "FTW Dataset Tools" in result.output
+        assert "create-chips" in result.output
+        assert "add-field-stats" not in result.output
+
+    def test_removed_add_field_stats_points_to_create_chips(
+        self, sample_fields_geoparquet: Path, sample_grid_geoparquet: Path
+    ) -> None:
+        """The old command fails with the create-chips equivalent instead of 'No such command'."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["add-field-stats", str(sample_grid_geoparquet), str(sample_fields_geoparquet)]
+        )
+        assert result.exit_code == 2
+        assert "'add-field-stats' was removed" in result.output
+        assert "ftwd create-chips FIELDS_FILE --grid-file GRID_FILE" in result.output

@@ -8,6 +8,7 @@ import click
 
 from ftw_dataset_tools.api import assets, crop_stats, masks, pipeline, source
 from ftw_dataset_tools.api import config as config_module
+from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
 
 
 def _on_progress(msg: str) -> None:
@@ -165,6 +166,10 @@ def run_cmd(
         sys.stdout.write("\n")
         click.echo(click.style("Interrupted by user.", fg="yellow"))
         raise SystemExit(130) from None
+    except SelectionConflictError as err:
+        raise click.ClickException(
+            f"{err} Use a new output_dir, or replace it with `ftwd select-images --force`."
+        ) from err
     except (
         FileNotFoundError,
         ValueError,

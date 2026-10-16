@@ -12,6 +12,11 @@ from pathlib import Path
 
 import pystac
 
+from ftw_dataset_tools.api.imagery.slots import (
+    DEFAULT_IMAGERY_MODE,
+    IMAGERY_SLOTS,
+    SLOTS_BY_MODE,
+)
 from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_EXTENSIONS
 from ftw_dataset_tools.api.stac_items import write_item
 
@@ -22,6 +27,7 @@ __all__ = [
     "IMAGERY_TEMPORAL_PROPERTIES",
     "ClearResult",
     "ImageryStats",
+    "SelectionConflictError",
     "chip_dir_for_item",
     "clear_chip_selections",
     "find_collection_dir",
@@ -29,15 +35,24 @@ __all__ = [
     "has_existing_scenes",
     "iter_chip_dirs",
     "preserve_imagery_selection",
+    "selection_conflict",
 ]
+
+
+class SelectionConflictError(Exception):
+    """Chips already hold a selection from a different imagery mode or year."""
+
 
 # The bookkeeping that image selection and download write onto a *parent* chip
 # item (see api/imagery/stac_child_items.py and api/stac_items.py). Shared so
 # that clearing a selection and preserving one across catalog regeneration stay
 # in sync: a key missing from these lists is silently dropped on a re-run.
-IMAGERY_LINK_RELS = ("ftw:planting", "ftw:harvest")
+IMAGERY_LINK_RELS = tuple(f"ftw:{slot}" for slot in IMAGERY_SLOTS)
 
 IMAGERY_PROPERTIES = (
+    "ftw:imagery_mode",
+    "ftw:requested_year",
+    "ftw:imagery_year",
     "ftw:calendar_year",
     "ftw:planting_day",
     "ftw:harvest_day",
@@ -60,7 +75,7 @@ IMAGERY_PROPERTIES = (
 IMAGERY_TEMPORAL_PROPERTIES = ("start_datetime", "end_datetime")
 
 # Added to the parent once imagery has been downloaded.
-IMAGERY_ASSET_KEYS = ("planting_image", "harvest_image", "thumbnail")
+IMAGERY_ASSET_KEYS = (*(f"{slot}_image" for slot in IMAGERY_SLOTS), "thumbnail")
 
 
 def iter_chip_dirs(collection_dir: Path) -> list[Path]:
@@ -91,17 +106,25 @@ def find_collection_dir(path: Path) -> Path:
 
 
 def has_existing_scenes(item: pystac.Item) -> bool:
-    """Check if item already has planting and harvest scene links.
+    """Whether the item links a complete selection: both seasons, or all four quarters."""
+    rels = {link.rel for link in item.links}
+    return any(all(f"ftw:{slot}" in rels for slot in slots) for slots in SLOTS_BY_MODE.values())
 
-    Args:
-        item: STAC item to check
 
-    Returns:
-        True if item has both ftw:planting and ftw:harvest links
+def selection_conflict(item: pystac.Item, imagery_mode: str, year: int | None) -> str | None:
+    """Why the item's existing selection does not match this run, or None if it does.
+
+    ``year`` is only compared in mosaic mode; scene selections predate the property.
     """
-    has_planting = any(link.rel == "ftw:planting" for link in item.links)
-    has_harvest = any(link.rel == "ftw:harvest" for link in item.links)
-    return has_planting and has_harvest
+    if not has_existing_scenes(item):
+        return None
+    existing_mode = item.properties.get("ftw:imagery_mode", DEFAULT_IMAGERY_MODE)
+    if existing_mode != imagery_mode:
+        return f"has {existing_mode} imagery"
+    existing_year = item.properties.get("ftw:requested_year")
+    if imagery_mode == "mosaics" and existing_year != year:
+        return f"has mosaics for {existing_year}"
+    return None
 
 
 def preserve_imagery_selection(item: pystac.Item, existing_item_path: Path) -> bool:
@@ -283,8 +306,8 @@ def clear_chip_selections(item: pystac.Item) -> ClearResult:
     chip_dir = chip_dir_for_item(item)
     result = ClearResult()
 
-    # Delete planting and harvest child STAC items and their GeoTIFFs
-    for season in ["planting", "harvest"]:
+    # Delete every slot's child STAC item and its GeoTIFFs
+    for season in IMAGERY_SLOTS:
         child_json = chip_dir / f"{item.id}_{season}_s2.json"
         if child_json.exists():
             child_json.unlink()
@@ -308,11 +331,13 @@ def clear_chip_selections(item: pystac.Item) -> ClearResult:
         if overlay.exists():
             overlay.unlink()
 
-    # Remove ftw:planting and ftw:harvest links from parent item
+    # Remove the slot links from parent item
     item.links = [link for link in item.links if link.rel not in IMAGERY_LINK_RELS]
 
     # Extract calendar year before removing properties (needed to restore datetime)
-    calendar_year = item.properties.get("ftw:calendar_year")
+    calendar_year = item.properties.get("ftw:calendar_year") or item.properties.get(
+        "ftw:requested_year"
+    )
 
     # Remove ftw: properties related to imagery selection
     for prop in IMAGERY_PROPERTIES:

@@ -7,24 +7,26 @@
 # 325 distinct NC codes across bb (2026), nds (2025), nrw (2026).
 #
 # Excluded (background): landscape elements (hedges, tree rows, field copses, stone walls,
-# margins) & eco-scheme strips, arable grass leys (Ackergras) and all grassland/pasture/
-# meadow, fallow/set-aside/nature-conservation/buffer & erosion strips/afforestation,
-# turf (Rollrasen) & ornamental plants, energy/biomass crops (Silphie, Miscanthus,
-# switchgrass, reed canary grass), orchards/berries/nuts/vineyards/nurseries/agroforestry/
-# heather/roses/truffle, Christmas trees, forest, storage heaps, and administrative codes.
+# margins) & eco-scheme strips incl. agroforestry strips, arable grass leys (Ackergras) and
+# all grassland/pasture/meadow, fallow/set-aside/nature-conservation/buffer & erosion strips/
+# afforestation, permanent crops taken out of production, protected cultivation (asparagus
+# under foil), turf (Rollrasen) & ornamental
+# plants (incl. heather, roses), energy/biomass crops (Silphie, Miscanthus, switchgrass, reed
+# canary grass), forest, storage heaps, and administrative codes.
 # The empty crop:code ("") and non-agricultural areas are background.
 #
 # Notable inclusions: all cereals (incl. silage maize), legumes & pulses, oilseeds, fodder
 # legumes and legume-predominant leys (clover, alfalfa, sainfoin, serradella, mixes),
 # fodder roots, potatoes, sugar beet, all field & market-garden vegetables, culinary/
 # medicinal/aromatic herbs, hemp, tobacco, poppy, strawberries, asparagus, rhubarb,
-# artichoke, Tagetes, Sudan grass, seed-multiplication & trial plots, and mixed cultures.
+# artichoke, Tagetes, Sudan grass, seed-multiplication & trial plots, mixed cultures, and
+# permanent & tree crops: orchards (incl. Streuobst meadow orchards), berries, nuts,
+# vineyards, tree & woody nurseries (incl. rhododendron), osier & short-rotation coppice
+# (KUP), Christmas trees, truffle, and other permanent crops.
 
 column: ["crop:code", "crop_code"]
 
 include:
-  # Industrial & specialty crops (hemp, tobacco, strawberry, asparagus, rhubarb, Tagetes, seed phacelia, Sudan grass, ...)
-  - "008"  # Spargel unter Folie
   # Cereals
   - 112  # Winterdurum (Hartweizen)
   - 113  # Sommerdurum (Hartweizen)
@@ -195,6 +197,38 @@ include:
   - 920  # House and kitchen gardens
   - 973  # NFF: Ackernutzung
   - 999  # Ackerkultur einer Gattung
+  # Permanent & tree crops (orchards, berries, nuts, vineyards, nurseries, KUP, Christmas trees)
+  - 480  # Streuobstfläche mit Grünlandnutzung
+  - 481  # Orchards without grassland use
+  - 821  # Pome and stone fruit
+  - 822  # Streuobst (ohne Wiesennutzung)
+  - 823  # Birnen (Ertragsanlagen)
+  - 824  # sonst. Obstanlagen in Vollanbau (ohne Äpfel, Birnen, Pfirsiche)
+  - 825  # Kernobst z.B. Äpfel, Birnen
+  - 826  # Steinobst, z. B. Kirschen, Pflaumen
+  - 827  # Beerenobst, z.B. Johannis-, Stachel-, Himbeeren
+  - 828  # Sanddorn
+  - 829  # Sonstige Obstanlagen
+  - 830  # Pfirsiche in Vollanbau
+  - 831  # Kirschen (Ertragsanlagen)
+  - 832  # Pflaumen (Ertragsanlagen)
+  - 833  # Haselnüsse
+  - 834  # Walnüsse
+  - 835  # other nuts
+  - 836  # Äpfel in Vollanbau
+  - 837  # sonst. Steinobst (ohne Kirschen, Pflaumen)
+  - 838  # Baumschulen, nicht für Beerenobst
+  - 839  # Beerenobst zur Vermehrung
+  - 840  # Korbweiden
+  - 841  # KUP lt. GAPDZV
+  - 842  # Rebland
+  - 843  # Planted vineyards (underplanting)
+  - 847  # Steep slope viticulture
+  - 850  # Sonstige Dauerkulturen
+  - 864  # rhododendron
+  - 865  # Trüffel
+  - 982  # Sonstige KUP
+  - 983  # Weihnachtsbäume
 
 exclude:
   # Unlabelled / non-agricultural / administrative
@@ -223,7 +257,7 @@ exclude:
   - "093"  # ÖR 1d Altgrasstreifen
   - 93  # ÖR 1d Altgrasstreifen DGL
   - "094"  # ÖR 3 Agroforststreifen
-  # Arable grass leys, grassland, pasture, meadow, orchard-meadow
+  # Arable grass leys, grassland, pasture, meadow
   - 424  # Ackergras
   - 428  # Alternating grassland
   - 441  # Wiesen (Grünlandneueinsaat im Rahmen von AUKM)
@@ -242,8 +276,6 @@ exclude:
   - 465  # Grazed montane meadows
   - 466  # Mowed grasslands
   - 467  # Mown montane meadows
-  - 480  # Streuobstfläche mit Grünlandnutzung
-  - 481  # Orchards without grassland use
   - 492  # Dauergrünland unter etablierten lokalen Praktiken (z.B. Heide)
   - 493  # unlabelled
   # Fallow, set-aside, nature conservation, buffer/erosion strips, afforestation
@@ -268,6 +300,8 @@ exclude:
   - 591  # Ackerland aus der Erzeugung genommen
   - 592  # Dauergrünland aus der Erzeugung genommen
   - 593  # Dauerkulturen aus der Erzeugung genommen
+  # Protected cultivation (under foil/glass)
+  - "008"  # Spargel unter Folie
   # Turf/sod & ornamental plants
   - 702  # Rollrasen, Vegetationsmatten für Dachbegrünung
   - 704  # Glanzgräser
@@ -309,41 +343,12 @@ exclude:
   - 804  # Virginiamalve
   - 805  # Knotweed
   - 806  # Rutenhirse
-  # Orchards, berries, nuts, vineyards, nurseries, agroforestry, heather, roses, truffle
-  - 821  # Pome and stone fruit
-  - 822  # Streuobst (ohne Wiesennutzung)
-  - 823  # Birnen (Ertragsanlagen)
-  - 824  # sonst. Obstanlagen in Vollanbau (ohne Äpfel, Birnen, Pfirsiche)
-  - 825  # Kernobst z.B. Äpfel, Birnen
-  - 826  # Steinobst, z. B. Kirschen, Pflaumen
-  - 827  # Beerenobst, z.B. Johannis-, Stachel-, Himbeeren
-  - 828  # Sanddorn
-  - 829  # Sonstige Obstanlagen
-  - 830  # Pfirsiche in Vollanbau
-  - 831  # Kirschen (Ertragsanlagen)
-  - 832  # Pflaumen (Ertragsanlagen)
-  - 833  # Haselnüsse
-  - 834  # Walnüsse
-  - 835  # other nuts
-  - 836  # Äpfel in Vollanbau
-  - 837  # sonst. Steinobst (ohne Kirschen, Pflaumen)
-  - 838  # Baumschulen, nicht für Beerenobst
-  - 839  # Beerenobst zur Vermehrung
-  - 840  # Korbweiden
-  - 841  # KUP lt. GAPDZV
-  - 842  # Rebland
-  - 843  # Planted vineyards (underplanting)
-  - 847  # Steep slope viticulture
-  - 850  # Sonstige Dauerkulturen
-  # Energy / biomass crops
   - 852  # Chinaschilf
   - 853  # Riesenweizengras
   - 854  # Rohrglanzgras
-  # Orchards, berries, nuts, vineyards, nurseries, agroforestry, heather, roses, truffle
+  # Heather, roses, wild-plant mixtures
   - 862  # Heidekraut
   - 863  # Rosen, Schnittrosen
-  - 864  # rhododendron
-  - 865  # Trüffel
   - 871  # Wildpflanzenmischung (AUM)
   # Unlabelled / non-agricultural / administrative
   - 880  # unlabelled
@@ -352,7 +357,7 @@ exclude:
   - 883  # unlabelled
   - 886  # Schonfläche unterjährig
   - 909  # unlabelled
-  # Christmas trees, forest, storage heaps, other non-crop / admin
+  # Forest, storage heaps, other non-crop / admin
   - 910  # Wildacker auf lw. Fläche
   - 915  # Randstreifen (Acker
   - 918  # Mehrjährige Buntbrachen (AUM)
@@ -364,14 +369,10 @@ exclude:
   - 972  # NFF: Dauergrünlandnutzung
   # Unlabelled / non-agricultural / administrative
   - 974  # unlabelled
-  # Christmas trees, forest, storage heaps, other non-crop / admin
-  - 982  # Sonstige KUP
-  - 983  # Weihnachtsbäume
-  # Unlabelled / non-agricultural / administrative
   - 990  # Alle anderen Flächen (keine LF)
   - 991  # Not farmer. Areas within the control of the applicant that have been desig
   - 992  # Nicht landwirt. Flächen in folge Genehmigung DGL Umwandlung
-  # Christmas trees, forest, storage heaps, other non-crop / admin
+  # Forest, storage heaps, other non-crop / admin
   - 994  # Vorübergehende, unbefestigte Mieten, Stroh-, Futter- oder Dunglagerplätze
   - 995  # Forstflächen
   - 996  # Vorübergehende, unbefestigte Mieten, Stroh-, Futter oder Dunglagerplätze a

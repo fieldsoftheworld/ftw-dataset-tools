@@ -3,16 +3,17 @@
 # each - so this filter is specific to es_cat. Crop names are Catalan (from crop:name_en).
 # Covers es_cat year 2024 (the published edition); 210 codes.
 #
-# Excluded (background): olive groves, vineyards; all fruit trees, citrus, nuts and berries;
-# forage grasses (agrostis, dactylis, fescue, ryegrass) and pastures; traditional & biodiversity
-# fallow (guaret); short-rotation energy trees (poplar, willow, paulownia, eucalyptus) & osier;
-# cut flowers, ornamental plants & nurseries (viver); and mushrooms & truffle.
+# Excluded (background): forage grasses (agrostis, dactylis, fescue, poa, ryegrass) and pastures;
+# traditional & biodiversity fallow (guaret); cut flowers, garlands & ornamental plants; and
+# mushrooms.
 #
 # Notable inclusions: all cereals, maize, sorghum, sudan grass, rice; oilseeds (sunflower, rape,
 # camelina, safflower, mustard); hemp, flax, hops, saffron; legumes & pulses; fodder legumes
 # (alfalfa, sainfoin, clover, vetch, lupine, sulla, trefoil, crotalaria) and cereal/legume
 # mixtures and forage mixtures; potatoes, beet; all vegetables; culinary/medicinal/aromatic herbs
-# (incl. lavender, aloe, caper); and strawberries.
+# (incl. lavender, aloe, caper); strawberries; and permanent & tree crops: olive groves,
+# vineyards, all fruit trees, citrus, nuts and berries, kiwi, carob, truffle, nurseries (viver),
+# and short-rotation energy trees (poplar, willow, paulownia, eucalyptus) & osier.
 
 column: ["crop:code", "crop_code"]
 
@@ -164,33 +165,24 @@ include:
   - 340  # RUIBARBRE
   - 341  # SULLA O ENCLOVA
   - 343  # VEÇA I RAIGRÀS
-
-exclude:
-  - 1  # AGROSTIS
+  # Permanent and tree crops
   - 2  # ALBERCOQUER
   - 7  # ALTRES FRUITERS
   - 8  # ALVOCAT
   - 9  # AMETLLER
   - 14  # AVELLANER
-  - 22  # BOLETS
   - 30  # CAQUI
   - 36  # CASTANYER
   - 40  # CIRERER
   - 42  # CLEMENTINA
   - 43  # CODONY
   - 54  # CONREU DE FRUITS DEL BOSC
-  - 58  # DÀCTIL (DACTYLIS)
   - 63  # ESBARZER
   - 71  # EUCALIPTUS ROT. CURTA
-  - 79  # FESTUCA
   - 80  # FIGUERA
-  - 81  # FLOR TALLADA
-  - 83  # GARLANDA
   - 85  # GARROFER
   - 86  # GERD
   - 88  # GROSELLER
-  - 89  # GUARET / SUP. LLIURE SEMBRA
-  - 90  # GUARET BIODIVERSITAT
   - 95  # KIWI
   - 99  # LLIMONER
   - 105  # MAGRANER
@@ -202,20 +194,15 @@ exclude:
   - 121  # NESPRER
   - 122  # NOGUERA
   - 123  # OLIVERA
-  - 127  # PASTURES DE MENYS DE 5 ANYS
   - 129  # PAULÒNIA ROT. CURTA
   - 131  # PERERA
   - 135  # PISTATXER O FESTUC
-  - 136  # PLANTA ORNAMENTAL
-  - 137  # POA
   - 138  # POLLANCRE ROT. CURTA
   - 139  # POMELO O ARANJA
   - 140  # POMERA
   - 142  # PRÉSSEC PLA
   - 143  # PRESSEGUER
   - 145  # PRUNERA
-  - 147  # RAIGRÀS MULTIFLORUM
-  - 148  # RAIGRÀS PERENNE
   - 156  # SALZE ROT. CURTA
   - 157  # SATSUMA
   - 163  # TARONGER
@@ -229,3 +216,18 @@ exclude:
   - 344  # VIMETERA
   - 345  # VIVER - PRODUCTOR MVR
   - 346  # XIRIMOIER
+
+exclude:
+  - 1  # AGROSTIS
+  - 22  # BOLETS
+  - 58  # DÀCTIL (DACTYLIS)
+  - 79  # FESTUCA
+  - 81  # FLOR TALLADA
+  - 83  # GARLANDA
+  - 89  # GUARET / SUP. LLIURE SEMBRA
+  - 90  # GUARET BIODIVERSITAT
+  - 127  # PASTURES DE MENYS DE 5 ANYS
+  - 136  # PLANTA ORNAMENTAL
+  - 137  # POA
+  - 147  # RAIGRÀS MULTIFLORUM
+  - 148  # RAIGRÀS PERENNE

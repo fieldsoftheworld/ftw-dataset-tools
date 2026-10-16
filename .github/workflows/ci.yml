@@ -32,6 +32,9 @@ jobs:
       - name: Run ruff format check
         run: uv run ruff format --check .
 
+      - name: Run xenon complexity check
+        run: uv run xenon --max-absolute=D --max-modules=C --max-average=B src/ftw_dataset_tools/
+
   test:
     runs-on: ubuntu-latest
     strategy:

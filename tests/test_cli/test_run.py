@@ -102,6 +102,28 @@ class TestRunCommand:
         assert "Traceback" not in result.output
         assert result.exception is None or isinstance(result.exception, SystemExit)
 
+    def test_imagery_from_another_run_is_a_plain_error(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A selection conflict names the fix instead of raising a traceback."""
+        from ftw_dataset_tools.api import pipeline
+        from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise SelectionConflictError("2 chip(s) already hold imagery from a different run.")
+
+        monkeypatch.setattr(pipeline, "run_pipeline", _boom)
+        config_path = _write_config(
+            tmp_path / "c.yaml", sample_geoparquet_4326, output_dir=str(tmp_path / "out")
+        )
+
+        result = CliRunner().invoke(run, [str(config_path)])
+
+        assert result.exit_code == 1
+        assert "different run" in result.output
+        assert "new output_dir" in result.output
+        assert "select-images --force" in result.output
+
     def test_run_through_reproject_writes_provenance(
         self, sample_geoparquet_4326: Path, tmp_path: Path
     ) -> None:

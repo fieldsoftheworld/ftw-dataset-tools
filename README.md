@@ -168,7 +168,8 @@ rasterised as background. Label collections are often sampled as separate blocks
 is applied per cluster rather than once over the whole dataset. `border_gap_chips`
 (default 2) sets how wide an unlabelled gap must be, in chips, before it counts as a
 cluster edge; gaps narrower than that, and holes fully enclosed by labelled chips such as
-lakes or towns, are treated as interior.
+lakes or towns, are treated as interior. Keep it at 2 or more when `min_chip_area` is on:
+the chips it drops along a UTM zone seam leave a gap of up to two chips.
 
 #### Class filter (optional)
 
@@ -282,11 +283,11 @@ ftwd create-dataset fields.parquet --split-type block3x3 --min-coverage 1.0 --re
 - `--split-type` - **Required.** Split strategy: `random-uniform` (random assignment of chips) or `block3x3` (3x3 blocks of chips assigned together for spatial coherence)
 - `--split-percents` - Train/val/test split percentages as three integers that sum to 100 (default: 80 10 10)
 - `--mask-types` - Comma-separated list of mask types to generate: `instance`, `semantic_2_class`, `semantic_3_class` (default: all three)
-- `--presence-only` - Flag indicating labels are presence-only; background class value will be 3 instead of 0
+- `--presence-only` - Flag indicating labels are presence-only; semantic mask background will be 3 instead of 0 (instance masks keep 0)
 - `-o, --output-dir` - Output directory (defaults to `{input_stem}-dataset/`)
 - `--field-dataset` - Dataset name for output filenames (defaults to input filename stem)
 - `--year` - Year for temporal extent (only required if fields lack `determination_datetime` column)
-- `--min-coverage` - Minimum coverage percentage to include grids (default: 0.01)
+- `--min-coverage` - Minimum coverage percentage (0-100) to include grids (default: 1.0)
 - `--resolution` - Pixel resolution in meters for masks (default: 10.0)
 - `--workers` - Number of parallel workers (default: half of CPUs)
 - `--skip-reproject` - Fail if input is not EPSG:4326 instead of auto-reprojecting
@@ -391,7 +392,7 @@ ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spa
 - `--mask-type` - Type of mask: `instance`, `semantic_2_class`, `semantic_3_class`, `decode_boundary`, or `decode_distance` (default: `semantic_3_class`)
 - `--grid-id-col` - Column name for grid cell ID (default: `id`)
 - `--coverage-col` - Column name for coverage percentage (default: `field_coverage_pct`)
-- `--min-coverage` - Minimum coverage to process (default: 0.01)
+- `--min-coverage` - Minimum coverage percentage (0-100) to process (default: 1.0)
 - `--resolution` - Pixel resolution in CRS units (default: 10.0)
 - `--workers` - Number of parallel workers (default: CPU count, capped at 8)
 - `--skip-existing` - Reuse masks already on disk instead of recreating them
@@ -475,6 +476,14 @@ ftwd get-grid fields.parquet -o custom_grid.parquet
 - `-o, --output` - Output file path (defaults to `<input>_grid.parquet`)
 - `--precise` - Use geometry union for precise matching (excludes grids in bbox gaps)
 - `--grid-source` - URL/path to the grid source
+
+### export-coco
+
+Write a dataset's instance masks as COCO instance segmentation JSON (`instances_<split>.json`, RLE masks, one `field` category).
+
+```bash
+ftwd export-coco ./austria-dataset -o ./coco --min-area 10
+```
 
 ### Reprojection
 
