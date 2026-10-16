@@ -33,9 +33,11 @@ from ftw_dataset_tools.api.imagery.parallel import (
     ParallelOutcome,
     run_in_parallel,
 )
+from ftw_dataset_tools.api.imagery.planet_items import PLANET_SOURCE, create_planet_child_items
+from ftw_dataset_tools.api.imagery.planet_scenes import PlanetChip, select_planet_scenes
 from ftw_dataset_tools.api.imagery.progress import ImageryProgressBar
 from ftw_dataset_tools.api.imagery.scene_selection import select_scenes_for_chip
-from ftw_dataset_tools.api.imagery.slots import DEFAULT_IMAGERY_MODE, parse_child_id
+from ftw_dataset_tools.api.imagery.slots import DEFAULT_IMAGERY_MODE, DEFAULT_SOURCE, parse_child_id
 from ftw_dataset_tools.api.imagery.stac_child_items import (
     create_child_items_from_selection,
     create_mosaic_child_items,
@@ -50,6 +52,9 @@ if TYPE_CHECKING:
     from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
 
 logger = get_logger(__name__)
+
+#: Where PlanetScope orders are delivered, relative to the collection directory.
+PLANET_CACHE_DIR = ".planet"
 
 __all__ = [
     "ChipSelectionJob",
@@ -252,6 +257,9 @@ def select_imagery_for_catalog(
     search_backend: str = "parquet",
     imagery_mode: str = DEFAULT_IMAGERY_MODE,
     chip_items: list[tuple[pystac.Item, Path]] | None = None,
+    source: str = DEFAULT_SOURCE,
+    planet_wait: bool = True,
+    planet_timeout_minutes: float = 120.0,
 ) -> SelectionWorkflowResult:
     """Select imagery for all chips in a catalog.
 
@@ -277,6 +285,11 @@ def select_imagery_for_catalog(
         imagery_mode: "scenes" (planting/harvest) or "mosaics" (Q1-Q4)
         chip_items: (item, item_path) pairs to select for instead of every chip
                     found under `catalog_dir`
+        source: "sentinel-2" (default) or "planetscope" (scenes mode only). Planet
+                scenes are ordered and cached under ``catalog_dir/.planet``.
+        planet_wait: Wait for Planet orders to finish; otherwise chips whose orders
+                     are still processing are skipped until a rerun
+        planet_timeout_minutes: Longest wait for Planet orders
 
     Returns:
         SelectionWorkflowResult with success/skipped/failed counts and details
@@ -287,6 +300,8 @@ def select_imagery_for_catalog(
         SelectionConflictError: If chips hold another mode's or year's imagery
             and ``force`` is False
     """
+    if source == PLANET_SOURCE and imagery_mode == "mosaics":
+        raise ValueError("PlanetScope selection supports scenes mode only for now.")
     result = SelectionWorkflowResult()
 
     if chip_items is None:
@@ -300,16 +315,17 @@ def select_imagery_for_catalog(
     if not chip_items:
         return result
 
-    cleared = resolve_selection_conflicts(
-        [item for item, _path in chip_items], imagery_mode=imagery_mode, year=year, force=force
-    )
-    if cleared:
-        logger.info(f"Cleared imagery from a different run: {cleared}")
+    if source == DEFAULT_SOURCE:
+        cleared = resolve_selection_conflicts(
+            [item for item, _path in chip_items], imagery_mode=imagery_mode, year=year, force=force
+        )
+        if cleared:
+            logger.info(f"Cleared imagery from a different run: {cleared}")
 
     jobs: list[ChipSelectionJob] = []
     for item, item_path in chip_items:
         job_year = year if year is not None else chip_year(item)
-        reason = _skip_reason(item, force=force, year=job_year)
+        reason = _skip_reason(item, force=force, year=job_year, source=source)
         if reason is not None:
             result.skipped += 1
             result.skipped_details.append({"chip": item.id, "reason": reason})
@@ -317,6 +333,23 @@ def select_imagery_for_catalog(
         jobs.append(ChipSelectionJob(item=item, item_path=item_path, year=job_year))
 
     if not jobs:
+        return result
+
+    if source == PLANET_SOURCE:
+        _select_planet(
+            jobs,
+            catalog_dir / PLANET_CACHE_DIR,
+            result=result,
+            cloud_cover_chip=cloud_cover_chip,
+            nodata_max=nodata_max,
+            buffer_days=buffer_days,
+            num_buffer_expansions=num_buffer_expansions,
+            buffer_expansion_size=buffer_expansion_size,
+            on_missing=on_missing,
+            workers=workers,
+            wait=planet_wait,
+            timeout_minutes=planet_timeout_minutes,
+        )
         return result
 
     # Warm the crop calendar before fanning out. Every chip needs it, and the
@@ -345,15 +378,67 @@ def select_imagery_for_catalog(
     return result
 
 
-def _skip_reason(item: pystac.Item, *, force: bool, year: int | None) -> str | None:
+def _skip_reason(
+    item: pystac.Item, *, force: bool, year: int | None, source: str = DEFAULT_SOURCE
+) -> str | None:
     """Return why this chip needs no selection, or None if it does."""
     if not item.bbox:
         return "No bbox in item"
-    if not force and has_existing_scenes(item):
+    if not force and has_existing_scenes(item, source):
         return "Already has imagery selections"
     if year is None:
         return NO_YEAR_REASON
     return None
+
+
+def _select_planet(
+    jobs: list[ChipSelectionJob],
+    cache_root: Path,
+    *,
+    result: SelectionWorkflowResult,
+    cloud_cover_chip: float,
+    nodata_max: float,
+    buffer_days: int,
+    num_buffer_expansions: int,
+    buffer_expansion_size: int,
+    on_missing: Literal["skip", "fail"],
+    workers: int,
+    wait: bool,
+    timeout_minutes: float,
+) -> None:
+    """Select PlanetScope scenes for every chip at once, then write each chip's items.
+
+    Selection runs per area (see ``planet_scenes``); only writing the STAC items is
+    per chip, on the same pool and progress display as Sentinel-2.
+    """
+    ensure_crop_calendar_exists()
+    selections = select_planet_scenes(
+        [PlanetChip(job.item.id, tuple(job.item.bbox), job.year) for job in jobs],
+        cache_root,
+        cloud_cover_chip=cloud_cover_chip,
+        nodata_max=nodata_max,
+        buffer_days=buffer_days,
+        num_buffer_expansions=num_buffer_expansions,
+        buffer_expansion_size=buffer_expansion_size,
+        workers=workers,
+        wait=wait,
+        timeout_minutes=timeout_minutes,
+    )
+
+    def work(job: ChipSelectionJob) -> SceneSelectionResult:
+        selection = selections[job.item.id]
+        with capture_logs(job.logs):
+            if selection.success:
+                create_planet_child_items(job.item_path.parent, job.item, selection, job.year)
+        return selection
+
+    with ImageryProgressBar(total=len(jobs), leave=False) as progress:
+
+        def apply(outcome: ParallelOutcome[ChipSelectionJob, SceneSelectionResult]) -> None:
+            _record_chip(outcome, result=result, progress=progress, on_missing=on_missing)
+
+        run_in_parallel(jobs, work=work, apply=apply, workers=workers)
+        progress.report_failures(result.failed_details)
 
 
 def _build_scene_index(

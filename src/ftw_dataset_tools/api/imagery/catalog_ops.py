@@ -14,17 +14,22 @@ import pystac
 
 from ftw_dataset_tools.api.imagery.slots import (
     DEFAULT_IMAGERY_MODE,
+    DEFAULT_SOURCE,
     IMAGERY_SLOTS,
+    IMAGERY_SOURCES,
     SLOTS_BY_MODE,
+    SOURCE_SUFFIXES,
 )
 from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_EXTENSIONS
 from ftw_dataset_tools.api.stac_items import write_item
 
 __all__ = [
+    "ALL_IMAGERY_LINK_RELS",
     "IMAGERY_ASSET_KEYS",
     "IMAGERY_LINK_RELS",
     "IMAGERY_PROPERTIES",
     "IMAGERY_TEMPORAL_PROPERTIES",
+    "PLANET_PROPERTY_PREFIX",
     "ClearResult",
     "ImageryStats",
     "SelectionConflictError",
@@ -33,7 +38,9 @@ __all__ = [
     "find_collection_dir",
     "get_imagery_stats",
     "has_existing_scenes",
+    "image_asset_key",
     "iter_chip_dirs",
+    "link_rel",
     "preserve_imagery_selection",
     "selection_conflict",
 ]
@@ -48,6 +55,31 @@ class SelectionConflictError(Exception):
 # that clearing a selection and preserving one across catalog regeneration stay
 # in sync: a key missing from these lists is silently dropped on a re-run.
 IMAGERY_LINK_RELS = tuple(f"ftw:{slot}" for slot in IMAGERY_SLOTS)
+
+#: Suffix of a source's parent links and image assets. Sentinel-2's are unsuffixed:
+#: they predate the other sources, and published catalogs already use them.
+_PARENT_SUFFIX = {"sentinel-2": "", "planetscope": "_planet"}
+#: Planet's parent bookkeeping is namespaced, so it never collides with Sentinel-2's.
+PLANET_PROPERTY_PREFIX = "ftw:planet:"
+
+
+def link_rel(slot: str, source: str = DEFAULT_SOURCE) -> str:
+    """The parent link to a slot's child item: ``ftw:planting``, ``ftw:planting_planet``."""
+    return f"ftw:{slot}{_PARENT_SUFFIX[source]}"
+
+
+def image_asset_key(slot: str, source: str = DEFAULT_SOURCE) -> str:
+    """The parent asset of a slot's downloaded image: ``planting_image``, ``..._planet``."""
+    return f"{slot}_image{_PARENT_SUFFIX[source]}"
+
+
+#: Every source's slot links, which a catalog rebuild must carry over.
+ALL_IMAGERY_LINK_RELS = tuple(
+    link_rel(slot, source) for source in IMAGERY_SOURCES for slot in IMAGERY_SLOTS
+)
+_ALL_IMAGE_ASSET_KEYS = tuple(
+    image_asset_key(slot, source) for source in IMAGERY_SOURCES for slot in IMAGERY_SLOTS
+)
 
 IMAGERY_PROPERTIES = (
     "ftw:imagery_mode",
@@ -105,10 +137,13 @@ def find_collection_dir(path: Path) -> Path:
     raise FileNotFoundError(f"No collection.json in {path}; pass the dataset output directory")
 
 
-def has_existing_scenes(item: pystac.Item) -> bool:
-    """Whether the item links a complete selection: both seasons, or all four quarters."""
+def has_existing_scenes(item: pystac.Item, source: str = DEFAULT_SOURCE) -> bool:
+    """Whether the item links a complete selection from ``source``: both seasons, or all
+    four quarters."""
     rels = {link.rel for link in item.links}
-    return any(all(f"ftw:{slot}" in rels for slot in slots) for slots in SLOTS_BY_MODE.values())
+    return any(
+        all(link_rel(slot, source) in rels for slot in slots) for slots in SLOTS_BY_MODE.values()
+    )
 
 
 def selection_conflict(item: pystac.Item, imagery_mode: str, year: int | None) -> str | None:
@@ -165,7 +200,7 @@ def preserve_imagery_selection(item: pystac.Item, existing_item_path: Path) -> b
         # catalog generation over.
         return False
 
-    if not has_existing_scenes(existing):
+    if not any(has_existing_scenes(existing, source) for source in IMAGERY_SOURCES):
         return False
 
     # The child season items are not regenerated, so a link is only worth
@@ -175,18 +210,20 @@ def preserve_imagery_selection(item: pystac.Item, existing_item_path: Path) -> b
     chip_dir = existing_item_path.parent
     rebuilt_rels = {link.rel for link in item.links}
     for link in existing.links:
-        if link.rel not in IMAGERY_LINK_RELS or link.rel in rebuilt_rels:
+        if link.rel not in ALL_IMAGERY_LINK_RELS or link.rel in rebuilt_rels:
             continue
         if (chip_dir / Path(link.href).name).exists():
             item.add_link(link.clone())
 
-    for key in (*IMAGERY_PROPERTIES, *IMAGERY_TEMPORAL_PROPERTIES):
-        if key in existing.properties:
-            item.properties[key] = existing.properties[key]
+    for key, value in existing.properties.items():
+        if key in (*IMAGERY_PROPERTIES, *IMAGERY_TEMPORAL_PROPERTIES) or key.startswith(
+            PLANET_PROPERTY_PREFIX
+        ):
+            item.properties[key] = value
 
     # Downloaded imagery outlives the catalog, but only advertise assets whose
     # files are still on disk.
-    for key in IMAGERY_ASSET_KEYS:
+    for key in (*IMAGERY_ASSET_KEYS, *_ALL_IMAGE_ASSET_KEYS):
         if key in item.assets:
             continue
         asset = existing.assets.get(key)
@@ -313,8 +350,10 @@ def clear_chip_selections(item: pystac.Item) -> ClearResult:
             child_json.unlink()
             result.stac_items_deleted += 1
 
-        # Delete associated GeoTIFFs (e.g., ftw-xxx_planting_image_s2.tif)
-        for tif in chip_dir.glob(f"{item.id}_{season}_*.tif"):
+        # Delete associated GeoTIFFs (e.g., ftw-xxx_planting_image_s2.tif). Only
+        # Sentinel-2's: another source's imagery on the same chip stays.
+        s2 = SOURCE_SUFFIXES["sentinel-2"]
+        for tif in chip_dir.glob(f"{item.id}_{season}_*{s2}.tif"):
             tif.unlink()
             result.geotiffs_deleted += 1
 
@@ -322,7 +361,7 @@ def clear_chip_selections(item: pystac.Item) -> ClearResult:
         # catalog built before that switch still has .jpg here, and leaving either
         # behind strands a preview for imagery that no longer exists.
         for ext in PREVIEW_EXTENSIONS:
-            for thumb in chip_dir.glob(f"{item.id}_{season}_*{ext}"):
+            for thumb in chip_dir.glob(f"{item.id}_{season}_*{s2}{ext}"):
                 thumb.unlink()
 
     # Delete overlay thumbnail if it exists
