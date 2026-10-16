@@ -8,6 +8,7 @@ axis for whole km (``ftw-36NXF6658``), up to 5 for any whole metre.
 from __future__ import annotations
 
 import math
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -23,6 +24,7 @@ __all__ = [
     "expand_bounds",
     "id_digits",
     "parse_chip_ids",
+    "utm_crs_for_cell",
 ]
 
 SQUARE_M = 100_000
@@ -299,3 +301,25 @@ FROM projected
 {keep}
 ORDER BY id
 """
+
+
+_FTW_ZONE = re.compile(r"^ftw-(?P<zone>\d{1,2})(?P<band>[C-HJ-NP-X])[A-HJ-NP-Z]{2}\d")
+
+
+def utm_crs_for_cell(grid_id: str, bounds: tuple[float, float, float, float]) -> str:
+    """The UTM CRS (``EPSG:326NN`` / ``EPSG:327NN``) a grid cell's native grid uses.
+
+    FTW chips take the zone from their own MGRS square, so the grid always agrees
+    with the chip id, also at zone seams and in the Norway/Svalbard exceptions.
+    Other ids fall back to the zone of the cell's centre, given in lon/lat ``bounds``.
+    """
+    match = _FTW_ZONE.match(grid_id)
+    if match:
+        zone = int(match.group("zone"))
+        north = match.group("band") >= "N"
+    else:
+        lon = (bounds[0] + bounds[2]) / 2
+        lat = (bounds[1] + bounds[3]) / 2
+        zone = min(int((lon + 180) // 6) + 1, 60)
+        north = lat >= 0
+    return f"EPSG:{32600 + zone if north else 32700 + zone}"
