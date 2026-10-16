@@ -841,6 +841,152 @@ def _write_items_parquet(
     asyncio.run(_write_items_parquet_async(items, output_path))
 
 
+def _resolve_temporal_extent(
+    fields_file: Path, year: int | None, log: Callable[[str], None]
+) -> tuple[datetime, datetime]:
+    """Dataset temporal extent from the fields' datetime column, else from ``year``."""
+    log("Determining temporal extent...")
+    datetime_col = detect_datetime_column(fields_file)
+    # An all-NULL column has no extent to read, so an explicit year takes over.
+    if (
+        datetime_col
+        and year is not None
+        and get_year_from_datetime_column(fields_file, datetime_col) is None
+    ):
+        datetime_col = None
+
+    if datetime_col:
+        log(f"Using '{datetime_col}' column for temporal extent")
+        return get_temporal_extent_from_data(fields_file, datetime_col)
+    if year is not None:
+        log(f"Using year {year} for temporal extent")
+        return get_temporal_extent_from_year(year)
+    raise ValueError(
+        "Cannot determine temporal extent. Either provide --year parameter "
+        "or ensure fields file has 'determination_datetime' column."
+    )
+
+
+def _build_chip_items(
+    chip_infos: list[ChipInfo],
+    chips_base_dir: Path,
+    temporal_extent: tuple[datetime, datetime],
+    *,
+    crop_calendar: bool,
+    checksums: bool,
+    background_class_value: int,
+    log: Callable[[str], None],
+) -> tuple[list[pystac.Item], dict[str, str]]:
+    """One item per chip that has a mask directory, and the MGRS square of each item."""
+    log("Creating STAC items...")
+    # Imported here to avoid a circular import: api.imagery imports back into
+    # this module.
+    from ftw_dataset_tools.api.imagery.catalog_ops import preserve_imagery_selection
+
+    items = []
+    resumed = 0
+    outside_calendar = 0
+    item_squares: dict[str, str] = {}
+    for chip_info in chip_infos:
+        square = get_mgrs_square(chip_info.grid_id)
+        chip_dir = chips_base_dir / square / chip_info.dir_name
+        if not chip_dir.exists():
+            # Skip chips without directories (no masks generated)
+            continue
+
+        chip_extent = temporal_extent
+        if crop_calendar and chip_info.year is not None:
+            season = _crop_season_extent(chip_info.bbox, chip_info.year, on_progress=log)
+            if season is None:
+                outside_calendar += 1
+            else:
+                chip_extent = season
+
+        item = _create_chip_item(
+            chip_info=chip_info,
+            temporal_extent=chip_extent,
+            chip_dir=chip_dir,
+            checksums=checksums,
+            background_class_value=background_class_value,
+        )
+        if item:
+            # Items are rebuilt from scratch, so carry over any imagery
+            # selection the previous run recorded; otherwise saving the catalog
+            # would wipe it and every chip would re-select.
+            # Read the previous run's item from the chip directory actually in
+            # use: CHIP_LAYOUT writes each item next to its masks, nested under
+            # its MGRS square, so that is where the last run's JSON is.
+            if preserve_imagery_selection(item, chip_dir / f"{item.id}.json"):
+                resumed += 1
+            items.append(item)
+            item_squares[item.id] = square
+
+    log(f"Created {len(items)} items with mask assets")
+    if resumed:
+        log(f"Preserved existing imagery selections for {resumed} items")
+    if outside_calendar:
+        log(f"{outside_calendar} chip(s) outside the crop calendar keep the dataset extent")
+    return items, item_squares
+
+
+def _apply_collection_context(
+    collection: pystac.Collection,
+    config: DatasetConfig | None,
+    metadata: MetadataConfig | None,
+    previous: dict | None,
+    provenance: dict | None,
+) -> None:
+    """Configured metadata, source link, ftw: properties and provenance on the collection."""
+    updated = _updated_stamp(provenance)
+    # No configured title means the title the collection constructor gave it stands;
+    # passing an absent title through would leave the collection untitled.
+    base_title = metadata.title if metadata and metadata.title else None
+    _apply_collection_metadata(
+        collection,
+        metadata,
+        updated=updated,
+        title=base_title,
+        description=metadata.description if metadata else None,
+    )
+    if config is not None and config.source_via:
+        collection.add_link(
+            Link(
+                rel="via",
+                target=config.source_via,
+                media_type="application/json",
+                title="Source field boundary collection",
+            )
+        )
+    if config is not None:
+        collection.extra_fields.update(_collection_ftw_properties(config))
+    if previous is not None:
+        _restore_collection_metadata(collection, previous)
+    if provenance is not None:
+        collection.extra_fields["ftw:config"] = provenance
+
+
+def _add_square_subcatalogs(
+    collection: pystac.Collection,
+    items: list[pystac.Item],
+    item_squares: dict[str, str],
+) -> dict[str, list[pystac.Item]]:
+    """Group items by MGRS square under one sub-catalog per square."""
+    groups = _group_items_by_square(items, item_squares)
+    for square, square_items in groups.items():
+        sub = Catalog(
+            id=square,
+            description=f"Chips in MGRS 100 km square {square}",
+            title=square,
+        )
+        _add_portolan_schema(sub)
+        for item in square_items:
+            sub.add_item(item)
+            item.set_collection(collection)
+            _add_portolan_schema(item)
+        collection.add_child(sub)
+    return groups
+
+
 def generate_stac_catalog(
     output_dir: Path | str,
     field_dataset: str,
@@ -909,28 +1055,7 @@ def generate_stac_catalog(
         if on_progress:
             on_progress(msg)
 
-    # Determine temporal extent
-    log("Determining temporal extent...")
-    datetime_col = detect_datetime_column(fields_file)
-    # An all-NULL column has no extent to read, so an explicit year takes over.
-    if (
-        datetime_col
-        and year is not None
-        and get_year_from_datetime_column(fields_file, datetime_col) is None
-    ):
-        datetime_col = None
-
-    if datetime_col:
-        log(f"Using '{datetime_col}' column for temporal extent")
-        temporal_extent = get_temporal_extent_from_data(fields_file, datetime_col)
-    elif year is not None:
-        log(f"Using year {year} for temporal extent")
-        temporal_extent = get_temporal_extent_from_year(year)
-    else:
-        raise ValueError(
-            "Cannot determine temporal extent. Either provide --year parameter "
-            "or ensure fields file has 'determination_datetime' column."
-        )
+    temporal_extent = _resolve_temporal_extent(fields_file, year, log)
 
     # Get spatial extent from fields
     log("Calculating spatial extent...")
@@ -950,54 +1075,15 @@ def generate_stac_catalog(
     log(f"Found {len(chip_infos)} chips")
 
     # Create items for each chip, nested by MGRS square
-    log("Creating STAC items...")
-    # Imported here to avoid a circular import: api.imagery imports back into
-    # this module.
-    from ftw_dataset_tools.api.imagery.catalog_ops import preserve_imagery_selection
-
-    items = []
-    resumed = 0
-    outside_calendar = 0
-    item_squares: dict[str, str] = {}
-    for chip_info in chip_infos:
-        square = get_mgrs_square(chip_info.grid_id)
-        chip_dir = chips_base_dir / square / chip_info.dir_name
-        if not chip_dir.exists():
-            # Skip chips without directories (no masks generated)
-            continue
-
-        chip_extent = temporal_extent
-        if crop_calendar and chip_info.year is not None:
-            season = _crop_season_extent(chip_info.bbox, chip_info.year, on_progress=log)
-            if season is None:
-                outside_calendar += 1
-            else:
-                chip_extent = season
-
-        item = _create_chip_item(
-            chip_info=chip_info,
-            temporal_extent=chip_extent,
-            chip_dir=chip_dir,
-            checksums=checksums,
-            background_class_value=background_class_value,
-        )
-        if item:
-            # Items are rebuilt from scratch, so carry over any imagery
-            # selection the previous run recorded; otherwise saving the catalog
-            # would wipe it and every chip would re-select.
-            # Read the previous run's item from the chip directory actually in
-            # use: CHIP_LAYOUT writes each item next to its masks, nested under
-            # its MGRS square, so that is where the last run's JSON is.
-            if preserve_imagery_selection(item, chip_dir / f"{item.id}.json"):
-                resumed += 1
-            items.append(item)
-            item_squares[item.id] = square
-
-    log(f"Created {len(items)} items with mask assets")
-    if resumed:
-        log(f"Preserved existing imagery selections for {resumed} items")
-    if outside_calendar:
-        log(f"{outside_calendar} chip(s) outside the crop calendar keep the dataset extent")
+    items, item_squares = _build_chip_items(
+        chip_infos,
+        chips_base_dir,
+        temporal_extent,
+        crop_calendar=crop_calendar,
+        checksums=checksums,
+        background_class_value=background_class_value,
+        log=log,
+    )
 
     # A southern-hemisphere harvest falls in the following year.
     temporal_extent = _covering_extent(temporal_extent, items)
@@ -1026,47 +1112,9 @@ def generate_stac_catalog(
         background_class_value=background_class_value,
     )
 
-    updated = _updated_stamp(provenance)
-    # No configured title means the title the collection constructor gave it stands;
-    # passing an absent title through would leave the collection untitled.
-    base_title = metadata.title if metadata and metadata.title else None
-    _apply_collection_metadata(
-        collection,
-        metadata,
-        updated=updated,
-        title=base_title,
-        description=metadata.description if metadata else None,
-    )
-    if config is not None and config.source_via:
-        collection.add_link(
-            Link(
-                rel="via",
-                target=config.source_via,
-                media_type="application/json",
-                title="Source field boundary collection",
-            )
-        )
-    if config is not None:
-        collection.extra_fields.update(_collection_ftw_properties(config))
-    if previous is not None:
-        _restore_collection_metadata(collection, previous)
-    if provenance is not None:
-        collection.extra_fields["ftw:config"] = provenance
+    _apply_collection_context(collection, config, metadata, previous, provenance)
 
-    # Group items by MGRS square and add one sub-catalog per square
-    groups = _group_items_by_square(items, item_squares)
-    for square, square_items in groups.items():
-        sub = Catalog(
-            id=square,
-            description=f"Chips in MGRS 100 km square {square}",
-            title=square,
-        )
-        _add_portolan_schema(sub)
-        for item in square_items:
-            sub.add_item(item)
-            item.set_collection(collection)
-            _add_portolan_schema(item)
-        collection.add_child(sub)
+    groups = _add_square_subcatalogs(collection, items, item_squares)
 
     _add_portolan_schema(collection)
 
