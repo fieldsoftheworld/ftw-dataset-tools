@@ -78,9 +78,7 @@ class TestUtmMasks:
         with rasterio.open(path) as src:
             assert src.crs.to_string() == "EPSG:32632"
             assert src.res == (3.0, 3.0)
-            assert src.transform.c % 3 == 0
-            assert src.transform.f % 3 == 0
-            # ~716 m x ~1112 m of cell, snapped outward to whole pixels
+            # ~716 m x ~1112 m of cell, rounded up to whole pixels
             assert 238 <= src.width <= 245
             assert 370 <= src.height <= 376
 

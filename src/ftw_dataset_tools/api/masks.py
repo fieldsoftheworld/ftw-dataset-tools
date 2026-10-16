@@ -432,6 +432,9 @@ class _MaskTask:
     # Rasterize on a grid in the cell's UTM zone (see utm_crs_for_cell) instead of
     # the chips file's CRS: the native grid of PlanetScope imagery.
     utm: bool = False
+    # The cell polygon (UTM mode), so the grid covers the chip itself rather than
+    # its lon/lat bounding box.
+    cell_wkt: str | None = None
 
 
 def _grid_raster_geometry(
@@ -687,6 +690,7 @@ def _create_masks_for_cell(
     background_class_value: int = 0,
     crop_column: str | None = None,
     utm: bool = False,
+    cell_wkt: str | None = None,
 ) -> list[tuple[MaskType, MaskResult]]:
     """Rasterize ``source_type`` once for a grid cell and write every output from it.
 
@@ -699,7 +703,7 @@ def _create_masks_for_cell(
     raster_crs = crs
     if utm:
         raster_crs, transform, width, height = _utm_raster_geometry(
-            grid_id, bounds, crs, resolution
+            grid_id, bounds, crs, resolution, cell_wkt
         )
         to_raster_crs = Transformer.from_crs(crs, raster_crs, always_xy=True).transform
     else:
@@ -816,6 +820,7 @@ def _create_masks_with_retry(
                 background_class_value=task.background_class_value,
                 crop_column=task.crop_column,
                 utm=task.utm,
+                cell_wkt=task.cell_wkt,
             )
             return (results, None)
         except _PartialCellFailure as exc:
@@ -1031,8 +1036,11 @@ def _read_grid_cells(
     grid_geom_col: str,
     coverage_col: str,
     min_coverage: float,
+    with_geometry: bool = False,
 ) -> list[tuple]:
     """(grid_id, minx, miny, maxx, maxy) for each cell passing the coverage filter.
+
+    With ``with_geometry`` each row also carries the cell polygon as WKT.
 
     Raises:
         ValueError: If the grid id or coverage column is missing from the chips file.
@@ -1048,6 +1056,7 @@ def _read_grid_cells(
             ST_YMin("{grid_geom_col}") as miny,
             ST_XMax("{grid_geom_col}") as maxx,
             ST_YMax("{grid_geom_col}") as maxy
+            {f', ST_AsText("{grid_geom_col}") as wkt' if with_geometry else ""}
         FROM '{sql_path(chips_path)}'
         {coverage_filter}
     """
@@ -1067,21 +1076,26 @@ def _utm_raster_geometry(
     bounds: tuple[float, float, float, float],
     crs: CRS,
     resolution: float,
+    cell_wkt: str | None = None,
 ) -> tuple[CRS, Affine, int, int]:
-    """The cell's grid in its UTM zone: bounds snapped outward to whole pixels.
+    """The cell's grid in its UTM zone, starting at the cell's north-west corner.
 
-    Snapping to multiples of ``resolution`` puts every chip of a zone on one pixel
-    lattice, so neighbouring chips' pixels line up.
+    Built from the cell polygon when given: an FTW chip is a square in its own UTM
+    zone, so its polygon maps back to exactly that square, whereas its lon/lat
+    bounding box would add a margin of the neighbouring chips. The far edges round
+    up to whole pixels.
     """
     lonlat = bounds if crs.to_epsg() == 4326 else transform_bounds(crs, "EPSG:4326", *bounds)
     utm = CRS.from_user_input(utm_crs_for_cell(grid_id, lonlat))
-    minx, miny, maxx, maxy = transform_bounds(crs, utm, *bounds, densify_pts=21)
-    minx = math.floor(minx / resolution) * resolution
-    miny = math.floor(miny / resolution) * resolution
-    maxx = math.ceil(maxx / resolution) * resolution
-    maxy = math.ceil(maxy / resolution) * resolution
-    width = round((maxx - minx) / resolution)
-    height = round((maxy - miny) / resolution)
+    if cell_wkt is not None:
+        to_utm = Transformer.from_crs(crs, utm, always_xy=True).transform
+        minx, miny, maxx, maxy = shapely_transform(to_utm, _wkt_to_geometry(cell_wkt)).bounds
+    else:
+        minx, miny, maxx, maxy = transform_bounds(crs, utm, *bounds, densify_pts=21)
+    # Centimetres: a reprojected corner lands a hair off the chip's metre grid.
+    minx, maxy = round(minx, 2), round(maxy, 2)
+    width = math.ceil(round((maxx - minx) / resolution, 6))
+    height = math.ceil(round((maxy - miny) / resolution, 6))
     return utm, from_origin(minx, maxy, resolution, resolution), width, height
 
 
@@ -1176,7 +1190,7 @@ def _build_work_items(
 ) -> list[_MaskTask]:
     """One task per (grid cell, group) that still has an output to write."""
     work_items: list[_MaskTask] = []
-    for grid_id, minx, miny, maxx, maxy in grid_cells:
+    for grid_id, minx, miny, maxx, maxy, *geometry in grid_cells:
         grid_id_str = str(grid_id)
         for source_type, group in groups.items():
             outputs = _outputs_to_write(
@@ -1191,6 +1205,7 @@ def _build_work_items(
                     source_type=source_type,
                     outputs=tuple(outputs),
                     crop_column=crop_column if source_type == MaskType.INSTANCE else None,
+                    cell_wkt=geometry[0] if geometry else None,
                     **shared_task_fields,
                 )
             )
@@ -1305,7 +1320,7 @@ def create_masks(
     total_grids = total_count_result[0] if total_count_result else 0
 
     grid_cells = _read_grid_cells(
-        conn, chips_path, grid_id_col, grid_geom_col, coverage_col, min_coverage
+        conn, chips_path, grid_id_col, grid_geom_col, coverage_col, min_coverage, with_geometry=utm
     )
     total_cells = len(grid_cells)
 
