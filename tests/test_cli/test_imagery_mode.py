@@ -283,12 +283,13 @@ class TestImageryModeConfig:
 
 
 class TestPipelineMosaicYear:
-    def test_configured_year_is_used(self) -> None:
-        log = MagicMock()
-        assert pipeline.mosaic_year(2022, log) == 2022
-        log.assert_not_called()
+    def test_configured_year_is_used(self, caplog: pytest.LogCaptureFixture) -> None:
+        assert pipeline.mosaic_year(2022) == 2022
+        assert not caplog.records
 
-    def test_missing_year_warns_and_falls_back(self) -> None:
-        log = MagicMock()
-        assert pipeline.mosaic_year(None, log) == 2025
-        assert "Warning: no year given; using 2025" in log.call_args.args[0]
+    def test_missing_year_warns_and_falls_back(self, caplog: pytest.LogCaptureFixture) -> None:
+        assert pipeline.mosaic_year(None) == 2025
+        assert any(
+            r.levelname == "WARNING" and "no year given; using 2025" in r.message
+            for r in caplog.records
+        )

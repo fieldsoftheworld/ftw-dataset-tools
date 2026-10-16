@@ -98,7 +98,7 @@ class TestSearchBackendDispatch:
         monkeypatch.setattr(
             scene_selection,
             "get_crop_calendar_dates",
-            lambda _bbox, on_progress=None: CropCalendarDates(150, 270),  # noqa: ARG005
+            lambda _bbox: CropCalendarDates(150, 270),
         )
 
     def test_parquet_backend_queries_the_mirror(self, monkeypatch):

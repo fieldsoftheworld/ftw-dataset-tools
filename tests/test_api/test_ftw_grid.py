@@ -1,5 +1,6 @@
 """Tests for the ftw_grid API module."""
 
+import logging
 from pathlib import Path
 
 import duckdb
@@ -135,22 +136,36 @@ class TestCreateFTWGrid:
         if result.output_path.exists():
             result.output_path.unlink()
 
-    def test_create_ftw_grid_with_progress_callback(
-        self, sample_mgrs_1km_geoparquet: Path, tmp_path: Path
+    def test_create_ftw_grid_logs_progress(
+        self, sample_mgrs_1km_geoparquet: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Test progress callback is called."""
+        """Test progress is logged."""
         from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
 
-        progress_messages: list[str] = []
-
-        def on_progress(msg: str) -> None:
-            progress_messages.append(msg)
-
         output_file = tmp_path / "ftw_output.parquet"
-        create_ftw_grid(sample_mgrs_1km_geoparquet, output_file, km_size=2, on_progress=on_progress)
+        create_ftw_grid(sample_mgrs_1km_geoparquet, output_file, km_size=2)
 
-        assert len(progress_messages) > 0
-        assert any("32U" in msg for msg in progress_messages)
+        assert any("32U" in msg for msg in caplog.messages)
+        assert any("Aggregation complete" in msg for msg in caplog.messages)
+
+    def test_partitioned_per_file_progress_is_debug(
+        self, sample_mgrs_1km_geoparquet: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Per-file aggregation lines stay out of the default output for folder input."""
+        import shutil
+
+        from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
+
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        shutil.copy(sample_mgrs_1km_geoparquet, input_dir / "part.parquet")
+
+        caplog.set_level(logging.DEBUG, logger="ftw_dataset_tools")
+        create_ftw_grid(input_dir, tmp_path / "out", km_size=2)
+
+        aggregation = [r for r in caplog.records if "Aggregation complete" in r.message]
+        assert aggregation
+        assert all(r.levelname == "DEBUG" for r in aggregation)
 
     def test_create_ftw_grid_minimal_columns(
         self, sample_mgrs_1km_minimal_geoparquet: Path, tmp_path: Path

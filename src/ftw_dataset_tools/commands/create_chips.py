@@ -155,20 +155,6 @@ def create_chips_cmd(
     else:
         click.echo("Grid source: FTW grid on Source Coop (fetching by bounds)")
 
-    # Progress callback that prints messages
-    def on_progress(msg: str) -> None:
-        if msg.startswith("Warning:"):
-            click.echo(click.style(msg, fg="yellow"))
-        elif "CRS mismatch" in msg or "reprojecting" in msg.lower():
-            click.echo(click.style(msg, fg="cyan"))
-        elif "optimization" in msg.lower():
-            if "disabled" in msg.lower():
-                click.echo(click.style(msg, fg="yellow"))
-            else:
-                click.echo(click.style(msg, fg="green"))
-        else:
-            click.echo(msg)
-
     try:
         # Show progress bar during calculation
         with tqdm(total=100, desc="Processing", unit="%") as pbar:
@@ -190,7 +176,6 @@ def create_chips_cmd(
                 drop_border_chips=drop_border_chips,
                 border_gap_chips=border_gap_chips,
                 batch_size=batch_size,
-                on_progress=on_progress,
             )
 
             pbar.update(90)

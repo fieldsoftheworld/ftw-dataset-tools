@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import duckdb
 
@@ -27,9 +26,9 @@ from ftw_dataset_tools.api.geo import (
     ensure_spatial_loaded,
     sql_path,
 )
+from ftw_dataset_tools.api.logging_config import get_logger
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
+logger = get_logger(__name__)
 
 CODE_COLUMN = "hcat:code"
 NAME_COLUMNS = ("hcat:name_en", "hcat:name")
@@ -289,7 +288,6 @@ def add_crop_stats(
     chips_id_col: str = "id",
     top_n: int = 5,
     chip_batch_size: int = CHIP_BATCH_SIZE,
-    on_progress: Callable[[str], None] | None = None,
 ) -> CropStatsResult:
     """Append the crop composition columns to the chips GeoParquet, in place.
 
@@ -300,12 +298,8 @@ def add_crop_stats(
     chips_path = Path(chips_file).resolve()
     fields_path = Path(fields_file).resolve()
 
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
     def skip(chips_total: int, reason: str) -> CropStatsResult:
-        log(f"Note: {reason}; skipping crop composition")
+        logger.info(f"Note: {reason}; skipping crop composition")
         return CropStatsResult(chips_total, 0, 0, skipped=True, reason=reason)
 
     detected = detect_hcat_columns(fields_path)
@@ -339,7 +333,7 @@ def add_crop_stats(
     finally:
         con.close()
 
-    log(
+    logger.info(
         f"Crop composition: {with_crops:,} of {total:,} chips have HCAT crops "
         f"({distinct} HCAT codes)"
     )

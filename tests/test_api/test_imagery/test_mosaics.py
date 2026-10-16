@@ -549,8 +549,8 @@ class TestMosaicSelectionEdges:
     def test_fallback_stops_when_candidates_run_out(self) -> None:
         assert fallback_years(2024, lambda year: year == 2024) == [2024]
 
-    def test_progress_lines_are_reported(self) -> None:
-        logs: list[str] = []
+    def test_progress_lines_are_reported(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level("INFO")
         with (
             patch(f"{_SELECTION}.year_available", return_value=True),
             patch(
@@ -558,9 +558,9 @@ class TestMosaicSelectionEdges:
             ),
             patch(f"{_SELECTION}.calculate_nodata_percentage", return_value=0.0),
         ):
-            select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024, on_progress=logs.append)
-        assert logs[-1] == "Selected mosaics for 2024"
-        assert any("2024 Q3" in line for line in logs)
+            select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024)
+        assert caplog.messages[-1] == "Selected mosaics for 2024"
+        assert any("2024 Q3" in line for line in caplog.messages)
 
     def test_failed_selection_writes_no_children(self, tmp_path: Path) -> None:
         parent, path = _chip(tmp_path)

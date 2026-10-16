@@ -127,16 +127,14 @@ class TestCreateBoundaries:
         assert result.total_processed == 0
         assert result.total_skipped == 1
 
-    def test_progress_callback(self, tmp_path: Path) -> None:
-        """Test progress callback is invoked."""
+    def test_progress_is_logged(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """Test progress messages are logged."""
         from ftw_dataset_tools.api.boundaries import create_boundaries
 
         gdf = gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326")
         input_file = tmp_path / "polygons.parquet"
         gdf.to_parquet(input_file)
 
-        messages: list[str] = []
-        create_boundaries(input_file, on_progress=messages.append)
+        create_boundaries(input_file)
 
-        assert len(messages) > 0
-        assert any("Found" in msg for msg in messages)
+        assert any("Found" in msg for msg in caplog.messages)

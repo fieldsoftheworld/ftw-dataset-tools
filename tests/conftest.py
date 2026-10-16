@@ -1,5 +1,6 @@
 """Shared test fixtures for ftw-dataset-tools tests."""
 
+import logging
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
@@ -48,6 +49,18 @@ def repo_root_stays_clean() -> Iterator[None]:
         + ", ".join(created)
         + ". Pass an output path under tmp_path instead."
     )
+
+
+@pytest.fixture(autouse=True)
+def package_logs(caplog: pytest.LogCaptureFixture) -> Iterator[None]:
+    """Capture ftw_dataset_tools INFO+ records and drop any CLI handler a test installed."""
+    from ftw_dataset_tools.commands.cli_logging import PACKAGE_LOGGER, ClickHandler
+
+    caplog.set_level(logging.INFO, logger=PACKAGE_LOGGER)
+    yield
+    logger = logging.getLogger(PACKAGE_LOGGER)
+    for handler in [h for h in logger.handlers if isinstance(h, ClickHandler)]:
+        logger.removeHandler(handler)
 
 
 @pytest.fixture

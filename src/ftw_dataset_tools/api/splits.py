@@ -11,12 +11,15 @@ import numpy as np
 
 from ftw_dataset_tools.api.blocks import block_scores, chip_block_ids
 from ftw_dataset_tools.api.geo import sql_path, write_geoparquet
+from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Sequence
 
     import geopandas as gpd
     import pandas as pd
+
+logger = get_logger(__name__)
 
 
 SPLIT_TYPE_CHOICES: tuple[str, ...] = (
@@ -110,7 +113,6 @@ def assign_splits(
     split_percents: tuple[int, int, int] = (80, 10, 10),
     random_seed: int = 42,
     fields_file: str | Path | None = None,
-    on_progress: Callable[[str], None] | None = None,
     km_size: float | None = None,
 ) -> CreateSplitsResult:
     """
@@ -129,7 +131,6 @@ def assign_splits(
             Default: (80, 10, 10)
         random_seed: Random seed for reproducibility. Default: 42
         fields_file: Fields GeoParquet path (required for split_type='predefined').
-        on_progress: Optional callback for progress messages
         km_size: Grid cell size in km for block grouping; inferred from chip IDs if None.
 
     Returns:
@@ -151,11 +152,7 @@ def assign_splits(
     if not chips_path.exists():
         raise FileNotFoundError(f"Chips file not found: {chips_path}")
 
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
-    log(f"Assigning {split_type} splits to {chips_path.name}")
+    logger.info(f"Assigning {split_type} splits to {chips_path.name}")
 
     import geopandas as gpd
 
@@ -183,7 +180,7 @@ def assign_splits(
     elif split_type == "block3x3-hash":
         splits = _assign_block3x3_hash(gdf, split_percents, km_size)
     elif split_type == "predefined":
-        splits = _assign_predefined(gdf, fields_file, random_seed, log)
+        splits = _assign_predefined(gdf, fields_file, random_seed)
     else:
         raise ValueError(f"Unsupported split_type: {split_type}")
 
@@ -208,7 +205,7 @@ def assign_splits(
             100.0 * test_count / total,
         )
 
-    log(f"Assigned {train_count} train, {val_count} val, {test_count} test")
+    logger.info(f"Assigned {train_count} train, {val_count} val, {test_count} test")
 
     return CreateSplitsResult(
         chips_file=chips_path,
@@ -349,10 +346,7 @@ def _load_and_validate_fields(fields_path: Path) -> gpd.GeoDataFrame:
     return fields_gdf
 
 
-def _normalize_and_validate_splits(
-    fields_gdf: gpd.GeoDataFrame,
-    log: Callable[[str], None],
-) -> gpd.GeoDataFrame:
+def _normalize_and_validate_splits(fields_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     fields_gdf = fields_gdf.copy()
     fields_gdf["_split_norm"] = fields_gdf["split"].map(_normalize_predefined_split)
 
@@ -360,8 +354,8 @@ def _normalize_and_validate_splits(
     if null_mask.any():
         null_count = int(null_mask.sum())
         example_indices = fields_gdf.index[null_mask][:5].tolist()
-        log(
-            "Warning: Found null split values in fields file. "
+        logger.warning(
+            "Found null split values in fields file. "
             f"Count: {null_count}. Example row indices: {example_indices}"
         )
 
@@ -379,7 +373,6 @@ def _normalize_and_validate_splits(
 def _ensure_crs_alignment(
     gdf: gpd.GeoDataFrame,
     fields_gdf: gpd.GeoDataFrame,
-    log: Callable[[str], None],
 ) -> gpd.GeoDataFrame:
     if gdf.crs is None:
         raise ValueError("Chips file has no CRS information; cannot align with fields CRS.")
@@ -387,7 +380,7 @@ def _ensure_crs_alignment(
         raise ValueError("Fields file has no CRS information; cannot align with chips CRS.")
 
     if fields_gdf.crs != gdf.crs:
-        log("Reprojecting fields to match chips CRS for predefined splits...")
+        logger.info("Reprojecting fields to match chips CRS for predefined splits...")
         fields_gdf = fields_gdf.to_crs(gdf.crs)
 
     return fields_gdf
@@ -449,13 +442,12 @@ def _assign_predefined(
     gdf: gpd.GeoDataFrame,
     fields_file: str | Path | None,
     random_seed: int,
-    log: Callable[[str], None],
 ) -> np.ndarray:
     """Assign splits by majority vote using a predefined split column in fields."""
     fields_path = _validate_fields_file(fields_file)
     fields_gdf = _load_and_validate_fields(fields_path)
-    fields_gdf = _normalize_and_validate_splits(fields_gdf, log)
-    fields_gdf = _ensure_crs_alignment(gdf, fields_gdf, log)
+    fields_gdf = _normalize_and_validate_splits(fields_gdf)
+    fields_gdf = _ensure_crs_alignment(gdf, fields_gdf)
     splits, has_val_labels = _compute_chip_majority_splits(fields_gdf, gdf)
 
     if not has_val_labels:
@@ -468,13 +460,13 @@ def _assign_predefined(
             rng = np.random.default_rng(random_seed)
             val_indices = rng.choice(train_indices, size=n_val, replace=False)
             splits.loc[val_indices] = "val"
-            log(
-                "Warning: No validation labels found in fields split column. "
+            logger.warning(
+                "No validation labels found in fields split column. "
                 f"Promoted {n_val} of {train_count} training chips to validation (20% of train)."
             )
         else:
-            log(
-                "Warning: No validation labels found in fields split column, "
+            logger.warning(
+                "No validation labels found in fields split column, "
                 "and training set is too small to allocate 20% to validation."
             )
 

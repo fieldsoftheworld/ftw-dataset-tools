@@ -110,7 +110,7 @@ class TestConvertPreviewsDryRun:
         _chip(dataset_dir, "chip_c", sources=False)
 
         result = CliRunner().invoke(
-            cli, ["convert-previews", str(dataset_dir), "--dry-run", "--verbose"]
+            cli, ["--verbose", "convert-previews", str(dataset_dir), "--dry-run"]
         )
 
         assert result.exit_code == 0, result.output
@@ -164,7 +164,7 @@ class TestConvertPreviewsErrors:
         chip_dir.mkdir(parents=True)
         (chip_dir / "chip_broken.json").write_text("{ not json")
 
-        result = CliRunner().invoke(cli, ["convert-previews", str(dataset_dir), "--verbose"])
+        result = CliRunner().invoke(cli, ["--verbose", "convert-previews", str(dataset_dir)])
 
         assert result.exit_code == 1
         assert "failed chip_broken" in result.output

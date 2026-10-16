@@ -261,7 +261,7 @@ class TestMasksSkippedReporting:
     """Per-cell mask failures must be logged and accumulated on the context."""
 
     def test_skipped_masks_are_logged_and_accumulated(
-        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch, caplog
     ) -> None:
         from ftw_dataset_tools.api import masks
         from ftw_dataset_tools.api.config import DatasetConfig
@@ -284,7 +284,6 @@ class TestMasksSkippedReporting:
 
         monkeypatch.setattr(masks, "create_masks", fake_create_masks)
 
-        logs: list[str] = []
         config = DatasetConfig.from_dict(
             {
                 "fields_file": str(sample_geoparquet_4326),
@@ -294,7 +293,7 @@ class TestMasksSkippedReporting:
                 "stages": {"masks": {"mask_types": ["instance"]}},
             }
         )
-        ctx = pipeline.build_context(config, on_progress=logs.append)
+        ctx = pipeline.build_context(config)
         ctx.output_dir.mkdir()
 
         gpd.GeoDataFrame(
@@ -314,7 +313,9 @@ class TestMasksSkippedReporting:
             ("instance", "g4", "TimeoutError: boom"),
         ]
 
-        skip_logs = [msg for msg in logs if msg.startswith("Skipped")]
+        skip_logs = [r for r in caplog.records if r.message.startswith("Skipped")]
+        assert all(r.levelname == "WARNING" for r in skip_logs)
+        skip_logs = [r.message for r in skip_logs]
         # Two distinct reasons -> two log lines (well under the top-3 cap).
         assert len(skip_logs) == 2
         assert any(
@@ -325,7 +326,7 @@ class TestMasksSkippedReporting:
         )
 
     def test_no_skipped_log_when_nothing_was_skipped(
-        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch, caplog
     ) -> None:
         from ftw_dataset_tools.api import masks
         from ftw_dataset_tools.api.config import DatasetConfig
@@ -339,7 +340,6 @@ class TestMasksSkippedReporting:
 
         monkeypatch.setattr(masks, "create_masks", fake_create_masks)
 
-        logs: list[str] = []
         config = DatasetConfig.from_dict(
             {
                 "fields_file": str(sample_geoparquet_4326),
@@ -349,7 +349,7 @@ class TestMasksSkippedReporting:
                 "stages": {"masks": {"mask_types": ["instance"]}},
             }
         )
-        ctx = pipeline.build_context(config, on_progress=logs.append)
+        ctx = pipeline.build_context(config)
         ctx.output_dir.mkdir()
 
         gpd.GeoDataFrame(
@@ -363,10 +363,10 @@ class TestMasksSkippedReporting:
         pipeline.stage_masks(ctx)
 
         assert ctx.masks_skipped == []
-        assert not any(msg.startswith("Skipped") for msg in logs)
+        assert not any(msg.startswith("Skipped") for msg in caplog.messages)
 
     def test_pool_restarts_are_logged(
-        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch, caplog
     ) -> None:
         from ftw_dataset_tools.api import masks
         from ftw_dataset_tools.api.config import DatasetConfig
@@ -380,7 +380,6 @@ class TestMasksSkippedReporting:
 
         monkeypatch.setattr(masks, "create_masks", fake_create_masks)
 
-        logs: list[str] = []
         config = DatasetConfig.from_dict(
             {
                 "fields_file": str(sample_geoparquet_4326),
@@ -390,7 +389,7 @@ class TestMasksSkippedReporting:
                 "stages": {"masks": {"mask_types": ["instance"]}},
             }
         )
-        ctx = pipeline.build_context(config, on_progress=logs.append)
+        ctx = pipeline.build_context(config)
         ctx.output_dir.mkdir()
 
         gpd.GeoDataFrame(
@@ -405,11 +404,11 @@ class TestMasksSkippedReporting:
 
         assert any(
             "Worker pool restarted 2 time(s)" in msg and "stages.masks.workers" in msg
-            for msg in logs
+            for msg in caplog.messages
         )
 
     def test_no_restart_log_when_zero(
-        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch, caplog
     ) -> None:
         from ftw_dataset_tools.api import masks
         from ftw_dataset_tools.api.config import DatasetConfig
@@ -423,7 +422,6 @@ class TestMasksSkippedReporting:
 
         monkeypatch.setattr(masks, "create_masks", fake_create_masks)
 
-        logs: list[str] = []
         config = DatasetConfig.from_dict(
             {
                 "fields_file": str(sample_geoparquet_4326),
@@ -433,7 +431,7 @@ class TestMasksSkippedReporting:
                 "stages": {"masks": {"mask_types": ["instance"]}},
             }
         )
-        ctx = pipeline.build_context(config, on_progress=logs.append)
+        ctx = pipeline.build_context(config)
         ctx.output_dir.mkdir()
 
         gpd.GeoDataFrame(
@@ -446,7 +444,7 @@ class TestMasksSkippedReporting:
 
         pipeline.stage_masks(ctx)
 
-        assert not any("Worker pool restarted" in msg for msg in logs)
+        assert not any("Worker pool restarted" in msg for msg in caplog.messages)
 
 
 class TestReprojectStage:
@@ -1351,10 +1349,11 @@ class TestScaleStage:
         ).to_parquet(ctx.chips_path)
         return ctx
 
-    def test_stage_scale_subsets_chips(self, tmp_path: Path) -> None:
+    def test_stage_scale_subsets_chips(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         ctx = self._ctx(tmp_path)
-        logs: list[str] = []
-        ctx.on_progress = logs.append
+        caplog.set_level("INFO")
 
         pipeline.stage_scale(ctx)
 
@@ -1362,7 +1361,9 @@ class TestScaleStage:
         assert ctx.scale_result.total_chips == 324
         assert 0 < ctx.scale_result.kept_chips < 324
         assert len(gpd.read_parquet(ctx.chips_path)) == ctx.scale_result.kept_chips
-        assert logs == [f"Scale 50%: kept {ctx.scale_result.kept_chips:,} of 324 chips"]
+        assert [m for m in caplog.messages if m.startswith("Scale")] == [
+            f"Scale 50%: kept {ctx.scale_result.kept_chips:,} of 324 chips"
+        ]
 
     def test_stage_splits_passes_km_size(self, tmp_path: Path, monkeypatch) -> None:
         ctx = self._ctx(tmp_path)
@@ -1428,18 +1429,16 @@ class TestStacStageStaleCropStats:
         return ctx
 
     def test_disabled_drops_stale_columns_before_publishing(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch, caplog
     ) -> None:
-        messages: list[str] = []
         ctx = self._ctx(tmp_path, monkeypatch, crop_stats_on=False)
-        ctx.on_progress = messages.append
 
         pipeline.stage_stac(ctx)
 
         chips = gpd.read_parquet(ctx.chips_path)
         assert not [col for col in chips.columns if col.startswith("hcat_")]
         assert len(chips) == 1
-        assert any("stale crop composition" in m for m in messages)
+        assert any("stale crop composition" in m for m in caplog.messages)
 
     def test_enabled_leaves_the_columns_alone(self, tmp_path: Path, monkeypatch) -> None:
         ctx = self._ctx(tmp_path, monkeypatch, crop_stats_on=True)
@@ -1547,17 +1546,16 @@ class TestStacStageStaleLandCover:
         monkeypatch.setattr(stac, "generate_stac_catalog", fake_generate)
 
     def test_disabled_drops_columns_and_says_how_to_keep_them(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        messages: list[str] = []
+        caplog.set_level("INFO")
         ctx = _land_cover_ctx(tmp_path, monkeypatch, land_cover_on=False)
-        ctx.on_progress = messages.append
         self._stub_stac(tmp_path, monkeypatch, ctx)
 
         pipeline.stage_stac(ctx)
 
         assert "landcover_year" not in gpd.read_parquet(ctx.chips_path).columns
-        assert any("stages.chips.land_cover: true" in m for m in messages)
+        assert any("stages.chips.land_cover: true" in m for m in caplog.messages)
 
     def test_enabled_keeps_backfilled_columns(self, tmp_path: Path, monkeypatch) -> None:
         ctx = _land_cover_ctx(tmp_path, monkeypatch, land_cover_on=True)
@@ -1576,7 +1574,7 @@ class TestDocsStage:
         assert "docs" in pipeline.resolve_stages()
 
     def test_stage_docs_without_tippecanoe_writes_docs_and_warns(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch, caplog
     ) -> None:
         import json
 
@@ -1593,8 +1591,7 @@ class TestDocsStage:
                 "year": 2024,
             }
         )
-        messages: list[str] = []
-        ctx = pipeline.build_context(config, on_progress=messages.append)
+        ctx = pipeline.build_context(config)
         monkeypatch.setattr(tiles, "tippecanoe_available", lambda: False)
 
         pipeline.stage_docs(ctx)
@@ -1602,7 +1599,9 @@ class TestDocsStage:
         assert (tmp_path / "README.md").exists() and (tmp_path / "AGENTS.md").exists()
         assert not (tmp_path / "chips.pmtiles").exists()
         assert not (tmp_path / "styles").exists()
-        assert any("tippecanoe not found" in m for m in messages)
+        assert any(
+            r.levelname == "WARNING" and "tippecanoe not found" in r.message for r in caplog.records
+        )
         coll = json.loads(result.collection_path.read_text())
         rels = {link["rel"] for link in coll["links"]}
         assert {"describedby", "agents"} <= rels
@@ -1632,7 +1631,7 @@ class TestDocsStage:
             pipeline.stage_docs(ctx)
 
     def test_stage_docs_pmtiles_false_skips_tiles_and_styles_silently(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch, caplog
     ) -> None:
         import json
 
@@ -1649,13 +1648,12 @@ class TestDocsStage:
                 "stages": {"docs": {"pmtiles": False}},
             }
         )
-        messages: list[str] = []
-        ctx = pipeline.build_context(config, on_progress=messages.append)
+        ctx = pipeline.build_context(config)
         monkeypatch.setattr(tiles, "tippecanoe_available", lambda: False)
 
         pipeline.stage_docs(ctx)
 
-        assert not any("tippecanoe not found" in m for m in messages)
+        assert not any("tippecanoe not found" in m for m in caplog.messages)
         assert not (tmp_path / "styles").exists()
         assert ctx.docs_result is not None and ctx.docs_result.tippecanoe_used is False
         coll = json.loads(result.collection_path.read_text())

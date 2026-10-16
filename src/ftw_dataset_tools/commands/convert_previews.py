@@ -7,10 +7,12 @@ from pathlib import Path
 import click
 
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
+from ftw_dataset_tools.commands.cli_logging import is_verbose, verbose_alias_option
 
 
 @click.command("convert-previews")
 @click.argument("catalog_dir", type=click.Path(exists=True, file_okay=False))
+@verbose_alias_option
 @click.option(
     "--dry-run",
     is_flag=True,
@@ -23,13 +25,7 @@ from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
     show_default=True,
     help="Number of chips to render concurrently.",
 )
-@click.option(
-    "-v",
-    "--verbose",
-    is_flag=True,
-    help="List the chips that were skipped or failed.",
-)
-def convert_previews(catalog_dir: str, dry_run: bool, workers: int, verbose: bool) -> None:
+def convert_previews(catalog_dir: str, dry_run: bool, workers: int) -> None:
     """Convert a catalog's JPEG chip previews to WebP.
 
     Chip previews are written as WebP, which is 25-35% smaller than JPEG at
@@ -51,6 +47,7 @@ def convert_previews(catalog_dir: str, dry_run: bool, workers: int, verbose: boo
     Examples:
         ftwd convert-previews dataset/
         ftwd convert-previews dataset/ --dry-run
+        ftwd -v convert-previews dataset/   # also list skipped and failed chips
     """
     from ftw_dataset_tools.api.imagery.preview_conversion import (
         conversion_summary_line,
@@ -72,7 +69,7 @@ def convert_previews(catalog_dir: str, dry_run: bool, workers: int, verbose: boo
     else:
         click.echo(conversion_summary_line(result))
 
-    if verbose:
+    if is_verbose():
         for entry in result.skipped_details:
             click.echo(f"  skipped {entry['chip']}: {entry['reason']}")
         for entry in result.failed_details:

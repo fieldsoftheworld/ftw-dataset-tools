@@ -153,8 +153,11 @@ class TestReproject:
         assert result.output_path == expected_output
 
     @patch("geoparquet_io.read")
-    def test_reproject_progress_callback(self, mock_read: MagicMock, tmp_path: Path) -> None:
-        """Test that progress callback is invoked."""
+    def test_reproject_logs_progress(
+        self, mock_read: MagicMock, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test that reproject logs its progress."""
+        caplog.set_level("INFO")
         input_file = tmp_path / "input.parquet"
         input_file.touch()
 
@@ -166,18 +169,13 @@ class TestReproject:
         mock_read.return_value = mock_table
 
         output_file = tmp_path / "output.parquet"
-        progress_messages = []
 
-        def on_progress(msg: str) -> None:
-            progress_messages.append(msg)
+        reproject(str(input_file), str(output_file), "EPSG:4326")
 
-        reproject(str(input_file), str(output_file), "EPSG:4326", on_progress)
-
-        assert len(progress_messages) > 0
-        assert any("Loading" in msg for msg in progress_messages)
-        assert any("Source CRS" in msg for msg in progress_messages)
-        assert any("Target CRS" in msg for msg in progress_messages)
-        assert any("Reprojecting" in msg for msg in progress_messages)
+        assert any("Loading" in msg for msg in caplog.messages)
+        assert any("Source CRS" in msg for msg in caplog.messages)
+        assert any("Target CRS" in msg for msg in caplog.messages)
+        assert any("Reprojecting" in msg for msg in caplog.messages)
 
 
 class TestReprojectIntegration:

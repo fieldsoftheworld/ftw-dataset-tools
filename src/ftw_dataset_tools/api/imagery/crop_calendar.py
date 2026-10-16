@@ -8,12 +8,8 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import rasterio
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 from ftw_dataset_tools.api.fs import create_temp_file, finalize_temp_file
 from ftw_dataset_tools.api.imagery.settings import (
@@ -22,6 +18,9 @@ from ftw_dataset_tools.api.imagery.settings import (
     CROP_CALENDAR_BASE_URL,
     CROP_CALENDAR_FILES,
 )
+from ftw_dataset_tools.api.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 __all__ = [
     "CropCalendarDates",
@@ -84,18 +83,13 @@ def get_crop_calendar_cache_dir() -> Path:
 _DOWNLOAD_LOCK = threading.Lock()
 
 
-def ensure_crop_calendar_exists(
-    on_progress: Callable[[str], None] | None = None,
-) -> Path:
+def ensure_crop_calendar_exists() -> Path:
     """
     Ensure crop calendar files exist, downloading if necessary.
 
     Safe to call from several threads, but callers that are about to fan out
     should call it once up front: the first-time download is a few hundred
     megabytes, and warming the cache first keeps every worker off the lock.
-
-    Args:
-        on_progress: Optional callback for progress messages
 
     Returns:
         Path to cache directory containing crop calendar files
@@ -107,9 +101,8 @@ def ensure_crop_calendar_exists(
     )
 
     if not all_files_exist:
-        if on_progress:
-            on_progress("Downloading crop calendar files (first-time setup)...")
-        download_crop_calendar_files(on_progress=on_progress)
+        logger.info("Downloading crop calendar files (first-time setup)...")
+        download_crop_calendar_files()
 
     return cache_dir
 
@@ -131,10 +124,7 @@ def _download_to_cache(url: str, file_path: Path) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
-def download_crop_calendar_files(
-    force: bool = False,
-    on_progress: Callable[[str], None] | None = None,
-) -> None:
+def download_crop_calendar_files(force: bool = False) -> None:
     """
     Download all crop calendar files.
 
@@ -144,7 +134,6 @@ def download_crop_calendar_files(
 
     Args:
         force: If True, re-download even if files exist
-        on_progress: Optional callback for progress messages
     """
     cache_dir = get_crop_calendar_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -158,13 +147,11 @@ def download_crop_calendar_files(
             if file_path.exists() and not force:
                 continue
 
-            if on_progress:
-                on_progress(f"Downloading {filename}...")
+            logger.info(f"  Downloading {filename}...")
 
             _download_to_cache(CROP_CALENDAR_BASE_URL + filename, file_path)
 
-    if on_progress:
-        on_progress(f"Crop calendar files cached at {cache_dir}")
+    logger.info(f"  Crop calendar files cached at {cache_dir}")
 
 
 def harvest_day_to_datetime(harvest_day: int, year: int) -> datetime:
@@ -231,7 +218,6 @@ def _sample_raster_at_center(
 
 def get_crop_calendar_dates(
     bbox: tuple[float, float, float, float],
-    on_progress: Callable[[str], None] | None = None,
 ) -> CropCalendarDates:
     """
     Get crop calendar dates for a bounding box.
@@ -243,7 +229,6 @@ def get_crop_calendar_dates(
 
     Args:
         bbox: Bounding box (minx, miny, maxx, maxy) in EPSG:4326
-        on_progress: Optional callback for progress messages
 
     Returns:
         CropCalendarDates with planting and harvest day-of-year values
@@ -251,7 +236,7 @@ def get_crop_calendar_dates(
     Raises:
         ValueError: If no valid crop calendar data found for the region
     """
-    cache_dir = ensure_crop_calendar_exists(on_progress=on_progress)
+    cache_dir = ensure_crop_calendar_exists()
 
     start_raster_path = cache_dir / CROP_CAL_SUMMER_START
     end_raster_path = cache_dir / CROP_CAL_SUMMER_END

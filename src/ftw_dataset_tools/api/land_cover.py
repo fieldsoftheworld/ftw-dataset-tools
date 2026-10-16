@@ -41,13 +41,16 @@ from ftw_dataset_tools.api.geo import (
     detect_geometry_column,
     ensure_spatial_loaded,
 )
+from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Sequence
+    from collections.abc import Iterable, Sequence
 
     from rasterio.io import DatasetReader
 
     from ftw_dataset_tools.api.imagery.parallel import ParallelOutcome
+
+logger = get_logger(__name__)
 
 PRODUCT = "io-lulc-annual-v02"
 STAC_API_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
@@ -444,7 +447,6 @@ def add_land_cover(
     chips_id_col: str = "id",
     workers: int = DEFAULT_WORKERS,
     chips_per_read: int = CHIPS_PER_READ,
-    on_progress: Callable[[str], None] | None = None,
 ) -> LandCoverResult:
     """Append the land cover columns to the chips GeoParquet, in place.
 
@@ -455,13 +457,8 @@ def add_land_cover(
         chips_id_col: Chip id column.
         workers: Concurrent tile reads.
         chips_per_read: Chips per read task; bounds work per task, not the result.
-        on_progress: Optional callback for progress messages.
     """
     chips_path = Path(chips_file).resolve()
-
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
 
     geom_col = _check_chips(chips_path, chips_id_col)
     has_gzd = GZD_COLUMN in parquet_columns(chips_path)
@@ -472,7 +469,7 @@ def add_land_cover(
         con.execute(f"CREATE TABLE chips_table AS {select_excluding(chips_path, OUTPUT_COLUMNS)}")
         total = con.execute("SELECT count(*) FROM chips_table").fetchone()[0]
         if year is None:
-            log(f"Note: {NO_YEAR_REASON}; skipping land cover")
+            logger.info(f"Note: {NO_YEAR_REASON}; skipping land cover")
             return LandCoverResult(total, 0, 0, (), None, skipped=True, reason=NO_YEAR_REASON)
 
         chips = _load_chips(con, geom_col, chips_id_col, has_gzd)
@@ -480,7 +477,9 @@ def add_land_cover(
         if chips:
             index = (source or IOLulcSource()).index(_chips_bbox(chips))
             tasks = _plan_reads(chips, index, year, max(1, chips_per_read))
-            log(f"Reading IO land cover for {len(chips):,} chips ({len(tasks)} read tasks)...")
+            logger.info(
+                f"Reading IO land cover for {len(chips):,} chips ({len(tasks)} read tasks)..."
+            )
             rows = _read_all(tasks, workers)
         _write_results(con, chips_path, chips_id_col, rows)
     finally:
@@ -488,9 +487,9 @@ def add_land_cover(
 
     result = _result(total, rows, year)
     if result.chips_nearest_year:
-        log(
-            f"Warning: {result.chips_nearest_year:,} chips use the nearest IO year because "
+        logger.warning(
+            f"{result.chips_nearest_year:,} chips use the nearest IO year because "
             f"IO has no {year} map for them; landcover_year_exact is false on those chips"
         )
-    log(land_cover_summary(result))
+    logger.info(land_cover_summary(result))
     return result

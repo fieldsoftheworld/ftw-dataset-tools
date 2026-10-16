@@ -6,14 +6,13 @@ import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import duckdb
 
 from ftw_dataset_tools.api.geo import configure_source_coop_s3, detect_crs, sql_path
+from ftw_dataset_tools.api.logging_config import get_logger
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
+logger = get_logger(__name__)
 
 # Default MGRS grid source
 DEFAULT_GRID_SOURCE = "s3://us-west-2.opendata.source.coop/tge-labs/mgrs/gzd_partition/*/*.parquet"
@@ -73,7 +72,6 @@ def get_grid(
     geom_col: str = "geometry",
     precise: bool = False,
     use_cache: bool = True,
-    on_progress: Callable[[str], None] | None = None,
 ) -> GetGridResult:
     """
     Fetch MGRS grid cells that intersect the input file's geometries.
@@ -87,7 +85,6 @@ def get_grid(
                  use bounding box only (faster but may include extra grids).
         use_cache: If True (default), cache grid results by bounding box for faster
                    repeated queries in the same area.
-        on_progress: Optional callback for progress messages
 
     Returns:
         GetGridResult with information about the operation
@@ -101,10 +98,6 @@ def get_grid(
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
     # Check CRS using geo module
     crs_info = detect_crs(input_path, geom_col)
     crs_str = str(crs_info)
@@ -112,7 +105,7 @@ def get_grid(
     if crs_info.authority_code is None or crs_info.authority_code.upper() != "EPSG:4326":
         raise CRSError(crs_str, str(input_file))
 
-    log(f"CRS: {crs_str}")
+    logger.info(f"CRS: {crs_str}")
 
     # Create DuckDB connection with required extensions
     conn = duckdb.connect(":memory:")
@@ -120,10 +113,10 @@ def get_grid(
     configure_source_coop_s3(conn)
 
     # Load input file
-    log("Loading input file...")
+    logger.info("Loading input file...")
     conn.execute(f"CREATE TABLE input_data AS SELECT * FROM '{sql_path(input_path)}'")
     feature_count = conn.execute("SELECT COUNT(*) FROM input_data").fetchone()[0]
-    log(f"Loaded {feature_count:,} features")
+    logger.info(f"Loaded {feature_count:,} features")
 
     # Compute bounds for bbox filtering
     bounds_result = conn.execute(f"""
@@ -136,7 +129,7 @@ def get_grid(
     """).fetchone()
     xmin, ymin, xmax, ymax = bounds_result
     bounds = (xmin, ymin, xmax, ymax)
-    log(f"Bounds: [{xmin:.6f}, {ymin:.6f}, {xmax:.6f}, {ymax:.6f}]")
+    logger.info(f"Bounds: [{xmin:.6f}, {ymin:.6f}, {xmax:.6f}, {ymax:.6f}]")
 
     # Check cache for existing grid results
     cache_file = None
@@ -145,10 +138,10 @@ def get_grid(
         cache_file = get_grid_cache_dir() / f"grid_{cache_key}.parquet"
 
         if cache_file.exists():
-            log(f"Using cached grid from {cache_file}")
+            logger.info(f"Using cached grid from {cache_file}")
             conn.execute(f"CREATE TABLE grid_result AS SELECT * FROM '{sql_path(cache_file)}'")
             grid_count = conn.execute("SELECT COUNT(*) FROM grid_result").fetchone()[0]
-            log(f"Loaded {grid_count:,} cached grid cells")
+            logger.info(f"Loaded {grid_count:,} cached grid cells")
 
             # Skip to output writing
             if output_file:
@@ -156,7 +149,7 @@ def get_grid(
             else:
                 out_path = input_path.parent / f"{input_path.stem}_grid.parquet"
 
-            log(f"Writing output to: {out_path}")
+            logger.info(f"Writing output to: {out_path}")
             out_path.parent.mkdir(parents=True, exist_ok=True)
             conn.execute(f"""
                 COPY grid_result TO '{sql_path(out_path)}'
@@ -171,7 +164,7 @@ def get_grid(
             )
 
     # Fetch grids that intersect the bounding box from remote source
-    log("Fetching grid cells from remote source...")
+    logger.info("Fetching grid cells from remote source...")
     conn.execute(f"""
         CREATE TABLE grid_bbox AS
         SELECT *
@@ -183,11 +176,11 @@ def get_grid(
     """)
 
     bbox_count = conn.execute("SELECT COUNT(*) FROM grid_bbox").fetchone()[0]
-    log(f"Found {bbox_count:,} grid cells in bounding box")
+    logger.info(f"Found {bbox_count:,} grid cells in bounding box")
 
     if precise:
         # Compute union of all geometries for precise filtering
-        log("Computing geometry union for precise matching...")
+        logger.info("Computing geometry union for precise matching...")
         conn.execute(f"""
             CREATE TABLE input_union AS
             SELECT ST_Union_Agg("{geom_col}") as union_geom FROM input_data
@@ -195,10 +188,10 @@ def get_grid(
 
         # Get union geometry as WKT for reporting
         union_wkt = conn.execute("SELECT ST_AsText(union_geom) FROM input_union").fetchone()[0]
-        log(f"Union geometry: {union_wkt}")
+        logger.debug(f"Union geometry: {union_wkt}")
 
         # Filter locally using geometry intersection
-        log("Filtering grids by geometry intersection...")
+        logger.info("Filtering grids by geometry intersection...")
         conn.execute("""
             CREATE TABLE grid_result AS
             SELECT g.*
@@ -211,11 +204,11 @@ def get_grid(
 
     # Get count
     grid_count = conn.execute("SELECT COUNT(*) FROM grid_result").fetchone()[0]
-    log(f"Found {grid_count:,} intersecting grid cells")
+    logger.info(f"Found {grid_count:,} intersecting grid cells")
 
     # Save to cache if caching is enabled
     if use_cache and cache_file:
-        log(f"Caching grid results to {cache_file}")
+        logger.info(f"Caching grid results to {cache_file}")
         conn.execute(f"""
             COPY grid_result TO '{sql_path(cache_file)}'
             (FORMAT PARQUET, COMPRESSION 'zstd', COMPRESSION_LEVEL 16)
@@ -228,7 +221,7 @@ def get_grid(
         out_path = input_path.parent / f"{input_path.stem}_grid.parquet"
 
     # Write output with zstd compression level 16
-    log(f"Writing output to: {out_path}")
+    logger.info(f"Writing output to: {out_path}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     conn.execute(f"""
         COPY grid_result TO '{sql_path(out_path)}'

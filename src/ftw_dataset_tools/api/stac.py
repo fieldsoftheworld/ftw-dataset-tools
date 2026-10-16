@@ -36,6 +36,7 @@ from ftw_dataset_tools.api.assets import (
     add_table_columns,
 )
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
+from ftw_dataset_tools.api.logging_config import get_logger, success
 from ftw_dataset_tools.api.masks import MaskType, get_mgrs_square, instance_labels_path
 from ftw_dataset_tools.api.renders import (
     RENDER_ORDER_PROP,
@@ -47,9 +48,9 @@ from ftw_dataset_tools.api.renders import (
 from ftw_dataset_tools.api.scale import SCALE_VERSION
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from ftw_dataset_tools.api.config import DatasetConfig, MetadataConfig
+
+logger = get_logger(__name__)
 
 # Media types
 MEDIA_TYPE_PARQUET = "application/vnd.apache.parquet"
@@ -293,14 +294,13 @@ def get_temporal_extent_from_year(year: int) -> tuple[datetime, datetime]:
 def _crop_season_extent(
     bbox: tuple[float, float, float, float],
     year: int,
-    on_progress: Callable[[str], None] | None = None,
 ) -> tuple[datetime, datetime] | None:
     """Planting day to the end of harvest day for ``bbox``, or None outside the crop calendar."""
     # Imported here to avoid a circular import: api.imagery imports back into this module.
     from ftw_dataset_tools.api.imagery.crop_calendar import get_crop_calendar_dates
 
     try:
-        planting, harvest = get_crop_calendar_dates(bbox, on_progress=on_progress).to_datetime(year)
+        planting, harvest = get_crop_calendar_dates(bbox).to_datetime(year)
     except ValueError:
         return None
     return (
@@ -871,11 +871,9 @@ def _write_items_parquet(
     asyncio.run(_write_items_parquet_async(items, output_path))
 
 
-def _resolve_temporal_extent(
-    fields_file: Path, year: int | None, log: Callable[[str], None]
-) -> tuple[datetime, datetime]:
+def _resolve_temporal_extent(fields_file: Path, year: int | None) -> tuple[datetime, datetime]:
     """Dataset temporal extent from the fields' datetime column, else from ``year``."""
-    log("Determining temporal extent...")
+    logger.info("Determining temporal extent...")
     datetime_col = detect_datetime_column(fields_file)
     # An all-NULL column has no extent to read, so an explicit year takes over.
     if (
@@ -886,10 +884,10 @@ def _resolve_temporal_extent(
         datetime_col = None
 
     if datetime_col:
-        log(f"Using '{datetime_col}' column for temporal extent")
+        logger.info(f"Using '{datetime_col}' column for temporal extent")
         return get_temporal_extent_from_data(fields_file, datetime_col)
     if year is not None:
-        log(f"Using year {year} for temporal extent")
+        logger.info(f"Using year {year} for temporal extent")
         return get_temporal_extent_from_year(year)
     raise ValueError(
         "Cannot determine temporal extent. Either provide --year parameter "
@@ -905,10 +903,9 @@ def _build_chip_items(
     crop_calendar: bool,
     checksums: bool,
     background_class_value: int,
-    log: Callable[[str], None],
 ) -> tuple[list[pystac.Item], dict[str, str]]:
     """One item per chip that has a mask directory, and the MGRS square of each item."""
-    log("Creating STAC items...")
+    logger.info("Creating STAC items...")
     # Imported here to avoid a circular import: api.imagery imports back into
     # this module.
     from ftw_dataset_tools.api.imagery.catalog_ops import preserve_imagery_selection
@@ -926,7 +923,7 @@ def _build_chip_items(
 
         chip_extent = temporal_extent
         if crop_calendar and chip_info.year is not None:
-            season = _crop_season_extent(chip_info.bbox, chip_info.year, on_progress=log)
+            season = _crop_season_extent(chip_info.bbox, chip_info.year)
             if season is None:
                 outside_calendar += 1
             else:
@@ -951,11 +948,11 @@ def _build_chip_items(
             items.append(item)
             item_squares[item.id] = square
 
-    log(f"Created {len(items)} items with mask assets")
+    logger.info(f"Created {len(items)} items with mask assets")
     if resumed:
-        log(f"Preserved existing imagery selections for {resumed} items")
+        logger.info(f"Preserved existing imagery selections for {resumed} items")
     if outside_calendar:
-        log(f"{outside_calendar} chip(s) outside the crop calendar keep the dataset extent")
+        logger.info(f"{outside_calendar} chip(s) outside the crop calendar keep the dataset extent")
     return items, item_squares
 
 
@@ -1038,7 +1035,6 @@ def generate_stac_catalog(
     year: int | None = None,
     provenance: dict | None = None,
     config: DatasetConfig | None = None,
-    on_progress: Callable[[str], None] | None = None,
     checksums: bool = False,
     background_class_value: int = 0,
     crop_calendar: bool = True,
@@ -1070,7 +1066,6 @@ def generate_stac_catalog(
                     the ``ftw:config`` extra field for reproducibility.
         config: Resolved dataset config; supplies metadata and the ftw: build properties
             written on the collection.
-        on_progress: Optional callback for progress messages
         checksums: Compute file:checksum (multihash sha256) for every asset. Slow; default False.
         background_class_value: Pixel value used for background in masks (3 for presence-only).
         crop_calendar: Date each year-tagged chip item by its crop season (planting to
@@ -1090,28 +1085,24 @@ def generate_stac_catalog(
     chips_base_dir = chips_base_dir_for(output_dir)
     filtered_fields_file = Path(filtered_fields_file) if filtered_fields_file else None
 
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
-    temporal_extent = _resolve_temporal_extent(fields_file, year, log)
+    temporal_extent = _resolve_temporal_extent(fields_file, year)
 
     # Get spatial extent from fields
-    log("Calculating spatial extent...")
+    logger.info("Calculating spatial extent...")
     spatial_extent = _get_dataset_bounds(
         fields_file, detect_geometry_column(fields_file) or "geometry"
     )
 
     # Extract chip info (pass year for year-based naming). The geometry column is
     # detected rather than assumed, matching how the masks were rasterized.
-    log("Extracting chip information...")
+    logger.info("Extracting chip information...")
     chip_infos = _extract_chips_info(
         chips_file,
         grid_id_col=grid_id_col,
         geom_col=detect_geometry_column(chips_file) or "geometry",
         year=year,
     )
-    log(f"Found {len(chip_infos)} chips")
+    logger.info(f"Found {len(chip_infos)} chips")
 
     # Create items for each chip, nested by MGRS square
     items, item_squares = _build_chip_items(
@@ -1121,14 +1112,13 @@ def generate_stac_catalog(
         crop_calendar=crop_calendar,
         checksums=checksums,
         background_class_value=background_class_value,
-        log=log,
     )
 
     # A southern-hemisphere harvest falls in the following year.
     temporal_extent = _covering_extent(temporal_extent, items)
 
     # Create the single collection
-    log("Creating collection...")
+    logger.info("Creating collection...")
     # Without a config (e.g. create-masks over a pipeline output), keep what the
     # earlier build published rather than silently dropping it.
     previous = _read_previous_collection(output_dir, field_dataset) if config is None else None
@@ -1137,7 +1127,9 @@ def generate_stac_catalog(
 
     metadata = config.metadata if config is not None else None
     if not (metadata and metadata.license) and not _has_license(previous):
-        log("Warning: no metadata.license; the collection is not Portolan-publishable without one")
+        logger.warning(
+            "no metadata.license; the collection is not Portolan-publishable without one"
+        )
 
     collection = _create_collection(
         dataset_name=field_dataset,
@@ -1159,7 +1151,7 @@ def generate_stac_catalog(
 
     # normalize_hrefs assigns each item's self href in-memory (needed for rustac to
     # serialize them below) without writing any files yet.
-    log("Writing STAC catalog...")
+    logger.info("Writing STAC catalog...")
     collection.normalize_hrefs(str(output_dir), strategy=CHIP_LAYOUT)
     # Set the catalog type before serializing the items below: item.to_dict()
     # renders hierarchical link hrefs relative only when the root catalog is a
@@ -1172,7 +1164,7 @@ def generate_stac_catalog(
     # would otherwise write an absolute filesystem self link into that file.
     items_parquet_path: Path | None = None
     if items:
-        log("Writing stac-geoparquet...")
+        logger.info("Writing stac-geoparquet...")
         items_parquet_path = output_dir / "items.parquet"
         _write_items_parquet(items, items_parquet_path)
         _add_parquet_asset(
@@ -1186,7 +1178,7 @@ def generate_stac_catalog(
 
     collection.save(catalog_type=collection.catalog_type)
 
-    log("STAC catalog generation complete")
+    success(logger, "STAC catalog generation complete")
 
     return STACGenerationResult(
         collection_path=output_dir / "collection.json",

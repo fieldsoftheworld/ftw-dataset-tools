@@ -13,6 +13,8 @@ import pystac_client
 from pystac.extensions.eo import EOExtension
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import pystac
 
 from ftw_dataset_tools.api.imagery import parquet_search
@@ -25,6 +27,7 @@ from ftw_dataset_tools.api.imagery.nodata_analysis import (
     calculate_nodata_percentage,
     get_nodata_from_metadata,
 )
+from ftw_dataset_tools.api.imagery.progress import STATUS_ICON
 from ftw_dataset_tools.api.imagery.settings import (
     DEFAULT_BUFFER_DAYS,
     DEFAULT_BUFFER_EXPANSION_SIZE,
@@ -36,9 +39,9 @@ from ftw_dataset_tools.api.imagery.settings import (
     S2_COLLECTIONS,
     STAC_URL,
 )
+from ftw_dataset_tools.api.logging_config import get_logger
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
+logger = get_logger(__name__)
 
 __all__ = [
     "STACQueryResult",
@@ -330,13 +333,30 @@ def _short_date(item: pystac.Item) -> str:
     return item.id[:15]  # Fallback to truncated ID
 
 
+def _status(icon: str, msg: str) -> None:
+    logger.info(msg, extra={STATUS_ICON: icon})
+
+
+def _log_query(result: STACQueryResult) -> None:
+    logger.debug(f"STAC Query: {result.catalog_url}")
+    logger.debug(f"  Collection: {result.collection}")
+    logger.debug(f"  Bbox: {result.bbox}")
+    logger.debug(f"  Date range: {result.date_range}")
+    logger.debug(f"  Cloud cover max: {result.cloud_cover_max}%")
+
+
+def _log_candidates(items: list[pystac.Item]) -> None:
+    for item in items[:5]:
+        cc = EOExtension.ext(item).cloud_cover or 0.0
+        logger.debug(f"  - {item.id}: {cc:.1f}% cloud, {item.datetime}")
+
+
 def _select_best_scene(
     items: list[pystac.Item],
     season: str,
     bbox: tuple[float, float, float, float],
     cloud_cover_chip: float = DEFAULT_CLOUD_COVER_CHIP,
     nodata_max: float = DEFAULT_NODATA_MAX,
-    on_progress: Callable[[str], None] | None = None,
 ) -> SelectedScene | None:
     """
     Select the best scene from candidates.
@@ -347,17 +367,12 @@ def _select_best_scene(
         bbox: Bounding box for chip-level cloud calculation
         cloud_cover_chip: Maximum chip-level cloud cover percentage (0-100)
         nodata_max: Maximum nodata percentage (0-100). Default 0 rejects any nodata.
-        on_progress: Optional callback for progress messages
 
     Returns:
         SelectedScene or None if no suitable scene found
     """
     if not items:
         return None
-
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
 
     for item in items:
         short_dt = _short_date(item)
@@ -383,7 +398,7 @@ def _select_best_scene(
             try:
                 stats = read_scl_chip_stats(scl_asset.href, bbox)
             except Exception as e:
-                log(f"  {item.id}: SCL read failed ({e})")
+                logger.debug(f"{item.id}: SCL read failed ({e})")
 
         if needs_nodata_check:
             nodata_pct = stats.nodata_pct if stats else None
@@ -395,39 +410,43 @@ def _select_best_scene(
                         nodata_pct = calculate_nodata_percentage(nir_asset.href, bbox)
                 except Exception as e:
                     if scene_nodata is not None and scene_nodata > nodata_max:
-                        log(
-                            f"  Skipping {short_dt}: nodata check failed ({e}), "
-                            f"scene reports {scene_nodata:.1f}% nodata"
+                        _status(
+                            "✗",
+                            f"Skipping {short_dt}: nodata check failed ({e}), "
+                            f"scene reports {scene_nodata:.1f}% nodata",
                         )
                         continue
-                    log(f"  {item.id}: nodata check failed ({e}), continuing")
+                    logger.debug(f"{item.id}: nodata check failed ({e}), continuing")
             if nodata_pct is not None and nodata_pct > nodata_max:
-                log(f"  Skipping {short_dt}: {nodata_pct:.1f}% nodata in chip window")
+                _status("✗", f"Skipping {short_dt}: {nodata_pct:.1f}% nodata in chip window")
                 continue
 
         if not needs_cloud_check:
-            log(
-                f"  {item.id}: scene cloud {scene_cloud_cover:.1f}% (trusted, < {PIXEL_CHECK_SKIP_THRESHOLD}%)"
+            logger.debug(
+                f"{item.id}: scene cloud {scene_cloud_cover:.1f}% "
+                f"(trusted, < {PIXEL_CHECK_SKIP_THRESHOLD}%)"
             )
             actual_cloud_cover = scene_cloud_cover
         elif stats is not None:
             actual_cloud_cover = stats.cloud_pct
-            log(f"  {item.id}: scene {scene_cloud_cover:.1f}% -> chip {actual_cloud_cover:.1f}%")
+            logger.debug(
+                f"{item.id}: scene {scene_cloud_cover:.1f}% -> chip {actual_cloud_cover:.1f}%"
+            )
         else:
             reason = "no SCL asset" if scl_asset is None else "chip check failed"
-            log(f"  {item.id}: {reason}, using scene cloud cover {scene_cloud_cover:.1f}%")
+            logger.debug(f"{item.id}: {reason}, using scene cloud cover {scene_cloud_cover:.1f}%")
             actual_cloud_cover = scene_cloud_cover
 
         # Check if chip cloud cover exceeds threshold
         if actual_cloud_cover > cloud_cover_chip:
-            log(f"  Skipping {short_dt}: {actual_cloud_cover:.1f}% cloud")
+            _status("✗", f"Skipping {short_dt}: {actual_cloud_cover:.1f}% cloud")
             continue
 
         # Get scene datetime using helper (handles None datetime with start_datetime fallback)
         try:
             scene_dt = _get_item_datetime(item)
         except ValueError as e:
-            log(f"  {item.id}: skipping - {e}")
+            _status("✗", f"Skipping {item.id}: {e}")
             continue
 
         return SelectedScene(
@@ -456,14 +475,6 @@ class _SeasonSearch:
         return self.scene is not None and self.scene.cloud_cover <= cloud_cover_chip
 
 
-def _log_query(query: STACQueryResult, log: Callable[[str], None]) -> None:
-    log(f"STAC Query: {query.catalog_url}")
-    log(f"  Collection: {query.collection}")
-    log(f"  Bbox: {query.bbox}")
-    log(f"  Date range: {query.date_range}")
-    log(f"  Cloud cover max: {query.cloud_cover_max}%")
-
-
 def _search_season(
     state: _SeasonSearch,
     expansion: int,
@@ -472,37 +483,32 @@ def _search_season(
     bbox: tuple[float, float, float, float],
     cloud_cover_chip: float,
     nodata_max: float,
-    on_progress: Callable[[str], None] | None,
 ) -> None:
     """Query one season's window and select its best scene among unseen candidates.
 
     Raises:
         ValueError: If the scene query fails.
     """
-
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
     season = state.season
     if expansion > 0:
-        log(f"Expansion {expansion}: {season} buffer now {state.buffer_days} days")
-    log(f"Searching for {season} scene around {state.center_date.date()}...")
+        _status("↻", f"Expansion {expansion}: {season} buffer now {state.buffer_days} days")
+    _status("○", f"Searching for {season} scene around {state.center_date.date()}...")
     query = run_search(state.center_date, state.buffer_days)
-    _log_query(query, log)
+    _log_query(query)
 
     # Filter out scenes already checked on an earlier expansion
     new_items = [item for item in query.items if item.id not in state.checked_ids]
     state.candidates_checked += len(new_items)
 
     if expansion > 0 and len(query.items) > len(new_items):
-        log(f"Found {len(query.items)} total, {len(new_items)} new {season} scene candidates")
+        _status(
+            "○",
+            f"Found {len(query.items)} total, {len(new_items)} new {season} scene candidates",
+        )
     else:
-        log(f"Found {len(new_items)} {season} scene candidates")
+        _status("○", f"Found {len(new_items)} {season} scene candidates")
 
-    for item in new_items[:5]:
-        cc = EOExtension.ext(item).cloud_cover or 0.0
-        log(f"  - {item.id}: {cc:.1f}% cloud, {item.datetime}")
+    _log_candidates(new_items)
 
     state.checked_ids.update(item.id for item in new_items)
     state.scene = _select_best_scene(
@@ -511,10 +517,12 @@ def _search_season(
         bbox=bbox,
         cloud_cover_chip=cloud_cover_chip,
         nodata_max=nodata_max,
-        on_progress=on_progress,
     )
     if state.scene:
-        log(f"Selected {season} scene: {state.scene.id} ({state.scene.cloud_cover:.1f}% cloud)")
+        _status(
+            "✓",
+            f"Selected {season} scene: {state.scene.id} ({state.scene.cloud_cover:.1f}% cloud)",
+        )
 
 
 def _missing_scene_reason(planting: _SeasonSearch, harvest: _SeasonSearch) -> str | None:
@@ -538,7 +546,6 @@ def select_scenes_for_chip(
     num_buffer_expansions: int = DEFAULT_NUM_BUFFER_EXPANSIONS,
     buffer_expansion_size: int = DEFAULT_BUFFER_EXPANSION_SIZE,
     search_backend: str = "parquet",
-    on_progress: Callable[[str], None] | None = None,
 ) -> SceneSelectionResult:
     """
     Select optimal Sentinel-2 scenes for a chip based on crop calendar.
@@ -556,7 +563,6 @@ def select_scenes_for_chip(
         buffer_expansion_size: Days to add to buffer on each expansion
         search_backend: "parquet" (the STAC-GeoParquet mirror, default) or
             "earth-search" (the Earth Search STAC API)
-        on_progress: Optional callback for progress messages
 
     Returns:
         SceneSelectionResult with selected scenes or skip reason
@@ -570,10 +576,6 @@ def select_scenes_for_chip(
         raise ValueError(
             f"Unknown search_backend {search_backend!r}; use 'parquet' or 'earth-search'."
         )
-
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
 
     def _run_search(center_date: datetime, buffer: int) -> STACQueryResult:
         if search_backend == "parquet":
@@ -590,7 +592,7 @@ def select_scenes_for_chip(
 
     # Get crop calendar dates
     try:
-        crop_dates = get_crop_calendar_dates(bbox, on_progress=on_progress)
+        crop_dates = get_crop_calendar_dates(bbox)
     except ValueError as e:
         return SceneSelectionResult(
             chip_id=chip_id,
@@ -603,7 +605,7 @@ def select_scenes_for_chip(
     # Convert to datetime
     planting_dt, harvest_dt = crop_dates.to_datetime(year)
 
-    log(f"Crop calendar: planting={planting_dt.date()}, harvest={harvest_dt.date()}")
+    logger.debug(f"Crop calendar: planting={planting_dt.date()}, harvest={harvest_dt.date()}")
 
     # Store selection parameters
     selection_params = {
@@ -645,7 +647,6 @@ def select_scenes_for_chip(
                     bbox=bbox,
                     cloud_cover_chip=cloud_cover_chip,
                     nodata_max=nodata_max,
-                    on_progress=on_progress,
                 )
             except ValueError as e:
                 if state is planting:
@@ -657,7 +658,7 @@ def select_scenes_for_chip(
 
         pending = [s for s in (planting, harvest) if not s.meets_threshold(cloud_cover_chip)]
         if not pending:
-            log(f"Both seasons meet threshold after {expansion} expansion(s)")
+            _status("✓", f"Both seasons meet threshold after {expansion} expansion(s)")
             break
 
         # If we have more expansions to try, expand buffers for failing seasons

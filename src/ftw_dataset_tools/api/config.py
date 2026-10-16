@@ -24,9 +24,12 @@ from ftw_dataset_tools.api import chip_grid, field_stats, scale, splits
 from ftw_dataset_tools.api.chip_borders import DEFAULT_BORDER_GAP_CHIPS
 from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
 from ftw_dataset_tools.api.imagery.slots import DEFAULT_IMAGERY_MODE, IMAGERY_MODES
+from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+logger = get_logger(__name__)
 
 # Mask types that ``create-masks`` understands. Kept here so config validation
 # gives the same error the CLI does.
@@ -229,7 +232,7 @@ class ClassFilter:
             f"fields file. Available columns: {sorted(available)}"
         )
 
-    def validate_against(self, distinct: set[str | None], on_progress: Any = None) -> None:
+    def validate_against(self, distinct: set[str | None]) -> None:
         """Enforce that every non-null class in the data is handled.
 
         NULL class values are treated as background (they fall outside ``include``,
@@ -237,7 +240,6 @@ class ClassFilter:
 
         Args:
             distinct: Distinct class values found in the data (may contain None).
-            on_progress: Optional callback for informational notes/warnings.
 
         Raises:
             ClassFilterError: If any non-null value in the data is in neither
@@ -251,15 +253,14 @@ class ClassFilter:
                 f"Add each to include or exclude: {offenders}"
             )
 
-        if None in distinct and on_progress is not None:
-            on_progress("Note: null class values are present and treated as background.")
+        if None in distinct:
+            logger.info("Note: null class values are present and treated as background.")
 
         present = {value for value in distinct if value is not None}
         absent = sorted(handled - present)
-        if absent and on_progress is not None:
-            on_progress(
-                f"Warning: class filter lists {len(absent)} class(es) not present "
-                f"in the data: {absent}"
+        if absent:
+            logger.warning(
+                f"class filter lists {len(absent)} class(es) not present in the data: {absent}"
             )
 
 

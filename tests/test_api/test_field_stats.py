@@ -135,7 +135,9 @@ class TestAddFieldStats:
                 fields_file="/nonexistent/fields.parquet",
             )
 
-    def test_remote_grid_bounds_guard_for_mislabeled_crs(self, tmp_path: Path) -> None:
+    def test_remote_grid_bounds_guard_for_mislabeled_crs(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Test guard for projected bounds when EPSG:4326 is expected."""
         from ftw_dataset_tools.api.field_stats import add_field_stats
 
@@ -149,15 +151,16 @@ class TestAddFieldStats:
         )
         gdf.to_parquet(fields_file)
 
-        messages: list[str] = []
         with pytest.raises(ValueError, match="Fields bounds appear to be in projected units"):
             add_field_stats(
                 fields_file=str(fields_file),
                 grid_file=None,
-                on_progress=messages.append,
             )
 
-        assert any("Warning: Fields bounds are outside degree ranges" in msg for msg in messages)
+        assert any(
+            r.levelname == "WARNING" and "Fields bounds are outside degree ranges" in r.message
+            for r in caplog.records
+        )
 
 
 class TestAddFieldStatsWithLocalGrid:
@@ -232,26 +235,23 @@ class TestAddFieldStatsWithLocalGrid:
             )
 
     def test_add_field_stats_with_progress(
-        self, sample_grid_geoparquet: Path, sample_fields_geoparquet: Path, tmp_path: Path
+        self,
+        sample_grid_geoparquet: Path,
+        sample_fields_geoparquet: Path,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Test add_field_stats with progress callback."""
+        """Test add_field_stats logs its progress."""
         from ftw_dataset_tools.api.field_stats import add_field_stats
-
-        progress_messages: list[str] = []
-
-        def on_progress(msg: str) -> None:
-            progress_messages.append(msg)
 
         output_file = tmp_path / "chips_output.parquet"
         add_field_stats(
             grid_file=sample_grid_geoparquet,
             fields_file=sample_fields_geoparquet,
             output_file=output_file,
-            on_progress=on_progress,
         )
 
-        assert len(progress_messages) > 0
-        assert any("Loading" in msg for msg in progress_messages)
+        assert any("Loading" in msg for msg in caplog.messages)
 
     def test_add_field_stats_default_output_name(
         self, sample_grid_geoparquet: Path, sample_fields_geoparquet: Path
@@ -456,30 +456,30 @@ class TestChipRowOrderIsReproducible:
 class TestSparseRowids:
     """Dropping border chips deletes rows without renumbering, leaving rowid gaps."""
 
-    def test_border_chips_leave_sparse_rowids(self, tmp_path: Path) -> None:
+    def test_border_chips_leave_sparse_rowids(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         from ftw_dataset_tools.api.field_stats import add_field_stats
 
         grid = _unsorted_grid(tmp_path / "grid.parquet")
         fields = _covering_fields(tmp_path / "fields.parquet")
 
-        messages: list[str] = []
         result = add_field_stats(
             grid_file=grid,
             fields_file=fields,
             output_file=tmp_path / "chips.parquet",
             drop_border_chips=True,
             batch_size=2,
-            on_progress=messages.append,
         )
 
-        assert any("Removed" in msg and "border chips" in msg for msg in messages)
+        assert any("Removed" in msg and "border chips" in msg for msg in caplog.messages)
         # The labelled 4x4 block is one cluster, so its own ring is the cluster edge and
         # only the inner 2x2 is safely interior.
         assert result.total_cells == 4
         assert result.cells_with_coverage == 4
 
         # Coverage now runs before the border step, so it sees the whole 6x6 grid.
-        coverage_msgs = [m for m in messages if m.strip().startswith("Coverage:")]
+        coverage_msgs = [m for m in caplog.messages if m.strip().startswith("Coverage:")]
         assert coverage_msgs[-1].strip() == "Coverage: 36/36 grid cells"
         assert len(coverage_msgs) == 18  # 36 cells at 2 per batch
 
@@ -510,7 +510,9 @@ class TestSparseRowids:
 class TestChipOrderByFallback:
     """Grids without an id column still work; they just cannot be ordered by chip id."""
 
-    def test_warns_and_skips_ordering_without_id_column(self, tmp_path: Path) -> None:
+    def test_warns_and_skips_ordering_without_id_column(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         from ftw_dataset_tools.api.field_stats import add_field_stats
 
         cells = [box(10.0 + i * 0.02, 50.0, 10.0 + (i + 1) * 0.02, 50.02) for i in range(3)]
@@ -520,16 +522,14 @@ class TestChipOrderByFallback:
         )
         fields = _covering_fields(tmp_path / "fields.parquet", lo=0, hi=1)
 
-        messages: list[str] = []
         result = add_field_stats(
             grid_file=grid,
             fields_file=fields,
             output_file=tmp_path / "chips.parquet",
-            on_progress=messages.append,
         )
 
         assert result.total_cells == 3
-        assert any("no 'id' column" in msg for msg in messages)
+        assert any("no 'id' column" in msg for msg in caplog.messages)
 
 
 # A 2 km cell and a 100 m sliver, both defined in UTM 33N metres so their true
@@ -678,21 +678,19 @@ class TestMinChipArea:
         assert result.cells_dropped_undersized == 1
         assert result.total_cells == 1
 
-    def test_km_size_mismatch_warns(self, tmp_path: Path) -> None:
+    def test_km_size_mismatch_warns(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         """Wrong km_size gutting the grid is reported rather than silently applied."""
         from ftw_dataset_tools.api.field_stats import add_field_stats
 
-        messages: list[str] = []
         add_field_stats(
             grid_file=_size_test_grid(tmp_path / "grid.parquet"),
             fields_file=_size_test_fields(tmp_path / "fields.parquet"),
             output_file=tmp_path / "chips.parquet",
             min_chip_area=99.5,
             km_size=10.0,
-            on_progress=messages.append,
         )
 
-        assert any("removed 100.0% of cells" in msg for msg in messages)
+        assert any("removed 100.0% of cells" in msg for msg in caplog.messages)
 
     def test_geographic_crs_other_than_4326_is_measured_in_degrees(self, tmp_path: Path) -> None:
         """A grid in ETRS89 is lon/lat too, so it must not be measured as metres.
@@ -748,7 +746,9 @@ class TestMinChipArea:
         assert _bounds_look_geographic(conn, "geometry") is False
         conn.close()
 
-    def test_unmeasurable_area_keeps_only_the_affected_rows(self, tmp_path: Path) -> None:
+    def test_unmeasurable_area_keeps_only_the_affected_rows(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """A mislabelled CRS keeps its rows; it must not switch the filter off."""
         from ftw_dataset_tools.api.field_stats import add_field_stats
 
@@ -767,20 +767,20 @@ class TestMinChipArea:
             crs="EPSG:4326",
         ).to_parquet(fields)
 
-        messages: list[str] = []
         result = add_field_stats(
             grid_file=grid,
             fields_file=fields,
             output_file=tmp_path / "chips.parquet",
             min_chip_area=99.5,
-            on_progress=messages.append,
         )
 
         assert result.cells_dropped_undersized == 0
         assert result.total_cells == 2
-        assert any("could not measure the area of 2 grid cells" in msg for msg in messages)
+        assert any("could not measure the area of 2 grid cells" in msg for msg in caplog.messages)
 
-    def test_one_unmeasurable_row_does_not_disable_the_filter(self, tmp_path: Path) -> None:
+    def test_one_unmeasurable_row_does_not_disable_the_filter(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """A single NULL geometry must not spare every other truncated chip."""
         from ftw_dataset_tools.api.field_stats import add_field_stats
 
@@ -792,18 +792,16 @@ class TestMinChipArea:
         ).to_crs("EPSG:4326")
         gdf.to_parquet(grid)
 
-        messages: list[str] = []
         result = add_field_stats(
             grid_file=grid,
             fields_file=_size_test_fields(tmp_path / "fields.parquet"),
             output_file=tmp_path / "chips.parquet",
             min_chip_area=99.5,
-            on_progress=messages.append,
         )
 
         assert result.cells_dropped_undersized == 1
         assert result.total_cells == 2  # the full cell plus the unmeasurable row
-        assert any("could not measure the area of 1 grid cells" in msg for msg in messages)
+        assert any("could not measure the area of 1 grid cells" in msg for msg in caplog.messages)
 
 
 # MGRS square 33UXP, anchored at a 100 km multiple in UTM zone 33N.
@@ -851,30 +849,35 @@ def _middle_field(path: Path) -> Path:
 class TestRemoteGridChipSize:
     """The remote 2 km grid is cut to km_size."""
 
-    def _run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, km_size: float):
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        km_size: float,
+    ):
         from ftw_dataset_tools.api import field_stats
 
         # The stand-in grid is a local file, so S3 setup is not needed.
         monkeypatch.setattr(field_stats, "configure_source_coop_s3", lambda _conn: None)
-        messages: list[str] = []
+        caplog.set_level("INFO")
         result = field_stats.add_field_stats(
             fields_file=_middle_field(tmp_path / "fields.parquet"),
             grid_source=str(_ftw_grid_source(tmp_path / "grid.parquet")),
             output_file=tmp_path / "chips.parquet",
             min_chip_area=99.5,
             km_size=km_size,
-            on_progress=messages.append,
         )
-        return result, sorted(_chip_ids(result.output_path)), messages
+        return result, sorted(_chip_ids(result.output_path)), caplog.messages
 
-    def test_default_size_keeps_the_source_cells(self, tmp_path: Path, monkeypatch) -> None:
-        _, ids, messages = self._run(tmp_path, monkeypatch, 2.0)
+    def test_default_size_keeps_the_source_cells(self, tmp_path: Path, monkeypatch, caplog) -> None:
+        _, ids, messages = self._run(tmp_path, monkeypatch, caplog, 2.0)
         assert ids == ["ftw-33UXP0202"]
         assert not any("Cutting" in msg for msg in messages)
         assert "Chip size: 2 km (2,000 m) per side (km_size is in kilometres)" in messages
 
-    def test_sub_km_chips_cover_the_fields(self, tmp_path: Path, monkeypatch) -> None:
-        result, ids, messages = self._run(tmp_path, monkeypatch, 0.5)
+    def test_sub_km_chips_cover_the_fields(self, tmp_path: Path, monkeypatch, caplog) -> None:
+        result, ids, messages = self._run(tmp_path, monkeypatch, caplog, 0.5)
         assert ids == [
             f"ftw-33UXP{e:03d}{n:03d}" for e in (20, 25, 30, 35) for n in (20, 25, 30, 35)
         ]
@@ -883,15 +886,15 @@ class TestRemoteGridChipSize:
         assert any("Cutting the 2 km grid into 0.5 km (500 m) chips" in msg for msg in messages)
 
     def test_chips_larger_than_the_source_fetch_their_neighbours(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch, caplog
     ) -> None:
         # The 6 km chip needs all nine source cells, not just the one under the field.
-        result, ids, _ = self._run(tmp_path, monkeypatch, 6)
+        result, ids, _ = self._run(tmp_path, monkeypatch, caplog, 6)
         assert ids == ["ftw-33UXP0000"]
         assert result.cells_dropped_undersized == 0
 
-    def test_size_not_dividing_100_km_warns(self, tmp_path: Path, monkeypatch) -> None:
-        _, _, messages = self._run(tmp_path, monkeypatch, 0.3)
+    def test_size_not_dividing_100_km_warns(self, tmp_path: Path, monkeypatch, caplog) -> None:
+        _, _, messages = self._run(tmp_path, monkeypatch, caplog, 0.3)
         assert any("does not divide an MGRS 100 km square evenly" in msg for msg in messages)
 
     def test_invalid_size_rejected_before_reading_inputs(self, tmp_path: Path) -> None:

@@ -21,15 +21,14 @@ from functools import lru_cache
 from importlib.resources import files
 from itertools import pairwise
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import duckdb
 
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
+from ftw_dataset_tools.api.logging_config import get_logger
 from ftw_dataset_tools.api.tiles import CHIPS_TILES, FIELDS_TILES
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
+logger = get_logger(__name__)
 
 SPLIT_ORDER = ("train", "val", "test")
 SPLIT_COLORS = {"train": "#1b9e77", "val": "#d95f02", "test": "#7570b3"}
@@ -505,7 +504,6 @@ def write_styles(
     *,
     chips_tiles: str | None,
     fields_tiles: str | None,
-    on_progress: Callable[[str], None] | None = None,
 ) -> list[StyleResult]:
     """Write ``styles/<id>.json`` for every style whose data and tiles are present.
 
@@ -519,8 +517,7 @@ def write_styles(
     results: list[StyleResult] = []
     for style_id, style, legend, title in built:
         path = _write_style(styles_dir, style_id, style)
-        if on_progress:
-            on_progress(f"style: {style_id}")
+        logger.info(f"style: {style_id}")
         results.append(
             StyleResult(
                 style_id=style_id,

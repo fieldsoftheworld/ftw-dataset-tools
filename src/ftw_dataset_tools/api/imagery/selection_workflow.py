@@ -40,13 +40,16 @@ from ftw_dataset_tools.api.imagery.stac_child_items import (
     create_child_items_from_selection,
     create_mosaic_child_items,
 )
+from ftw_dataset_tools.api.logging_config import capture_logs, get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    import logging
     from pathlib import Path
 
     from ftw_dataset_tools.api.imagery.mosaic_selection import MosaicSelectionResult
     from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
+
+logger = get_logger(__name__)
 
 __all__ = [
     "ChipSelectionJob",
@@ -92,15 +95,15 @@ def chip_year(item: pystac.Item) -> int | None:
 class ChipSelectionJob:
     """One chip's selection work: its item, where it lives, and the year to select for.
 
-    ``logs`` collects the progress lines the selection produced so the caller can
-    replay them in one block; printing them from the worker would interleave the
+    ``logs`` collects the log records the selection produced so the caller can
+    replay them in one block; emitting them from the worker would interleave the
     chips running alongside it.
     """
 
     item: pystac.Item
     item_path: Path
     year: int
-    logs: list[str] = field(default_factory=list)
+    logs: list[logging.LogRecord] = field(default_factory=list)
 
 
 def run_chip_selection(
@@ -119,42 +122,41 @@ def run_chip_selection(
     Safe to run on a worker thread: every chip queries the scene catalog on its
     own and writes only into its own directory.
     """
-    if imagery_mode == "mosaics":
-        mosaics = select_mosaics_for_chip(
+    with capture_logs(job.logs):
+        if imagery_mode == "mosaics":
+            mosaics = select_mosaics_for_chip(
+                chip_id=job.item.id,
+                bbox=tuple(job.item.bbox),
+                year=job.year,
+                nodata_max=nodata_max,
+            )
+            if mosaics.success:
+                create_mosaic_child_items(job.item_path.parent, job.item, mosaics)
+            return mosaics
+
+        selection = select_scenes_for_chip(
             chip_id=job.item.id,
             bbox=tuple(job.item.bbox),
             year=job.year,
-            nodata_max=nodata_max,
-            on_progress=job.logs.append,
-        )
-        if mosaics.success:
-            create_mosaic_child_items(job.item_path.parent, job.item, mosaics)
-        return mosaics
-
-    selection = select_scenes_for_chip(
-        chip_id=job.item.id,
-        bbox=tuple(job.item.bbox),
-        year=job.year,
-        cloud_cover_chip=cloud_cover_chip,
-        nodata_max=nodata_max,
-        buffer_days=buffer_days,
-        num_buffer_expansions=num_buffer_expansions,
-        buffer_expansion_size=buffer_expansion_size,
-        search_backend=search_backend,
-        on_progress=job.logs.append,
-    )
-
-    if selection.success:
-        create_child_items_from_selection(
-            chip_dir=job.item_path.parent,
-            parent_item=job.item,
-            result=selection,
-            year=job.year,
             cloud_cover_chip=cloud_cover_chip,
+            nodata_max=nodata_max,
             buffer_days=buffer_days,
             num_buffer_expansions=num_buffer_expansions,
             buffer_expansion_size=buffer_expansion_size,
+            search_backend=search_backend,
         )
+
+        if selection.success:
+            create_child_items_from_selection(
+                chip_dir=job.item_path.parent,
+                parent_item=job.item,
+                result=selection,
+                year=job.year,
+                cloud_cover_chip=cloud_cover_chip,
+                buffer_days=buffer_days,
+                num_buffer_expansions=num_buffer_expansions,
+                buffer_expansion_size=buffer_expansion_size,
+            )
 
     return selection
 
@@ -246,12 +248,10 @@ def select_imagery_for_catalog(
     buffer_expansion_size: int = 14,
     force: bool = False,
     on_missing: Literal["skip", "fail"] = "skip",
-    verbose: bool = False,
     workers: int = DEFAULT_WORKERS,
     search_backend: str = "parquet",
     imagery_mode: str = DEFAULT_IMAGERY_MODE,
     chip_items: list[tuple[pystac.Item, Path]] | None = None,
-    on_progress: Callable[[str], None] | None = None,
 ) -> SelectionWorkflowResult:
     """Select imagery for all chips in a catalog.
 
@@ -271,15 +271,12 @@ def select_imagery_for_catalog(
         on_missing: How to handle chips with no cloud-free scenes:
                     - "skip": Skip and record in skipped_details
                     - "fail": Raise exception
-        verbose: If True, show detailed STAC query information
         workers: Number of chips to select for concurrently
         search_backend: "parquet" (the STAC-GeoParquet mirror, default) or
                         "earth-search" (the Earth Search STAC API)
         imagery_mode: "scenes" (planting/harvest) or "mosaics" (Q1-Q4)
         chip_items: (item, item_path) pairs to select for instead of every chip
                     found under `catalog_dir`
-        on_progress: Optional callback for run-level messages (crop calendar
-                     download, imagery cleared from a different run)
 
     Returns:
         SelectionWorkflowResult with success/skipped/failed counts and details
@@ -306,8 +303,8 @@ def select_imagery_for_catalog(
     cleared = resolve_selection_conflicts(
         [item for item, _path in chip_items], imagery_mode=imagery_mode, year=year, force=force
     )
-    if cleared and on_progress:
-        on_progress(f"Cleared imagery from a different run: {cleared}")
+    if cleared:
+        logger.info(f"Cleared imagery from a different run: {cleared}")
 
     jobs: list[ChipSelectionJob] = []
     for item, item_path in chip_items:
@@ -327,8 +324,8 @@ def select_imagery_for_catalog(
     # Mosaics need neither the crop calendar nor the scene catalog.
     index = None
     if imagery_mode != "mosaics":
-        ensure_crop_calendar_exists(on_progress=on_progress)
-        index = _build_scene_index(jobs, search_backend, verbose=verbose)
+        ensure_crop_calendar_exists()
+        index = _build_scene_index(jobs, search_backend)
 
     with parquet_search.local_index(index):
         _run_selection(
@@ -340,7 +337,6 @@ def select_imagery_for_catalog(
             num_buffer_expansions=num_buffer_expansions,
             buffer_expansion_size=buffer_expansion_size,
             on_missing=on_missing,
-            verbose=verbose,
             workers=workers,
             search_backend=search_backend,
             imagery_mode=imagery_mode,
@@ -363,8 +359,6 @@ def _skip_reason(item: pystac.Item, *, force: bool, year: int | None) -> str | N
 def _build_scene_index(
     jobs: list[ChipSelectionJob],
     search_backend: str,
-    *,
-    verbose: bool,
 ) -> Path | None:
     """Pull the run's slice of the scene catalog local before fanning out.
 
@@ -393,8 +387,7 @@ def _build_scene_index(
         return parquet_search.build_local_index(bbox, sorted(years))
     except Exception as e:
         # An unbuildable index is a performance problem, not a correctness one.
-        if verbose:
-            print(f"Scene index unavailable ({e}); querying the catalog directly.")
+        logger.debug(f"Scene index unavailable ({e}); querying the catalog directly.")
         return None
 
 
@@ -408,7 +401,6 @@ def _run_selection(
     num_buffer_expansions: int,
     buffer_expansion_size: int,
     on_missing: Literal["skip", "fail"],
-    verbose: bool,
     workers: int,
     search_backend: str = "parquet",
     imagery_mode: str = DEFAULT_IMAGERY_MODE,
@@ -431,7 +423,7 @@ def _run_selection(
             imagery_mode=imagery_mode,
         )
 
-    with ImageryProgressBar(total=len(jobs), leave=False, verbose=verbose) as progress:
+    with ImageryProgressBar(total=len(jobs), leave=False) as progress:
 
         def apply(outcome: ParallelOutcome[ChipSelectionJob, SceneSelectionResult]) -> None:
             _record_chip(outcome, result=result, progress=progress, on_missing=on_missing)
@@ -453,8 +445,7 @@ def _record_chip(
     """Fold one chip's outcome into the counters and the progress bar (calling thread only)."""
     job = outcome.task
     progress.start_chip(job.item.id)
-    for message in job.logs:
-        progress.on_progress(message)
+    progress.show(job.logs)
 
     if outcome.error is not None:
         if on_missing == "fail":

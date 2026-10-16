@@ -52,16 +52,12 @@ def get_grid_cmd(
     """
     click.echo(f"Input file: {input_file}")
 
-    def on_progress(msg: str) -> None:
-        click.echo(msg)
-
     try:
         result = grid.get_grid(
             input_file=input_file,
             output_file=output_file,
             grid_source=grid_source,
             precise=precise,
-            on_progress=on_progress,
         )
 
         click.echo("\nSummary:")

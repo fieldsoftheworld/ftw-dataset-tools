@@ -11,20 +11,6 @@ from ftw_dataset_tools.api import config as config_module
 from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
 
 
-def _on_progress(msg: str) -> None:
-    """Color-coded general progress messages (mirrors create-dataset)."""
-    if msg.startswith("Warning:"):
-        click.echo(click.style(msg, fg="yellow"))
-    elif "Error" in msg:
-        click.echo(click.style(msg, fg="red"))
-    elif "Reprojecting" in msg or "CRS" in msg:
-        click.echo(click.style(msg, fg="cyan"))
-    elif "complete" in msg.lower():
-        click.echo(click.style(msg, fg="green"))
-    else:
-        click.echo(msg)
-
-
 def _on_mask_progress(current: int, total: int) -> None:
     percent = int(100 * current / total) if total > 0 else 0
     bar_width = 40
@@ -154,7 +140,6 @@ def run_cmd(
         ctx = pipeline.build_context(
             config,
             stages=stages,
-            on_progress=_on_progress,
             on_mask_progress=_on_mask_progress,
             on_mask_start=_on_mask_start,
             provenance=provenance,

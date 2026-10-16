@@ -242,21 +242,24 @@ class TestAddLandCover:
         assert classes[1]["pct"] == pytest.approx(28.57, abs=0.01)
         assert rows["ftw-33UXP0002"][2:5] == (CROPS, "Crops", 100.0)
 
-    def test_nearest_year_is_flagged(self, tmp_path: Path) -> None:
+    def test_nearest_year_is_flagged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         chips, tile = two_chip_setup(tmp_path)
-        messages: list[str] = []
 
         result = add_land_cover(
             chips,
             year=2025,
             source=LocalSource({"33U": {2017: str(tile), 2023: str(tile)}}),
-            on_progress=messages.append,
         )
 
         assert result.chips_nearest_year == 2
         assert result.years_used == (2023,)
         assert {row[:2] for row in read_land_cover(chips).values()} == {(2023, False)}
-        assert any(m.startswith("Warning: 2 chips use the nearest IO year") for m in messages)
+        assert any(
+            r.levelname == "WARNING" and r.message.startswith("2 chips use the nearest IO year")
+            for r in caplog.records
+        )
 
     def test_tile_missing_leaves_only_its_chips_blank(self, tmp_path: Path) -> None:
         chips, tile = two_chip_setup(tmp_path)
@@ -383,19 +386,19 @@ class TestAddLandCover:
         ids = [row[0] for row in duckdb.sql(f"SELECT id FROM '{chips}'").fetchall()]
         assert ids == ["ftw-33UXP0001", "ftw-33UXP0002"]
 
-    def test_skips_without_a_year(self, tmp_path: Path) -> None:
+    def test_skips_without_a_year(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level("INFO")
         chips, tile = two_chip_setup(tmp_path)
         source = LocalSource({"33U": {2021: str(tile)}})
-        messages: list[str] = []
 
-        result = add_land_cover(chips, year=None, source=source, on_progress=messages.append)
+        result = add_land_cover(chips, year=None, source=source)
 
         assert result.skipped is True
         assert result.reason == land_cover.NO_YEAR_REASON
         assert result.chips_total == 2
         assert source.calls == []
         assert "landcover_year" not in gpd.read_parquet(chips).columns
-        assert any("skipping land cover" in m for m in messages)
+        assert any("skipping land cover" in m for m in caplog.messages)
 
     def test_empty_chips_file(self, tmp_path: Path) -> None:
         chips = tmp_path / "chips.parquet"

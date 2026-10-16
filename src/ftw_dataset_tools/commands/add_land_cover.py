@@ -51,19 +51,12 @@ def add_land_cover_cmd(chips_file: str, year: int, chips_id_col: str, workers: i
         ftwd add-land-cover spain_chips.parquet --year 2025 --workers 16
     """
 
-    def on_progress(msg: str) -> None:
-        if msg.startswith("Warning:"):
-            click.echo(click.style(msg, fg="yellow"))
-        else:
-            click.echo(msg)
-
     try:
         land_cover.add_land_cover(
             chips_file,
             year=year,
             chips_id_col=chips_id_col,
             workers=workers,
-            on_progress=on_progress,
         )
     except (ValueError, OSError, APIError) as err:
         raise click.ClickException(str(err)) from err

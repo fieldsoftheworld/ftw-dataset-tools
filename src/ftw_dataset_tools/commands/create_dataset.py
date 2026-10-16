@@ -375,19 +375,6 @@ def create_dataset_cmd(
     click.echo(f"Output: {output_dir}")
     click.echo(f"Chip size: {chip_grid.chip_size_label(km_size)} (--km-size is in kilometres)")
 
-    # Progress callback for general messages
-    def on_progress(msg: str) -> None:
-        if msg.startswith("Warning:"):
-            click.echo(click.style(msg, fg="yellow"))
-        elif "Error" in msg:
-            click.echo(click.style(msg, fg="red"))
-        elif "Reprojecting" in msg or "CRS" in msg:
-            click.echo(click.style(msg, fg="cyan"))
-        elif "complete" in msg.lower():
-            click.echo(click.style(msg, fg="green"))
-        else:
-            click.echo(msg)
-
     # Track current mask type for progress display
     current_mask_info = {"type": "", "total": 0}
 
@@ -536,7 +523,6 @@ def create_dataset_cmd(
             scale_percent=scale_percent,
             scale_min_blocks=scale_min_blocks,
             on_imagery=select_and_download if should_select_images else None,
-            on_progress=on_progress,
             on_mask_progress=on_mask_progress,
             on_mask_start=on_mask_start,
         )

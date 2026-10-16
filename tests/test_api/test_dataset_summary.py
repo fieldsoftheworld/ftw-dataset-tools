@@ -1,5 +1,6 @@
 """Tests for the dataset_summary API module."""
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
@@ -90,7 +91,7 @@ class TestFindChipsDirAndParquet:
         parquet_file = dataset_dir / "austria_chips.parquet"
         parquet_file.touch()
 
-        result_dir, result_parquet = _find_chips_dir_and_parquet(dataset_dir, lambda _: None)
+        result_dir, result_parquet = _find_chips_dir_and_parquet(dataset_dir)
 
         assert result_dir == chips_dir
         assert result_parquet == parquet_file
@@ -100,7 +101,7 @@ class TestFindChipsDirAndParquet:
         from ftw_dataset_tools.api.dataset_summary import _find_chips_dir_and_parquet
 
         with pytest.raises(FileNotFoundError, match=r"No chips directory found"):
-            _find_chips_dir_and_parquet(tmp_path, lambda _: None)
+            _find_chips_dir_and_parquet(tmp_path)
 
     def test_raises_when_no_parquet_file(self, tmp_path: Path) -> None:
         """Test raises FileNotFoundError when no parquet file found."""
@@ -110,7 +111,7 @@ class TestFindChipsDirAndParquet:
         chips_dir.mkdir()
 
         with pytest.raises(FileNotFoundError, match=r"No \*_chips.parquet file found"):
-            _find_chips_dir_and_parquet(tmp_path, lambda _: None)
+            _find_chips_dir_and_parquet(tmp_path)
 
 
 class TestLoadChipsDf:
@@ -135,7 +136,7 @@ class TestLoadChipsDf:
         parquet_file = tmp_path / "chips.parquet"
         gdf.to_parquet(parquet_file)
 
-        result_df, total, train, val, test = _load_chips_df(parquet_file, lambda _: None)
+        result_df, total, train, val, test = _load_chips_df(parquet_file)
 
         assert total == 3
         assert train == 1
@@ -156,7 +157,7 @@ class TestLoadChipsDf:
         parquet_file = tmp_path / "chips.parquet"
         df.to_parquet(parquet_file)
 
-        _result_df, total, train, val, test = _load_chips_df(parquet_file, lambda _: None)
+        _result_df, total, train, val, test = _load_chips_df(parquet_file)
 
         assert total == 2
         assert train == 0
@@ -172,7 +173,7 @@ class TestLoadChipsDf:
         parquet_file = tmp_path / "chips.parquet"
         df.to_parquet(parquet_file)
 
-        _result_df, total, train, val, test = _load_chips_df(parquet_file, lambda _: None)
+        _result_df, total, train, val, test = _load_chips_df(parquet_file)
 
         assert total == 0
         assert train == 0
@@ -193,7 +194,7 @@ class TestLoadChipsDf:
         parquet_file.touch()
 
         with pytest.raises(Exception, match="Corrupt parquet file"):
-            _load_chips_df(parquet_file, lambda _: None)
+            _load_chips_df(parquet_file)
 
 
 class TestCollectStacMetadata:
@@ -222,7 +223,7 @@ class TestCollectStacMetadata:
         planting_file = chip_dir / "chip1_planting_s2.json"
         planting_file.write_text(json.dumps(stac_item))
 
-        result = _collect_stac_metadata(tmp_path, lambda _: None)
+        result = _collect_stac_metadata(tmp_path)
 
         assert len(result["planting_items"]) == 1
         # Dates and cloud cover are only collected if datetime is present and parseable
@@ -244,7 +245,7 @@ class TestCollectStacMetadata:
         malformed_file.write_text("{ invalid json")
 
         # Should not raise - files are found but parsing fails silently
-        result = _collect_stac_metadata(tmp_path, lambda _: None)
+        result = _collect_stac_metadata(tmp_path)
 
         # The file path is still added to planting_items
         assert len(result["planting_items"]) == 1
@@ -271,7 +272,7 @@ class TestCollectStacMetadata:
         planting_file.write_text(json.dumps(stac_item))
 
         # Should not raise
-        result = _collect_stac_metadata(tmp_path, lambda _: None)
+        result = _collect_stac_metadata(tmp_path)
 
         assert len(result["planting_items"]) == 1
         # Dates list should be empty since datetime is missing
@@ -283,7 +284,7 @@ class TestCollectStacMetadata:
 
         (tmp_path / "chips").mkdir()
 
-        result = _collect_stac_metadata(tmp_path, lambda _: None)
+        result = _collect_stac_metadata(tmp_path)
 
         assert len(result["planting_items"]) == 0
         assert len(result["planting_dates"]) == 0
@@ -306,7 +307,7 @@ class TestSelectExampleChips:
 
         planting_items = [chip1_dir / "chip1_planting_s2.json"]
 
-        result = _select_example_chips(planting_items, 1, lambda _: None)
+        result = _select_example_chips(planting_items, 1)
 
         assert len(result) == 1
         assert result[0] == "chip1"
@@ -323,7 +324,7 @@ class TestSelectExampleChips:
 
         planting_items = [chip1_dir / "chip1_planting_s2.json"]
 
-        result = _select_example_chips(planting_items, 1, lambda _: None)
+        result = _select_example_chips(planting_items, 1)
 
         assert len(result) == 0
 
@@ -339,7 +340,7 @@ class TestSelectExampleChips:
             (chip_dir / f"chip{i}_harvest_image_s2.jpg").touch()
             planting_items.append(chip_dir / f"chip{i}_planting_s2.json")
 
-        result = _select_example_chips(planting_items, 3, lambda _: None)
+        result = _select_example_chips(planting_items, 3)
 
         assert len(result) == 3
 
@@ -405,8 +406,10 @@ class TestCreateDatasetSummaryIntegration:
         assert result.output_path == output_path
         assert output_path.exists()
 
-    def test_on_progress_callback(self, tmp_path: Path) -> None:
-        """Test that on_progress callback is invoked."""
+    def test_progress_is_logged_at_debug(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Progress messages are logged at DEBUG, so they show only with ftwd -v."""
         from ftw_dataset_tools.api.dataset_summary import create_dataset_summary
 
         # Create minimal valid structure (chips/ directory, *_chips.parquet file)
@@ -418,15 +421,12 @@ class TestCreateDatasetSummaryIntegration:
         parquet_file = dataset_dir / "test_chips.parquet"
         df.to_parquet(parquet_file)
 
-        messages = []
+        caplog.set_level(logging.DEBUG, logger="ftw_dataset_tools")
+        create_dataset_summary(dataset_dir, num_examples=0)
 
-        def callback(msg: str) -> None:
-            messages.append(msg)
-
-        create_dataset_summary(dataset_dir, num_examples=0, on_progress=callback)
-
-        assert len(messages) > 0
-        assert any("Analyzing dataset" in msg for msg in messages)
+        assert any(
+            r.levelname == "DEBUG" and "Analyzing dataset" in r.message for r in caplog.records
+        )
 
 
 class TestWriteMarkdownSummary:
@@ -469,7 +469,13 @@ class TestWriteMarkdownSummary:
 class TestCountEmptyMasks:
     """Tests for _count_empty_masks helper."""
 
-    def test_counts_empty_and_non_empty_masks(self, tmp_path: Path) -> None:
+    @pytest.fixture(autouse=True)
+    def _debug_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.DEBUG, logger="ftw_dataset_tools")
+
+    def test_counts_empty_and_non_empty_masks(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Test counting mix of empty and non-empty masks."""
         from ftw_dataset_tools.api.dataset_summary import _count_empty_masks
 
@@ -492,13 +498,14 @@ class TestCountEmptyMasks:
         mask3_path = chip3_dir / "chip3_semantic_3_class.tif"
         self._create_test_mask(mask3_path, all_zeros=True)
 
-        messages = []
-        result = _count_empty_masks(tmp_path, messages.append)
+        result = _count_empty_masks(tmp_path)
 
         assert result == 2  # Two empty masks
-        assert any("Found 2 empty masks" in msg for msg in messages)
+        assert any("Found 2 empty masks" in msg for msg in caplog.messages)
 
-    def test_handles_missing_mask_files(self, tmp_path: Path) -> None:
+    def test_handles_missing_mask_files(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Test handling chips without mask files."""
         from ftw_dataset_tools.api.dataset_summary import _count_empty_masks
 
@@ -513,14 +520,15 @@ class TestCountEmptyMasks:
         chip2_dir.mkdir(parents=True)
         # No mask file created
 
-        messages = []
-        result = _count_empty_masks(tmp_path, messages.append)
+        result = _count_empty_masks(tmp_path)
 
         # Should only count the one chip with a mask
         assert result == 1
-        assert any("Found 1 empty masks out of 1 chips checked" in msg for msg in messages)
+        assert any("Found 1 empty masks out of 1 chips checked" in msg for msg in caplog.messages)
 
-    def test_handles_rasterio_read_errors(self, tmp_path: Path) -> None:
+    def test_handles_rasterio_read_errors(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Test handling rasterio read errors gracefully."""
         from ftw_dataset_tools.api.dataset_summary import _count_empty_masks
 
@@ -530,33 +538,33 @@ class TestCountEmptyMasks:
         mask1_path = chip1_dir / "chip1_semantic_3_class.tif"
         self._create_test_mask(mask1_path, all_zeros=True)
 
-        messages = []
-
         # Mock rasterio.open to raise an exception
         with patch("rasterio.open") as mock_open:
             mock_open.side_effect = Exception("Simulated read error")
 
-            result = _count_empty_masks(tmp_path, messages.append)
+            result = _count_empty_masks(tmp_path)
 
         # Should return 0 and log warning
         assert result == 0
-        assert any("Warning: Failed to read mask" in msg for msg in messages)
+        assert any(
+            r.levelname == "WARNING" and "Failed to read mask" in r.message for r in caplog.records
+        )
 
-    def test_handles_missing_rasterio(self, tmp_path: Path) -> None:
+    def test_handles_missing_rasterio(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Test graceful handling when rasterio is not available."""
         from ftw_dataset_tools.api.dataset_summary import _count_empty_masks
 
         chip_dir = tmp_path / "chips" / "33UXP" / "chip1"
         chip_dir.mkdir(parents=True)
 
-        messages = []
-
         # Mock the rasterio import to fail
         with patch.dict("sys.modules", {"rasterio": None}):
-            result = _count_empty_masks(tmp_path, messages.append)
+            result = _count_empty_masks(tmp_path)
 
         assert result == 0
-        assert any("rasterio not available" in msg for msg in messages)
+        assert any("rasterio not available" in msg for msg in caplog.messages)
 
     @staticmethod
     def _create_test_mask(path: Path, all_zeros: bool = True) -> None:
@@ -758,25 +766,27 @@ class TestMaskStatisticsMarkdown:
 class TestHistograms:
     """Tests for the histogram figures."""
 
-    def test_creates_value_histogram(self, tmp_path: Path) -> None:
+    def test_creates_value_histogram(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         from ftw_dataset_tools.api.dataset_summary import _create_histogram
 
+        caplog.set_level("DEBUG", logger="ftw_dataset_tools")
         output = tmp_path / "coverage.png"
-        messages: list[str] = []
-        _create_histogram([10.0, 50.0, 90.0], "Coverage (%)", output, messages.append)
+        _create_histogram([10.0, 50.0, 90.0], "Coverage (%)", output)
 
         assert output.stat().st_size > 0
-        assert "  Saved: coverage.png" in messages
+        assert any("Saved: coverage.png" in msg for msg in caplog.messages)
 
-    def test_creates_date_histogram(self, tmp_path: Path) -> None:
+    def test_creates_date_histogram(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         from datetime import datetime
 
         from ftw_dataset_tools.api.dataset_summary import _create_date_histogram
 
         output = tmp_path / "dates.png"
-        messages: list[str] = []
+        caplog.set_level("DEBUG", logger="ftw_dataset_tools")
         dates = [datetime(2023, 4, 1), datetime(2023, 5, 15), datetime(2023, 9, 1)]
-        _create_date_histogram(dates, "Planting", output, messages.append)
+        _create_date_histogram(dates, "Planting", output)
 
         assert output.stat().st_size > 0
-        assert "  Saved: dates.png" in messages
+        assert any("Saved: dates.png" in msg for msg in caplog.messages)

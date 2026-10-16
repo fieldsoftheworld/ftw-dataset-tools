@@ -31,16 +31,18 @@ from ftw_dataset_tools.api.imagery.thumbnails import (
     generate_thumbnail,
     has_rgb_bands,
 )
+from ftw_dataset_tools.api.logging_config import get_logger
 from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 from ftw_dataset_tools.api.stac_items import update_parent_item, write_item
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from pathlib import Path
 
     from affine import Affine
 
     from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
+
+logger = get_logger(__name__)
 
 __all__ = [
     "DownloadResult",
@@ -163,14 +165,8 @@ def compute_target_grid(
     output_path: Path,
     resolution: float,
     reference_raster: Path | None,
-    on_progress: Callable[[str], None] | None = None,
 ) -> tuple[tuple[CRS, Affine, int, int, Path | None] | None, str | None]:
     """Compute output grid from reference mask or bbox+resolution fallback."""
-
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
     minx, miny, maxx, maxy = bbox
     reference_grid = reference_raster or find_reference_mask_for_output(output_path)
 
@@ -184,16 +180,16 @@ def compute_target_grid(
                 if target_crs is None:
                     raise ValueError("Reference raster has no CRS")
 
-            log(
+            logger.debug(
                 f"Grid: source=reference_mask path={reference_grid.name} "
                 f"crs={target_crs} width={target_width} height={target_height}"
             )
-            log(f"Grid: using reference transform={target_transform}")
-            log(
+            logger.debug(f"Grid: using reference transform={target_transform}")
+            logger.debug(
                 f"Grid: requested resolution={resolution}m ignored because "
                 "reference mask defines output grid"
             )
-            log(
+            logger.debug(
                 f"Using reference mask grid: {reference_grid.name} "
                 f"({target_width}x{target_height}, {target_crs})"
             )
@@ -224,15 +220,17 @@ def compute_target_grid(
     target_crs = CRS.from_epsg(4326)
     target_transform = transform_from_bounds(minx, miny, maxx, maxy, target_width, target_height)
 
-    log(
+    logger.debug(
         f"Grid: source=fallback_bbox_resolution bbox=({minx:.6f}, {miny:.6f}, "
         f"{maxx:.6f}, {maxy:.6f}) resolution_m={resolution}"
     )
-    log(
+    logger.debug(
         f"Grid: computed crs={target_crs} width={target_width} "
         f"height={target_height} transform={target_transform}"
     )
-    log(f"No reference mask found, using EPSG:4326 fallback grid: {target_width}x{target_height}")
+    logger.debug(
+        f"No reference mask found, using EPSG:4326 fallback grid: {target_width}x{target_height}"
+    )
 
     return (target_crs, target_transform, target_width, target_height, None), None
 
@@ -333,7 +331,6 @@ def download_and_clip_scene(
     bands: list[str] | None = None,
     resolution: float = 10.0,
     reference_raster: Path | None = None,
-    on_progress: Callable[[str], None] | None = None,
 ) -> DownloadResult:
     """
     Download and clip a scene to the specified bounding box.
@@ -347,7 +344,6 @@ def download_and_clip_scene(
         reference_raster: Optional mask raster path used as exact output grid
             reference (CRS, transform, width, height). If not provided, the
             function auto-detects a co-located mask from ``output_path``.
-        on_progress: Optional callback for progress messages
 
     Returns:
         DownloadResult with output information
@@ -355,11 +351,7 @@ def download_and_clip_scene(
     if bands is None:
         bands = BANDS_OF_INTEREST.copy()
 
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
-    log(f"Downloading {scene.id} bands: {bands}")
+    logger.debug(f"Downloading {scene.id} bands: {bands}")
 
     # Get band hrefs
     band_hrefs = _get_band_hrefs(scene.item, bands)
@@ -377,14 +369,13 @@ def download_and_clip_scene(
         )
 
     found_bands = list(band_hrefs.keys())
-    log(f"Found {len(found_bands)} bands: {found_bands}")
+    logger.debug(f"Found {len(found_bands)} bands: {found_bands}")
 
     target_grid, target_grid_error = compute_target_grid(
         bbox=bbox,
         output_path=output_path,
         resolution=resolution,
         reference_raster=reference_raster,
-        on_progress=on_progress,
     )
 
     if target_grid_error is not None or target_grid is None:
@@ -402,10 +393,10 @@ def download_and_clip_scene(
 
     target_crs, target_transform, target_width, target_height, reference_grid = target_grid
 
-    log(f"Target dimensions: {target_width}x{target_height} pixels")
+    logger.debug(f"Target dimensions: {target_width}x{target_height} pixels")
 
     # Read bands in parallel for faster network throughput
-    log(f"Reading {len(found_bands)} bands in parallel...")
+    logger.debug(f"Reading {len(found_bands)} bands in parallel...")
     band_results: dict[str, np.ndarray] = {}
     failed_band = None
     failed_error = None
@@ -455,7 +446,7 @@ def download_and_clip_scene(
 
     # Stack bands
     stacked = np.stack(band_data, axis=0)
-    log(f"Stacked shape: {stacked.shape}")
+    logger.debug(f"Stacked shape: {stacked.shape}")
 
     # Mosaics keep their native int16 values, -32768 fill and 0.0001 scale (no offset).
     is_mosaic = scene.item.properties.get("ftw:source") == MOSAIC_SOURCE
@@ -472,7 +463,7 @@ def download_and_clip_scene(
         "nodata": MOSAIC_NODATA if is_mosaic else stack_nodata(found_bands),
     }
 
-    log(f"Writing to {output_path}...")
+    logger.debug(f"Writing to {output_path}...")
 
     write_error = write_cog(
         output_path,
@@ -495,7 +486,7 @@ def download_and_clip_scene(
             error=write_error,
         )
 
-    log(f"Successfully wrote {output_path}")
+    logger.debug(f"Successfully wrote {output_path}")
 
     alignment_error = validate_alignment(output_path, reference_grid)
     if alignment_error is not None:

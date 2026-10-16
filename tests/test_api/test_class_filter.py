@@ -121,18 +121,19 @@ class TestValidateAgainst:
         with pytest.raises(ClassFilterError, match="not covered"):
             cf.validate_against({"wheat", "water", "rye"})
 
-    def test_null_treated_as_background(self) -> None:
+    def test_null_treated_as_background(self, caplog: pytest.LogCaptureFixture) -> None:
         cf = ClassFilter("crop", ["wheat"], ["water"])
-        msgs: list[str] = []
         # NULL is background, not an error.
-        cf.validate_against({"wheat", "water", None}, on_progress=msgs.append)
-        assert any("null" in m.lower() and "background" in m.lower() for m in msgs)
+        cf.validate_against({"wheat", "water", None})
+        assert any("null" in m.lower() and "background" in m.lower() for m in caplog.messages)
 
-    def test_absent_listed_class_warns(self) -> None:
+    def test_absent_listed_class_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         cf = ClassFilter("crop", ["wheat", "rye"], ["water"])
-        msgs: list[str] = []
-        cf.validate_against({"wheat", "water"}, on_progress=msgs.append)
-        assert any("not present" in m and "rye" in m for m in msgs)
+        cf.validate_against({"wheat", "water"})
+        assert any(
+            r.levelname == "WARNING" and "not present" in r.message and "rye" in r.message
+            for r in caplog.records
+        )
 
 
 class TestDataPlane:

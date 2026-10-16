@@ -1,13 +1,18 @@
 """Progress display for imagery selection operations."""
 
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from tqdm import tqdm
 
+from ftw_dataset_tools.api.logging_config import replay
+
 if TYPE_CHECKING:
     from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
 
+# Log-record attribute naming the icon for a record shown on the status line.
+STATUS_ICON = "status_icon"
 
 # tqdm prefixes a non-empty ``{postfix}`` with ", ", so the counters have to carry
 # their own labels: a literal ``ok={postfix}`` in the format rendered "ok=, 0 fail=19".
@@ -46,7 +51,6 @@ class ImageryProgressBar:
 
     total: int
     leave: bool = True
-    verbose: bool = False
     stats: SelectionStats = field(default_factory=SelectionStats)
     _pbar: tqdm | None = field(default=None, repr=False)
     _current_chip: str | None = field(default=None, repr=False)
@@ -91,36 +95,14 @@ class ImageryProgressBar:
         short_id = chip_id.replace("ftw-", "") if chip_id.startswith("ftw-") else chip_id
         self._status(short_id)
 
-    def on_progress(self, message: str) -> None:
-        """Progress callback for scene selection.
-
-        All messages update in-place on the description line with original formatting.
-        """
-        if not self._pbar:
-            return
-
-        # Format messages with icons like the original
-        if message.startswith("Expansion"):
-            # "Expansion 1: planting buffer now 28 days"
-            self._status(f"↻ {message}")
-        elif message.startswith("Searching for"):
-            # "Searching for planting scene around 2024-05-01..." -> "○ Searching planting..."
-            season = "planting" if "planting" in message else "harvest"
-            self._status(f"○ Searching {season}...")
-        elif message.startswith("Selected"):
-            # Keep the full message: "✓ Selected planting scene: S2B_T54TWN... (0.0% cloud)"
-            self._status(f"✓ {message}")
-        elif message.startswith("Found"):
-            # "Found 5 planting scene candidates"
-            self._status(f"○ {message}")
-        elif message.startswith("Both seasons"):
-            self._status(f"✓ {message}")
-        elif "Skipping" in message:
-            # "  Skipping 9-28: 15.2% cloud" -> "✗ Skipping 9-28: 15.2% cloud"
-            self._status(f"✗ {message.strip()}")
-        else:
-            # Other messages
-            self._status(message)
+    def show(self, records: list[logging.LogRecord]) -> None:
+        """Put status-tagged records on the status line; log the rest above the bar."""
+        for record in records:
+            icon = getattr(record, STATUS_ICON, None)
+            if icon is None:
+                replay([record])
+            else:
+                self._status(f"{icon} {record.getMessage()}")
 
     def mark_success(self, result: "SceneSelectionResult") -> None:
         """Mark current chip as successfully processed."""

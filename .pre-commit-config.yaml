@@ -32,6 +32,12 @@ repos:
 
   - repo: local
     hooks:
+      - id: no-click-in-api
+        name: no click in api/ (use the logger)
+        entry: '^\s*(import click|from click)|click\.(echo|secho)'
+        language: pygrep
+        files: ^src/ftw_dataset_tools/api/
+        types: [python]
       - id: pytest
         name: pytest
         entry: uv run --locked pytest -m "not slow"

@@ -65,20 +65,19 @@ class TestGetGrid:
 
     @pytest.mark.slow
     @pytest.mark.network
-    def test_progress_callback(self, sample_geoparquet_4326: Path) -> None:
-        """Test progress callback is invoked."""
+    def test_progress_is_logged(
+        self, sample_geoparquet_4326: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test progress is logged."""
         import contextlib
 
         from ftw_dataset_tools.api.grid import get_grid
 
-        messages: list[str] = []
-
-        # This will fail at the S3 fetch step, but progress should be called first
+        # This will fail at the S3 fetch step, but progress should be logged first
         with contextlib.suppress(Exception):
-            get_grid(sample_geoparquet_4326, on_progress=messages.append)
+            get_grid(sample_geoparquet_4326)
 
-        assert len(messages) > 0
-        assert any("CRS" in msg for msg in messages)
+        assert any("CRS" in msg for msg in caplog.messages)
 
     @pytest.mark.slow
     @pytest.mark.network

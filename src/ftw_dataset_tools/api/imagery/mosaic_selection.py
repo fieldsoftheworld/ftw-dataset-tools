@@ -9,6 +9,7 @@ from ftw_dataset_tools.api.imagery.mosaic_search import find_containing_tile, ye
 from ftw_dataset_tools.api.imagery.nodata_analysis import calculate_nodata_percentage
 from ftw_dataset_tools.api.imagery.settings import DEFAULT_NODATA_MAX, MOSAIC_MAX_YEAR_TRIES
 from ftw_dataset_tools.api.imagery.slots import MOSAIC_SLOTS
+from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -26,6 +27,9 @@ __all__ = [
 
 # How far from the requested year the fallback looks before giving up.
 _MAX_YEAR_DISTANCE = 10
+
+
+logger = get_logger(__name__)
 
 
 class MosaicYearError(ValueError):
@@ -96,7 +100,6 @@ def select_mosaics_for_chip(
     bbox: tuple[float, float, float, float],
     year: int,
     nodata_max: float = DEFAULT_NODATA_MAX,
-    on_progress: Callable[[str], None] | None = None,
 ) -> MosaicSelectionResult:
     """Pick Q1-Q4 mosaics of one year for a chip, falling back to nearby years.
 
@@ -104,21 +107,17 @@ def select_mosaics_for_chip(
     the chip's nodata is within ``nodata_max`` (same check as scene selection).
     """
 
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
     result = MosaicSelectionResult(chip_id=chip_id, bbox=bbox, requested_year=year)
     reason = "No mosaic year available"
     for candidate in fallback_years(year):
         result.years_tried.append(candidate)
-        quarters, reason = _select_year(bbox, candidate, nodata_max, log, result)
+        quarters, reason = _select_year(bbox, candidate, nodata_max, result)
         if quarters is not None:
             result.imagery_year = candidate
             result.quarters = quarters
-            log(f"Selected mosaics for {candidate}")
+            logger.info(f"Selected mosaics for {candidate}")
             return result
-        log(f"  {reason}")
+        logger.info(f"  {reason}")
 
     tried = ", ".join(str(y) for y in result.years_tried)
     result.skipped_reason = f"No complete mosaic year (tried {tried}): {reason}"
@@ -129,7 +128,6 @@ def _select_year(
     bbox: tuple[float, float, float, float],
     year: int,
     nodata_max: float,
-    log: Callable[[str], None],
     result: MosaicSelectionResult,
 ) -> tuple[dict[str, SelectedMosaic] | None, str]:
     quarters: dict[str, SelectedMosaic] = {}
@@ -141,6 +139,6 @@ def _select_year(
         nodata = calculate_nodata_percentage(tile.assets["nir"].href, bbox)
         if nodata > nodata_max:
             return None, f"{year} Q{number}: {nodata:.1f}% nodata in chip window"
-        log(f"  {year} Q{number}: {tile.id}")
+        logger.info(f"  {year} Q{number}: {tile.id}")
         quarters[slot] = SelectedMosaic(item=tile, quarter=slot, year=year)
     return quarters, ""

@@ -90,14 +90,14 @@ CLI commands are thin wrappers. Business logic lives in `api/`.
 # In commands/mycommand.py - CLI wrapper
 @click.command()
 @click.argument("input_file")
-@click.option("--verbose", "-v", is_flag=True)
-def mycommand(input_file, verbose):
+@click.option("--force", is_flag=True)
+def mycommand(input_file, force):
     """Command docstring."""
     from ftw_dataset_tools.api.mymodule import mycommand_impl
-    mycommand_impl(input_file, verbose)
+    mycommand_impl(input_file, force)
 
 # In api/mymodule.py - Business logic
-def mycommand_impl(input_file, verbose):
+def mycommand_impl(input_file, force):
     # Actual implementation here
 ```
 
@@ -230,34 +230,32 @@ with rasterio.open(file_path) as src:
 
 ---
 
-## Logging (TODO)
+## Logging
 
-> **Note:** This section describes the target logging infrastructure. It is not yet implemented.
-> See GitHub issue for tracking: https://github.com/fieldsoftheworld/ftw-dataset-tools/issues/14
-
-**Target: Never use `click.echo()` in `api/` modules. Always use logging helpers.**
-
-`click.echo()` is allowed in `commands/` for direct CLI output, but `api/` modules should use a logger for testability and library compatibility.
-
-### Future Implementation
+`api/` reports messages through a module logger, never `click.echo()` or a string callback
+(a pre-commit hook rejects click in `api/`). Numeric `(done, total)` callbacks for progress
+bars stay as callbacks.
 
 ```python
-from ftw_dataset_tools.api.logging_config import success, warn, error, info, debug, progress
+from ftw_dataset_tools.api.logging_config import get_logger, success
 
-success("Operation completed")  # Green - for completed operations
-warn("Something to note")       # Yellow - for warnings
-error("Something went wrong")   # Red - for errors
-info("Informational message")   # Cyan - for tips/context
-debug("Debug details")          # Only shown when verbose=True
-progress("Processing...")       # Plain text - for status updates
+logger = get_logger(__name__)
+
+logger.debug("Details")            # shown only with `ftwd -v`
+logger.info("Processing...")
+success(logger, "Done")            # green
+logger.warning("Something to note")  # yellow, "Warning: " prefix added by the CLI
+logger.error("Something failed")     # red, "Error: " prefix added by the CLI
 ```
 
-### Why Not click.echo() in api/?
-
-1. **Testability**: Logger output is captured by pytest; click.echo requires special handling
-2. **Library usage**: When ftwd is used as a library, users can configure logging handlers
-3. **Consistency**: Single source of truth for all output formatting
-4. **Verbosity control**: Debug messages are automatically hidden unless `--verbose` is passed
+- Use `get_logger`, not `logging.getLogger`: it honours `capture_logs()`.
+- Don't put colours or `Warning:` prefixes in messages; `commands/cli_logging.py` adds them.
+- Work on a thread pool wraps each task in `capture_logs(task.logs)` and the calling thread
+  calls `replay(task.logs)`, so each task's lines stay together.
+- `ftwd -v` is global; commands check it with `is_verbose()`. Tests assert on `caplog`.
+- `select-images`, `convert-previews` and `create-dataset-summary` keep their old `-v/--verbose`
+  as an alias of `ftwd -v` (`verbose_alias_option`) so existing scripts still work; don't add
+  it to new commands.
 
 ---
 

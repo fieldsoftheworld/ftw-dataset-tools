@@ -20,11 +20,12 @@ from ftw_dataset_tools.api.geo import (
     ensure_spatial_loaded,
     sql_path,
 )
+from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from ftw_dataset_tools.api.geo import CRSInfo
+
+logger = get_logger(__name__)
 
 _NAN_SAFE_TYPES = {"DOUBLE", "FLOAT", "REAL"}
 
@@ -133,8 +134,6 @@ def build_pmtiles(
     parquet: Path,
     out: Path,
     spec: TileSpec,
-    *,
-    on_progress: Callable[[str], None] | None = None,
 ) -> Path:
     """Export ``parquet`` to GeoJSONSeq and tile it into a PMTiles archive at ``out``.
 
@@ -148,8 +147,7 @@ def build_pmtiles(
     seq = out.with_suffix(".geojsonseq")
     kept = export_geojsonseq(Path(parquet), seq, spec.attributes)
     cmd = _tippecanoe_command(out, seq, spec)
-    if on_progress:
-        on_progress(f"tippecanoe: {spec.layer} ({', '.join(kept) or 'geometry only'})")
+    logger.info(f"tippecanoe: {spec.layer} ({', '.join(kept) or 'geometry only'})")
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as err:

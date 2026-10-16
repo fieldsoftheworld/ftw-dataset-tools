@@ -117,16 +117,15 @@ class TestAddCropStats:
         cols = list(gpd.read_parquet(chips).columns)
         assert cols.count("hcat_dominant_code") == 1
 
-    def test_skips_without_hcat(self, tmp_path: Path) -> None:
+    def test_skips_without_hcat(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         from ftw_dataset_tools.api.crop_stats import add_crop_stats
 
         chips = _chips(tmp_path)
-        messages: list[str] = []
-        result = add_crop_stats(chips, _fields(tmp_path, hcat=False), on_progress=messages.append)
+        result = add_crop_stats(chips, _fields(tmp_path, hcat=False))
 
         assert result.skipped is True
         assert "hcat:code" in (result.reason or "")
-        assert any("skipping crop composition" in m for m in messages)
+        assert any("skipping crop composition" in m for m in caplog.messages)
         assert "hcat_dominant_code" not in gpd.read_parquet(chips).columns
 
     def test_name_falls_back_to_hcat_name(self, tmp_path: Path) -> None:
@@ -182,7 +181,9 @@ class TestCodeCasting:
         assert result.skipped is False
         assert _read(chips)[0][1] == 3301010101
 
-    def test_non_numeric_codes_skip_without_raising(self, tmp_path: Path) -> None:
+    def test_non_numeric_codes_skip_without_raising(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         from ftw_dataset_tools.api.crop_stats import add_crop_stats
 
         fields = _write(
@@ -191,14 +192,13 @@ class TestCodeCasting:
             [box(0, 0, 1, 2), box(1, 0, 2, 2)],
         )
         chips = _chips(tmp_path)
-        messages: list[str] = []
 
-        result = add_crop_stats(chips, fields, on_progress=messages.append)
+        result = add_crop_stats(chips, fields)
 
         assert result.skipped is True
         assert result.reason == "hcat:code has no numeric values"
         assert result.chips_total == 2
-        assert any("skipping crop composition" in m for m in messages)
+        assert any("skipping crop composition" in m for m in caplog.messages)
         assert "hcat_dominant_code" not in gpd.read_parquet(chips).columns
 
     def test_uncastable_rows_count_as_uncoded(self, tmp_path: Path) -> None:

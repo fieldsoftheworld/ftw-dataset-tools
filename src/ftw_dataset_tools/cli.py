@@ -5,6 +5,7 @@ import importlib
 import click
 
 from ftw_dataset_tools import __version__
+from ftw_dataset_tools.commands.cli_logging import configure_cli_logging
 
 # Command modules are imported on first use to keep startup fast.
 COMMAND_MODULES = (
@@ -58,7 +59,8 @@ class FtwdGroup(click.Group):
 
 @click.group(cls=FtwdGroup)
 @click.version_option(version=__version__, prog_name="ftwd")
-def cli() -> None:
+@click.option("-v", "--verbose", is_flag=True, help="Show debug output.")
+def cli(verbose: bool) -> None:
     """FTW Dataset Tools - CLI for creating Fields of the World benchmark dataset.
 
     This tool provides commands for:
@@ -69,6 +71,7 @@ def cli() -> None:
     - Creating chip definitions with field coverage statistics
     - Creating boundary lines and raster masks
     """
+    configure_cli_logging(verbose)
 
 
 if __name__ == "__main__":

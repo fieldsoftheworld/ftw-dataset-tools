@@ -25,6 +25,7 @@ from ftw_dataset_tools.api.imagery.selection_workflow import (
 )
 
 if TYPE_CHECKING:
+    import logging
     from pathlib import Path
 
     from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
@@ -688,8 +689,8 @@ class RecordingProgressBar:
     def start_chip(self, chip_id: str) -> None:
         self.calls.append(("start", chip_id))
 
-    def on_progress(self, message: str) -> None:
-        self.calls.append(("log", message))
+    def show(self, records: list[logging.LogRecord]) -> None:
+        self.calls.extend(("log", record.getMessage()) for record in records)
 
     def mark_success(self, _result: object) -> None:
         self.calls.append(("success", ""))
@@ -872,12 +873,11 @@ class TestParallelSelection:
         """Two chips searching at once must not interleave their output."""
         catalog = _write_chip_catalog(tmp_path, [f"chip_{n:03d}" for n in range(4)])
 
-        def fake_select(
-            *, chip_id: str, on_progress: object = None, **_kwargs: object
-        ) -> SceneSelectionResult:
+        from ftw_dataset_tools.api.imagery.scene_selection import logger
+
+        def fake_select(*, chip_id: str, **_kwargs: object) -> SceneSelectionResult:
             for step in range(3):
-                if on_progress is not None:
-                    on_progress(f"{chip_id}|step{step}")  # type: ignore[operator]
+                logger.info(f"{chip_id}|step{step}")
                 time.sleep(0.02)
             return mock_selection_result
 
@@ -953,28 +953,6 @@ class TestCropCalendarWarmup:
         select_imagery_for_catalog(catalog_dir=catalog, year=2024)
 
         crop_calendar_warmup.assert_not_called()
-
-    def test_on_progress_reaches_the_warmup(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        mock_selection_result: SceneSelectionResult,
-        crop_calendar_warmup: MagicMock,
-    ) -> None:
-        catalog = _write_chip_catalog(tmp_path, ["chip_000"])
-        monkeypatch.setattr(
-            "ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip",
-            lambda **_kwargs: mock_selection_result,
-        )
-        monkeypatch.setattr(
-            "ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar",
-            RecordingProgressBar,
-        )
-        callback = MagicMock()
-
-        select_imagery_for_catalog(catalog_dir=catalog, year=2024, on_progress=callback)
-
-        crop_calendar_warmup.assert_called_once_with(on_progress=callback)
 
 
 def _chip(item_id: str, **kwargs: object) -> pystac.Item:
@@ -1133,7 +1111,7 @@ class TestBuildSceneIndex:
         with patch.object(
             selection_workflow.parquet_search, "build_local_index", return_value="idx"
         ) as build:
-            index = selection_workflow._build_scene_index(jobs, "parquet", verbose=False)
+            index = selection_workflow._build_scene_index(jobs, "parquet")
 
         assert index == "idx"
         bbox, years = build.call_args.args
@@ -1145,7 +1123,7 @@ class TestBuildSceneIndex:
 
         jobs = [self._job("ftw-a_2022", [10.0, 45.0, 10.1, 45.1], 2022)]
         with patch.object(selection_workflow.parquet_search, "build_local_index") as build:
-            index = selection_workflow._build_scene_index(jobs, "earth-search", verbose=False)
+            index = selection_workflow._build_scene_index(jobs, "earth-search")
 
         assert index is None
         build.assert_not_called()
@@ -1159,6 +1137,6 @@ class TestBuildSceneIndex:
             "build_local_index",
             side_effect=OSError("mirror unreachable"),
         ):
-            index = selection_workflow._build_scene_index(jobs, "parquet", verbose=False)
+            index = selection_workflow._build_scene_index(jobs, "parquet")
 
         assert index is None

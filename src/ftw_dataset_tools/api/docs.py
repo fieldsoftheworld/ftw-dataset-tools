@@ -18,12 +18,13 @@ import duckdb
 
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
+from ftw_dataset_tools.api.logging_config import get_logger
 from ftw_dataset_tools.api.styles import split_counts, top_codes
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from ftw_dataset_tools.api.styles import StyleResult
+
+logger = get_logger(__name__)
 
 QUANTILES = (5, 25, 50, 75, 95)
 TOP_CROP_LIMIT = 10
@@ -946,7 +947,6 @@ def write_docs(
     *,
     readme: bool = True,
     agents: bool = True,
-    on_progress: Callable[[str], None] | None = None,
 ) -> list[Path]:
     """Measure the collection, run the documented queries and write the documents."""
     output_dir = Path(output_dir)
@@ -958,15 +958,13 @@ def write_docs(
         path = output_dir / "README.md"
         path.write_text(render_readme(collection, stats, styles, config_dict), encoding="utf-8")
         written.append(path)
-        if on_progress:
-            on_progress("docs: README.md")
+        logger.info("docs: README.md")
     if agents:
         queries = run_agents_queries(output_dir, collection)
         path = output_dir / "AGENTS.md"
         path.write_text(render_agents(collection, stats, queries), encoding="utf-8")
         written.append(path)
-        if on_progress:
-            on_progress("docs: AGENTS.md")
+        logger.info("docs: AGENTS.md")
     return written
 
 

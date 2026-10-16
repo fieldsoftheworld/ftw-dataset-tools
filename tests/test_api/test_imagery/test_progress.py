@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+
 from tqdm import tqdm
 
 from ftw_dataset_tools.api.imagery.progress import (
     BAR_FORMAT,
+    STATUS_ICON,
     ImageryProgressBar,
     SelectionStats,
     format_counters,
 )
+
+LOGGER_NAME = "ftw_dataset_tools.tests.progress"
 
 
 def _render(stats: SelectionStats) -> str:
@@ -76,3 +81,37 @@ class TestReportFailures:
             bar.report_failures([])
 
         assert capsys.readouterr().out == ""
+
+
+class TestShow:
+    """Status-tagged records drive the status line; everything else is logged."""
+
+    @staticmethod
+    def _record(msg: str, level: int = logging.INFO, icon: str | None = None) -> logging.LogRecord:
+        record = logging.LogRecord(LOGGER_NAME, level, __file__, 0, msg, None, None)
+        if icon is not None:
+            setattr(record, STATUS_ICON, icon)
+        return record
+
+    def test_tagged_record_goes_to_the_status_line(self, caplog) -> None:
+        with ImageryProgressBar(total=1, leave=False) as bar:
+            bar.show([self._record("Searching for planting scene", icon="○")])
+            description = bar._pbar.desc
+
+        assert description.startswith("○ Searching for planting scene")
+        assert caplog.records == []
+
+    def test_untagged_record_is_logged_with_its_level(self, caplog) -> None:
+        with ImageryProgressBar(total=1, leave=False) as bar:
+            bar.show([self._record("check failed", level=logging.WARNING)])
+            description = bar._pbar.desc
+
+        assert description == ""
+        assert [(r.levelname, r.message) for r in caplog.records] == [("WARNING", "check failed")]
+
+    def test_scene_selection_status_lines_carry_an_icon(self, caplog) -> None:
+        from ftw_dataset_tools.api.imagery import scene_selection
+
+        scene_selection._status("✗", "Skipping 9-28: 15.2% cloud")
+
+        assert getattr(caplog.records[0], STATUS_ICON) == "✗"

@@ -26,6 +26,7 @@ from ftw_dataset_tools.api.imagery.selection_workflow import (
     SelectionWorkflowResult,
 )
 from ftw_dataset_tools.api.stac_items import copy_catalog
+from ftw_dataset_tools.commands.cli_logging import is_verbose, verbose_alias_option
 from ftw_dataset_tools.commands.imagery_mode import (
     imagery_mode_option,
     reject_scene_only_options,
@@ -253,6 +254,7 @@ def _write_report(
 
 @click.command("select-images")
 @click.argument("input_path", type=click.Path(exists=True))
+@verbose_alias_option
 @imagery_mode_option
 @click.option(
     "--year",
@@ -331,13 +333,6 @@ def _write_report(
     help="Path for JSON report of skipped/failed chips.",
 )
 @click.option(
-    "-v",
-    "--verbose",
-    is_flag=True,
-    default=False,
-    help="Show detailed STAC query information and results.",
-)
-@click.option(
     "-o",
     "--output-dir",
     type=click.Path(path_type=Path),
@@ -370,7 +365,6 @@ def select_images_cmd(
     search_backend: Literal["parquet", "earth-search"],
     workers: int | None,
     output_report: str | None,
-    verbose: bool,
     output_dir: Path | None,
     show_stats: bool,
     clear_selections: bool,
@@ -396,7 +390,7 @@ def select_images_cmd(
     \b
     Examples:
         ftwd select-images ./my-dataset
-        ftwd select-images ./my-dataset/chips/33UXP/ftw-34UFF1628_2024/ftw-34UFF1628_2024.json -v
+        ftwd -v select-images ./my-dataset/chips/33UXP/ftw-34UFF1628_2024/ftw-34UFF1628_2024.json
         ftwd select-images ./my-dataset --year 2023 --cloud-cover-chip 5
         ftwd select-images ./my-dataset --force  # Overwrite existing selections
     """
@@ -420,7 +414,7 @@ def select_images_cmd(
 
     if mosaics:
         year = resolve_mosaic_year(year)
-        _echo_mosaic_settings(year, verbose)
+        _echo_mosaic_settings(year, is_verbose())
     else:
         _echo_settings(
             year,
@@ -428,7 +422,7 @@ def select_images_cmd(
             buffer_days,
             buffer_expansion_size,
             num_buffer_expansions,
-            verbose,
+            is_verbose(),
         )
     click.echo(f"\nFound {len(chip_items)} total chips")
 
@@ -443,12 +437,10 @@ def select_images_cmd(
             buffer_expansion_size=buffer_expansion_size,
             force=force,
             on_missing=on_missing,
-            verbose=verbose,
             workers=workers,
             search_backend=search_backend,
             imagery_mode=imagery_mode,
             chip_items=chip_entries,
-            on_progress=lambda msg: click.echo(f"  {msg}"),
         )
     except NoCloudFreeScenesError as e:
         raise click.ClickException(str(e)) from e

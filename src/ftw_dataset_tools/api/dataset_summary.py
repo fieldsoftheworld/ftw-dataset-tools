@@ -14,11 +14,12 @@ import pystac
 from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
 from ftw_dataset_tools.api.imagery.slots import parse_child_id
 from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_EXTENSIONS
+from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     import pandas as pd
+
+logger = get_logger(__name__)
 
 __all__ = [
     "DatasetSummary",
@@ -51,7 +52,6 @@ def create_dataset_summary(
     dataset_dir: str | Path,
     output_path: str | Path | None = None,
     num_examples: int = 10,
-    on_progress: Callable[[str], None] | None = None,
 ) -> DatasetSummary:
     """
     Create a markdown summary report for a dataset.
@@ -60,7 +60,6 @@ def create_dataset_summary(
         dataset_dir: Path to dataset directory containing a chips/ subdirectory
         output_path: Output path for markdown file (default: dataset_dir/summary.md)
         num_examples: Number of example chips to include (default: 10)
-        on_progress: Optional callback for progress messages
 
     Returns:
         DatasetSummary with statistics and paths
@@ -73,23 +72,19 @@ def create_dataset_summary(
     if not dataset_dir.exists():
         raise FileNotFoundError(f"Dataset directory not found: {dataset_dir}")
 
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
-    log(f"Analyzing dataset: {dataset_dir}")
+    logger.debug(f"Analyzing dataset: {dataset_dir}")
 
     # Find chips directory and parquet file
-    chips_dir, chips_parquet = _find_chips_dir_and_parquet(dataset_dir, log)
+    chips_dir, chips_parquet = _find_chips_dir_and_parquet(dataset_dir)
 
     # Load chips dataframe and compute split counts
-    df, total_chips, train_chips, val_chips, test_chips = _load_chips_df(chips_parquet, log)
+    df, total_chips, train_chips, val_chips, test_chips = _load_chips_df(chips_parquet)
 
     # Collect STAC metadata from chip items
-    stac_metadata = _collect_stac_metadata(dataset_dir, log)
+    stac_metadata = _collect_stac_metadata(dataset_dir)
 
     # Select example chips with imagery
-    example_chips = _select_example_chips(stac_metadata["planting_items"], num_examples, log)
+    example_chips = _select_example_chips(stac_metadata["planting_items"], num_examples)
 
     # Get field coverage statistics
     field_coverage_pct = (
@@ -97,7 +92,7 @@ def create_dataset_summary(
     )
 
     # Count empty masks
-    empty_mask_count = _count_empty_masks(dataset_dir, log)
+    empty_mask_count = _count_empty_masks(dataset_dir)
 
     # Generate visualizations
     figures_dir = dataset_dir / "figures"
@@ -110,13 +105,12 @@ def create_dataset_summary(
         planting_cloud_cover=stac_metadata["planting_cloud_cover"],
         harvest_cloud_cover=stac_metadata["harvest_cloud_cover"],
         field_coverage_pct=field_coverage_pct,
-        log=log,
     )
 
     # Create markdown report
     output_path = dataset_dir / "summary.md" if output_path is None else Path(output_path)
 
-    log("Generating markdown report...")
+    logger.debug("Generating markdown report...")
     _write_markdown_summary(
         output_path=output_path,
         dataset_dir=dataset_dir,
@@ -136,7 +130,7 @@ def create_dataset_summary(
         figures_dir=figures_dir,
     )
 
-    log(f"Summary written to: {output_path}")
+    logger.debug(f"Summary written to: {output_path}")
 
     return DatasetSummary(
         dataset_dir=dataset_dir,
@@ -157,12 +151,12 @@ def create_dataset_summary(
     )
 
 
-def _find_chips_dir_and_parquet(dataset_dir: Path, log: Callable[[str], None]) -> tuple[Path, Path]:
+def _find_chips_dir_and_parquet(dataset_dir: Path) -> tuple[Path, Path]:
     """Find chips directory and parquet file in dataset directory."""
     chips_dir = dataset_dir / "chips"
     if not chips_dir.is_dir():
         raise FileNotFoundError(f"No chips directory found in {dataset_dir}")
-    log(f"Found chips directory: {chips_dir.name}")
+    logger.debug(f"Found chips directory: {chips_dir.name}")
 
     chips_parquet_files = list(dataset_dir.glob("*_chips.parquet"))
     if not chips_parquet_files:
@@ -172,11 +166,9 @@ def _find_chips_dir_and_parquet(dataset_dir: Path, log: Callable[[str], None]) -
     return chips_dir, chips_parquet
 
 
-def _load_chips_df(
-    chips_parquet: Path, log: Callable[[str], None]
-) -> tuple[pd.DataFrame, int, int, int, int]:
+def _load_chips_df(chips_parquet: Path) -> tuple[pd.DataFrame, int, int, int, int]:
     """Load chips dataframe and compute split counts."""
-    log("Loading chips data...")
+    logger.debug("Loading chips data...")
 
     # Use DuckDB with spatial extension to load parquet file
     con = duckdb.connect(":memory:")
@@ -201,19 +193,18 @@ def _load_chips_df(
     val_chips = int((df["split"] == "val").sum()) if "split" in df.columns else 0
     test_chips = int((df["split"] == "test").sum()) if "split" in df.columns else 0
 
-    log(f"Total chips: {total_chips} (train={train_chips}, val={val_chips}, test={test_chips})")
+    logger.debug(
+        f"Total chips: {total_chips} (train={train_chips}, val={val_chips}, test={test_chips})"
+    )
 
     return df, total_chips, train_chips, val_chips, test_chips
 
 
-def _extract_dates_and_cloud_cover(
-    items: list[Path], log: Callable[[str], None]
-) -> tuple[list[datetime], list[float]]:
+def _extract_dates_and_cloud_cover(items: list[Path]) -> tuple[list[datetime], list[float]]:
     """Extract dates and cloud cover from STAC items.
 
     Args:
         items: List of paths to STAC item JSON files
-        log: Logging callback function
 
     Returns:
         Tuple of (dates, cloud_cover_values)
@@ -229,25 +220,25 @@ def _extract_dates_and_cloud_cover(
             if "eo:cloud_cover" in item.properties:
                 cloud_cover.append(item.properties["eo:cloud_cover"])
         except Exception as e:
-            log(f"Warning: Could not parse {json_file.name}: {e}")
+            logger.warning(f"Could not parse {json_file.name}: {e}")
 
     return dates, cloud_cover
 
 
-def _collect_stac_metadata(dataset_dir: Path, log: Callable[[str], None]) -> dict:
+def _collect_stac_metadata(dataset_dir: Path) -> dict:
     """Collect STAC metadata from chip items."""
-    log("Scanning STAC items...")
+    logger.debug("Scanning STAC items...")
 
     # Find all chip item directories (chips/<square>/<chip_id>/)
     chip_subdirs = iter_chip_dirs(dataset_dir)
-    log(f"Found {len(chip_subdirs)} chip subdirectories")
+    logger.debug(f"Found {len(chip_subdirs)} chip subdirectories")
 
     # Collect all JSON files from chip subdirectories
     chip_json_files = []
     for chip_subdir in chip_subdirs:
         chip_json_files.extend(chip_subdir.glob("*.json"))
 
-    log(f"Found {len(chip_json_files)} JSON files in chip subdirectories")
+    logger.debug(f"Found {len(chip_json_files)} JSON files in chip subdirectories")
 
     # Separate parent items and child items
     parent_items = [
@@ -256,13 +247,13 @@ def _collect_stac_metadata(dataset_dir: Path, log: Callable[[str], None]) -> dic
     planting_items = [f for f in chip_json_files if "_planting_s2" in f.stem]
     harvest_items = [f for f in chip_json_files if "_harvest_s2" in f.stem]
 
-    log(
+    logger.debug(
         f"Found {len(parent_items)} parent items, {len(planting_items)} planting items, {len(harvest_items)} harvest items"
     )
 
     # Process planting and harvest child items
-    planting_dates, planting_cloud_cover = _extract_dates_and_cloud_cover(planting_items, log)
-    harvest_dates, harvest_cloud_cover = _extract_dates_and_cloud_cover(harvest_items, log)
+    planting_dates, planting_cloud_cover = _extract_dates_and_cloud_cover(planting_items)
+    harvest_dates, harvest_cloud_cover = _extract_dates_and_cloud_cover(harvest_items)
 
     # Process parent items for metadata
     metadata = {}
@@ -280,7 +271,7 @@ def _collect_stac_metadata(dataset_dir: Path, log: Callable[[str], None]) -> dic
                 }
                 break
         except Exception as e:
-            log(f"Warning: Could not parse {json_file.name}: {e}")
+            logger.warning(f"Could not parse {json_file.name}: {e}")
 
     # Fallback to child items if no parent metadata
     if not metadata and (planting_items or harvest_items):
@@ -298,7 +289,7 @@ def _collect_stac_metadata(dataset_dir: Path, log: Callable[[str], None]) -> dic
         except Exception:
             pass
 
-    log(f"Found {len(planting_dates)} planting dates, {len(harvest_dates)} harvest dates")
+    logger.debug(f"Found {len(planting_dates)} planting dates, {len(harvest_dates)} harvest dates")
 
     return {
         "planting_items": planting_items,
@@ -327,9 +318,7 @@ def _find_preview(chip_dir: Path, stem: str) -> Path | None:
     return None
 
 
-def _select_example_chips(
-    planting_items: list[Path], num_examples: int, log: Callable[[str], None]
-) -> list[str]:
+def _select_example_chips(planting_items: list[Path], num_examples: int) -> list[str]:
     """Select example chips with imagery.
 
     Previews are matched across every known extension: a catalog built before the
@@ -348,7 +337,7 @@ def _select_example_chips(
 
     # Guard against empty chip list
     if not chip_ids_list:
-        log("Warning: No chip IDs found with planting items, returning empty example list")
+        logger.warning("No chip IDs found with planting items, returning empty example list")
         return []
 
     rng = np.random.default_rng(42)
@@ -365,27 +354,26 @@ def _select_example_chips(
                 if len(example_chips) >= num_examples:
                     break
 
-    log(f"Selected {len(example_chips)} example chips with imagery")
+    logger.debug(f"Selected {len(example_chips)} example chips with imagery")
     return example_chips
 
 
-def _count_empty_masks(dataset_dir: Path, log: Callable[[str], None]) -> int:
+def _count_empty_masks(dataset_dir: Path) -> int:
     """Count the number of chips with empty masks (no field pixels).
 
     Args:
         dataset_dir: Dataset directory whose chips/<square>/<chip_id>/
                      subdirectories hold the chip masks
-        log: Logging function
 
     Returns:
         Number of chips with empty masks
     """
-    log("Counting empty masks...")
+    logger.debug("Counting empty masks...")
 
     try:
         import rasterio
     except ImportError:
-        log("Warning: rasterio not available, skipping empty mask count")
+        logger.warning("rasterio not available, skipping empty mask count")
         return 0
 
     empty_count = 0
@@ -406,10 +394,10 @@ def _count_empty_masks(dataset_dir: Path, log: Callable[[str], None]) -> int:
                     empty_count += 1
                 total_checked += 1
         except Exception as e:
-            log(f"Warning: Failed to read mask {mask_file.name}: {e}")
+            logger.warning(f"Failed to read mask {mask_file.name}: {e}")
             continue
 
-    log(f"Found {empty_count} empty masks out of {total_checked} chips checked")
+    logger.debug(f"Found {empty_count} empty masks out of {total_checked} chips checked")
     return empty_count
 
 
@@ -421,31 +409,28 @@ def _generate_visualizations(
     planting_cloud_cover: list[float],
     harvest_cloud_cover: list[float],
     field_coverage_pct: list[float],
-    log: Callable[[str], None],
 ) -> None:
     """Generate all visualization plots."""
-    log(f"Creating visualizations in {figures_dir.name}/")
+    logger.debug(f"Creating visualizations in {figures_dir.name}/")
 
-    _create_split_map(df, figures_dir / "split_map.png", log)
+    _create_split_map(df, figures_dir / "split_map.png")
 
     if planting_dates:
-        _create_date_histogram(planting_dates, "Planting", figures_dir / "planting_dates.png", log)
+        _create_date_histogram(planting_dates, "Planting", figures_dir / "planting_dates.png")
     if harvest_dates:
-        _create_date_histogram(harvest_dates, "Harvest", figures_dir / "harvest_dates.png", log)
+        _create_date_histogram(harvest_dates, "Harvest", figures_dir / "harvest_dates.png")
 
     if planting_cloud_cover:
         _create_histogram(
             planting_cloud_cover,
             "Planting Cloud Cover (%)",
             figures_dir / "planting_cloud_cover.png",
-            log,
         )
     if harvest_cloud_cover:
         _create_histogram(
             harvest_cloud_cover,
             "Harvest Cloud Cover (%)",
             figures_dir / "harvest_cloud_cover.png",
-            log,
         )
 
     if field_coverage_pct:
@@ -453,7 +438,6 @@ def _generate_visualizations(
             field_coverage_pct,
             "Field Coverage (%)",
             figures_dir / "field_coverage.png",
-            log,
         )
 
 
@@ -467,13 +451,13 @@ def _pyplot():
     return plt
 
 
-def _create_split_map(df: pd.DataFrame, output_path: Path, log: Callable[[str], None]) -> None:
+def _create_split_map(df: pd.DataFrame, output_path: Path) -> None:
     """Create a map visualization of train/val/test splits."""
-    log("Creating split map...")
+    logger.debug("Creating split map...")
 
     # Ensure we have geometry column
     if "geometry" not in df.columns:
-        log("Warning: No geometry column found, skipping split map")
+        logger.warning("No geometry column found, skipping split map")
         return
 
     try:
@@ -484,7 +468,7 @@ def _create_split_map(df: pd.DataFrame, output_path: Path, log: Callable[[str], 
         if not isinstance(df, gpd.GeoDataFrame):
             # Check if DataFrame is empty before accessing iloc[0]
             if df.empty:
-                log("Warning: Empty DataFrame, skipping split map")
+                logger.warning("Empty DataFrame, skipping split map")
                 return
 
             # Check if geometry is in WKB format (bytes or bytearray)
@@ -512,10 +496,10 @@ def _create_split_map(df: pd.DataFrame, output_path: Path, log: Callable[[str], 
         df = df[df["geometry"].notna()]
 
         if len(df) == 0:
-            log("Warning: No valid geometries found after conversion, skipping split map")
+            logger.warning("No valid geometries found after conversion, skipping split map")
             return
 
-        log(f"Plotting {len(df)} chips on map...")
+        logger.debug(f"Plotting {len(df)} chips on map...")
 
         # Plot splits
         plt = _pyplot()
@@ -549,20 +533,16 @@ def _create_split_map(df: pd.DataFrame, output_path: Path, log: Callable[[str], 
         plt.tight_layout()
         plt.savefig(output_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
-        log(f"  Saved: {output_path.name}")
+        logger.debug(f"  Saved: {output_path.name}")
 
     except Exception as e:
-        import traceback
-
-        log(f"Warning: Could not create split map: {e}")
-        log(f"Traceback: {traceback.format_exc()}")
+        logger.warning(f"Could not create split map: {e}")
+        logger.debug("Traceback:", exc_info=True)
 
 
-def _create_date_histogram(
-    dates: list[datetime.datetime], label: str, output_path: Path, log: Callable[[str], None]
-) -> None:
+def _create_date_histogram(dates: list[datetime.datetime], label: str, output_path: Path) -> None:
     """Create histogram of dates."""
-    log(f"Creating {label.lower()} date histogram...")
+    logger.debug(f"Creating {label.lower()} date histogram...")
 
     try:
         import matplotlib.dates as mdates
@@ -586,20 +566,16 @@ def _create_date_histogram(
         plt.tight_layout()
         plt.savefig(output_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
-        log(f"  Saved: {output_path.name}")
+        logger.debug(f"  Saved: {output_path.name}")
 
     except Exception as e:
-        import traceback
-
-        log(f"Warning: Could not create date histogram: {e}")
-        log(f"Traceback: {traceback.format_exc()}")
+        logger.warning(f"Could not create date histogram: {e}")
+        logger.debug("Traceback:", exc_info=True)
 
 
-def _create_histogram(
-    values: list[float], label: str, output_path: Path, log: Callable[[str], None], bins: int = 20
-) -> None:
+def _create_histogram(values: list[float], label: str, output_path: Path, bins: int = 20) -> None:
     """Create histogram of numerical values."""
-    log(f"Creating {label.lower()} histogram...")
+    logger.debug(f"Creating {label.lower()} histogram...")
 
     try:
         plt = _pyplot()
@@ -625,13 +601,11 @@ def _create_histogram(
         plt.tight_layout()
         plt.savefig(output_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
-        log(f"  Saved: {output_path.name}")
+        logger.debug(f"  Saved: {output_path.name}")
 
     except Exception as e:
-        import traceback
-
-        log(f"Warning: Could not create histogram: {e}")
-        log(f"Traceback: {traceback.format_exc()}")
+        logger.warning(f"Could not create histogram: {e}")
+        logger.debug("Traceback:", exc_info=True)
 
 
 def _write_markdown_summary(

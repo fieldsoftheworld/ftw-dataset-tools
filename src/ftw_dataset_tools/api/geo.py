@@ -10,13 +10,13 @@ from typing import TYPE_CHECKING
 import duckdb
 
 from ftw_dataset_tools.api.fs import create_temp_file, finalize_temp_file
+from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     import geopandas as gpd
     import pyproj
 
+logger = get_logger(__name__)
 
 SOURCE_COOP_S3_REGION = "us-west-2"
 
@@ -447,7 +447,6 @@ def reproject(
     input_file: str | Path,
     output_file: str | Path | None = None,
     target_crs: str = "EPSG:4326",
-    on_progress: Callable[[str], None] | None = None,
 ) -> ReprojectResult:
     """
     Reproject a GeoParquet file to a different CRS using geoparquet-io.
@@ -456,7 +455,6 @@ def reproject(
         input_file: Path to input GeoParquet file
         output_file: Path to output file. If None, generates name from input.
         target_crs: Target CRS (default: EPSG:4326)
-        on_progress: Optional callback for progress messages
 
     Returns:
         ReprojectResult with information about the operation
@@ -469,13 +467,9 @@ def reproject(
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
     import geoparquet_io as gpio
 
-    log("Loading and reprojecting data...")
+    logger.info("Loading and reprojecting data...")
 
     # Use fluent API to read, reproject, and write
     table = gpio.read(str(input_path))
@@ -493,12 +487,12 @@ def reproject(
             source_crs_str = raw_crs.get("name", "unknown")
     else:
         source_crs_str = str(raw_crs)
-    log(f"Source CRS: {source_crs_str}")
-    log(f"Target CRS: {target_crs}")
+    logger.info(f"Source CRS: {source_crs_str}")
+    logger.info(f"Target CRS: {target_crs}")
 
     # Get count before reprojection
     count = table.num_rows
-    log(f"Reprojecting {count:,} features...")
+    logger.info(f"Reprojecting {count:,} features...")
 
     # Determine output path
     if output_file:
@@ -540,7 +534,7 @@ def reproject(
         if tmp_out_path and tmp_out_path.exists():
             tmp_out_path.unlink()
 
-    log(f"Wrote output to: {out_path}")
+    logger.info(f"Wrote output to: {out_path}")
 
     return ReprojectResult(
         output_path=out_path,

@@ -48,15 +48,6 @@ def create_boundaries_cmd(
     if output_dir:
         click.echo(f"Output directory: {output_dir}")
 
-    # Progress callback
-    def on_progress(msg: str) -> None:
-        if "Warning:" in msg:
-            click.echo(click.style(msg, fg="yellow"))
-        elif msg.startswith("Error") or "Error:" in msg:
-            click.echo(click.style(msg, fg="red"))
-        else:
-            click.echo(msg)
-
     try:
         with tqdm(total=100, desc="Processing", unit="%") as pbar:
             pbar.update(10)
@@ -65,7 +56,6 @@ def create_boundaries_cmd(
                 input_path=input_path,
                 output_dir=output_dir,
                 output_prefix=output_prefix,
-                on_progress=on_progress,
             )
 
             pbar.update(90)

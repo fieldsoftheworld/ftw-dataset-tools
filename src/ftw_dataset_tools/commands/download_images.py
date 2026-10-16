@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import click
-from tqdm import tqdm
 
 from ftw_dataset_tools.api.imagery import download_imagery_for_catalog, find_collection_dir
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
@@ -39,11 +38,6 @@ VALID_BANDS: tuple[str, ...] = (
     # Composite
     "visual",  # True color RGB composite
 )
-
-
-def _echo_grid_log(message: str) -> None:
-    if message.startswith("Grid:"):
-        tqdm.write(f"  {message}")
 
 
 @click.command("download-images")
@@ -157,7 +151,6 @@ def download_images_cmd(
         resume=resume,
         workers=workers,
         keep_remote_refs=keep_remote_refs,
-        on_log=_echo_grid_log,
     )
     skipped = result.skipped_details
     failed = result.failed_details

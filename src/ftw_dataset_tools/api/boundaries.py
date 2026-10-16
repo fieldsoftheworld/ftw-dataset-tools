@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import duckdb
 
@@ -15,9 +14,9 @@ from ftw_dataset_tools.api.geo import (
     sql_path,
     write_geoparquet,
 )
+from ftw_dataset_tools.api.logging_config import get_logger
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -100,7 +99,6 @@ def create_boundaries(
     input_path: str | Path,
     output_dir: str | Path | None = None,
     output_prefix: str = "boundary_lines_",
-    on_progress: Callable[[str], None] | None = None,
 ) -> CreateBoundariesResult:
     """
     Convert polygon geometries to boundary lines using ST_Boundary.
@@ -112,7 +110,6 @@ def create_boundaries(
         input_path: Path to a parquet file or directory containing parquet files
         output_dir: Output directory. If None, writes to same directory as input files.
         output_prefix: Prefix for output filenames (default: "boundary_lines_")
-        on_progress: Optional callback for progress messages
 
     Returns:
         CreateBoundariesResult with information about processed and skipped files
@@ -126,10 +123,6 @@ def create_boundaries(
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
 
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
     # Collect parquet files to process
     if input_path.is_file():
         parquet_files = [input_path]
@@ -141,7 +134,7 @@ def create_boundaries(
     if not parquet_files:
         raise ValueError(f"No parquet files found in: {input_path}")
 
-    log(f"Found {len(parquet_files)} parquet file(s) to check")
+    logger.info(f"Found {len(parquet_files)} parquet file(s) to check")
 
     # Create DuckDB connection with spatial extension
     conn = duckdb.connect(":memory:")
@@ -151,24 +144,26 @@ def create_boundaries(
     skipped: list[tuple[Path, str]] = []
 
     for parquet_file in parquet_files:
-        log(f"Checking: {parquet_file.name}")
+        logger.info(f"Checking: {parquet_file.name}")
 
         # Detect geometry column from GeoParquet metadata
         file_geom_col = detect_geometry_column(parquet_file)
         if file_geom_col is None:
             skipped.append((parquet_file, "no geometry column found in GeoParquet metadata"))
-            log("  Skipping: no geometry column found in GeoParquet metadata")
+            logger.info("  Skipping: no geometry column found in GeoParquet metadata")
             continue
 
         # Check CRS and warn if not lat/long
         crs_info = detect_crs(parquet_file, file_geom_col)
         if crs_info.authority_code and crs_info.authority_code.upper() != "EPSG:4326":
-            log(f"  Warning: CRS is {crs_info}, not lat/long. Operations may not work as expected.")
+            logger.warning(
+                f"  CRS is {crs_info}, not lat/long. Operations may not work as expected."
+            )
 
         # Check if file has polygon geometries
         if not _has_polygon_geometries(conn, parquet_file, file_geom_col):
             skipped.append((parquet_file, "no polygon geometries found"))
-            log("  Skipping: no polygon geometries")
+            logger.info("  Skipping: no polygon geometries")
             continue
 
         # Determine output path
@@ -177,7 +172,7 @@ def create_boundaries(
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{output_prefix}{parquet_file.name}"
 
-        log("  Converting to boundary lines...")
+        logger.info("  Converting to boundary lines...")
 
         try:
             count = _extract_boundaries(conn, parquet_file, out_path, file_geom_col)
@@ -188,10 +183,10 @@ def create_boundaries(
                     feature_count=count,
                 )
             )
-            log(f"  Wrote {count:,} features to: {out_path.name}")
+            logger.info(f"  Wrote {count:,} features to: {out_path.name}")
         except Exception as e:
             skipped.append((parquet_file, str(e)))
-            log(f"  Error: {e}")
+            logger.error(f"  {e}")
 
     conn.close()
 

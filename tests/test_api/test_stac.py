@@ -385,7 +385,6 @@ def build_catalog(
     checksums: bool = False,
     config=None,
     provenance=None,
-    on_progress=None,
     filtered: bool = False,
     with_masks: bool = True,
     grid_id: str = "ftw-33UXP0410",
@@ -443,7 +442,6 @@ def build_catalog(
         checksums=checksums,
         config=config,
         provenance=provenance,
-        on_progress=on_progress,
         background_class_value=background_class_value,
         crop_calendar=crop_calendar,
     )
@@ -487,15 +485,17 @@ class TestCropCalendarExtent:
         coll = json.loads(result.collection_path.read_text())
         assert coll["extent"]["temporal"]["interval"][0][1] == "2025-03-01T23:59:59Z"
 
-    def test_outside_calendar_keeps_year(self, tmp_path: Path) -> None:
-        messages: list[str] = []
+    def test_outside_calendar_keeps_year(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level("INFO")
 
-        build_catalog(tmp_path, on_progress=messages.append)
+        build_catalog(tmp_path)
 
         props = self._item(tmp_path)["properties"]
         assert props["start_datetime"] == "2024-01-01T00:00:00+00:00"
         assert props["end_datetime"] == "2024-12-31T23:59:59+00:00"
-        assert any("outside the crop calendar" in m for m in messages)
+        assert any("outside the crop calendar" in m for m in caplog.messages)
 
     def test_disabled_skips_lookup(self, tmp_path: Path, stac_crop_calendar) -> None:
         self._use_season(stac_crop_calendar, 100, 250)
@@ -822,11 +822,13 @@ class TestCollectionMetadata:
         assert props["ftw:scale_min_blocks_per_square"] == 1
         assert props["ftw:scale_version"] == "ftw-scale-v1"
 
-    def test_warns_without_license(self, tmp_path: Path) -> None:
-        messages: list[str] = []
-        build_catalog(tmp_path, on_progress=messages.append)
+    def test_warns_without_license(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        build_catalog(tmp_path)
 
-        assert any("not Portolan-publishable" in m for m in messages)
+        assert any(
+            r.levelname == "WARNING" and "not Portolan-publishable" in r.message
+            for r in caplog.records
+        )
 
     def test_via_link_from_source_via(self, tmp_path: Path) -> None:
         import json
@@ -907,12 +909,14 @@ class TestConfiglessRerunPreservesMetadata:
         )
         return json.loads(result.collection_path.read_text())
 
-    def test_metadata_survives_a_configless_rebuild(self, tmp_path: Path) -> None:
+    def test_metadata_survives_a_configless_rebuild(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         import json
 
         before = self._pipeline_build(tmp_path)
-        messages: list[str] = []
-        result = build_catalog(tmp_path, on_progress=messages.append)
+        caplog.set_level("INFO")
+        result = build_catalog(tmp_path)
         after = json.loads(result.collection_path.read_text())
 
         for key in ("title", "license", "keywords", "providers", "version", "ftw:config"):
@@ -926,7 +930,7 @@ class TestConfiglessRerunPreservesMetadata:
         assert rels.count("via") == 1
         assert rels.count("license") == 1
         assert after["assets"]["fields_filtered"]["href"] == "./ds_fields_filtered.parquet"
-        assert not any("not Portolan-publishable" in m for m in messages)
+        assert not any("not Portolan-publishable" in m for m in caplog.messages)
 
     def test_config_rebuild_does_not_inherit(self, tmp_path: Path) -> None:
         import json
@@ -955,12 +959,14 @@ class TestConfiglessRerunPreservesMetadata:
         assert "keywords" not in after
         assert "ftw:config" not in after
 
-    def test_unlicensed_rebuild_still_warns(self, tmp_path: Path) -> None:
+    def test_unlicensed_rebuild_still_warns(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         build_catalog(tmp_path)
-        messages: list[str] = []
-        build_catalog(tmp_path, on_progress=messages.append)
+        caplog.clear()
+        build_catalog(tmp_path)
 
-        assert any("not Portolan-publishable" in m for m in messages)
+        assert any("not Portolan-publishable" in m for m in caplog.messages)
 
     def test_corrupt_collection_is_rebuilt(self, tmp_path: Path) -> None:
         import json

@@ -806,14 +806,17 @@ class TestKeepRemoteRefsAndLogs:
         assert result.failed == 2
         assert {d["error"] for d in result.failed_details} == {"disk full"}
 
-    def test_on_log_receives_each_scenes_lines(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_each_scenes_log_lines_are_replayed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        catalog = _write_s2_catalog(tmp_path, ["chip_000"])
-        logs: list[str] = []
+        from ftw_dataset_tools.api.logging_config import get_logger
 
-        def fake_download(*, scene: object, on_progress: object, **_kwargs: object) -> MagicMock:
-            on_progress(f"Grid: {scene.item.id}")  # type: ignore[attr-defined,operator]
+        caplog.set_level("DEBUG", logger="ftw_dataset_tools")
+        catalog = _write_s2_catalog(tmp_path, ["chip_000"])
+        scene_logger = get_logger("ftw_dataset_tools.api.imagery.image_download")
+
+        def fake_download(*, scene: object, **_kwargs: object) -> MagicMock:
+            scene_logger.debug(f"Grid: {scene.item.id}")  # type: ignore[attr-defined]
             return MagicMock(success=True, error=None)
 
         monkeypatch.setattr(
@@ -825,8 +828,7 @@ class TestKeepRemoteRefsAndLogs:
             lambda **_kwargs: None,
         )
 
-        download_imagery_for_catalog(
-            catalog_dir=catalog, show_progress_bar=False, on_log=logs.append
-        )
+        download_imagery_for_catalog(catalog_dir=catalog, show_progress_bar=False)
 
-        assert sorted(logs) == ["Grid: chip_000_harvest_s2", "Grid: chip_000_planting_s2"]
+        grid_lines = [msg for msg in caplog.messages if msg.startswith("Grid:")]
+        assert sorted(grid_lines) == ["Grid: chip_000_harvest_s2", "Grid: chip_000_planting_s2"]

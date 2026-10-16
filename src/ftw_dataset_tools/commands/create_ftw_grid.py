@@ -74,17 +74,6 @@ def create_ftw_grid_cmd(
     # Progress bar for file processing (folder mode only)
     pbar = None
 
-    def on_progress(msg: str) -> None:
-        # Close progress bar before printing messages
-        if pbar is not None:
-            pbar.clear()
-        if msg.startswith("Warning:"):
-            click.echo(click.style(msg, fg="yellow"))
-        else:
-            click.echo(msg)
-        if pbar is not None:
-            pbar.refresh()
-
     def on_file_progress(_current: int, total: int, file_name: str) -> None:
         nonlocal pbar
         if pbar is None:
@@ -97,7 +86,6 @@ def create_ftw_grid_cmd(
             input_path=input_path,
             output_path=output_path,
             km_size=km_size,
-            on_progress=on_progress,
             on_file_progress=on_file_progress if is_folder else None,
         )
 

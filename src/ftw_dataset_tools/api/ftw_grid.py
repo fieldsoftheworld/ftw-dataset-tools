@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -9,9 +10,12 @@ from typing import TYPE_CHECKING
 import duckdb
 
 from ftw_dataset_tools.api.geo import get_bbox_column_name, has_bbox_column, sql_path
+from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+logger = get_logger(__name__)
 
 # Valid km sizes that divide 100 evenly
 VALID_KM_SIZES = {1, 2, 4, 5, 10, 20, 25, 50, 100}
@@ -92,7 +96,6 @@ def create_ftw_grid(
     input_path: str | Path,
     output_path: str | Path | None = None,
     km_size: int = 2,
-    on_progress: Callable[[str], None] | None = None,
     on_file_progress: Callable[[int, int, str], None] | None = None,
 ) -> CreateFTWGridResult:
     """
@@ -110,7 +113,6 @@ def create_ftw_grid(
             - For folder input: Required, must be a folder for hive-partitioned output
         km_size: Grid cell size in km (must divide 100 evenly).
             Valid values: 1, 2, 4, 5, 10, 20, 25, 50, 100
-        on_progress: Optional callback for progress messages
         on_file_progress: Optional callback for file processing progress (current, total, file_name)
 
     Returns:
@@ -130,42 +132,35 @@ def create_ftw_grid(
     if km_size not in VALID_KM_SIZES:
         raise InvalidKmSizeError(km_size)
 
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
     # Determine if input is file or folder
     is_folder = input_p.is_dir()
 
     if is_folder:
         if output_path is None:
             raise ValueError("Output path is required when input is a folder")
-        return _create_ftw_grid_partitioned(
-            input_p, Path(output_path), km_size, log, on_file_progress
-        )
+        return _create_ftw_grid_partitioned(input_p, Path(output_path), km_size, on_file_progress)
     else:
-        return _create_ftw_grid_single(input_p, output_path, km_size, log)
+        return _create_ftw_grid_single(input_p, output_path, km_size)
 
 
 def _create_ftw_grid_single(
     input_path: Path,
     output_file: str | Path | None,
     km_size: int,
-    log: Callable[[str], None],
 ) -> CreateFTWGridResult:
     """Create FTW grid from a single file with exactly one GZD."""
-    log(f"Creating {km_size}x{km_size}km FTW grid from: {input_path.name}")
+    logger.info(f"Creating {km_size}x{km_size}km FTW grid from: {input_path.name}")
 
     # Create DuckDB connection with spatial extension
     conn = duckdb.connect(":memory:")
     conn.execute("INSTALL spatial; LOAD spatial;")
 
     # Load input file
-    log("Loading 1km MGRS data...")
+    logger.info("Loading 1km MGRS data...")
     conn.execute(f"CREATE TABLE mgrs_1km AS SELECT * FROM '{sql_path(input_path)}'")
 
     input_count = conn.execute("SELECT COUNT(*) FROM mgrs_1km").fetchone()[0]
-    log(f"Loaded {input_count:,} 1km cells")
+    logger.info(f"Loaded {input_count:,} 1km cells")
 
     # Get column mapping for case-insensitive access
     col_map = _normalize_columns(conn)
@@ -200,7 +195,7 @@ def _create_ftw_grid_single(
         raise MultipleGZDError(len(gzds), gzds)
 
     gzd = gzds[0]
-    log(f"GZD: {gzd}")
+    logger.info(f"GZD: {gzd}")
 
     # Build the query based on available columns
     result = _build_and_execute_query(
@@ -213,7 +208,7 @@ def _create_ftw_grid_single(
         easting_col,
         northing_col,
         bbox_col,
-        log,
+        logging.INFO,
     )
 
     total_cells, _kmsq_count = result
@@ -225,7 +220,7 @@ def _create_ftw_grid_single(
         out_path = input_path.parent / f"ftw_{gzd}.parquet"
 
     # Write output
-    _write_output(conn, out_path, input_path, log)
+    _write_output(conn, out_path, input_path)
     conn.close()
 
     return CreateFTWGridResult(
@@ -241,17 +236,16 @@ def _create_ftw_grid_partitioned(
     input_folder: Path,
     output_folder: Path,
     km_size: int,
-    log: Callable[[str], None],
     on_file_progress: Callable[[int, int, str], None] | None = None,
 ) -> CreateFTWGridResult:
     """Create FTW grid from partitioned parquet files, output as hive partitions."""
     import geoparquet_io as gpio
 
-    log(f"Creating {km_size}x{km_size}km FTW grid from folder: {input_folder}")
+    logger.info(f"Creating {km_size}x{km_size}km FTW grid from folder: {input_folder}")
 
     # Find all input parquet files
     input_files = sorted(input_folder.glob("**/*.parquet"))
-    log(f"Found {len(input_files)} parquet files to process")
+    logger.info(f"Found {len(input_files)} parquet files to process")
 
     if not input_files:
         raise ValueError(f"No parquet files found in {input_folder}")
@@ -269,11 +263,7 @@ def _create_ftw_grid_partitioned(
         file_name = input_file.name
 
         try:
-            # Process single file (suppress logging noise)
-            def file_log(msg: str) -> None:
-                pass  # Suppress individual file logs
-
-            result = _create_ftw_grid_single_internal(input_file, km_size, file_log)
+            result = _create_ftw_grid_single_internal(input_file, km_size)
 
             if result is None:
                 skipped_files.append(str(input_file))
@@ -307,7 +297,7 @@ def _create_ftw_grid_partitioned(
                 on_file_progress(i + 1, total_files, file_name)
 
         except (ValueError, MultipleGZDError) as e:
-            log(f"Warning: Skipping {file_name}: {e}")
+            logger.warning(f"Skipping {file_name}: {e}")
             skipped_files.append(str(input_file))
             # Report progress even for error files
             if on_file_progress:
@@ -317,7 +307,7 @@ def _create_ftw_grid_partitioned(
     if not gzds_processed:
         raise ValueError("No files were successfully processed")
 
-    log(f"Processed {len(gzds_processed)} GZDs, skipped {len(skipped_files)} files")
+    logger.info(f"Processed {len(gzds_processed)} GZDs, skipped {len(skipped_files)} files")
 
     return CreateFTWGridResult(
         output_path=output_folder,
@@ -332,7 +322,6 @@ def _create_ftw_grid_partitioned(
 def _create_ftw_grid_single_internal(
     input_path: Path,
     km_size: int,
-    log: Callable[[str], None],
 ) -> tuple[str, int, duckdb.DuckDBPyConnection] | None:
     """
     Process a single file and return (gzd, cell_count, conn) without writing.
@@ -380,7 +369,7 @@ def _create_ftw_grid_single_internal(
         raise MultipleGZDError(len(gzds), gzds)
 
     gzd = gzds[0]
-    log(f"GZD: {gzd}")
+    logger.debug(f"GZD: {gzd}")
 
     # Build and execute query
     total_cells, _ = _build_and_execute_query(
@@ -393,7 +382,7 @@ def _create_ftw_grid_single_internal(
         easting_col,
         northing_col,
         bbox_col,
-        log,
+        logging.DEBUG,
     )
 
     return gzd, total_cells, conn
@@ -409,9 +398,12 @@ def _build_and_execute_query(
     easting_col: str | None,
     northing_col: str | None,
     bbox_col: str | None,
-    log: Callable[[str], None],
+    level: int,
 ) -> tuple[int, int]:
-    """Build and execute the aggregation query. Returns (total_cells, kmsq_count)."""
+    """Build and execute the aggregation query. Returns (total_cells, kmsq_count).
+
+    ``level`` is the log level for progress lines; per-file runs pass DEBUG.
+    """
 
     # Determine how to get kmsq_id - from column or parse from MGRS
     if kmsq_col:
@@ -432,21 +424,23 @@ def _build_and_execute_query(
     if easting_col and northing_col:
         # Check format of EASTING
         sample_easting = conn.execute(f'SELECT "{easting_col}" FROM mgrs_1km LIMIT 1').fetchone()[0]
-        log(f"Sample EASTING value: {sample_easting}")
+        logger.log(level, f"Sample EASTING value: {sample_easting}")
 
         if "m" in str(sample_easting).lower():
             easting_expr = f"(CAST(REGEXP_REPLACE(\"{easting_col}\", '[^0-9]', '', 'g') AS BIGINT) // 1000) % 100"
             northing_expr = f"(CAST(REGEXP_REPLACE(\"{northing_col}\", '[^0-9]', '', 'g') AS BIGINT) // 1000) % 100"
-            log("Detected full coordinate format (e.g., '706000mE'), extracting 1km indices")
+            logger.log(
+                level, "Detected full coordinate format (e.g., '706000mE'), extracting 1km indices"
+            )
         else:
             easting_expr = f'CAST("{easting_col}" AS INT)'
             northing_expr = f'CAST("{northing_col}" AS INT)'
-            log("Detected simple index format")
+            logger.log(level, "Detected simple index format")
     else:
         # Parse from MGRS code - last 4 digits are easting (2) + northing (2) for 1km
         easting_expr = f'CAST(SUBSTRING("{mgrs_col}", LENGTH("{gzd_col}") + 3, 2) AS INT)'
         northing_expr = f'CAST(SUBSTRING("{mgrs_col}", LENGTH("{gzd_col}") + 5, 2) AS INT)'
-        log("Parsing easting/northing from MGRS code")
+        logger.log(level, "Parsing easting/northing from MGRS code")
 
     # Build bbox expressions if input has bbox
     bbox_parsed = ""
@@ -464,7 +458,7 @@ def _build_and_execute_query(
         ) AS bbox"""
 
     # Build the aggregation query
-    log(f"Aggregating into {km_size}x{km_size}km cells (this may take a while)...")
+    logger.log(level, f"Aggregating into {km_size}x{km_size}km cells (this may take a while)...")
 
     query = f"""
     WITH parsed AS (
@@ -506,7 +500,7 @@ def _build_and_execute_query(
     """
 
     conn.execute(f"CREATE TABLE ftw_grid AS {query}")
-    log("Aggregation complete")
+    logger.log(level, "Aggregation complete")
 
     # Get statistics
     stats = conn.execute("""
@@ -517,7 +511,10 @@ def _build_and_execute_query(
     """).fetchone()
 
     total_cells, kmsq_count = stats
-    log(f"Created {total_cells:,} {km_size}x{km_size}km cells across {kmsq_count} 10km squares")
+    logger.log(
+        level,
+        f"Created {total_cells:,} {km_size}x{km_size}km cells across {kmsq_count} 10km squares",
+    )
 
     return total_cells, kmsq_count
 
@@ -526,12 +523,11 @@ def _write_output(
     conn: duckdb.DuckDBPyConnection,
     out_path: Path,
     input_path: Path,
-    log: Callable[[str], None],
 ) -> None:
     """Write output as GeoParquet with bbox."""
     import geoparquet_io as gpio
 
-    log(f"Writing output to: {out_path}")
+    logger.info(f"Writing output to: {out_path}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Get result as Arrow table
@@ -540,6 +536,6 @@ def _write_output(
     # Create gpio.Table and write with bbox if needed
     table = gpio.Table(arrow_table)
     if not has_bbox_column(input_path):
-        log("Adding bbox column...")
+        logger.info("Adding bbox column...")
         table = table.add_bbox()
     table.write(str(out_path))

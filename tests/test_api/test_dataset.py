@@ -159,7 +159,7 @@ class TestCreateDatasetSignature:
         assert "num_workers" in param_names
         assert "skip_reproject" in param_names
         assert "year" in param_names
-        assert "on_progress" in param_names
+        assert "on_progress" not in param_names
         assert "on_mask_progress" in param_names
         assert "on_mask_start" in param_names
 

@@ -73,7 +73,6 @@ def create_dataset(
     scale_percent: float = scale.DEFAULT_SCALE_PERCENT,
     scale_min_blocks: int = scale.DEFAULT_MIN_BLOCKS_PER_SQUARE,
     on_imagery: Callable[[Path], None] | None = None,
-    on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int, int], None] | None = None,
     crop_column: str | None = None,
@@ -125,7 +124,6 @@ def create_dataset(
             imagery stages' position in the pipeline. ``create-dataset`` selects and
             downloads imagery itself through this hook, so the documents it writes
             afterwards describe the collection's imagery too.
-        on_progress: Optional callback for progress messages
         on_mask_progress: Optional callback (current, total) for mask creation progress
         on_mask_start: Optional callback (total_grids, filtered_grids, total_tasks) for mask start
 
@@ -173,7 +171,6 @@ def create_dataset(
     ctx = pipeline.build_context(
         config,
         stages=stages,
-        on_progress=on_progress,
         on_mask_progress=on_mask_progress,
         on_mask_start=on_mask_start,
         provenance=provenance,

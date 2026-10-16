@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pystac
+import pytest
 from click.testing import CliRunner
 
 from ftw_dataset_tools.api.imagery.image_download import DownloadResult
@@ -17,8 +18,6 @@ from ftw_dataset_tools.cli import cli
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 def _write_minimal_collection(path: Path) -> None:
@@ -272,12 +271,17 @@ class TestDownloadImagesWorkers:
 class TestDownloadImagesOutput:
     """What the command prints and reports around the shared workflow."""
 
-    def test_prints_grid_lines_only(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+    @pytest.mark.parametrize("verbose", [False, True])
+    def test_grid_lines_need_verbose(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verbose: bool
+    ) -> None:
+        from ftw_dataset_tools.api.logging_config import get_logger
 
-        def fake_download(*, on_progress: object, **_kwargs: object) -> MagicMock:
-            on_progress("Grid: EPSG:32633 2x2")  # type: ignore[operator]
-            on_progress("Reading red band")  # type: ignore[operator]
+        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+        scene_logger = get_logger("ftw_dataset_tools.api.imagery.image_download")
+
+        def fake_download(**_kwargs: object) -> MagicMock:
+            scene_logger.debug("Grid: EPSG:32633 2x2")
             return MagicMock(success=True, error=None)
 
         monkeypatch.setattr(
@@ -289,11 +293,11 @@ class TestDownloadImagesOutput:
             lambda **_kwargs: None,
         )
 
-        result = CliRunner().invoke(cli, ["download-images", str(dataset_dir)])
+        args = ["-v"] if verbose else []
+        result = CliRunner().invoke(cli, [*args, "download-images", str(dataset_dir)])
 
         assert result.exit_code == 0, result.output
-        assert "Grid: EPSG:32633 2x2" in result.output
-        assert "Reading red band" not in result.output
+        assert ("Grid: EPSG:32633 2x2" in result.output) is verbose
 
     def test_empty_catalog_fails(self, tmp_path: Path) -> None:
         dataset_dir = _write_catalog(tmp_path, [])

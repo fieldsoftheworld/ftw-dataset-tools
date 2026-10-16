@@ -55,6 +55,7 @@ from ftw_dataset_tools.api.imagery import (
 from ftw_dataset_tools.api.imagery.mosaic_selection import check_mosaic_year
 from ftw_dataset_tools.api.imagery.preview_workflow import preview_imagery_for_catalog
 from ftw_dataset_tools.api.imagery.settings import MOSAIC_FALLBACK_YEAR
+from ftw_dataset_tools.api.logging_config import get_logger, success
 from ftw_dataset_tools.api.masks import MaskType
 from ftw_dataset_tools.api.source import (
     describe_local_source,
@@ -68,6 +69,8 @@ if TYPE_CHECKING:
 
     from ftw_dataset_tools.api.config import DatasetConfig
     from ftw_dataset_tools.api.source import SourceRecord
+
+logger = get_logger(__name__)
 
 # Ordered list of all pipeline stages.
 STAGE_ORDER = [
@@ -159,7 +162,6 @@ class PipelineContext:
     temporal_error: stac.TemporalExtentError | None = None
     provenance: dict[str, Any] | None = None
     source: SourceRecord | None = None
-    on_progress: Callable[[str], None] | None = None
     on_mask_progress: Callable[[int, int], None] | None = None
     on_mask_start: Callable[[int, int, int], None] | None = None
 
@@ -208,10 +210,6 @@ class PipelineContext:
         """Which stage produces field_polygons_path (for input-error messages)."""
         return "filter" if self.config.class_filter is not None else "reproject"
 
-    def log(self, msg: str) -> None:
-        if self.on_progress:
-            self.on_progress(msg)
-
 
 def _input_name_stem(config: DatasetConfig) -> str:
     """Default dataset name stem, from the URL path or the local filename.
@@ -224,9 +222,7 @@ def _input_name_stem(config: DatasetConfig) -> str:
     return Path(config.fields_file).stem
 
 
-def _resolve_input(
-    config: DatasetConfig, *, log: Callable[[str], None]
-) -> tuple[Path, SourceRecord]:
+def _resolve_input(config: DatasetConfig) -> tuple[Path, SourceRecord]:
     """Resolve ``config.fields_file`` to a local path, fetching URLs into the cache.
 
     Returns the local fields path and the source record describing where the
@@ -237,13 +233,15 @@ def _resolve_input(
     """
     if is_url(config.fields_file):
         fetch_cfg = config.stages.fetch
-        log(f"Fetching source {config.fields_file}...")
+        logger.info(f"Fetching source {config.fields_file}...")
         record = fetch_source(
             config.fields_file,
             Path(fetch_cfg.cache_dir).expanduser(),
             refresh=fetch_cfg.refresh,
         )
-        log("Using cached copy" if record.fetched_at is None else f"Fetched {record.size:,} bytes")
+        logger.info(
+            "Using cached copy" if record.fetched_at is None else f"Fetched {record.size:,} bytes"
+        )
         return record.local_path, record
 
     fields_path = Path(config.fields_file).resolve()
@@ -272,7 +270,7 @@ def _record_source_provenance(ctx: PipelineContext, source: SourceRecord | None)
         provenance["ftwd_git_commit"] = installed_git_commit()
 
 
-def _detect_temporal(ctx: PipelineContext, *, log: Callable[[str], None]) -> None:
+def _detect_temporal(ctx: PipelineContext) -> None:
     """Set ``effective_year`` / ``has_temporal`` from the best available fields file.
 
     Prefers the resolved source input; falls back to the reprojected fields file
@@ -284,13 +282,15 @@ def _detect_temporal(ctx: PipelineContext, *, log: Callable[[str], None]) -> Non
     if fields_path is None and ctx.output_fields_path.exists():
         fields_path = ctx.output_fields_path
     if fields_path is not None and ctx.config.year is None:
-        log("Checking temporal extent availability...")
+        logger.info("Checking temporal extent availability...")
         try:
             ctx.effective_year = stac.resolve_year(fields_path)
         except stac.TemporalExtentError as err:
             ctx.temporal_error = err
         if ctx.effective_year is not None:
-            log(f"Using year {ctx.effective_year} from determination_datetime for chip naming")
+            logger.info(
+                f"Using year {ctx.effective_year} from determination_datetime for chip naming"
+            )
     ctx.has_temporal = ctx.effective_year is not None
 
 
@@ -298,7 +298,6 @@ def build_context(
     config: DatasetConfig,
     *,
     stages: list[str] | None = None,
-    on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int, int], None] | None = None,
     provenance: dict[str, Any] | None = None,
@@ -314,11 +313,6 @@ def build_context(
     Raises:
         FileNotFoundError: If a local input fields file does not exist.
     """
-
-    def log(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
     name_stem = _input_name_stem(config)
     field_dataset = config.name or name_stem
     out_dir = (
@@ -328,9 +322,9 @@ def build_context(
     )
 
     if stages is None or any(stage in _SOURCE_STAGES for stage in stages):
-        fields_path, source = _resolve_input(config, log=log)
+        fields_path, source = _resolve_input(config)
     else:
-        log("No selected stage reads the source input; skipping source resolution.")
+        logger.info("No selected stage reads the source input; skipping source resolution.")
         fields_path, source = None, None
 
     ctx = PipelineContext(
@@ -340,12 +334,11 @@ def build_context(
         field_dataset=field_dataset,
         provenance=provenance,
         source=source,
-        on_progress=on_progress,
         on_mask_progress=on_mask_progress,
         on_mask_start=on_mask_start,
     )
     _record_source_provenance(ctx, source)
-    _detect_temporal(ctx, log=log)
+    _detect_temporal(ctx)
     return ctx
 
 
@@ -421,7 +414,7 @@ def run_pipeline(
         if stage in stages_to_run:
             _STAGE_FUNCS[stage](ctx)
 
-    ctx.log("Pipeline complete!")
+    success(logger, "Pipeline complete!")
     return ctx
 
 
@@ -470,7 +463,7 @@ def stage_reproject(ctx: PipelineContext) -> None:
             "Stage 'reproject' needs the source input, but this context was built "
             "without resolving it. Rebuild the context including the reproject stage."
         )
-    ctx.log("Checking CRS...")
+    logger.info("Checking CRS...")
     geom_col = detect_geometry_column(ctx.fields_input) or "geometry"
     crs_info = detect_crs(ctx.fields_input, geom_col)
     ctx.source_crs = str(crs_info)
@@ -481,17 +474,16 @@ def stage_reproject(ctx: PipelineContext) -> None:
                 f"Input file has CRS '{crs_info}' but EPSG:4326 is required. "
                 "Remove skip_reproject to auto-reproject."
             )
-        ctx.log(f"Reprojecting from {crs_info} to EPSG:4326...")
+        logger.info(f"Reprojecting from {crs_info} to EPSG:4326...")
         reproject(
             ctx.fields_input,
             ctx.output_fields_path,
             target_crs="EPSG:4326",
-            on_progress=ctx.log,
         )
         ctx.was_reprojected = True
-        ctx.log(f"Reprojected to: {ctx.output_fields_path}")
+        logger.info(f"Reprojected to: {ctx.output_fields_path}")
     else:
-        ctx.log("CRS is already EPSG:4326, copying to output directory...")
+        logger.info("CRS is already EPSG:4326, copying to output directory...")
         shutil.copy2(ctx.fields_input, ctx.output_fields_path)
 
 
@@ -507,13 +499,13 @@ def stage_filter(ctx: PipelineContext) -> None:
     _require(ctx.output_fields_path, stage="filter", produced_by="reproject")
 
     column = class_filter.resolve_column(ctx.output_fields_path, cf)
-    ctx.log(f"Filtering fields by column '{column}'...")
+    logger.info(f"Filtering fields by column '{column}'...")
     distinct = class_filter.get_distinct_classes(ctx.output_fields_path, column)
-    cf.validate_against(distinct, on_progress=ctx.log)
+    cf.validate_against(distinct)
     class_filter.write_filtered_fields(
         ctx.output_fields_path, ctx.field_polygons_path, cf, column=column
     )
-    ctx.log(
+    logger.info(
         f"Wrote filtered fields ({len(cf.include)} field class(es)): {ctx.field_polygons_path.name}"
     )
 
@@ -532,7 +524,7 @@ def _subset_local_grid(ctx: PipelineContext, grid_file: str) -> str:
         grid_sql = sql_path(grid_file)
         grid_cols = [r[0] for r in conn.execute(f"DESCRIBE SELECT * FROM '{grid_sql}'").fetchall()]
         if "bbox" not in grid_cols:
-            ctx.log("Local grid has no bbox column; loading it in full (may be slow).")
+            logger.info("Local grid has no bbox column; loading it in full (may be slow).")
             return grid_file
 
         # Fields bounds from their bbox column (present after reproject/filter).
@@ -549,7 +541,7 @@ def _subset_local_grid(ctx: PipelineContext, grid_file: str) -> str:
             f"TO '{subset_sql}' (FORMAT PARQUET)"
         )
         n = conn.execute(f"SELECT COUNT(*) FROM '{subset_sql}'").fetchone()[0]
-        ctx.log(f"Subset local grid to {n:,} cells within fields bounds -> {subset_path.name}")
+        logger.info(f"Subset local grid to {n:,} cells within fields bounds -> {subset_path.name}")
         return str(subset_path)
     finally:
         conn.close()
@@ -562,11 +554,11 @@ def stage_chips(ctx: PipelineContext) -> None:
     grid_file = chips_cfg.grid_file
     grid_source = chips_cfg.grid_source or field_stats.DEFAULT_FTW_GRID_SOURCE
     if grid_file:
-        ctx.log(f"Using local FTW grid: {grid_file}")
+        logger.info(f"Using local FTW grid: {grid_file}")
         grid_file = _subset_local_grid(ctx, grid_file)
     elif chips_cfg.grid_source:
-        ctx.log(f"Using grid source: {grid_source}")
-    ctx.log("Creating chips with field coverage statistics...")
+        logger.info(f"Using grid source: {grid_source}")
+    logger.info("Creating chips with field coverage statistics...")
     ctx.chips_result = field_stats.add_field_stats(
         fields_file=str(ctx.field_polygons_path),
         grid_file=grid_file,
@@ -578,18 +570,15 @@ def stage_chips(ctx: PipelineContext) -> None:
         drop_border_chips=ctx.config.stages.chips.drop_border_chips,
         border_gap_chips=ctx.config.stages.chips.border_gap_chips,
         batch_size=chips_cfg.coverage_batch_size,
-        on_progress=ctx.log,
     )
-    ctx.log(
+    logger.info(
         f"Created chips: {ctx.chips_result.total_cells:,} cells, "
         f"{ctx.chips_result.cells_with_coverage:,} with coverage"
     )
     if ctx.config.stages.chips.crop_stats:
         # chips and field_polygons_path share a CRS: chips derive from the same
         # (reprojected, class-filtered) fields used here, so no reprojection is needed.
-        ctx.crop_stats_result = crop_stats.add_crop_stats(
-            ctx.chips_path, ctx.field_polygons_path, on_progress=ctx.log
-        )
+        ctx.crop_stats_result = crop_stats.add_crop_stats(ctx.chips_path, ctx.field_polygons_path)
     else:
         # Never publish a previous run's composition when the step is turned off.
         crop_stats.drop_crop_stats(ctx.chips_path)
@@ -601,9 +590,7 @@ def _add_land_cover(ctx: PipelineContext) -> None:
     if not ctx.config.stages.chips.land_cover:
         land_cover.drop_land_cover(ctx.chips_path)
         return
-    ctx.land_cover_result = land_cover.add_land_cover(
-        ctx.chips_path, year=ctx.effective_year, on_progress=ctx.log
-    )
+    ctx.land_cover_result = land_cover.add_land_cover(ctx.chips_path, year=ctx.effective_year)
 
 
 def stage_scale(ctx: PipelineContext) -> None:
@@ -616,7 +603,7 @@ def stage_scale(ctx: PipelineContext) -> None:
         min_blocks_per_square=scale_cfg.min_blocks_per_square,
         km_size=ctx.config.stages.chips.km_size,
     )
-    ctx.log(
+    logger.info(
         f"Scale {scale_cfg.percent:g}%: kept {ctx.scale_result.kept_chips:,} of "
         f"{ctx.scale_result.total_chips:,} chips"
     )
@@ -626,14 +613,13 @@ def stage_splits(ctx: PipelineContext) -> None:
     """Assign train/val/test splits to the chips file."""
     _require(ctx.chips_path, stage="splits", produced_by="chips")
     split_cfg = ctx.config.stages.splits
-    ctx.log(f"Assigning {split_cfg.split_type} splits...")
+    logger.info(f"Assigning {split_cfg.split_type} splits...")
     ctx.splits_result = splits.assign_splits(
         chips_file=str(ctx.chips_path),
         split_type=split_cfg.split_type,
         split_percents=split_cfg.split_percents,
         random_seed=split_cfg.random_seed,
         fields_file=str(ctx.field_polygons_path),
-        on_progress=ctx.log,
         km_size=ctx.config.stages.chips.km_size,
     )
 
@@ -641,12 +627,11 @@ def stage_splits(ctx: PipelineContext) -> None:
 def stage_boundaries(ctx: PipelineContext) -> None:
     """Create boundary lines from field polygons."""
     _require(ctx.field_polygons_path, stage="boundaries", produced_by=ctx.field_polygons_producer)
-    ctx.log("Creating boundary lines...")
+    logger.info("Creating boundary lines...")
     result = boundaries.create_boundaries(
         input_path=str(ctx.field_polygons_path),
         output_dir=str(ctx.output_dir),
         output_prefix=f"{ctx.field_dataset}_boundary_lines_",
-        on_progress=ctx.log,
     )
     # Rename to the canonical naming convention.
     if result.files_processed:
@@ -654,7 +639,7 @@ def stage_boundaries(ctx: PipelineContext) -> None:
         if original_output != ctx.boundary_lines_path:
             shutil.move(str(original_output), str(ctx.boundary_lines_path))
     ctx.boundaries_result = result
-    ctx.log(f"Created boundary lines: {result.total_features:,} features")
+    logger.info(f"Created boundary lines: {result.total_features:,} features")
 
 
 # String name -> (enum, subdir key used as masks_results key).
@@ -703,7 +688,7 @@ def _log_skipped_masks(
 
     top_reasons = sorted(reason_counts.items(), key=lambda item: item[1], reverse=True)
     for reason, count in top_reasons[:_SKIPPED_REASONS_TO_LOG]:
-        ctx.log(
+        logger.warning(
             f"Skipped {mask_result.total_skipped} {mask_type.value} mask(s): {reason} (x{count})"
         )
 
@@ -715,7 +700,7 @@ def stage_masks(ctx: PipelineContext) -> None:
     _require(ctx.boundary_lines_path, stage="masks", produced_by="boundaries")
 
     chip_dirs = _build_chip_dirs(ctx)
-    ctx.log(f"Created {len(chip_dirs)} chip directories")
+    logger.info(f"Created {len(chip_dirs)} chip directories")
 
     masks_cfg = ctx.config.stages.masks
     requested = [
@@ -730,7 +715,7 @@ def stage_masks(ctx: PipelineContext) -> None:
 
     # Types sharing a rasterization are burned once, so this is a single pass over
     # the chips rather than one pass per type.
-    ctx.log(f"Creating {', '.join(m.value for m in requested_types)} masks...")
+    logger.info(f"Creating {', '.join(m.value for m in requested_types)} masks...")
     mask_results = masks.create_masks(
         chips_file=str(ctx.chips_path),
         boundaries_file=str(ctx.field_polygons_path),
@@ -752,13 +737,13 @@ def stage_masks(ctx: PipelineContext) -> None:
 
     for mask_type, mask_result in mask_results.items():
         ctx.masks_results[subdir_by_type[mask_type]] = mask_result
-        ctx.log(f"Created {mask_result.total_created} {mask_type.value} masks")
+        logger.info(f"Created {mask_result.total_created} {mask_type.value} masks")
         _log_skipped_masks(ctx, mask_type, mask_result)
 
     # Every type shares one worker pool, so the count is the same on each result.
     pool_restarts = max((r.pool_restarts for r in mask_results.values()), default=0)
     if pool_restarts > 0:
-        ctx.log(
+        logger.warning(
             f"Worker pool restarted {pool_restarts} time(s) "
             "(a worker died; lower stages.masks.workers if this repeats)"
         )
@@ -777,16 +762,16 @@ def stage_stac(ctx: PipelineContext) -> None:
     # run would republish that run's composition onto every item. Dropping here, at the
     # only stage that publishes them, is a no-op when they are absent.
     if not ctx.config.stages.chips.crop_stats and crop_stats.drop_crop_stats(ctx.chips_path):
-        ctx.log("Dropped stale crop composition columns from the chips file")
+        logger.info("Dropped stale crop composition columns from the chips file")
     # The same holds for land cover, including columns added by ``ftwd add-land-cover``:
     # the config decides what is published, so a backfill needs land_cover: true.
     if not ctx.config.stages.chips.land_cover and land_cover.drop_land_cover(ctx.chips_path):
-        ctx.log(
+        logger.info(
             "Dropped land cover columns from the chips file "
             "(set stages.chips.land_cover: true to publish them)"
         )
 
-    ctx.log("Generating STAC catalog...")
+    logger.info("Generating STAC catalog...")
     ctx.stac_result = stac.generate_stac_catalog(
         output_dir=ctx.output_dir,
         field_dataset=ctx.field_dataset,
@@ -801,19 +786,18 @@ def stage_stac(ctx: PipelineContext) -> None:
         checksums=ctx.config.stages.stac.checksums,
         crop_calendar=ctx.config.stages.stac.crop_calendar,
         background_class_value=3 if ctx.config.stages.masks.presence_only else 0,
-        on_progress=ctx.log,
         config=ctx.config,
     )
     n = ctx.stac_result.total_items
     k = len(ctx.stac_result.subcatalog_paths)
-    ctx.log(f"Created STAC collection with {n} items in {k} sub-catalog(s)")
+    logger.info(f"Created STAC collection with {n} items in {k} sub-catalog(s)")
 
 
-def mosaic_year(config_year: int | None, log: Callable[[str], None]) -> int:
+def mosaic_year(config_year: int | None) -> int:
     """The mosaic year: the configured year, else a warning and the fallback year."""
     if config_year is not None:
         return config_year
-    log(f"Warning: no year given; using {MOSAIC_FALLBACK_YEAR} for mosaics.")
+    logger.warning(f"no year given; using {MOSAIC_FALLBACK_YEAR} for mosaics.")
     return MOSAIC_FALLBACK_YEAR
 
 
@@ -822,13 +806,13 @@ def stage_select_images(ctx: PipelineContext) -> None:
     _require(ctx.output_dir / "collection.json", stage="select_images", produced_by="stac")
     select_cfg = ctx.config.stages.select_images
     if select_cfg.imagery_mode == "mosaics":
-        year = mosaic_year(ctx.config.year, ctx.log)
+        year = mosaic_year(ctx.config.year)
     elif ctx.effective_year is None:
         raise ValueError("A year is required for image selection.")
     else:
         year = ctx.effective_year
 
-    ctx.log("Selecting imagery...")
+    logger.info("Selecting imagery...")
     ctx.selection_result = select_imagery_for_catalog(
         catalog_dir=ctx.output_dir,
         year=year,
@@ -852,14 +836,14 @@ def stage_download_images(ctx: PipelineContext) -> None:
     )
     download_cfg = ctx.config.stages.download_images
     if download_cfg.mode == DOWNLOAD_MODE_PREVIEW:
-        ctx.log("Rendering chip previews from the remote scenes...")
+        logger.info("Rendering chip previews from the remote scenes...")
         ctx.preview_result = preview_imagery_for_catalog(
             catalog_dir=ctx.output_dir,
             resume=download_cfg.resume,
             workers=download_cfg.workers,
         )
         return
-    ctx.log("Downloading imagery...")
+    logger.info("Downloading imagery...")
     ctx.download_result = download_imagery_for_catalog(
         catalog_dir=ctx.output_dir,
         bands=download_cfg.bands,
@@ -876,7 +860,7 @@ def stage_download_images(ctx: PipelineContext) -> None:
 
 
 TIPPECANOE_MISSING_WARNING = (
-    "Warning: tippecanoe not found; no PMTiles or styles were written "
+    "tippecanoe not found; no PMTiles or styles were written "
     "(install tippecanoe or set stages.docs.pmtiles: false to silence)"
 )
 
@@ -898,15 +882,13 @@ def _build_tiles(ctx: PipelineContext) -> dict[str, Path]:
                 "stages.docs.pmtiles is true but tippecanoe is not installed. "
                 "Install tippecanoe, or set stages.docs.pmtiles to auto or false."
             )
-        ctx.log(TIPPECANOE_MISSING_WARNING)
+        logger.warning(TIPPECANOE_MISSING_WARNING)
         return {}
 
     built: dict[str, Path] = {}
     for key, attribute, out_name, spec in _TILE_TARGETS:
         source = getattr(ctx, attribute)
-        built[key] = tiles.build_pmtiles(
-            source, ctx.output_dir / out_name, spec, on_progress=ctx.log
-        )
+        built[key] = tiles.build_pmtiles(source, ctx.output_dir / out_name, spec)
     return built
 
 
@@ -923,7 +905,6 @@ def _write_styles(ctx: PipelineContext, built: dict[str, Path]) -> list[styles.S
         # reference, so the embedded source URL must climb back out of styles/.
         chips_tiles=f"../{built['chips_tiles'].name}" if "chips_tiles" in built else None,
         fields_tiles=f"../{built['fields_tiles'].name}" if "fields_tiles" in built else None,
-        on_progress=ctx.log,
     )
 
 
@@ -941,7 +922,6 @@ def _write_docs(ctx: PipelineContext, style_results: list[styles.StyleResult]) -
         ctx.config.config_dict(),
         readme=docs_cfg.readme,
         agents=docs_cfg.agents,
-        on_progress=ctx.log,
     )
 
 
@@ -962,10 +942,10 @@ def stage_docs(ctx: PipelineContext) -> None:
     docs.register_docs_assets(collection_json, tiles=built, styles=style_results, docs=written)
 
     if not (built or written):
-        ctx.log("Nothing to document: PMTiles are off and README/AGENTS are disabled")
+        logger.info("Nothing to document: PMTiles are off and README/AGENTS are disabled")
         return
 
-    ctx.log(
+    logger.info(
         f"Documented the collection: {len(built)} tile archive(s), "
         f"{len(style_results)} style(s), {len(written)} document(s)"
     )
