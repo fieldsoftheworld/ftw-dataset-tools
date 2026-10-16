@@ -154,10 +154,33 @@ denominator from `field_coverage_pct`, which is a share of the chip's own area.
 Datasets whose fields lack `hcat:code` skip this step with a note in the run output; set
 `stages.chips.crop_stats: false` to disable it even when the column is present.
 
+**Land cover (optional).** Set `stages.chips.land_cover: true` (or pass `--land-cover` to
+`create-dataset`) to add each chip's land cover from the Impact Observatory 10 m annual
+maps, read remotely from Microsoft Planetary Computer. The chips GeoParquet gets
+`landcover_dominant_code`, `landcover_dominant_name`, `landcover_dominant_pct`, and
+`landcover_classes` (every class as `{code, name, pct}`, shares of the chip's valid pixels),
+and these carry through to the STAC items as `ftw:landcover_*`. IO has maps for 2017-2023:
+a dataset year outside that range, or missing for a tile, uses the nearest year, recorded
+in `landcover_year` with `landcover_year_exact: false` and a warning in the run output. See
+[docs/stac-extension.md](docs/stac-extension.md) for the class codes. Off by default, since
+it reads remote rasters for every chip.
+
+To add land cover to a dataset that is already built, without redoing the chips stage:
+
+```bash
+ftwd add-land-cover output/austria_chips.parquet --year 2020
+# then, with stages.chips.land_cover: true in the config, republish the items:
+ftwd run config.yaml --only stac
+```
+
+The config decides what is published: with `land_cover: false`, the stac stage drops the
+columns again.
+
 **Resuming past the chips stage.** The chips GeoParquet is written by the chips stage and
 reused as-is by every later stage, so a run started with `--from` or `--stage` after
-`chips` publishes whatever that file already holds. Turning `stages.chips.crop_stats` off
-is handled: the stac stage drops any stale composition columns before publishing. Other
+`chips` publishes whatever that file already holds. Turning `stages.chips.crop_stats` or
+`stages.chips.land_cover` off is handled: the stac stage drops any stale columns before
+publishing. Other
 chips settings are not — change `min_coverage`, `drop_border_chips`, `border_gap_chips`,
 `grid_file` or the class filter and you must re-run the `chips` stage for the change to
 reach the output.

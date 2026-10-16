@@ -75,6 +75,23 @@ _HCAT_NOTES = {
     ),
 }
 
+# Land cover notes, shared the same way between the landcover_* chips columns and
+# the ftw:landcover_* item properties.
+_LANDCOVER_NOTES = {
+    "landcover_year": "year of the Impact Observatory land-cover map the chip was read from",
+    "landcover_year_exact": (
+        "true when landcover_year is the dataset year; false when IO had no map for that "
+        "year and the nearest year was used, so the land may have changed since"
+    ),
+    "landcover_dominant_code": "Impact Observatory class value covering most of the chip",
+    "landcover_dominant_name": "name of landcover_dominant_code (e.g. Crops, Trees, Built area)",
+    "landcover_dominant_pct": "share of the chip's valid land-cover pixels in the dominant class",
+    "landcover_classes": (
+        "every Impact Observatory class in the chip, as {code, name, pct} entries ordered "
+        "by share of the chip's valid pixels"
+    ),
+}
+
 # Plain-language meanings for the columns and item properties FTW writes. Anything
 # not listed is carried through from the source dataset and described as such.
 CHIP_COLUMN_NOTES = {
@@ -85,6 +102,7 @@ CHIP_COLUMN_NOTES = {
     "field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
     "field_count": "number of field polygons intersecting the chip",
     **_HCAT_NOTES,
+    **_LANDCOVER_NOTES,
     "gzd": "MGRS grid zone designator of the chip's grid cell",
     "mgrs_10km": "MGRS 100 km square plus 10 km cell identifier the chip belongs to",
     "grid_id": "identifier of the FTW grid cell the chip was cut from",
@@ -108,6 +126,7 @@ ITEM_PROPERTY_NOTES = {
     "ftw:buffer_days": "half-width of the search window around the target day, in days",
     "ftw:field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
     **{f"ftw:{name}": note for name, note in _HCAT_NOTES.items()},
+    **{f"ftw:{name}": note for name, note in _LANDCOVER_NOTES.items()},
 }
 
 ASSET_NOTES = {

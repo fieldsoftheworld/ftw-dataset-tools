@@ -144,6 +144,32 @@ class TestCreateDatasetMaskTypes:
 
         assert captured["mask_types"] == ["semantic_2_class", "decode_distance"]
 
+    @pytest.mark.parametrize(("extra", "expected"), [([], False), (["--land-cover"], True)])
+    def test_land_cover_flag_reaches_the_api(
+        self,
+        sample_fields_geoparquet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        extra: list[str],
+        expected: bool,
+    ) -> None:
+        """Land cover is off unless --land-cover is passed."""
+        captured: dict[str, Any] = {}
+
+        def fake_create_dataset(**kwargs: Any) -> CreateDatasetResult:
+            captured.update(kwargs)
+            raise SystemExit(0)
+
+        monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
+
+        _invoke(sample_fields_geoparquet, *extra)
+
+        assert captured["land_cover"] is expected
+
+    def test_land_cover_flag_in_help(self) -> None:
+        result = CliRunner().invoke(cli, ["create-dataset", "--help"])
+
+        assert "--land-cover" in result.output
+
 
 @dataclass
 class SelectionStub:

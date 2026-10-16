@@ -6,7 +6,7 @@ import sys
 
 import click
 
-from ftw_dataset_tools.api import assets, crop_stats, masks, pipeline, source
+from ftw_dataset_tools.api import assets, crop_stats, land_cover, masks, pipeline, source
 from ftw_dataset_tools.api import config as config_module
 from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
 
@@ -208,6 +208,7 @@ def _print_summary(ctx: pipeline.PipelineContext) -> None:
             click.echo(line)
     if ctx.chips_result:
         click.echo(f"  {crop_stats.crop_stats_summary(ctx.crop_stats_result)}")
+        click.echo(f"  {land_cover.land_cover_summary(ctx.land_cover_result)}")
     if ctx.stac_result:
         click.echo(f"  STAC items: {ctx.stac_result.total_items:,}")
     if ctx.selection_result is not None:

@@ -837,6 +837,28 @@ class TestCollectionMetadata:
             }
         ]
 
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_land_cover_product_and_source_link(self, tmp_path: Path, enabled: bool) -> None:
+        import json
+
+        from ftw_dataset_tools.api import land_cover
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        config = DatasetConfig.from_dict(
+            {"fields_file": "unused.parquet", "stages": {"chips": {"land_cover": enabled}}}
+        )
+        result = build_catalog(tmp_path, config=config)
+
+        coll = json.loads(result.collection_path.read_text())
+        derived = [link for link in coll["links"] if link["rel"] == "derived_from"]
+        if enabled:
+            assert coll["ftw:landcover_product"] == "io-lulc-annual-v02"
+            assert [link["href"] for link in derived] == [land_cover.COLLECTION_URL]
+            assert "CC-BY-4.0" in derived[0]["title"]
+        else:
+            assert "ftw:landcover_product" not in coll
+            assert derived == []
+
 
 class TestConfiglessRerunPreservesMetadata:
     """create-masks rebuilds the catalog without a config over a pipeline output."""
@@ -1025,7 +1047,80 @@ class TestChipProperties:
         item_path = next((tmp_path / "chips").glob("*/*/*.json"))
         props = json.loads(item_path.read_text())["properties"]
         assert "ftw:hcat_dominant_code" not in props
+        assert "ftw:landcover_year" not in props
         assert "ftw:split" not in props  # the default fixture has no split column
+
+    def _land_cover_chips(self, tmp_path: Path, *, blank: bool = False) -> Path:
+        """One chip carrying land cover columns as ``add_land_cover`` writes them."""
+        import duckdb
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.geo import ensure_spatial_loaded, write_geoparquet
+
+        chips_path = tmp_path / "ds_chips.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["ftw-33UXP0410"], "field_coverage_pct": [50.0]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(chips_path)
+        classes_type = "STRUCT(code BIGINT, name VARCHAR, pct DOUBLE)[]"
+        values = {
+            "landcover_year": "2023::INTEGER",
+            "landcover_year_exact": "false",
+            "landcover_dominant_code": "5::BIGINT",
+            "landcover_dominant_name": "'Crops'",
+            "landcover_dominant_pct": "71.43::DOUBLE",
+            "landcover_classes": (
+                "[{'code': 5, 'name': 'Crops', 'pct': 71.43}, "
+                f"{{'code': 2, 'name': 'Trees', 'pct': 28.57}}]::{classes_type}"
+            ),
+        }
+        if blank:
+            types = ["INTEGER", "BOOLEAN", "BIGINT", "VARCHAR", "DOUBLE", classes_type]
+            values = {name: f"NULL::{t}" for name, t in zip(values, types, strict=True)}
+        selected = ", ".join(f"{expr} AS {name}" for name, expr in values.items())
+
+        con = duckdb.connect()
+        ensure_spatial_loaded(con)
+        con.execute(f"CREATE TABLE chips AS SELECT *, {selected} FROM read_parquet('{chips_path}')")
+        write_geoparquet(chips_path, conn=con, query="SELECT * FROM chips")
+        con.close()
+        return chips_path
+
+    def test_land_cover_on_items(self, tmp_path: Path) -> None:
+        import json
+
+        import duckdb
+
+        result = build_catalog(tmp_path, chips_path=self._land_cover_chips(tmp_path))
+
+        item_path = tmp_path / "chips" / "33UXP" / "ftw-33UXP0410_2024" / "ftw-33UXP0410_2024.json"
+        props = json.loads(item_path.read_text())["properties"]
+        assert props["ftw:landcover_year"] == 2023
+        assert props["ftw:landcover_year_exact"] is False
+        assert props["ftw:landcover_dominant_code"] == 5
+        assert props["ftw:landcover_dominant_name"] == "Crops"
+        assert props["ftw:landcover_dominant_pct"] == pytest.approx(71.43)
+        assert [c["code"] for c in props["ftw:landcover_classes"]] == [5, 2]
+
+        con = duckdb.connect()
+        row = con.execute(
+            'SELECT "ftw:landcover_year_exact", "ftw:landcover_classes" '
+            f"FROM read_parquet('{result.items_parquet_path}')"
+        ).fetchone()
+        con.close()
+        assert row[0] is False
+        assert row[1][1]["name"] == "Trees"
+
+    def test_blank_land_cover_is_not_published(self, tmp_path: Path) -> None:
+        import json
+
+        build_catalog(tmp_path, chips_path=self._land_cover_chips(tmp_path, blank=True))
+
+        item_path = next((tmp_path / "chips").glob("*/*/*.json"))
+        props = json.loads(item_path.read_text())["properties"]
+        assert not [key for key in props if key.startswith("ftw:landcover_")]
 
 
 class TestChipsPathEscaping:

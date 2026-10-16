@@ -66,6 +66,10 @@ stages:
     drop_border_chips: false
     # Per-chip HCAT crop composition (skipped automatically when the fields lack hcat:code).
     crop_stats: true
+    # Per-chip land cover from the Impact Observatory annual maps (2017-2023), read from
+    # Planetary Computer. Years without a map use the nearest one, flagged with
+    # landcover_year_exact: false.
+    land_cover: false
     # Grid cells per coverage batch. Lower it if the coverage step runs out of memory.
     coverage_batch_size: 2000
     # Minimum chip area, as a percentage of a full km_size x km_size cell. MGRS cells

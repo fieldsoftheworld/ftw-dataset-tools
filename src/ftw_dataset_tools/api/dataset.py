@@ -9,6 +9,7 @@ from ftw_dataset_tools.api import (
     boundaries,
     crop_stats,
     field_stats,
+    land_cover,
     masks,
     pipeline,
     splits,
@@ -37,6 +38,7 @@ class CreateDatasetResult:
     chips_result: field_stats.FieldStatsResult | None = None
     splits_result: splits.CreateSplitsResult | None = None
     crop_stats_result: crop_stats.CropStatsResult | None = None
+    land_cover_result: land_cover.LandCoverResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
     stac_result: stac.STACGenerationResult | None = None
@@ -63,6 +65,7 @@ def create_dataset(
     presence_only: bool = False,
     drop_border_chips: bool = False,
     border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS,
+    land_cover: bool = False,
     checksums: bool = False,
     class_filter: str | Path | None = None,
     on_imagery: Callable[[Path], None] | None = None,
@@ -105,6 +108,8 @@ def create_dataset(
         crop_column: Source column to preserve in per-chip instance crop lookups.
         drop_border_chips: If True, remove chips on the edge of any labelled cluster. Useful when fields at a cluster boundary may have partial coverage.
         border_gap_chips: How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.
+        land_cover: Add per-chip land cover from the Impact Observatory annual maps
+            (reads remote rasters from Planetary Computer; default False).
         checksums: Compute file:checksum for every asset (slow; default False).
         class_filter: Optional path to a class filter YAML (column + include/exclude
             lists). Include classes count as field; all others become background.
@@ -142,6 +147,7 @@ def create_dataset(
         crop_column=crop_column,
         drop_border_chips=drop_border_chips,
         border_gap_chips=border_gap_chips,
+        land_cover=land_cover,
     )
     config.stages.stac.checksums = checksums
     if class_filter is not None:
@@ -178,6 +184,7 @@ def create_dataset(
         chips_result=ctx.chips_result,
         splits_result=ctx.splits_result,
         crop_stats_result=ctx.crop_stats_result,
+        land_cover_result=ctx.land_cover_result,
         boundaries_result=ctx.boundaries_result,
         masks_results=ctx.masks_results,
         stac_result=ctx.stac_result,

@@ -28,6 +28,7 @@ from pystac import (
 from pystac.extensions.version import VersionExtension
 from pystac.layout import TemplateLayoutStrategy
 
+from ftw_dataset_tools.api import land_cover
 from ftw_dataset_tools.api.assets import (
     add_file_info,
     add_mask_classification,
@@ -345,6 +346,7 @@ OPTIONAL_CHIP_COLUMNS = {
     "hcat_dominant_name_en": "ftw:hcat_dominant_name_en",
     "hcat_dominant_pct": "ftw:hcat_dominant_pct",
     "hcat_top": "ftw:hcat_top",
+    **{col: f"ftw:{col}" for col in land_cover.OUTPUT_COLUMNS},
 }
 
 #: Columns that need an explicit cast (test fixtures built with geopandas can store
@@ -354,6 +356,10 @@ _OPTIONAL_COLUMN_CASTS = {
     "hcat_dominant_code": "BIGINT",
     "hcat_dominant_pct": "DOUBLE",
     "field_coverage_pct": "DOUBLE",
+    "landcover_year": "INTEGER",
+    "landcover_year_exact": "BOOLEAN",
+    "landcover_dominant_code": "BIGINT",
+    "landcover_dominant_pct": "DOUBLE",
 }
 
 
@@ -498,6 +504,8 @@ def _collection_ftw_properties(config: DatasetConfig) -> dict:
         "ftw:presence_only": stages.masks.presence_only,
         "ftw:min_coverage_pct": stages.chips.min_coverage,
     }
+    if stages.chips.land_cover:
+        props["ftw:landcover_product"] = land_cover.PRODUCT
     if stages.select_images.enabled:
         sel = stages.select_images
         props.update(
@@ -966,6 +974,15 @@ def _apply_collection_context(
                 target=config.source_via,
                 media_type="application/json",
                 title="Source field boundary collection",
+            )
+        )
+    if config is not None and config.stages.chips.land_cover:
+        collection.add_link(
+            Link(
+                rel="derived_from",
+                target=land_cover.COLLECTION_URL,
+                media_type="application/json",
+                title=land_cover.ATTRIBUTION,
             )
         )
     if config is not None:

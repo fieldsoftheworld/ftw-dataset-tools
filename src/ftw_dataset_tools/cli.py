@@ -8,6 +8,7 @@ from ftw_dataset_tools import __version__
 
 # Command modules are imported on first use to keep startup fast.
 COMMAND_MODULES = (
+    "add_land_cover",
     "convert_previews",
     "create_boundaries",
     "create_chips",

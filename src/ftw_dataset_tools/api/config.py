@@ -286,6 +286,9 @@ class ChipsConfig:
     grid_source: str | None = None
     # Per-chip HCAT crop composition (skipped automatically when the fields lack hcat:code).
     crop_stats: bool = True
+    # Per-chip land cover from the Impact Observatory annual maps on Planetary
+    # Computer. Off by default: it reads remote rasters for every chip.
+    land_cover: bool = False
     # Grid cells per coverage batch. Lower it when the coverage step runs the
     # machine out of memory on a dense, country-sized input.
     coverage_batch_size: int = field_stats.DEFAULT_COVERAGE_BATCH_SIZE
@@ -600,6 +603,7 @@ class DatasetConfig:
         presence_only: bool,
         drop_border_chips: bool,
         border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS,
+        land_cover: bool = False,
         crop_column: str | None = None,
     ) -> DatasetConfig:
         """Build a config from ``create_dataset`` keyword arguments.
@@ -619,6 +623,7 @@ class DatasetConfig:
                     min_coverage=min_coverage,
                     drop_border_chips=drop_border_chips,
                     border_gap_chips=border_gap_chips,
+                    land_cover=land_cover,
                 ),
                 splits=SplitsConfig(split_type=split_type, split_percents=split_percents),
                 masks=MasksConfig(
@@ -667,6 +672,8 @@ class DatasetConfig:
 
         if not isinstance(self.stages.chips.crop_stats, bool):
             raise ConfigError("stages.chips.crop_stats must be true or false")
+        if not isinstance(self.stages.chips.land_cover, bool):
+            raise ConfigError("stages.chips.land_cover must be true or false")
 
         batch_size = self.stages.chips.coverage_batch_size
         if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:

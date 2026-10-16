@@ -15,13 +15,17 @@ from typing import TYPE_CHECKING
 
 import duckdb
 
-from ftw_dataset_tools.api.field_stats import CHIP_ID_COLUMN, detect_bbox_column
-from ftw_dataset_tools.api.fs import create_temp_file, finalize_temp_file
+from ftw_dataset_tools.api.chips_io import (
+    drop_columns,
+    parquet_columns,
+    select_excluding,
+    write_chips,
+)
+from ftw_dataset_tools.api.field_stats import detect_bbox_column
 from ftw_dataset_tools.api.geo import (
     detect_geometry_column,
     ensure_spatial_loaded,
     sql_path,
-    write_geoparquet,
 )
 
 if TYPE_CHECKING:
@@ -51,63 +55,13 @@ class CropStatsResult:
     reason: str | None = None
 
 
-def _write_chips(chips_path: Path, con: duckdb.DuckDBPyConnection, query: str) -> None:
-    """Write ``query`` over the chips GeoParquet through a temp file and a rename.
-
-    The chips file is both the input and the output of this module, and it is the
-    only copy: a partial write would leave a truncated file that a later resume from
-    the splits stage cannot read. The temp file is a sibling of the target so the
-    rename stays on one filesystem.
-
-    The write is ordered by chip id. ``assign_splits`` maps a shuffled label array
-    onto the rows by position, so any writer that leaves row order to the engine
-    breaks split reproducibility at a fixed seed. ``add_field_stats`` orders its own
-    write, but this module rewrites the same file afterwards through a LEFT JOIN,
-    which does not preserve the probe side's order - so the ordering has to be
-    re-applied here rather than inherited. Ordering inside this helper rather than at
-    the call sites keeps a future writer from silently dropping it.
-    """
-    columns = [row[0] for row in con.execute(f"DESCRIBE {query}").fetchall()]
-    if CHIP_ID_COLUMN in columns:
-        query = f'SELECT * FROM ({query}) ORDER BY "{CHIP_ID_COLUMN}"'
-    tmp_path: Path | None = None
-    try:
-        tmp_path = create_temp_file(chips_path, suffix=".parquet")
-        write_geoparquet(tmp_path, conn=con, query=query)
-        finalize_temp_file(tmp_path, chips_path)
-        tmp_path = None
-    finally:
-        if tmp_path is not None and tmp_path.exists():
-            tmp_path.unlink()
-
-
-def _columns(path: Path) -> list[str]:
-    con = duckdb.connect(":memory:")
-    try:
-        return [
-            row[0]
-            for row in con.execute(
-                f"DESCRIBE SELECT * FROM read_parquet('{sql_path(path)}')"
-            ).fetchall()
-        ]
-    finally:
-        con.close()
-
-
 def detect_hcat_columns(fields_file: Path | str) -> tuple[str, str | None] | None:
     """The HCAT code column and the best available name column, or None."""
-    columns = _columns(Path(fields_file))
+    columns = parquet_columns(Path(fields_file))
     if CODE_COLUMN not in columns:
         return None
     name_col = next((c for c in NAME_COLUMNS if c in columns), None)
     return CODE_COLUMN, name_col
-
-
-def _select_without_crop_stats(chips_path: Path) -> str:
-    """SELECT over the chips file with any previous composition columns removed."""
-    existing = [c for c in _columns(chips_path) if c in OUTPUT_COLUMNS]
-    drop = f"EXCLUDE ({', '.join(existing)})" if existing else ""
-    return f"SELECT * {drop} FROM read_parquet('{sql_path(chips_path)}')"
 
 
 def drop_crop_stats(chips_file: Path | str) -> bool:
@@ -116,18 +70,7 @@ def drop_crop_stats(chips_file: Path | str) -> bool:
     Returns True when columns were dropped. Used when the step is configured off, so
     a rerun never republishes the previous run's composition.
     """
-    chips_path = Path(chips_file).resolve()
-    if not any(col in OUTPUT_COLUMNS for col in _columns(chips_path)):
-        return False
-
-    con = duckdb.connect(":memory:")
-    ensure_spatial_loaded(con)
-    try:
-        con.execute(f"CREATE TABLE chips_table AS {_select_without_crop_stats(chips_path)}")
-        _write_chips(chips_path, con, "SELECT * FROM chips_table")
-    finally:
-        con.close()
-    return True
+    return drop_columns(chips_file, OUTPUT_COLUMNS)
 
 
 def _join_condition(
@@ -373,7 +316,7 @@ def add_crop_stats(
     con = duckdb.connect(":memory:")
     ensure_spatial_loaded(con)
     try:
-        con.execute(f"CREATE TABLE chips_table AS {_select_without_crop_stats(chips_path)}")
+        con.execute(f"CREATE TABLE chips_table AS {select_excluding(chips_path, OUTPUT_COLUMNS)}")
         con.execute(
             f"CREATE TABLE fields_table AS SELECT * FROM read_parquet('{sql_path(fields_path)}')"
         )
@@ -392,7 +335,7 @@ def add_crop_stats(
             top_n=top_n,
             batch_size=batch_size,
         )
-        _write_chips(chips_path, con, "SELECT * FROM composed")
+        write_chips(chips_path, con, "SELECT * FROM composed")
     finally:
         con.close()
 

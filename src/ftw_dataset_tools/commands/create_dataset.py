@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from ftw_dataset_tools.api import chip_borders, crop_stats, dataset, field_stats, masks, splits
+from ftw_dataset_tools.api import land_cover as land_cover_api
 from ftw_dataset_tools.api.assets import MaskReadError
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
@@ -226,6 +227,16 @@ def _selection_year(fields_file: Path, year: int | None, mosaic_year: int | None
     ),
 )
 @click.option(
+    "--land-cover",
+    is_flag=True,
+    default=False,
+    help=(
+        "Add per-chip land cover from the Impact Observatory annual maps (2017-2023; the "
+        "nearest year is used and flagged when the dataset year has no map). Reads remote "
+        "rasters from Planetary Computer."
+    ),
+)
+@click.option(
     "--class-filter",
     "class_filter",
     type=click.Path(exists=True),
@@ -270,6 +281,7 @@ def create_dataset_cmd(
     crop_column: str | None,
     drop_border_chips: bool,
     border_gap_chips: int,
+    land_cover: bool,
     class_filter: str | None,
     checksums: bool,
 ) -> None:
@@ -479,6 +491,7 @@ def create_dataset_cmd(
             crop_column=crop_column,
             drop_border_chips=drop_border_chips,
             border_gap_chips=border_gap_chips,
+            land_cover=land_cover,
             class_filter=class_filter,
             checksums=checksums,
             on_imagery=select_and_download if should_select_images else None,
@@ -504,6 +517,7 @@ def create_dataset_cmd(
             click.echo(f"  Grid cells: {result.chips_result.total_cells:,}")
             click.echo(f"  Cells with coverage: {result.chips_result.cells_with_coverage:,}")
             click.echo(f"  {crop_stats.crop_stats_summary(result.crop_stats_result)}")
+            click.echo(f"  {land_cover_api.land_cover_summary(result.land_cover_result)}")
 
         if result.splits_result:
             click.echo(

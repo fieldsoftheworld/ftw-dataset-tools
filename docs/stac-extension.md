@@ -92,6 +92,12 @@ independently of imagery:
 | `ftw:hcat_dominant_name_en` | string | English name of the dominant HCAT code |
 | `ftw:hcat_dominant_pct` | number | Area share (0-100) of the dominant HCAT code |
 | `ftw:hcat_top` | array | Top HCAT codes by area, each `{code, name_en, pct}` |
+| `ftw:landcover_year` | integer | Year of the Impact Observatory land-cover map the chip was read from |
+| `ftw:landcover_year_exact` | boolean | `true` when `ftw:landcover_year` is the dataset year; `false` when the nearest available year was used |
+| `ftw:landcover_dominant_code` | integer | Impact Observatory class value covering most of the chip |
+| `ftw:landcover_dominant_name` | string | Name of the dominant class |
+| `ftw:landcover_dominant_pct` | number | Share (0-100) of the chip's valid pixels in the dominant class |
+| `ftw:landcover_classes` | array | Every class in the chip, largest first, each `{code, name, pct}` |
 
 The `ftw:hcat_*` properties are only present when the field polygons carry the fiboa
 HCAT extension (an `hcat:code` column); otherwise crop composition is skipped and these
@@ -101,6 +107,39 @@ area, so they sum below 100 when some of the fields in the chip carry no HCAT co
 is a different denominator from `ftw:field_coverage_pct`, which is a share of the chip's
 own area: a chip that is 20% fields, all of them wheat, has
 `ftw:field_coverage_pct: 20` and `ftw:hcat_dominant_pct: 100`.
+
+The `ftw:landcover_*` properties are only present when land cover is enabled
+(`stages.chips.land_cover: true`, `ftwd create-dataset --land-cover`, or
+`ftwd add-land-cover`). They come from the Impact Observatory
+[10m Annual Land Use Land Cover (9-class) V2](https://planetarycomputer.microsoft.com/dataset/io-lulc-annual-v02)
+maps (Impact Observatory and Esri, CC-BY-4.0), read from Microsoft Planetary Computer.
+Every chip in every dataset uses this one product, so the class codes mean the same thing
+across datasets:
+
+| Code | Class |
+|------|-------|
+| 1 | Water |
+| 2 | Trees |
+| 4 | Flooded vegetation |
+| 5 | Crops |
+| 7 | Built area |
+| 8 | Bare ground |
+| 9 | Snow/ice |
+| 10 | Clouds |
+| 11 | Rangeland |
+
+IO publishes one map per year, 2017-2023. A chip uses the map for the dataset year when
+there is one. Otherwise it uses the nearest year (the later one on a tie), and
+`ftw:landcover_year_exact` is `false` because the land may have changed in between: a 2025
+dataset reads the 2023 map, a 2014 dataset the 2017 map. Filter on
+`ftw:landcover_year_exact = true` for exact matches only, or compare `ftw:landcover_year`
+with `ftw:calendar_year` to allow a tolerance. The properties are omitted only where IO has
+no data for the chip.
+
+The percentages are shares of the chip's valid land-cover pixels (IO's nodata value 0 is
+left out), so they sum to ~100. A pixel counts when its centre is inside the chip. As
+with the other properties, a share is rounded to 2 decimals, so a class present on a
+handful of pixels can show `pct: 0.0`.
 
 ### Child S2 Item Properties
 
@@ -133,6 +172,7 @@ describing how the whole dataset was built:
 | `ftw:mask_resolution_m` | number | Mask pixel resolution in meters |
 | `ftw:presence_only` | boolean | Whether labels are presence-only (semantic mask background is 3 instead of 0) |
 | `ftw:min_coverage_pct` | number | Minimum field-coverage percentage required to keep a grid cell |
+| `ftw:landcover_product` | string | Land-cover product behind the `ftw:landcover_*` item properties: `io-lulc-annual-v02` (present only when land cover is enabled, alongside a `derived_from` link to that collection) |
 | `ftw:cloud_cover_chip_threshold` | number | Chip-level cloud cover threshold percentage (present only when image selection is enabled) |
 | `ftw:nodata_max` | number | Maximum allowed nodata percentage (0-100) for a selected scene (present only when image selection is enabled) |
 | `ftw:buffer_days` | integer | Search buffer in days around crop calendar dates (present only when image selection is enabled) |

@@ -31,6 +31,7 @@ from ftw_dataset_tools.api import (
     crop_stats,
     docs,
     field_stats,
+    land_cover,
     masks,
     splits,
     stac,
@@ -165,6 +166,7 @@ class PipelineContext:
     source_crs: str | None = None
     chips_result: field_stats.FieldStatsResult | None = None
     crop_stats_result: crop_stats.CropStatsResult | None = None
+    land_cover_result: land_cover.LandCoverResult | None = None
     splits_result: splits.CreateSplitsResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
@@ -586,6 +588,17 @@ def stage_chips(ctx: PipelineContext) -> None:
     else:
         # Never publish a previous run's composition when the step is turned off.
         crop_stats.drop_crop_stats(ctx.chips_path)
+    _add_land_cover(ctx)
+
+
+def _add_land_cover(ctx: PipelineContext) -> None:
+    """Run the land cover step, or clear a previous run's columns when it is off."""
+    if not ctx.config.stages.chips.land_cover:
+        land_cover.drop_land_cover(ctx.chips_path)
+        return
+    ctx.land_cover_result = land_cover.add_land_cover(
+        ctx.chips_path, year=ctx.effective_year, on_progress=ctx.log
+    )
 
 
 def stage_splits(ctx: PipelineContext) -> None:
@@ -743,6 +756,13 @@ def stage_stac(ctx: PipelineContext) -> None:
     # only stage that publishes them, is a no-op when they are absent.
     if not ctx.config.stages.chips.crop_stats and crop_stats.drop_crop_stats(ctx.chips_path):
         ctx.log("Dropped stale crop composition columns from the chips file")
+    # The same holds for land cover, including columns added by ``ftwd add-land-cover``:
+    # the config decides what is published, so a backfill needs land_cover: true.
+    if not ctx.config.stages.chips.land_cover and land_cover.drop_land_cover(ctx.chips_path):
+        ctx.log(
+            "Dropped land cover columns from the chips file "
+            "(set stages.chips.land_cover: true to publish them)"
+        )
 
     ctx.log("Generating STAC catalog...")
     ctx.stac_result = stac.generate_stac_catalog(

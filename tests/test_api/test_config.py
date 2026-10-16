@@ -218,6 +218,24 @@ class TestFromDict:
                 {"fields_file": "f.parquet", "stages": {"chips": {"crop_stats": "yes"}}}
             )
 
+    def test_land_cover_defaults_false(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+
+        assert config.stages.chips.land_cover is False
+
+    def test_land_cover_can_be_enabled(self) -> None:
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"chips": {"land_cover": True}}}
+        )
+
+        assert config.stages.chips.land_cover is True
+
+    def test_land_cover_non_bool_raises(self) -> None:
+        with pytest.raises(ConfigError, match=r"stages\.chips\.land_cover must be true or false"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"chips": {"land_cover": "yes"}}}
+            )
+
     def test_skip_existing_defaults_false(self) -> None:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
 
@@ -298,10 +316,12 @@ class TestFromKwargs:
             mask_types=["instance"],
             presence_only=True,
             drop_border_chips=True,
+            land_cover=True,
         )
         assert config.name == "ds"
         assert config.stages.chips.min_coverage == 0.02
         assert config.stages.chips.drop_border_chips is True
+        assert config.stages.chips.land_cover is True
         assert config.stages.masks.workers == 4
         assert config.stages.masks.presence_only is True
         assert config.stages.masks.mask_types == ["instance"]
@@ -325,6 +345,7 @@ class TestFromKwargs:
             presence_only=False,
             drop_border_chips=False,
         )
+        assert config.stages.chips.land_cover is False
         assert config.stages.masks.mask_types == list(config_module.DEFAULT_MASK_TYPES)
         # The DECODE layers are valid but opt-in, so they are not in the default set.
         assert "decode_boundary" not in config.stages.masks.mask_types

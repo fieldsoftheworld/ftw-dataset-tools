@@ -777,6 +777,19 @@ class TestMasksStage:
 
 
 class TestStacStageFlags:
+    @staticmethod
+    def _placeholder_outputs(ctx) -> None:
+        """Stand-ins for the stac stage's inputs; generate_stac_catalog is stubbed.
+
+        The chips file has to be real Parquet: the stage reads its schema to drop
+        stale columns of any enrichment step configured off.
+        """
+        gpd.GeoDataFrame(
+            {"id": ["ftw-33UXP0001"]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326"
+        ).to_parquet(ctx.chips_path)
+        ctx.output_fields_path.write_bytes(b"")
+        ctx.boundary_lines_path.write_bytes(b"")
+
     def test_stac_stage_passes_checksums_and_background(
         self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
     ) -> None:
@@ -813,8 +826,7 @@ class TestStacStageFlags:
         )
         ctx = pipeline.build_context(config)
         ctx.output_dir.mkdir()
-        for name in ("chips", "fields", "boundary_lines"):
-            (ctx.output_dir / f"{ctx.field_dataset}_{name}.parquet").write_bytes(b"")
+        self._placeholder_outputs(ctx)
 
         pipeline.stage_stac(ctx)
 
@@ -853,8 +865,7 @@ class TestStacStageFlags:
         )
         ctx = pipeline.build_context(config)
         ctx.output_dir.mkdir()
-        for name in ("chips", "fields", "boundary_lines"):
-            (ctx.output_dir / f"{ctx.field_dataset}_{name}.parquet").write_bytes(b"")
+        self._placeholder_outputs(ctx)
 
         pipeline.stage_stac(ctx)
 
@@ -1378,6 +1389,125 @@ class TestStacStageStaleCropStats:
         pipeline.stage_stac(ctx)
 
         assert "hcat_dominant_code" in gpd.read_parquet(ctx.chips_path).columns
+
+
+def _land_cover_ctx(
+    tmp_path: Path, monkeypatch, *, land_cover_on: bool
+) -> pipeline.PipelineContext:
+    """A context whose chips stage writes one chip that already carries land cover columns.
+
+    The columns stand in for a previous run (or an ``ftwd add-land-cover`` backfill).
+    """
+    fields = tmp_path / "fields.parquet"
+    gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(fields)
+    config = _config(
+        fields,
+        tmp_path / "out",
+        year=2024,
+        stages={"chips": {"crop_stats": False, "land_cover": land_cover_on}},
+    )
+    ctx = pipeline.build_context(config)
+    ctx.output_dir.mkdir()
+    gpd.read_parquet(fields).to_parquet(ctx.field_polygons_path)
+
+    def write_chips(path: Path) -> None:
+        gpd.GeoDataFrame(
+            {"id": ["ftw-33UXP0001"], "field_coverage_pct": [50.0], "landcover_year": [2021]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(path)
+
+    def fake_field_stats(**kwargs):
+        write_chips(Path(kwargs["output_file"]))
+        return field_stats.FieldStatsResult(
+            output_path=Path(kwargs["output_file"]),
+            total_cells=1,
+            cells_with_coverage=1,
+            average_coverage=50.0,
+            max_coverage=50.0,
+        )
+
+    monkeypatch.setattr(field_stats, "add_field_stats", fake_field_stats)
+    write_chips(ctx.chips_path)
+    return ctx
+
+
+class TestChipsStageLandCover:
+    def test_enabled_runs_with_the_dataset_year(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import land_cover
+
+        ctx = _land_cover_ctx(tmp_path, monkeypatch, land_cover_on=True)
+        calls: list[tuple] = []
+        expected = land_cover.LandCoverResult(1, 1, 0, (2024,), 2024, skipped=False)
+
+        def fake_add(chips, *, year, **_kwargs):
+            calls.append((Path(chips), year))
+            return expected
+
+        monkeypatch.setattr(land_cover, "add_land_cover", fake_add)
+
+        pipeline.stage_chips(ctx)
+
+        assert calls == [(ctx.chips_path, 2024)]
+        assert ctx.land_cover_result is expected
+
+    def test_disabled_drops_stale_columns(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import land_cover
+
+        ctx = _land_cover_ctx(tmp_path, monkeypatch, land_cover_on=False)
+
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError("called")
+
+        monkeypatch.setattr(land_cover, "add_land_cover", fail_if_called)
+
+        pipeline.stage_chips(ctx)
+
+        assert ctx.land_cover_result is None
+        assert "landcover_year" not in gpd.read_parquet(ctx.chips_path).columns
+
+
+class TestStacStageStaleLandCover:
+    def _stub_stac(self, tmp_path: Path, monkeypatch, ctx: pipeline.PipelineContext) -> None:
+        from ftw_dataset_tools.api import stac
+
+        ctx.output_fields_path.write_bytes(b"")
+        ctx.boundary_lines_path.write_bytes(b"")
+
+        def fake_generate(**_kwargs):
+            return stac.STACGenerationResult(
+                collection_path=tmp_path / "collection.json",
+                items_parquet_path=tmp_path / "items.parquet",
+                subcatalog_paths={},
+                total_items=0,
+                temporal_extent=(
+                    datetime(2024, 1, 1, tzinfo=UTC),
+                    datetime(2024, 12, 31, tzinfo=UTC),
+                ),
+            )
+
+        monkeypatch.setattr(stac, "generate_stac_catalog", fake_generate)
+
+    def test_disabled_drops_columns_and_says_how_to_keep_them(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        messages: list[str] = []
+        ctx = _land_cover_ctx(tmp_path, monkeypatch, land_cover_on=False)
+        ctx.on_progress = messages.append
+        self._stub_stac(tmp_path, monkeypatch, ctx)
+
+        pipeline.stage_stac(ctx)
+
+        assert "landcover_year" not in gpd.read_parquet(ctx.chips_path).columns
+        assert any("stages.chips.land_cover: true" in m for m in messages)
+
+    def test_enabled_keeps_backfilled_columns(self, tmp_path: Path, monkeypatch) -> None:
+        ctx = _land_cover_ctx(tmp_path, monkeypatch, land_cover_on=True)
+        self._stub_stac(tmp_path, monkeypatch, ctx)
+
+        pipeline.stage_stac(ctx)
+
+        assert "landcover_year" in gpd.read_parquet(ctx.chips_path).columns
 
 
 class TestDocsStage:

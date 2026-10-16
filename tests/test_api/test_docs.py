@@ -690,6 +690,22 @@ class TestSchemaNotes:
         assert "see the item JSON" not in agents
         assert "ordered by share (top 5)" in agents
 
+    def test_land_cover_columns_and_properties_have_notes(self) -> None:
+        from ftw_dataset_tools.api import land_cover
+        from ftw_dataset_tools.api.docs import render_agents
+
+        collection = {"title": "T", "links": []}
+        stats = _stats(
+            chip_columns=list(land_cover.OUTPUT_COLUMNS),
+            item_properties=[f"ftw:{col}" for col in land_cover.OUTPUT_COLUMNS],
+        )
+
+        agents = render_agents(collection, stats, [])
+
+        assert "carried through from the source dataset" not in agents
+        assert "see the item JSON" not in agents
+        assert "the nearest year was used" in agents
+
 
 class TestLicenseLink:
     """README/AGENTS license mentions link out when there is somewhere to link to."""
