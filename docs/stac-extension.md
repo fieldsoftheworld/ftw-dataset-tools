@@ -79,6 +79,45 @@ Child items carry `start_datetime`/`end_datetime` for the quarter instead of `da
 Clipped mosaic images keep the source encoding: `int16`, nodata `-32768`, reflectance =
 value x 0.0001 with no offset, recorded as GDAL scale/offset and in `raster:bands`.
 
+### PlanetScope Scenes
+
+With `--source planetscope` (config `stages.select_images.source: planetscope`) a chip gets a
+planting and a harvest PlanetScope scene, chosen from the same crop calendar windows as
+Sentinel-2. Planet selections sit beside any Sentinel-2 selection on the same chip: links are
+`ftw:planting_planet` / `ftw:harvest_planet`, image assets `planting_image_planet` /
+`harvest_image_planet`, files `{item_id}_{season}_planet.json` /
+`{item_id}_{season}_image_planet.tif`, and the parent's Planet bookkeeping is namespaced
+`ftw:planet:` so it never overwrites the Sentinel-2 properties above.
+
+Scenes are PSScene `ortho_analytic_4b_sr` (blue, green, red, NIR surface reflectance, not
+harmonized). Candidates are rated on the chip itself from each scene's UDM2: cloud is the
+share of the chip's valid pixels that UDM2 does not mark clear, nodata the share that is
+blackfill or outside the scene.
+
+| Property | Item | Type | Description |
+|----------|------|------|-------------|
+| `ftw:planet:imagery_mode` | parent | string | `scenes` |
+| `ftw:planet:calendar_year` | parent | integer | Crop calendar year selected for |
+| `ftw:planet:planting_day` / `ftw:planet:harvest_day` | parent | integer | Crop calendar days of year |
+| `ftw:planet:cloud_cover_chip_threshold` | parent | number | Chip cloud limit used (%) |
+| `ftw:planet:buffer_days` | parent | integer | Initial search window, days either side |
+| `ftw:planet:planting_buffer_used` / `ftw:planet:harvest_buffer_used` | parent | integer | Window that found the scene |
+| `ftw:planet:expansions_performed` | parent | integer | Window widenings needed |
+| `ftw:planet:planting_cloud_cover` / `ftw:planet:harvest_cloud_cover` | parent | number | Chip cloud of the chosen scene (%) |
+| `ftw:source` | child | string | `planetscope` |
+| `ftw:scene_id` | child | string | PSScene id |
+| `ftw:planet_item_type` / `ftw:planet_asset` | child | string | `PSScene` / `ortho_analytic_4b_sr` |
+| `ftw:planet_order_id` | child | string | Planet order the scene was delivered in |
+| `ftw:cloud_mask` | child | string | `udm2` |
+| `ftw:scene_clear_percent` | child | number | Planet's scene-level clear percentage |
+| `eo:cloud_cover` | child | number | Chip cloud from UDM2 (%) |
+| `platform` / `gsd` | child | string / number | Satellite id and ground sample distance |
+
+Child assets `analytic` and `udm2` point at the delivered, clipped files in the dataset's
+`.planet/` cache; `image` is added on download. Images are written on the chip's own grid in
+its UTM zone at 3 m (see the `*_mask_planet` assets): `uint16`, nodata `0`, reflectance =
+value x 0.0001, recorded as GDAL scale and `raster:scale`.
+
 ### Build-time Chip Item Properties
 
 These properties are set when the chip items are generated from the chips GeoParquet,
@@ -506,6 +545,7 @@ Rebuild STAC to refresh existing collection asset definitions for mixed formats.
 |----------|-------------|
 | `ftw:planting` | Links a parent chip item to its planting-season S2 child item |
 | `ftw:harvest` | Links a parent chip item to its harvest-season S2 child item |
+| `ftw:planting_planet` / `ftw:harvest_planet` | Links a parent chip item to its PlanetScope child items |
 | `ftw:parent_chip` | Links a child S2 item back to its parent chip item |
 | `via` | Links to the original source STAC item in the remote catalog |
 
@@ -520,6 +560,8 @@ Rebuild STAC to refresh existing collection asset definitions for mixed formats.
 | `scl` | Scene Classification Layer |
 | `cloud_probability` | Cloud probability mask |
 | `clipped` | Local clipped multi-band image (after download) |
+| `analytic` / `udm2` | PlanetScope child: the delivered 4-band SR scene and its UDM2, in `.planet/` |
+| `{mask}_mask_planet` | Mask on the chip's 3 m UTM grid, for its PlanetScope imagery |
 | `planting_visual` / `harvest_visual` | The season's source scene as a true-colour COG (role `visual`, remote href) |
 
 ## File Naming Convention
@@ -530,6 +572,9 @@ All files include the calendar year for consistency. Chip item files and their a
 - Child S2 items: `chips/{mgrs100k}/{item_id}/{item_id}_{season}_s2.json`
 - Clipped imagery: `chips/{mgrs100k}/{item_id}/{item_id}_{season}_image_s2.tif`
 - Mask files: `chips/{mgrs100k}/{item_id}/{item_id}_{mask_type}.tif`
+- PlanetScope child items, imagery and masks: `{item_id}_{season}_planet.json`,
+  `{item_id}_{season}_image_planet.tif`, `{item_id}_{mask_type}_planet.tif`
+- PlanetScope deliveries (order cache and manifest): `.planet/{order_id}/`, `.planet/manifest.json`
 
 where `{mgrs100k}` is the MGRS 100 km square (or `other` for custom grids) and `{item_id}` is the chip identifier.
 

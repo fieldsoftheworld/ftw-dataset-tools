@@ -247,6 +247,44 @@ stages:
     enabled: false
 ```
 
+### PlanetScope imagery
+
+Instead of Sentinel-2, imagery can come from PlanetScope: a planting and a harvest scene per
+chip, 4-band surface reflectance (blue, green, red, NIR) at 3 m. It needs a Planet account with
+download access, and its API key in `PL_API_KEY`.
+
+```bash
+export PL_API_KEY=...   # never commit this
+
+# In a config (ftwd run): select and download PlanetScope scenes
+#   stages:
+#     select_images: {source: planetscope}
+#     download_images: {enabled: true}
+ftwd run config.yaml
+
+# Or step by step on an existing dataset
+ftwd create-masks chips.parquet fields.parquet lines.parquet -o ./dataset --planet-grid --mask-type semantic_3_class
+ftwd select-images ./dataset --source planetscope
+ftwd download-images ./dataset --source planetscope
+```
+
+How it works:
+
+- **Selection orders scenes per area, not per chip.** Chips are grouped by MGRS 100 km square
+  and season. Each group runs one search, each chip keeps its few clearest covering scenes,
+  and their union is ordered once, clipped to the chips. Deliveries are cached under
+  `<dataset>/.planet/`, so a rerun never orders the same scenes twice.
+- **Each chip is rated on its own pixels.** A chip takes the candidate whose UDM2 shows the
+  least cloud over the chip itself; a scene's overall clear percentage often misleads.
+- **Orders take a while** (roughly 15-20 minutes). `--no-planet-wait` (`planet_wait: false`)
+  returns without waiting; chips whose orders are still processing are picked up by a rerun.
+  See #120 for work on speeding this up.
+- **PlanetScope gets its own masks**, on each chip's grid in its UTM zone at 3 m
+  (`*_planet.tif`); the masks stage writes them when the source is planetscope. Downloads cut
+  each scene onto that grid as `{item_id}_{season}_image_planet.tif`.
+- Planet and Sentinel-2 selections can coexist on one chip. Quarterly PlanetScope mosaics are
+  not supported yet (scenes mode only).
+
 ### inspect-fields
 
 Quickly summarize a fields (Geo)Parquet file before building a dataset: columns,

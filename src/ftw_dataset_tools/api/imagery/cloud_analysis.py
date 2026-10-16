@@ -1,4 +1,4 @@
-"""Pixel-level cloud cover analysis using SCL or cloud probability bands."""
+"""Pixel-level cloud cover analysis using SCL, UDM2 or cloud probability bands."""
 
 from __future__ import annotations
 
@@ -6,16 +6,25 @@ from typing import NamedTuple
 
 import numpy as np
 import rasterio
+from pyproj import Transformer
 from rasterio.crs import CRS
 from rasterio.errors import WindowError
+from rasterio.features import geometry_mask
 from rasterio.warp import transform_bounds
 from rasterio.windows import Window, from_bounds
+from shapely.geometry import box
+from shapely.ops import transform as shapely_transform
 
-__all__ = ["SCLChipStats", "calculate_pixel_cloud_cover", "read_scl_chip_stats"]
+__all__ = [
+    "SCLChipStats",
+    "calculate_pixel_cloud_cover",
+    "read_scl_chip_stats",
+    "read_udm2_chip_stats",
+]
 
 
 class SCLChipStats(NamedTuple):
-    """What one SCL window says about a chip: how much is missing, how much is cloud."""
+    """What one SCL or UDM2 window says about a chip: how much is missing, how much is cloud."""
 
     nodata_pct: float
     cloud_pct: float
@@ -63,6 +72,44 @@ def read_scl_chip_stats(scl_href: str, bbox: tuple[float, float, float, float]) 
     cloud_mask = (data == 3) | (data == 8) | (data == 9) | (data == 10)
     cloud_pct = int(np.count_nonzero(cloud_mask & valid_mask)) / valid_count * 100.0
     return SCLChipStats(nodata_pct=float(nodata_pct), cloud_pct=float(cloud_pct))
+
+
+def read_udm2_chip_stats(udm2_path: str, bbox: tuple[float, float, float, float]) -> SCLChipStats:
+    """Nodata and not-clear percentages for a chip, from a PlanetScope UDM2 file.
+
+    UDM2 band 1 is the clear map (1 = clear) and band 8 is the legacy unusable-data
+    mask, whose bit 0 marks blackfill: pixels outside the imaged area. As with SCL,
+    ``cloud_pct`` is the share of *valid* pixels that are not clear (cloud, shadow,
+    haze or snow) and ``nodata_pct`` the share of the chip that is blackfill or
+    falls outside the file.
+
+    Pixels are counted inside the chip polygon reprojected to the file's CRS, not
+    its bounding box: delivered files are clipped close to the chips, and a
+    reprojected box would reach past the file's edge and read as missing data.
+    """
+    with rasterio.open(udm2_path) as src:
+        to_src = Transformer.from_crs(CRS.from_epsg(4326), src.crs, always_xy=True)
+        chip = shapely_transform(to_src.transform, box(*bbox))
+        window = from_bounds(*chip.bounds, src.transform).round_offsets().round_lengths()
+        if window.width <= 0 or window.height <= 0:
+            return SCLChipStats(nodata_pct=100.0, cloud_pct=0.0)
+        # Outside the file reads as blackfill, so it counts as missing.
+        clear = src.read(1, window=window, boundless=True, fill_value=0)
+        unusable = src.read(8, window=window, boundless=True, fill_value=1)
+        inside = geometry_mask(
+            [chip], out_shape=clear.shape, transform=src.window_transform(window), invert=True
+        )
+
+    chip_px = int(np.count_nonzero(inside))
+    if chip_px == 0:
+        return SCLChipStats(nodata_pct=100.0, cloud_pct=0.0)
+    valid = inside & ((unusable & 1) == 0)
+    valid_count = int(np.count_nonzero(valid))
+    nodata_pct = (chip_px - valid_count) / chip_px * 100.0
+    if valid_count == 0:
+        return SCLChipStats(nodata_pct=float(nodata_pct), cloud_pct=0.0)
+    not_clear = int(np.count_nonzero((clear != 1) & valid))
+    return SCLChipStats(nodata_pct=float(nodata_pct), cloud_pct=not_clear / valid_count * 100.0)
 
 
 def calculate_pixel_cloud_cover(

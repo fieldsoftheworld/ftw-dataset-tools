@@ -22,7 +22,12 @@ from ftw_dataset_tools.api.imagery.settings import (
     MOSAIC_SCALE,
     REFLECTANCE_BANDS,
 )
-from ftw_dataset_tools.api.imagery.slots import MOSAIC_SOURCE, THUMBNAIL_SLOTS, parse_image_stem
+from ftw_dataset_tools.api.imagery.slots import (
+    MOSAIC_SOURCE,
+    THUMBNAIL_SLOTS,
+    mask_suffix,
+    parse_image,
+)
 from ftw_dataset_tools.api.imagery.thumbnails import (
     PREVIEW_MEDIA_TYPE,
     PREVIEW_SUFFIX,
@@ -142,15 +147,17 @@ def find_reference_mask_for_output(output_path: Path) -> Path | None:
     Returns:
         Path to reference mask if available, otherwise ``None``.
     """
-    parsed = parse_image_stem(output_path.stem)
+    parsed = parse_image(output_path.stem)
     if parsed is None:
         return None
-    base_id = parsed[0]
+    base_id, _slot, source = parsed
+    # Each source's imagery goes on the masks made for its own grid.
+    suffix = mask_suffix(source)
 
     candidates = [
-        output_path.parent / f"{base_id}_semantic_3_class.tif",
-        output_path.parent / f"{base_id}_semantic_2_class.tif",
-        output_path.parent / f"{base_id}_instance.tif",
+        output_path.parent / f"{base_id}_semantic_3_class{suffix}.tif",
+        output_path.parent / f"{base_id}_semantic_2_class{suffix}.tif",
+        output_path.parent / f"{base_id}_instance{suffix}.tif",
     ]
 
     for candidate in candidates:

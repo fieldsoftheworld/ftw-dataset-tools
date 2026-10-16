@@ -8,6 +8,7 @@ import click
 
 from ftw_dataset_tools.api import assets, crop_stats, land_cover, masks, pipeline, source
 from ftw_dataset_tools.api import config as config_module
+from ftw_dataset_tools.api.imagery import planet_api
 from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
 
 
@@ -162,6 +163,8 @@ def run_cmd(
         pipeline.StageInputError,
         assets.MaskReadError,
         source.SourceFetchError,
+        planet_api.PlanetUnavailableError,
+        planet_api.PlanetAPIError,
     ) as err:
         click.echo(click.style(f"\nError: {err}", fg="red"))
         raise SystemExit(1) from err

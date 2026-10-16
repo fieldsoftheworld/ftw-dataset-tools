@@ -50,11 +50,14 @@ from ftw_dataset_tools.api.geo import (
 )
 from ftw_dataset_tools.api.imagery import (
     download_imagery_for_catalog,
+    planet_api,
     select_imagery_for_catalog,
 )
 from ftw_dataset_tools.api.imagery.mosaic_selection import check_mosaic_year
+from ftw_dataset_tools.api.imagery.planet_download import download_planet_imagery_for_catalog
 from ftw_dataset_tools.api.imagery.preview_workflow import preview_imagery_for_catalog
 from ftw_dataset_tools.api.imagery.settings import MOSAIC_FALLBACK_YEAR
+from ftw_dataset_tools.api.imagery.slots import mask_suffix
 from ftw_dataset_tools.api.logging_config import get_logger, success
 from ftw_dataset_tools.api.masks import MaskType
 from ftw_dataset_tools.api.source import (
@@ -740,6 +743,9 @@ def stage_masks(ctx: PipelineContext) -> None:
         logger.info(f"Created {mask_result.total_created} {mask_type.value} masks")
         _log_skipped_masks(ctx, mask_type, mask_result)
 
+    if _selects_planet(ctx):
+        _create_planet_masks(ctx, chip_dirs, requested_types, background_class_value)
+
     # Every type shares one worker pool, so the count is the same on each result.
     pool_restarts = max((r.pool_restarts for r in mask_results.values()), default=0)
     if pool_restarts > 0:
@@ -747,6 +753,44 @@ def stage_masks(ctx: PipelineContext) -> None:
             f"Worker pool restarted {pool_restarts} time(s) "
             "(a worker died; lower stages.masks.workers if this repeats)"
         )
+
+
+def _selects_planet(ctx: PipelineContext) -> bool:
+    # Not tied to the select stage being enabled: create-dataset selects through its
+    # own hook, and masks for the configured source are useful either way.
+    return ctx.config.stages.select_images.source == "planetscope"
+
+
+def _create_planet_masks(
+    ctx: PipelineContext,
+    chip_dirs: dict[str, Path],
+    mask_types: list[masks.MaskType],
+    background_class_value: int,
+) -> None:
+    """The same masks again on each chip's 3 m UTM grid, for its PlanetScope imagery."""
+    masks_cfg = ctx.config.stages.masks
+    logger.info("Creating PlanetScope (3 m UTM) masks...")
+    results = masks.create_masks(
+        chips_file=str(ctx.chips_path),
+        boundaries_file=str(ctx.field_polygons_path),
+        boundary_lines_file=str(ctx.boundary_lines_path),
+        output_dir=str(ctx.chips_base_dir),
+        field_dataset=ctx.field_dataset,
+        mask_types=mask_types,
+        min_coverage=ctx.config.stages.chips.min_coverage,
+        resolution=planet_api.GRID_RESOLUTION_M,
+        num_workers=masks_cfg.workers,
+        chip_dirs=chip_dirs,
+        year=ctx.effective_year,
+        background_class_value=background_class_value,
+        skip_existing=masks_cfg.skip_existing,
+        crop_column=masks_cfg.crop_column,
+        utm=True,
+        filename_suffix=mask_suffix("planetscope"),
+    )
+    for mask_type, result in results.items():
+        logger.info(f"Created {result.total_created} {mask_type.value} PlanetScope masks")
+        _log_skipped_masks(ctx, mask_type, result)
 
 
 def stage_stac(ctx: PipelineContext) -> None:
@@ -824,6 +868,9 @@ def stage_select_images(ctx: PipelineContext) -> None:
         buffer_expansion_size=select_cfg.buffer_expansion_size,
         workers=select_cfg.effective_workers,
         search_backend=select_cfg.search_backend,
+        source=select_cfg.source,
+        planet_wait=select_cfg.planet_wait,
+        planet_timeout_minutes=select_cfg.planet_timeout_minutes,
     )
 
 
@@ -841,6 +888,12 @@ def stage_download_images(ctx: PipelineContext) -> None:
             catalog_dir=ctx.output_dir,
             resume=download_cfg.resume,
             workers=download_cfg.workers,
+        )
+        return
+    if _selects_planet(ctx):
+        logger.info("Cutting PlanetScope imagery onto the chip grids...")
+        ctx.download_result = download_planet_imagery_for_catalog(
+            ctx.output_dir, workers=download_cfg.workers, resume=download_cfg.resume
         )
         return
     logger.info("Downloading imagery...")
