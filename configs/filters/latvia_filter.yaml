@@ -5,16 +5,17 @@
 #
 # Excluded (background): permanent grassland and pure grass leys sown on arable land,
 # grasses not elsewhere specified, phacelia (grown as cover / nectar / green manure),
-# fallow & green-manure fallow, agricultural land ineligible for support, tree nurseries,
-# energy trees & grasses (reed canary grass, switchgrass, willow, aspen, alder), orchards,
-# fruit, berries, nuts, vineyards, shrubs, nectar-plant mixtures, perennial plantings, and
-# semi-natural areas dominated by self-sown plants.
+# fallow & green-manure fallow, agricultural land ineligible for support, energy grasses
+# (reed canary grass, switchgrass), nectar-plant mixtures, and semi-natural areas dominated by
+# self-sown plants.
 #
 # Notable inclusions: all cereals (incl. hemp), oilseeds & mustard, flax, legumes & pulses,
 # fodder legumes and legume-predominant leys (clover, alfalfa, galega, sainfoin, melilot,
 # trefoil, crimson clover) and grasses grown for seed, maize (incl. biogas maize), potatoes,
 # sugar/fodder beet, all field & market-garden vegetables, culinary/medicinal/aromatic herbs,
-# strawberries, melon/watermelon, cultivated nectar/medicinal species, and sunflower.
+# strawberries, melon/watermelon, cultivated nectar/medicinal species, and sunflower; and
+# permanent & tree crops: orchards, fruit, berries & fruit shrubs, vineyards, other perennial
+# plantings, tree nurseries and short-rotation energy trees (willow, aspen, alder).
 
 column: ["crop:code", "crop_code"]
 
@@ -173,28 +174,7 @@ include:
   - 930  # Other cultivated nectar plants (hedgehog periwinkle dragon's head lemo
   - 937  # Watermelons and melons
   - 960  # Saulespuķe
-
-exclude:
-  # Fallow, green-manure fallow, unused agricultural land
-  - "0"  # unlabelled
-  - 610  # Idle land
-  - 612  # Zaļmēslojuma augu papuve
-  - 620  # UAA for which no support is available in the current year
-  # Nurseries & energy trees/grasses (reed canary grass, switchgrass, willow, aspen, alder)
-  - 640  # Tree nurseries on agricultural land
-  - 641  # Reed canary grass
-  - 642  # Switch grass
-  - 644  # Apsen
-  - 645  # Willow
-  - 646  # White alder
-  # Permanent grassland, pure grass leys, phacelia (cover/nectar), semi-natural
-  - 710  # Permanent grasslands
-  - 713  # Grasses not elsewhere specified or included
-  - 715  # Phacelia
-  - 716  # Phacelia with legume sowing
-  - 720  # Mixture of grasses or fodder grasses sown on arable land
-  - 792  # Area where the proportion of naturally sown plants exceeds 40% the num
-  # Orchards, fruit, berries, nuts, vineyard, shrubs, nectar-plant mixes, perennial plantings
+  # Orchards, fruit, berries, vineyard, fruit shrubs & other perennial plantings
   - 911  # Apples
   - 912  # Pears
   - 914  # Plums
@@ -214,9 +194,32 @@ exclude:
   - 935  # Grapes
   - 938  # Honeysuckle
   - 939  # Guilder rose
-  - 940  # Nektāraugi savstarpējos maisījumos vai citur nemin
   - 950  # Fruit trees and berry bushes (excluding strawberries) if BSA species g
   - 952  # Perennial crops not mentioned elsewhere
+  # Tree nurseries & short-rotation energy trees (willow, aspen, alder)
+  - 640  # Tree nurseries on agricultural land
+  - 644  # Apsen
+  - 645  # Willow
+  - 646  # White alder
+
+exclude:
+  # Fallow, green-manure fallow, unused agricultural land
+  - "0"  # unlabelled
+  - 610  # Idle land
+  - 612  # Zaļmēslojuma augu papuve
+  - 620  # UAA for which no support is available in the current year
+  # Energy grasses (reed canary grass, switchgrass)
+  - 641  # Reed canary grass
+  - 642  # Switch grass
+  # Permanent grassland, pure grass leys, phacelia (cover/nectar), semi-natural
+  - 710  # Permanent grasslands
+  - 713  # Grasses not elsewhere specified or included
+  - 715  # Phacelia
+  - 716  # Phacelia with legume sowing
+  - 720  # Mixture of grasses or fodder grasses sown on arable land
+  - 792  # Area where the proportion of naturally sown plants exceeds 40% the num
+  # Nectar-plant mixtures
+  - 940  # Nektāraugi savstarpējos maisījumos vai citur nemin
   # Codes present only in the earlier lv editions (2015-2025) with no name in the dataset or
   # source code lists. 619 = "Papuve" (fallow, LAD). The rest are unmapped and, per policy,
   # treated as background (no crop can be affirmed); all are rare (1-13 records each).

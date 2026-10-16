@@ -1,26 +1,22 @@
 # Class filter for the Spanish region datasets that publish only the coarse SIGPAC land-use
 # code ("uso SIGPAC"), not a crop: es_an, es_ar, es_cb, es_cl, es_cm, es_ga, es_ib, es_md,
 # es_pv and es_vc. They all share the same 2-letter uso scheme (crop:code), so one filter covers
-# them all. This is a land-use-level filter, not a crop-type filter: only arable land (TA) is
-# field; permanent crops, pasture and their associations are background.
+# them all. This is a land-use-level filter, not a crop-type filter: arable land (TA), permanent
+# crops and their associations are field; pasture, wood pasture and landscape elements are
+# background.
 # (The national es, Cataluña es_cat and Canarias es_cn datasets use their own crop-level code
 # schemes and have separate filters.)
 column: ["crop:code", "crop_code"]
 
 include:
   - TA  # ARABLE LAND (tierra arable)
-
-exclude:
-  - PR  # Shrub grass / pasto arbustivo
-  - PS  # Pasture / pastizal
-  - PA  # Grass with trees (dehesa / wood pasture)
+  # Permanent and tree crops
   - OV  # Olive grove / olivar
   - VI  # Vineyard / viñedo
   - FY  # Fruit trees / frutales
   - FS  # Dried fruits / nut trees (frutos secos)
   - CI  # Citrus / cítricos
   - OP  # Other permanent crops
-  - EP  # Landscape element / non-crop (elemento del paisaje)
   - VO  # Vineyard - olive grove association
   - FL  # Dried fruits and olive groves association
   - CF  # Citrus - fruit tree association
@@ -31,4 +27,10 @@ exclude:
   - FF  # Fruit trees - nut trees association
   - CS  # Citrus - peel fruit association
   - CV  # Citrus - vineyard association
+
+exclude:
+  - PR  # Shrub grass / pasto arbustivo
+  - PS  # Pasture / pastizal
+  - PA  # Grass with trees (dehesa / wood pasture)
+  - EP  # Landscape element / non-crop (elemento del paisaje)
   - "\x010"  # data artifact (single record, non-printing code)

@@ -4,17 +4,17 @@
 #
 # Excluded (background): all pasture, meadow & mowing/grazing grassland on arable and non-arable
 # land, mountain & mosaic pasture, grass hay (forage dryer), forage ryegrass, energy grass, turf;
-# fallow; forest grazing, energy willow (Salix) & poplar, Christmas trees; fruit, berries & nuts;
-# nurseries; green manure; ornamental horticulture; and non-agricultural / biodiversity / admin
-# areas (alvar, wetlands, protection zones, game fields, flowering-field margins, ineligible land,
-# grass-poor land). Four codes (17, 26, 51, 69) are unmapped in the data and the Jordbruksverket
-# code list and, per policy, are treated as background.
+# fallow; forest grazing; green manure; ornamental horticulture; and non-agricultural /
+# biodiversity / admin areas (alvar, wetlands, protection zones, game fields, flowering-field
+# margins, ineligible land, grass-poor land). Four codes (17, 26, 51, 69) are unmapped in the
+# data and the Jordbruksverket code list and, per policy, are treated as background.
 #
 # Notable inclusions: all cereals (incl. mixed grain, green-fodder cereals, perennial wheat/rye),
 # maize; oilseeds (rape, turnip rape, sunflower, mustard, oil radish, flax), hemp, tobacco;
 # legumes & pulses and protein/cereal mixtures; potatoes, sugar & fodder beet; field vegetables,
 # herbs, hops, chicory, kale, asparagus, rhubarb; green fodder; grass & clover grown for seed;
-# strawberries; and other arable crops.
+# strawberries; other arable crops; and permanent & tree crops: fruit, berries & nuts, nurseries
+# of permanent crops, Christmas trees, and energy willow (Salix) & poplar.
 
 column: ["crop:code", "crop_code"]
 
@@ -86,6 +86,15 @@ include:
   - "315"  # Mixed grain (cereal mixtures) (autumn)
   - "316"  # Wheat (perennial)
   - "317"  # Rye (perennial)
+  # Permanent and tree crops
+  - "65"  # Salix willow
+  - "67"  # Poplar
+  - "68"  # Hybrid poplar
+  - "71"  # Other berry cultivation
+  - "72"  # Fruit growing
+  - "73"  # Nut cultivation
+  - "78"  # Nurseries with cultivation of permanent crops
+  - "83"  # Christmas tree cultivation
 
 exclude:
   - "17"  # (unmapped source code)
@@ -102,19 +111,11 @@ exclude:
   - "60"  # Fallow
   - "61"  # Mountain pasture that entitles to farm support and compensation support
   - "63"  # Energy grass
-  - "65"  # Salix willow
   - "66"  # Custom protection zones
-  - "67"  # Poplar
-  - "68"  # Hybrid poplar
   - "69"  # (unmapped source code)
-  - "71"  # Other berry cultivation
-  - "72"  # Fruit growing
-  - "73"  # Nut cultivation
   - "77"  # Protection zone against watercourses
-  - "78"  # Nurseries with cultivation of permanent crops
   - "81"  # Green manure
   - "82"  # Wetland
-  - "83"  # Christmas tree cultivation
   - "85"  # Horticulture (excluding vegetables, fruit or berries)
   - "89"  # Mosaic pasture
   - "90"  # Grass-poor lands

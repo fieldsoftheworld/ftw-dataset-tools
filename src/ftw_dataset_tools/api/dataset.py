@@ -54,7 +54,7 @@ def create_dataset(
     field_dataset: str | None = None,
     split_type: str | None = None,
     split_percents: tuple[int, int, int] = (80, 10, 10),
-    min_coverage: float = 0.01,
+    min_coverage: float = field_stats.DEFAULT_MIN_COVERAGE,
     resolution: float = 10.0,
     num_workers: int | None = None,
     skip_reproject: bool = False,
@@ -69,6 +69,7 @@ def create_dataset(
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int, int], None] | None = None,
+    crop_column: str | None = None,
 ) -> CreateDatasetResult:
     """
     Create a complete training dataset from a fields file.
@@ -94,13 +95,14 @@ def create_dataset(
         field_dataset: Name for the dataset (default: input filename stem)
         split_type: Dataset split strategy
         split_percents: Train/val/test percentages (must be three integers summing to 100; default: 80 10 10)
-        min_coverage: Minimum coverage percentage to include grids (default: 0.01)
+        min_coverage: Minimum coverage percentage (0-100) to include grids (default: 1.0)
         resolution: Pixel resolution in meters for masks (default: 10.0)
         num_workers: Number of parallel workers for mask creation
         skip_reproject: If True, fail instead of reprojecting non-4326 inputs
         year: Year for temporal extent (required if fields lack determination_datetime)
         mask_types: List of mask types to generate (e.g., ["instance", "semantic_2_class"]). If None, generates all types.
         presence_only: If True, background class value is 3 instead of 0 (for presence-only labels)
+        crop_column: Source column to preserve in per-chip instance crop lookups.
         drop_border_chips: If True, remove chips on the edge of any labelled cluster. Useful when fields at a cluster boundary may have partial coverage.
         border_gap_chips: How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.
         checksums: Compute file:checksum for every asset (slow; default False).
@@ -137,6 +139,7 @@ def create_dataset(
         year=year,
         mask_types=mask_types,
         presence_only=presence_only,
+        crop_column=crop_column,
         drop_border_chips=drop_border_chips,
         border_gap_chips=border_gap_chips,
     )

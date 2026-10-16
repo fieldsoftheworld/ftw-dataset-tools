@@ -8,13 +8,13 @@
 # a space (e.g. "iki 5m." vs "iki 5 m."); both spellings are listed.
 #
 # Excluded (background): pastures & meadows, perennial grasses, fallow, landscape elements,
-# ditches, non-supported areas, orchards (Sodai), berry plantations, other plantations,
-# woods, and wetlands (the 'Ðlapynës' category, mislabelled "Spinach"/spinach in the source
-# HCAT mapping).
+# ditches, non-supported areas, woods, and wetlands (the 'Ðlapynës' category, mislabelled
+# "Spinach"/spinach in the source HCAT mapping).
 #
 # Included (field): winter/summer/early cereals, oats, buckwheat, maize, rapeseed, flax,
 # fibre hemp, grain legumes (Ankðtiniai javai), sugar beet, vegetables, aromatic/medicinal
-# plants, and other arable land.
+# plants, other arable land, and permanent & tree crops: orchards (Sodai), berry plantations
+# (Uogynai) and other plantations (Kiti sodiniai).
 
 column: ["crop:name", "crop:code", "crop_name"]
 
@@ -32,6 +32,10 @@ include:
   - "Aromatiniai augalai"  # Aromatic plants
   - "Pluoðtinës kanapës"  # Fiber hemp
   - "Linai"  # Linen
+  # Permanent and tree crops
+  - "Sodai"  # Orchards
+  - "Uogynai"  # Berries
+  - "Kiti sodiniai"  # Other plantations
 
 exclude:
   - "Ganyklos-pievos virð 5m."  # Pastures-meadows over 5m.
@@ -42,9 +46,6 @@ exclude:
   - "Neremiami plotai"  # Non-supported areas
   - "Daugiametës þolës"  # Perennial grasses
   - "Pûdymas"  # Fallow
-  - "Sodai"  # Gardens
   - "Miðkai"  # Woods
-  - "Uogynai"  # Berries
   - "Ðlapynës"  # wetlands (labelled 'Spinach' in source)
-  - "Kiti sodiniai"  # Other plantations
   - "Grioviai"  # Ditches

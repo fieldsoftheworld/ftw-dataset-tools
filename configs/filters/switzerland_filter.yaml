@@ -4,11 +4,10 @@
 # grassland-dominated, so most parcels fall in the background class.
 #
 # Excluded (background): all meadows & pastures (permanent, extensive, low-intensity, summering,
-# riverside, hay, communal) and artificial grass leys (Kunstwiesen); vineyards; orchards, other
-# perennial fruit & perennial berries, chestnut & mulberry groves, truffle plantations; forest,
-# hedges/field/riparian shrubs, Christmas trees; nurseries (fruit, forest, vine, ornamental) &
-# ornamental shrubs/perennials; greenhouse & protected cultivation (vegetables, berries, mushrooms,
-# specialty crops); biodiversity-promotion areas, colourful & rotational fallow, field margins &
+# riverside, hay, communal) and artificial grass leys (Kunstwiesen); forest & wood pastures,
+# hedges/field/riparian shrubs; annual & perennial open-field horticulture (flowers, turf);
+# greenhouse & protected cultivation (vegetables, berries, mushrooms, specialty crops) and
+# open-field mushrooms; biodiversity-promotion areas, colourful & rotational fallow, field margins &
 # beneficial-insect strips, litter meadows; perennial renewable-resource crops (Miscanthus);
 # and unproductive / non-agricultural areas (built land, tracks, ditches, dry stone walls, etc.).
 #
@@ -18,7 +17,10 @@
 # resource), soy, hemp, tobacco, kenaf; legumes & pulses and legume/cereal mixtures; sugar &
 # fodder beet, potatoes, asparagus, rhubarb, chicory roots, open-field & processing vegetables;
 # grasses & forage legumes grown for seed; spice & medicinal plants; hops; home gardens;
-# permaculture; and annual berries (strawberries).
+# permaculture; annual berries (strawberries); and permanent & tree crops: vineyards, orchards,
+# other perennial fruit & perennial berries, chestnut & mulberry groves, truffle plantations,
+# other permanent-crop areas, Christmas trees, nurseries (fruit, forest, vine, ornamental) and
+# ornamental shrubs/woody plants.
 
 column: ["crop:name", "crop_name"]
 
@@ -91,6 +93,27 @@ include:
   - "Saflor"  # Safflower
   - "Einjährige nachwachsende Rohstoffe (Kenaf, usw.)"  # Annual renewable resources (kenaf etc.)
   - "Hirse zur Nutzung ganze Pflanze"  # Millet/sorghum for whole plant use
+  # Permanent and tree crops
+  - "Reben"  # Vines/vineyards
+  - "Rebflächen mit natürlicher Artenvielfalt"  # Vineyards with natural biodiversity
+  - "Obstanlagen (Steinobst)"  # Orchards (stone fruit)
+  - "Obstanlagen (Äpfel)"  # Orchards (apples)
+  - "Obstanlagen (Birnen)"  # Orchards (pears)
+  - "Mehrjährige Beeren"  # Perennial berries
+  - "Gepflegte Selven (Edelkastanienbäume)"  # Managed chestnut groves
+  - "Christbäume"  # Christmas trees
+  - "Andere Obstanlagen (Kiwis, Holunder usw.)"  # Other orchards (kiwi elder etc.)
+  - "Ziersträucher, Ziergehölze und Zierstauden"  # Ornamental shrubs trees and perennials
+  - "Reben (regionsspezifische Biodiversitätsförderflächen)"  # Reben (regionsspezifische Biodiversitätsförderfl
+  - "Übrige Flächen mit Dauerkulturen, beitragsberechtigt"  # Other perennial crop areas eligible
+  - "Baumschulen von Obst und Beeren"  # Nurseries of fruit and berries
+  - "Übrige Baumschulen (Rosen, Zierstauden, usw.)"  # Other nurseries (roses ornamentals etc.)
+  - "Baumschule von Forstpflanzen ausserhalb der Forstzone"  # Nursery of forest plants outside forest zone
+  - "Übrige Flächen mit Dauerkulturen, nicht beitragsberechtigt"  # Other perennial crop areas not eligible
+  - "Trüffelanlagen"  # Truffle plantations
+  - "Maulbeerbaumanlagen (Fütterung Seidenraupen)"  # Mulberry tree plantations (silkworm feeding)
+  - "Baumschulen von Reben"  # Vine nurseries
+  - "Obstanlagen aggregiert"  # Orchards aggregated
 
 exclude:
   - "Übrige Dauerwiesen (ohne Weiden)"  # Other permanent meadows (without pastures)
@@ -98,10 +121,8 @@ exclude:
   - "Extensiv genutzte Weiden"  # Extensively used pastures
   - "Weiden (Heimweiden, übrige Weiden ohne Sömmerungsweiden)"  # Pastures (home pastures others without summering pastures)
   - "Kunstwiesen (ohne Weiden)"  # Artificial meadows (without pastures)
-  - "Reben"  # Vines/vineyards
   - "Wenig intensiv genutzte Wiesen (ohne Weiden)"  # Low-intensity meadows (without pastures)
   - "Hecken-, Feld- und Ufergehölze (mit Krautsaum)"  # Hedges field and riparian shrubs (with herb strip)
-  - "Rebflächen mit natürlicher Artenvielfalt"  # Vineyards with natural biodiversity
   - "Sömmerungsweiden"  # Summer pastures
   - "Regionsspezifische Biodiversitätsförderfläche (Grünflächen ohne Weiden)"  # Region-specific biodiversity area (grasslands without pastures)
   - "Wald"  # Forest
@@ -111,24 +132,18 @@ exclude:
   - "Übrige unproduktive Flächen (z.B. gemulchte Flächen, stark verunkrautete Flächen, Hecken ohne Pufferstreifen)"  # Other unproductive areas (e.g. mulched, weedy, hedges without buffers)
   - "Waldweiden (ohne bewaldete Fläche)"  # Forest pastures (without forested area)
   - "Übrige Flächen innerhalb der landwirtschaftlichen Nutzfläche, nicht beitragsberechtigt"  # Übrige Flächen innerhalb der landwirtschaftliche
-  - "Obstanlagen (Steinobst)"  # Orchards (stone fruit)
-  - "Obstanlagen (Äpfel)"  # Orchards (apples)
   - "Buntbrache"  # Colourful fallow
   - "Übrige Flächen ausserhalb der landwirtschaftlichen Nutzfläche und Sömmerungsfläche"  # Übrige Flächen ausserhalb der landwirtschaftlich
   - "Flächen ohne landwirtschaftliche Hauptzweckbestimmung (erschlossenes Bauland, Spiel-, Reit-, Camping-, Golf-, Flug- und Militärplätze oder ausgemarchte Bereiche von Eisenbahnen, öffentlichen Strassen und Gewässern)"  # Areas without agricultural main purpose (built land etc.)
   - "Übrige Grünfläche (Dauergrünflächen), nicht beitragsberechtigt"  # Other grassland (permanent) not eligible
   - "Wassergräben, Tümpel, Teiche"  # Ditches ponds pools
-  - "Obstanlagen (Birnen)"  # Orchards (pears)
   - "Saum auf Ackerflächen"  # Field margin on arable land
   - "Nützlingsstreifen auf offener Ackerfläche"  # Beneficial insect strips on arable land
-  - "Mehrjährige Beeren"  # Perennial berries
-  - "Gepflegte Selven (Edelkastanienbäume)"  # Managed chestnut groves
   - "Übrige Grünfläche (Dauergrünfläche), beitragsberechtigt"  # Other grassland (permanent grassland) eligible
   - "Rotationsbrache"  # Rotational fallow
   - "Heuwiesen im Sömmerungsgebiet, Typ extensiv genutzte Wiese"  # Hay meadows in summering area type extensively used
   - "Unbefestigte, natürliche Wege"  # Unpaved natural tracks
   - "Gemüsekulturen in geschütztem Anbau ohne festes Fundament; im gewachsenen Boden"  # Vegetables protected without foundation in soil
-  - "Christbäume"  # Christmas trees
   - "Heuwiesen im Sömmerungsgebiet, Übrige Wiesen"  # Hay meadows in summering area other meadows
   - "Übrige Kunstwiese, beitragsberechtigt (z.B. Schweineweide, Geflügelweide)"  # Other artificial meadow eligible (e.g. pig poultry pasture)
   - "Ruderalflächen, Steinhaufen und -wälle"  # Ruderal areas stone piles and walls
@@ -138,28 +153,19 @@ exclude:
   - "Übrige Flächen innerhalb der landwirtschaftlichen Nutzfläche, beitragsberechtigt"  # Übrige Flächen innerhalb der landwirtschaftliche
   - "Heuwiesen im Sömmerungsgebiet, Typ wenig intensiv genutzte Wiese"  # Hay meadows in summering area type low intensity
   - "Übrige offene Ackerfläche, nicht beitragsberechtigt (regionsspezifische Biodiversitätsförderfläche)"  # Other open arable land not eligible (region-specific biodiversity area)
-  - "Andere Obstanlagen (Kiwis, Holunder usw.)"  # Other orchards (kiwi elder etc.)
   - "Gemüsekulturen in Gewächshäusern mit festem Fundament"  # Vegetable crops in greenhouses with fixed foundation
   - "Gemeinschaftsweiden"  # Gemeinschaftsweiden
-  - "Ziersträucher, Ziergehölze und Zierstauden"  # Ornamental shrubs trees and perennials
   - "Regionsspezifische Biodiversitätsförderflächen"  # Region-specific biodiversity areas
-  - "Reben (regionsspezifische Biodiversitätsförderflächen)"  # Reben (regionsspezifische Biodiversitätsförderfl
-  - "Übrige Flächen mit Dauerkulturen, beitragsberechtigt"  # Other perennial crop areas eligible
   - "Offene Ackerfläche, beitragsberechtigt (regionsspezifische Biodiversitätsförderfläche)"  # Open arable land eligible (region-specific biodiversity area)
   - "Streueflächen im Sömmerungsgebiet"  # Litter meadows in summering area
-  - "Baumschulen von Obst und Beeren"  # Nurseries of fruit and berries
   - "Gärtnerische Kulturen in geschütztem Anbau ohne festes Fundament"  # Horticultural crops protected without fixed foundation
-  - "Übrige Baumschulen (Rosen, Zierstauden, usw.)"  # Other nurseries (roses ornamentals etc.)
   - "Beerenkulturen in geschütztem Anbau ohne festes Fundament; auf Pflanztischen oder -gestellen"  # Berry crops protected without fixed foundation on tables
-  - "Baumschule von Forstpflanzen ausserhalb der Forstzone"  # Nursery of forest plants outside forest zone
   - "Mehrjährige gärtnerische Freilandkulturen (nicht im Gewächshaus)"  # Perennial horticultural open-field crops (not greenhouse)
-  - "Übrige Flächen mit Dauerkulturen, nicht beitragsberechtigt"  # Other perennial crop areas not eligible
   - "Übrige Spezialkulturen in geschütztem Anbau ohne festes Fundament"  # Other specialty crops protected without foundation
   - "Heuwiesen mit Zufütterung während der Sömmerung"  # Hay meadows with supplementary feeding during summering
   - "Beerenkulturen in geschütztem Anbau ohne festes Fundament; im gewachsenen Boden"  # Berry crops protected without foundation in soil
   - "Mehrjährige nachwachsende Rohstoffe (Chinaschilf, usw.)"  # Perennial renewable resources (miscanthus etc.)
   - "Gärtnerische Kulturen in Gewächshäusern mit festem Fundament"  # Horticultural crops in greenhouses with fixed foundation
-  - "Trüffelanlagen"  # Truffle plantations
   - "Übrige Kulturen in geschütztem Anbau ohne festes Fundament, beitragsberechtigt"  # Other protected crops without foundation eligible
   - "Gemüsekulturen in geschütztem Anbau ohne festes Fundament; auf Pflanztischen oder -gestellen"  # Vegetable crops protected without foundation on benches
   - "Übrige Spezialkulturen in Gewächshäusern mit festem Fundament"  # Other specialty crops in greenhouses with foundation
@@ -169,9 +175,6 @@ exclude:
   - "Landwirtschaftliche Produktion in Gebäuden (z. B. Champignon, Brüsseler)"  # Agricultural production in buildings (e.g. mushrooms Belgian endive)
   - "Kulturen in ganzjährig geschütztem Anbau, beitragsberechtigt aggregiert"  # Crops in year-round protected cultivation eligible aggregated
   - "Beerenkulturen in Gewächshäusern mit festem Fundament"  # Berry crops in greenhouses with fixed foundation
-  - "Maulbeerbaumanlagen (Fütterung Seidenraupen)"  # Mulberry tree plantations (silkworm feeding)
-  - "Baumschulen von Reben"  # Vine nurseries
   - "Pilze (Freiland)"  # Mushrooms (open field)
-  - "Obstanlagen aggregiert"  # Orchards aggregated
   - "Pilze in geschütztem Anbau mit festem Fundament"  # Mushrooms in protected cultivation with foundation
   - "Übrige Dauerweiden, beitragsberechtigt aggregiert"  # Other permanent pastures eligible aggregated

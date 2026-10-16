@@ -15,7 +15,7 @@ __getattr__, __all__ = lazy_exports(
             "has_existing_scenes",
             "iter_chip_dirs",
         ),
-        "cloud_analysis": ("calculate_pixel_cloud_cover",),
+        "cloud_analysis": ("calculate_pixel_cloud_cover", "read_scl_chip_stats"),
         "crop_calendar": ("CropCalendarDates", "get_crop_calendar_dates"),
         "download_workflow": (
             "DownloadWorkflowResult",

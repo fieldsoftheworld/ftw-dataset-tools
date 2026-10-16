@@ -9,6 +9,29 @@ The FTW extension adds properties to STAC items that describe:
 - Image selection parameters
 - Source imagery provenance
 
+## Instance crop labels
+
+The optional `instance_labels` asset references `{item_id}_instance_labels.json`
+(`application/json`, roles `labels`, `metadata`):
+
+```json
+{
+  "crop_column": "crop:name",
+  "background_value": 0,
+  "instances": [
+    {"instance_value": 1, "field_id": "field-a", "crop_value": "Wheat"},
+    {"instance_value": 2, "field_id": "field-b", "crop_value": null}
+  ]
+}
+```
+
+Join `instance_value` to this chip's `instance_mask` pixels. Source field IDs and
+crop values are strings or null, without taxonomy conversion. Background and fields
+with no remaining pixels are excluded; null crops mean unknown.
+
+`skip_existing` regenerates missing or mismatched-column lookups. Rerun without
+it after changing source values. Disabling labels removes them on the next mask run.
+
 ## Extension Prefix
 
 All FTW properties use the `ftw:` prefix.
@@ -34,6 +57,27 @@ These properties are added to parent chip items after image selection:
 | `ftw:expansions_performed` | integer | Number of buffer expansions performed before a scene was found |
 | `ftw:planting_cloud_cover` | number | Cloud cover percentage of the selected planting scene |
 | `ftw:harvest_cloud_cover` | number | Cloud cover percentage of the selected harvest scene |
+
+### Quarterly Mosaic Mode
+
+With `--imagery-mode mosaics` (config `stages.select_images.imagery_mode: mosaics`) a chip
+gets four images, Q1-Q4 of one year, from the Sentinel-2 quarterly cloudless mosaics, in
+place of the planting and harvest scenes. The slots are `q1`..`q4`, so links are
+`ftw:q1`..`ftw:q4`, assets `q1_image`..`q4_image` and files `{item_id}_q1_s2.json` /
+`{item_id}_q1_image_s2.tif`. None of the crop-calendar or cloud properties above are written.
+
+| Property | Item | Type | Description |
+|----------|------|------|-------------|
+| `ftw:imagery_mode` | parent | string | `mosaics` (absent means scenes) |
+| `ftw:requested_year` | parent | integer | Mosaic year the selection asked for |
+| `ftw:imagery_year` | parent, child | integer | Mosaic year used; differs when a nearby year was needed |
+| `ftw:season` | child | string | `q1`..`q4` |
+| `ftw:source` | child | string | `sentinel-2-mosaic` |
+| `ftw:mosaic_tile` | child | string | Mosaic tile id, e.g. `31UGR_0_0` |
+
+Child items carry `start_datetime`/`end_datetime` for the quarter instead of `datetime`.
+Clipped mosaic images keep the source encoding: `int16`, nodata `-32768`, reflectance =
+value x 0.0001 with no offset, recorded as GDAL scale/offset and in `raster:bands`.
 
 ### Build-time Chip Item Properties
 
@@ -87,7 +131,7 @@ describing how the whole dataset was built:
 | `ftw:split_percents` | integer[3] | Train/val/test split percentages |
 | `ftw:mask_types` | string[] | Mask types generated for the dataset |
 | `ftw:mask_resolution_m` | number | Mask pixel resolution in meters |
-| `ftw:presence_only` | boolean | Whether labels are presence-only (background class value is 3 instead of 0) |
+| `ftw:presence_only` | boolean | Whether labels are presence-only (semantic mask background is 3 instead of 0) |
 | `ftw:min_coverage_pct` | number | Minimum field-coverage percentage required to keep a grid cell |
 | `ftw:cloud_cover_chip_threshold` | number | Chip-level cloud cover threshold percentage (present only when image selection is enabled) |
 | `ftw:nodata_max` | number | Maximum allowed nodata percentage (0-100) for a selected scene (present only when image selection is enabled) |
@@ -148,7 +192,8 @@ After image selection, a parent chip item contains:
 ```
 
 `start_datetime` / `end_datetime` span the acquisition dates of the two selected
-scenes. The `ftw:planting` and `ftw:harvest` links are what mark a chip as having
+scenes. Before selection they span the chip's crop calendar season (planting to harvest),
+or the dataset extent where the calendar has no data or `stages.stac.crop_calendar` is false. The `ftw:planting` and `ftw:harvest` links are what mark a chip as having
 imagery: `ftwd select-images` skips chips that already have both (use `--force` to
 re-select).
 
@@ -201,10 +246,7 @@ Checksums are off by default because they are slow on large datasets.
 Raster assets (masks and clipped imagery) carry `raster:bands`
 ([raster extension](https://github.com/stac-extensions/raster)) with `data_type`,
 `nodata` when set, `spatial_resolution`, and `statistics` (minimum, maximum, mean,
-stddev, and valid_percent whenever a value was excluded from them). A presence-only
-instance mask is the case where those come apart: its background is excluded from the
-statistics, so `valid_percent` is present, while the band declares no `nodata` at all.
-The same statistics are embedded in the
+stddev, and valid_percent whenever a value was excluded from them). The same statistics are embedded in the
 COG as GDAL `STATISTICS_*` band tags, never in an `.aux.xml` sidecar.
 
 Semantic mask assets add `classification:classes`
@@ -214,7 +256,7 @@ Semantic mask assets add `classification:classes`
 |------|---------|
 | `semantic_2class_mask` | 0 background, 1 field (background is 3 when `presence_only` is set) |
 | `semantic_3class_mask` | 0 background, 1 field, 2 boundary |
-| `instance_mask` | no class list; background (0, or 3 for presence-only) marks non-field pixels and is excluded from the band statistics — declared as the band's `nodata` only when it is 0 — other values are instance ids |
+| `instance_mask` | no class list; 0 marks non-field pixels (also when `presence_only` is set) and is the band's `nodata`; other values are instance ids |
 | | Field ids that are float-like (e.g. `'111205887.0'`) or otherwise non-numeric are coerced to integers, or replaced with sequential ids (1..n) for that chip when any id in it can't be coerced. |
 | `decode_boundary_mask` | 0 background, 1 boundary |
 | `decode_distance_mask` | no class list; float32 normalized distance in [0, 1], with a `decode_distance_max_px` dataset tag |
@@ -273,14 +315,13 @@ gets a true-colour render per season:
 | `semantic_3class` | `semantic_3class_mask` | `nodata`: the background value |
 | `decode_boundary` | `decode_boundary_mask` | `nodata: 0` |
 | `decode_distance` | `decode_distance_mask` | `rescale: [[0, 1]]`, `nodata` from the band, else 0 |
-| `instance` | `instance_mask` | `rescale: [[band minimum, band maximum]]`, `nodata`: the background value, `colormap_name: viridis` |
+| `instance` | `instance_mask` | `rescale: [[band minimum, band maximum]]`, `nodata: 0`, `colormap_name: viridis` |
 | `planting_rgb` | `planting_image`, else `planting_visual` | `bidx` + `rescale` — see below |
 | `harvest_rgb` | `harvest_image`, else `harvest_visual` | `bidx` + `rescale` — see below |
 
 `nodata` is the dataset's background pixel value — 0 normally, **3** when
-`presence_only` is set — for the three class-valued masks (`semantic_2class`,
-`semantic_3class`, `instance`). The DECODE layers always fold their background into 0, so
-they always use 0.
+`presence_only` is set — for the semantic masks (`semantic_2class`, `semantic_3class`).
+The DECODE layers and the instance mask always use 0.
 
 Instance ids are global rather than per-chip, so the instance mask's background is excluded
 from its embedded statistics: the render then stretches from the chip's smallest field id
@@ -288,16 +329,9 @@ to its largest instead of from zero, and a chip whose ids all sit in the hundred
 thousands still shows its fields apart. Where those statistics are missing or degenerate
 the render falls back to `[[0, 1]]`.
 
-Two caveats on that:
-
-- The instance band declares `nodata` **only when the background is 0**. A presence-only
-  background of 3 is also a legal instance id (ids are renumbered `1..n` for a chip whose
-  raw ids cannot be coerced), so declaring it would make a real field vanish for any
-  nodata-respecting reader. Presence-only instance masks therefore exclude 3 from their
-  statistics but leave the band's `nodata` unset.
-- Masks written before this behaviour existed carry statistics that include the background
-  and so still yield a `[[0, maximum]]` stretch. Re-run the `masks` stage (then `stac`) to
-  pick up the tighter range.
+Masks written before this behaviour existed carry statistics that include the background
+and so still yield a `[[0, maximum]]` stretch, and presence-only instance masks from then
+use 3 as background. Re-run the `masks` stage (then `stac`) to pick up both.
 
 Item mask renders are keyed by mask kind and only cover the masks that chip actually has;
 the collection mirrors the same definitions keyed by asset name, as a default for clients
@@ -411,6 +445,13 @@ smaller than JPEG at equivalent quality. Catalogs built before that switch carry
 previews and are still described correctly (`image/jpeg`); convert one in place with
 `ftwd convert-previews <catalog_dir>`, which re-renders each preview from the imagery it
 was made from and removes the superseded `.jpg`.
+
+Preview-stage reruns retain old JPEGs; use `convert-previews` for local cleanup.
+Start with `--dry-run -v` to inspect planned work and skips; remote reads can still
+fail during conversion. Existing thumbnail checksums are recomputed for WebP.
+Missing local JPEG references are repaired when source imagery is available.
+Upload the converted catalog before separately removing old objects from the bucket.
+Rebuild STAC to refresh existing collection asset definitions for mixed formats.
 
 **Collection reference:** Every chip item carries a `collection` field and link pointing to the dataset collection (the one holding `collection.json`). The collection's `root` link points to itself (downstream Portolan catalogs rewrite `root` when ingesting the output).
 

@@ -1,10 +1,12 @@
 # Class filter used for Belgium (Wallonia) field boundaries.
 # Excluded classes are those that are not considered agricultural fields, e.g. forest, ecological protection areas.
-# Notable exclusions: grassland/meadow & fodder, fallow (jachere), orchards, fruit & nut trees, vineyards,
-# ornamental plants & nurseries, greenhouse / "sous serre / sous verre", Christmas trees, short-rotation
-# coppice & miscanthus, scrub/woodland, and non-agricultural parcels (buildings, water, sport/leisure).
+# Notable exclusions: grassland/meadow & fodder, fallow (jachere), ornamental plants, greenhouse /
+# "sous serre / sous verre" (incl. permanent crops under glass), miscanthus, scrub/woodland, and
+# non-agricultural parcels (buildings, water, sport/leisure).
 # Notable inclusions: cereals, maize, legumes, oilseeds, potatoes, sugar & fodder beet, field vegetables,
-# medicinal/aromatic plants, flax, hemp, hops, chicory, clover, alfalfa, sainfoin, strawberries.
+# medicinal/aromatic plants, flax, hemp, hops, chicory, clover, alfalfa, sainfoin, strawberries, and
+# permanent & tree crops: orchards (low- and high-stem), fruit & nut trees, vineyards, raspberries,
+# fruit/ornamental & forest nurseries, Christmas trees and short-rotation coppice.
 # HCAT taxonomy and crop codes from be_wal.parquet (EuroCrops).
 
 column: ["crop:code", "crop_code"]
@@ -102,6 +104,7 @@ include:
   - 9541  # Courgettes (consommation au frais)
   - 9543  # Céleri-rave (consommation au frais)
   - 9548  # Choux - Légumes
+  - 9552  # Tomates (consommation au frais)
   - 9551  # Céleri-branche (consommation au frais)
   - 9563  # Oignons (hâtifs) (consommation au frais)
   - 9564  # Carotte (hâtive)(consommation) (consommation au frais)
@@ -110,37 +113,13 @@ include:
   - 9812  # Chicorée à café
   - 9821  # Tabac
   - 9822  # Houblon
-
-exclude:
-  - 6  # Prairie et fourrage
-  - 80  # Jachère
-  - 85  # Autres couverts semés
-  - 96  # Cultures horticoles non-comestibles
-  - 812  # jachère non herbacée
-  - 813  # Jachère mellifère
-  - 817  # Jachère Maïs - Dérogation SIE
-  - 818  # Jachère Fauche, pâturage - Dérogation SIE
-  - 819  # Jachère Légumineuses - Dérogation SIE
+  # Permanent and tree crops
   - 883  # Cultures forestières à rotation courte (taillis à très courte rotation)
-  - 884  # Miscanthus
-  - 885  # Cultures permanentes sous serre
-  - 952  # Cultures maraîchères sous verre
-  - 954  # Autres plantes ornementales de plein air
-  - 958  # Autres plantes ornementales sous serre
   - 962  # Sapins de Noël
-  - 991  # Parcelle bâtie, ou zone artificialisée
-  - 992  # Parcelle de sport ou loisir
-  - 993  # Utilisation non agricole (stockage de grume, ..) ou terrain vague
-  - 994  # Mare, étang, lac, plan d'eau
-  - 8516  # Cultures fruitières annuelles - Fraise sous serre
   - 9201  # Noisetier
   - 9202  # Noyer
   - 9520  # Pépinières de plants fruitiers ou de plantes ornementales
-  - 9521  # Autres cultures de légumes sous serre
-  - 9552  # Tomates (consommation au frais)
   - 9560  # Pépinières de plants forestiers
-  - 9584  # Plantes ornementales rustiques
-  - 9588  # Fleurs et plantes ornementales sous serre
   - 9710  # cultures fruitières pluriannuelles (pommes) - basses tiges
   - 9711  # cultures fruitières pluriannuelles (poires) - basses tiges
   - 9713  # cultures fruitières pluriannuelles (prunes) - basses tiges
@@ -153,5 +132,29 @@ exclude:
   - 9732  # cultures fruitières pluriannuelles (prunes) - hautes tiges
   - 9741  # Cultures fruitière pluriannuelles-basses tiges
   - 9742  # Cultures fruitière pluriannuelles-hautes tiges
+
+exclude:
+  - 6  # Prairie et fourrage
+  - 80  # Jachère
+  - 85  # Autres couverts semés
+  - 96  # Cultures horticoles non-comestibles
+  - 812  # jachère non herbacée
+  - 813  # Jachère mellifère
+  - 817  # Jachère Maïs - Dérogation SIE
+  - 818  # Jachère Fauche, pâturage - Dérogation SIE
+  - 819  # Jachère Légumineuses - Dérogation SIE
+  - 884  # Miscanthus
+  - 885  # Cultures permanentes sous serre
+  - 952  # Cultures maraîchères sous verre
+  - 954  # Autres plantes ornementales de plein air
+  - 958  # Autres plantes ornementales sous serre
+  - 991  # Parcelle bâtie, ou zone artificialisée
+  - 992  # Parcelle de sport ou loisir
+  - 993  # Utilisation non agricole (stockage de grume, ..) ou terrain vague
+  - 994  # Mare, étang, lac, plan d'eau
+  - 8516  # Cultures fruitières annuelles - Fraise sous serre
+  - 9521  # Autres cultures de légumes sous serre
+  - 9584  # Plantes ornementales rustiques
+  - 9588  # Fleurs et plantes ornementales sous serre
   - 9942  # Brousailles, ronces, ligneux bas, buissons sur parcelle non paturée
   - 9943  # parcelle boisée présentant un couvert forestier

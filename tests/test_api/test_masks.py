@@ -1480,40 +1480,13 @@ class TestRasterizeMaskInstanceIds:
         unique_nonzero = set(np.unique(mask).tolist()) - {0}
         assert unique_nonzero == {1, 2, 3}
 
-    def test_fallback_ids_skip_a_presence_only_background(self, tmp_path) -> None:
-        """With background 3, a plain 1..n fallback would burn the third field as
+    def test_presence_only_keeps_a_field_with_id_3(self, tmp_path) -> None:
+        mask = self._rasterize(tmp_path, ["3", "5", "7"], background_class_value=3)
+        assert set(np.unique(mask).tolist()) == {0, 3, 5, 7}
 
-        background and make it vanish. The fallback has to step over 3.
-        """
+    def test_presence_only_fallback_ids_start_at_1(self, tmp_path) -> None:
         mask = self._rasterize(tmp_path, ["abc", "abc", "abc"], background_class_value=3)
-        burned = set(np.unique(mask).tolist()) - {3}
-        assert burned == {1, 2, 4}
-
-
-class TestFallbackInstanceIds:
-    """The fallback id generator must never hand out the background value."""
-
-    def test_default_background_is_a_plain_range(self) -> None:
-        from ftw_dataset_tools.api.masks import _fallback_instance_ids
-
-        assert _fallback_instance_ids(4, background_class_value=0) == [1, 2, 3, 4]
-
-    def test_presence_only_background_is_skipped(self) -> None:
-        from ftw_dataset_tools.api.masks import _fallback_instance_ids
-
-        assert _fallback_instance_ids(5, background_class_value=3) == [1, 2, 4, 5, 6]
-
-    def test_no_shapes_needs_no_ids(self) -> None:
-        from ftw_dataset_tools.api.masks import _fallback_instance_ids
-
-        assert _fallback_instance_ids(0, background_class_value=3) == []
-
-    def test_ids_stay_unique(self) -> None:
-        from ftw_dataset_tools.api.masks import _fallback_instance_ids
-
-        ids = _fallback_instance_ids(20, background_class_value=7)
-        assert len(set(ids)) == len(ids)
-        assert 7 not in ids
+        assert set(np.unique(mask).tolist()) == {0, 1, 2, 3}
 
 
 class TestMgrsSquare:
@@ -1832,19 +1805,20 @@ class TestInstanceMaskStatistics:
         assert float(tags["STATISTICS_MAXIMUM"]) == 1010
         assert float(tags["STATISTICS_VALID_PERCENT"]) < 100
 
-    def test_presence_only_background_is_excluded_but_not_declared(self, tmp_path) -> None:
-        """Background 3 is a legal instance id, so it must not become the band nodata."""
+    def test_presence_only_instance_mask_uses_zero_background(self, tmp_path) -> None:
+        """A field with id 3 must survive a presence-only instance mask."""
         import rasterio
 
         from ftw_dataset_tools.api.masks import MaskType
 
-        path = self._create(tmp_path, MaskType.INSTANCE, background_class_value=3)
+        path = self._create(tmp_path, MaskType.INSTANCE, ids=(3, 1010), background_class_value=3)
 
         with rasterio.open(path) as src:
-            assert src.nodata is None
+            assert src.nodata == 0
+            assert (src.read(1) == 3).any()
             tags = src.tags(1)
 
-        assert float(tags["STATISTICS_MINIMUM"]) == 1000
+        assert float(tags["STATISTICS_MINIMUM"]) == 3
         assert float(tags["STATISTICS_MAXIMUM"]) == 1010
 
     def test_semantic_masks_keep_background_in_their_statistics(self, tmp_path) -> None:

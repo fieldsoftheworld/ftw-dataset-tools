@@ -8,7 +8,6 @@ from ftw_dataset_tools import __version__
 
 # Command modules are imported on first use to keep startup fast.
 COMMAND_MODULES = (
-    "add_field_stats",
     "convert_previews",
     "create_boundaries",
     "create_chips",
@@ -18,6 +17,7 @@ COMMAND_MODULES = (
     "create_masks",
     "create_splits",
     "download_images",
+    "export_coco",
     "get_grid",
     "inspect_fields",
     "run",
@@ -25,8 +25,18 @@ COMMAND_MODULES = (
 )
 _COMMANDS = {module.replace("_", "-"): module for module in COMMAND_MODULES}
 
+REMOVED_COMMANDS = {
+    "add-field-stats": (
+        "use 'ftwd create-chips FIELDS_FILE --grid-file GRID_FILE' instead "
+        "(add --min-chip-area 0 to keep truncated chips)"
+    ),
+}
 
-class LazyGroup(click.Group):
+
+class FtwdGroup(click.Group):
+    """Click group that loads commands on first use and points removed ones at their
+    replacement."""
+
     def list_commands(self, ctx: click.Context) -> list[str]:
         return sorted({*super().list_commands(ctx), *_COMMANDS})
 
@@ -36,8 +46,15 @@ class LazyGroup(click.Group):
             return super().get_command(ctx, cmd_name)
         return getattr(importlib.import_module(f"ftw_dataset_tools.commands.{module}"), module)
 
+    def resolve_command(
+        self, ctx: click.Context, args: list[str]
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        if args and args[0] in REMOVED_COMMANDS:
+            ctx.fail(f"'{args[0]}' was removed; {REMOVED_COMMANDS[args[0]]}.")
+        return super().resolve_command(ctx, args)
 
-@click.group(cls=LazyGroup)
+
+@click.group(cls=FtwdGroup)
 @click.version_option(version=__version__, prog_name="ftwd")
 def cli() -> None:
     """FTW Dataset Tools - CLI for creating Fields of the World benchmark dataset.
