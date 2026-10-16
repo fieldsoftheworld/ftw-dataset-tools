@@ -50,7 +50,9 @@ from ftw_dataset_tools.api.imagery import (
     download_imagery_for_catalog,
     select_imagery_for_catalog,
 )
+from ftw_dataset_tools.api.imagery.mosaic_selection import check_mosaic_year
 from ftw_dataset_tools.api.imagery.preview_workflow import preview_imagery_for_catalog
+from ftw_dataset_tools.api.imagery.settings import MOSAIC_FALLBACK_YEAR
 from ftw_dataset_tools.api.masks import MaskType
 from ftw_dataset_tools.api.source import (
     describe_local_source,
@@ -434,6 +436,13 @@ def _validate_stage_selection(ctx: PipelineContext, stages_to_run: list[str]) ->
             "'determination_datetime' column."
         )
 
+    if (
+        "select_images" in stages_to_run
+        and ctx.config.stages.select_images.imagery_mode == "mosaics"
+        and ctx.config.year is not None
+    ):
+        check_mosaic_year(ctx.config.year)
+
 
 def _require(path: Path, *, stage: str, produced_by: str) -> None:
     """Ensure a stage's input exists, with a clear message for standalone runs."""
@@ -757,17 +766,30 @@ def stage_stac(ctx: PipelineContext) -> None:
     ctx.log(f"Created STAC collection with {n} items in {k} sub-catalog(s)")
 
 
-def stage_select_images(ctx: PipelineContext) -> None:
-    """Select cloud-free Sentinel-2 scenes for each chip."""
-    _require(ctx.output_dir / "collection.json", stage="select_images", produced_by="stac")
-    if ctx.effective_year is None:
-        raise ValueError("A year is required for image selection.")
+def mosaic_year(config_year: int | None, log: Callable[[str], None]) -> int:
+    """The mosaic year: the configured year, else a warning and the fallback year."""
+    if config_year is not None:
+        return config_year
+    log(f"Warning: no year given; using {MOSAIC_FALLBACK_YEAR} for mosaics.")
+    return MOSAIC_FALLBACK_YEAR
 
+
+def stage_select_images(ctx: PipelineContext) -> None:
+    """Select Sentinel-2 imagery (seasonal scenes or quarterly mosaics) for each chip."""
+    _require(ctx.output_dir / "collection.json", stage="select_images", produced_by="stac")
     select_cfg = ctx.config.stages.select_images
+    if select_cfg.imagery_mode == "mosaics":
+        year = mosaic_year(ctx.config.year, ctx.log)
+    elif ctx.effective_year is None:
+        raise ValueError("A year is required for image selection.")
+    else:
+        year = ctx.effective_year
+
     ctx.log("Selecting imagery...")
     ctx.selection_result = select_imagery_for_catalog(
         catalog_dir=ctx.output_dir,
-        year=ctx.effective_year,
+        year=year,
+        imagery_mode=select_cfg.imagery_mode,
         cloud_cover_chip=select_cfg.cloud_cover_chip,
         nodata_max=select_cfg.nodata_max,
         buffer_days=select_cfg.buffer_days,

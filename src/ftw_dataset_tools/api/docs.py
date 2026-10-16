@@ -29,6 +29,7 @@ QUANTILES = (5, 25, 50, 75, 95)
 TOP_CROP_LIMIT = 10
 RESULT_ROWS = 3
 SEASONS = ("planting", "harvest")
+MOSAIC_QUARTERS = ("q1", "q2", "q3", "q4")
 
 # Columns that would mark a row in items.parquet as a season child item rather
 # than a chip. The catalogue written today mirrors chips only, so the child
@@ -98,8 +99,12 @@ ITEM_PROPERTY_NOTES = {
     "ftw:planting_cloud_cover": "cloud cover of the selected planting scene, in percent",
     "ftw:harvest_cloud_cover": "cloud cover of the selected harvest scene, in percent",
     "ftw:stac_host": "STAC API the imagery was selected from",
-    "ftw:season": "which crop-calendar window a child imagery item covers",
+    "ftw:season": "which crop-calendar window (or mosaic quarter) a child imagery item covers",
     "ftw:source": "satellite mission the imagery came from",
+    "ftw:imagery_mode": "scenes (planting/harvest) or mosaics (quarterly, Q1-Q4)",
+    "ftw:requested_year": "mosaic year the selection asked for",
+    "ftw:imagery_year": "mosaic year actually used (differs when a nearby year was needed)",
+    "ftw:mosaic_tile": "quarterly mosaic tile the imagery came from",
     "ftw:buffer_days": "half-width of the search window around the target day, in days",
     "ftw:field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
     **{f"ftw:{name}": note for name, note in _HCAT_NOTES.items()},
@@ -297,7 +302,7 @@ def imagery_stats(
     if not records:
         return None
     stats: dict = {"chips_with_imagery": len({r["parent"] for r in records})}
-    for season in SEASONS:
+    for season in (*SEASONS, *MOSAIC_QUARTERS):
         summary = _season_summary(records, season)
         if summary:
             stats[season] = summary
@@ -538,6 +543,11 @@ def _imagery_block(stats: dict) -> str:
     imagery = stats["imagery"]
     if not imagery:
         return ""
+    if any(imagery.get(q) for q in MOSAIC_QUARTERS):
+        return (
+            f"{imagery['chips_with_imagery']:,} chips have Sentinel-2 quarterly cloudless "
+            "mosaics selected for them, one for each quarter (Q1-Q4) of a single year."
+        )
     lines = [
         f"{imagery['chips_with_imagery']:,} chips have Sentinel-2 scenes selected for them, "
         "one in the planting window and one in the harvest window of the crop calendar."

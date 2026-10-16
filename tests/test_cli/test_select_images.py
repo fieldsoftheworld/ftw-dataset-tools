@@ -409,7 +409,7 @@ class TestSelectImagesSharedWorkflow:
         )
 
         assert result.exit_code == 1
-        assert "No cloud-free scenes for ftw-item1_2023" in result.output
+        assert "No imagery for ftw-item1_2023" in result.output
 
     def test_writes_report(self, tmp_path: Path, monkeypatch) -> None:
         from ftw_dataset_tools.api.imagery import selection_workflow

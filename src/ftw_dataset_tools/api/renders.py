@@ -74,9 +74,9 @@ _DATASET_BACKGROUND_KINDS = frozenset({"semantic_2class", "semantic_3class"})
 #: Ramp for the continuous rasters; a built-in of the render extension.
 _CONTINUOUS_COLORMAP = "viridis"
 
-#: Seasons a chip can carry imagery for, in the order the render stack prefers them
-#: as its base layer.
-_SEASONS = ("planting", "harvest")
+#: Slots a chip can carry imagery for, in the order the render stack prefers them
+#: as its base layer (Q3 first for mosaics, matching the chip thumbnail).
+_SEASONS = ("planting", "harvest", "q3", "q1", "q2", "q4")
 
 #: Bands the true-colour render selects, in display order.
 _RGB_BANDS = ("red", "green", "blue")
@@ -274,6 +274,8 @@ def _rgb_nodata(bands: list[dict], bidx: list[int]) -> float | int | str | None:
 
 
 def _season_title(season: str) -> str:
+    if season.startswith("q"):
+        return f"{season.upper()} mosaic (true colour)"
     return f"{season.capitalize()} season (true colour)"
 
 

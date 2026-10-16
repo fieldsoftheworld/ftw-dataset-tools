@@ -650,3 +650,39 @@ class TestCreateDatasetImageDownload:
         result = _invoke(sample_fields_geoparquet, "--image-workers", "0")
 
         assert result.exit_code == 2
+
+
+class TestCreateDatasetMosaics:
+    """--imagery-mode mosaics reaches the shared selection workflow."""
+
+    def test_mosaic_mode_and_year_reach_the_workflow(
+        self,
+        stub_pipeline: SelectionStub,
+        sample_fields_geoparquet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ftw_dataset_tools.api.imagery import mosaic_selection
+
+        monkeypatch.setattr(mosaic_selection, "year_available", lambda _year: True)
+        result = _invoke(sample_fields_geoparquet, "--imagery-mode", "mosaics", year="2022")
+
+        assert result.exit_code == 0, result.output
+        assert stub_pipeline.calls[0]["imagery_mode"] == "mosaics"
+        assert stub_pipeline.calls[0]["year"] == 2022
+
+    def test_selection_conflict_names_the_force_flag(
+        self,
+        stub_pipeline: SelectionStub,
+        sample_fields_geoparquet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ftw_dataset_tools.api.imagery import mosaic_selection
+        from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
+
+        monkeypatch.setattr(mosaic_selection, "year_available", lambda _year: True)
+        stub_pipeline.error = SelectionConflictError("3 chip(s) already hold imagery.")
+        result = _invoke(sample_fields_geoparquet, "--imagery-mode", "mosaics")
+
+        assert result.exit_code == 1
+        assert "already hold imagery" in result.output
+        assert "--force-image-selection" in result.output

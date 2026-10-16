@@ -8,7 +8,7 @@ and the `create-dataset` pipeline to ensure identical behavior.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import pystac
 from tqdm import tqdm
@@ -24,6 +24,7 @@ from ftw_dataset_tools.api.imagery.parallel import (
     run_in_parallel,
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
+from ftw_dataset_tools.api.imagery.slots import image_filename, parse_child_id
 from ftw_dataset_tools.api.imagery.thumbnails import has_rgb_bands
 from ftw_dataset_tools.api.stac_items import write_item
 
@@ -61,10 +62,9 @@ def find_s2_child_items(
     catalog_dir: Path,
     unreadable: list[dict] | None = None,
 ) -> list[tuple[pystac.Item, Path]]:
-    """Find all S2 child items (planting/harvest) in a catalog directory.
+    """Find all S2 child items (one per imagery slot) in a catalog directory.
 
-    Searches subdirectories for STAC item JSON files that end with
-    _planting_s2 or _harvest_s2.
+    Searches subdirectories for STAC item JSON files named ``{chip}_{slot}_s2``.
 
     Args:
         catalog_dir: Path to the collection directory (holding collection.json),
@@ -89,8 +89,7 @@ def find_s2_child_items(
                 if unreadable is not None:
                     unreadable.append({"item": json_file.stem, "error": f"Unreadable item: {e}"})
                 continue
-            # Only include child items (they have _planting_s2 or _harvest_s2 suffix)
-            if item.id.endswith("_planting_s2") or item.id.endswith("_harvest_s2"):
+            if parse_child_id(item.id) is not None:
                 child_items.append((item, json_file))
 
     return child_items
@@ -214,7 +213,7 @@ class DownloadTask:
     item: pystac.Item
     item_path: Path
     bbox: tuple[float, ...]
-    season: Literal["planting", "harvest"]
+    season: str
     base_id: str
     output_filename: str
     output_path: Path
@@ -238,12 +237,12 @@ def skip_download_reason(item: pystac.Item, item_path: Path, *, resume: bool) ->
 
 
 def build_download_task(item: pystac.Item, item_path: Path) -> DownloadTask:
-    """Derive the season and output paths for one child item."""
-    season: Literal["planting", "harvest"] = (
-        "planting" if item.id.endswith("_planting_s2") else "harvest"
-    )
-    base_id = item.id.replace("_planting_s2", "").replace("_harvest_s2", "")
-    output_filename = f"{base_id}_{season}_image_s2.tif"
+    """Derive the slot and output paths for one child item."""
+    parsed = parse_child_id(item.id)
+    if parsed is None:
+        raise ValueError(f"Not an imagery child item: {item.id}")
+    base_id, season = parsed
+    output_filename = image_filename(base_id, season)
 
     return DownloadTask(
         item=item,

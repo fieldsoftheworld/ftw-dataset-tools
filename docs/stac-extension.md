@@ -35,6 +35,27 @@ These properties are added to parent chip items after image selection:
 | `ftw:planting_cloud_cover` | number | Cloud cover percentage of the selected planting scene |
 | `ftw:harvest_cloud_cover` | number | Cloud cover percentage of the selected harvest scene |
 
+### Quarterly Mosaic Mode
+
+With `--imagery-mode mosaics` (config `stages.select_images.imagery_mode: mosaics`) a chip
+gets four images, Q1-Q4 of one year, from the Sentinel-2 quarterly cloudless mosaics, in
+place of the planting and harvest scenes. The slots are `q1`..`q4`, so links are
+`ftw:q1`..`ftw:q4`, assets `q1_image`..`q4_image` and files `{item_id}_q1_s2.json` /
+`{item_id}_q1_image_s2.tif`. None of the crop-calendar or cloud properties above are written.
+
+| Property | Item | Type | Description |
+|----------|------|------|-------------|
+| `ftw:imagery_mode` | parent | string | `mosaics` (absent means scenes) |
+| `ftw:requested_year` | parent | integer | Mosaic year the selection asked for |
+| `ftw:imagery_year` | parent, child | integer | Mosaic year used; differs when a nearby year was needed |
+| `ftw:season` | child | string | `q1`..`q4` |
+| `ftw:source` | child | string | `sentinel-2-mosaic` |
+| `ftw:mosaic_tile` | child | string | Mosaic tile id, e.g. `31UGR_0_0` |
+
+Child items carry `start_datetime`/`end_datetime` for the quarter instead of `datetime`.
+Clipped mosaic images keep the source encoding: `int16`, nodata `-32768`, reflectance =
+value x 0.0001 with no offset, recorded as GDAL scale/offset and in `raster:bands`.
+
 ### Build-time Chip Item Properties
 
 These properties are set when the chip items are generated from the chips GeoParquet,

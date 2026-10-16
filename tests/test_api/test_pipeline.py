@@ -1784,3 +1784,63 @@ class TestStageSelectImagesWiring:
         )
         assert seen["search_backend"] == "earth-search"
         assert seen["workers"] == 4
+
+    def test_mosaic_mode_uses_the_configured_year(
+        self,
+        sample_geoparquet_4326: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seen = self._run_stage(
+            sample_geoparquet_4326,
+            tmp_path,
+            monkeypatch,
+            stages={"select_images": {"imagery_mode": "mosaics"}},
+        )
+        assert seen["imagery_mode"] == "mosaics"
+        assert seen["year"] == 2024
+
+    def test_scene_mode_still_requires_a_year(
+        self, sample_geoparquet_4326: Path, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "out"
+        ctx = pipeline.build_context(_config(sample_geoparquet_4326, out, year=2024))
+        ctx.effective_year = None
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "collection.json").write_text("{}")
+
+        with pytest.raises(ValueError, match="A year is required"):
+            pipeline.stage_select_images(ctx)
+
+
+class TestMosaicYearValidation:
+    """An unavailable mosaic year fails before any stage runs."""
+
+    def test_unavailable_year_is_rejected_up_front(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api.imagery import mosaic_selection
+
+        monkeypatch.setattr(mosaic_selection, "year_available", lambda _year: False)
+        config = _config(
+            sample_geoparquet_4326,
+            tmp_path / "out",
+            year=2023,
+            stages={"select_images": {"imagery_mode": "mosaics"}},
+        )
+        ctx = pipeline.build_context(config, stages=["select_images"])
+        with pytest.raises(mosaic_selection.MosaicYearError, match="2023"):
+            pipeline._validate_stage_selection(ctx, ["select_images"])
+
+    def test_scene_mode_never_checks_mosaic_years(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api.imagery import mosaic_selection
+
+        def fail(_year: int) -> bool:
+            raise AssertionError("checked a mosaic year in scene mode")
+
+        monkeypatch.setattr(mosaic_selection, "year_available", fail)
+        config = _config(sample_geoparquet_4326, tmp_path / "out", year=2023)
+        ctx = pipeline.build_context(config, stages=["select_images"])
+        pipeline._validate_stage_selection(ctx, ["select_images"])

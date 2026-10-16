@@ -251,6 +251,18 @@ class TestLabelColors:
             int(value, 16)
 
 
+class TestMosaicImageryRenders:
+    def test_quarter_images_get_renders_with_q3_as_base(self) -> None:
+        from ftw_dataset_tools.api.renders import build_item_renders, build_render_order
+
+        item = _item({"q1_image": IMAGE_BANDS, "q3_image": IMAGE_BANDS})
+        renders = build_item_renders(item)
+
+        assert renders["q3_rgb"]["title"] == "Q3 mosaic (true colour)"
+        assert renders["q1_rgb"]["assets"] == ["q1_image"]
+        assert build_render_order(renders)[0] == "q3_rgb"
+
+
 class TestSeasonImageryRenders:
     """The true-colour base layer, from the chip's own image or the scene's visual COG."""
 
