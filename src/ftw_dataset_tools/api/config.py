@@ -23,7 +23,12 @@ from ftw_dataset_tools import __version__
 from ftw_dataset_tools.api import chip_grid, field_stats, scale, splits
 from ftw_dataset_tools.api.chip_borders import DEFAULT_BORDER_GAP_CHIPS
 from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
-from ftw_dataset_tools.api.imagery.slots import DEFAULT_IMAGERY_MODE, IMAGERY_MODES
+from ftw_dataset_tools.api.imagery.slots import (
+    DEFAULT_IMAGERY_MODE,
+    DEFAULT_SOURCE,
+    IMAGERY_MODES,
+    IMAGERY_SOURCES,
+)
 from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -475,6 +480,13 @@ class SelectImagesConfig:
     # backend's default: 16 for the parquet mirror, 4 for Earth Search (which
     # rate-bans aggressive clients).
     workers: int | None = None
+    # "sentinel-2" or "planetscope" (scenes mode only; needs PL_API_KEY). Planet
+    # scenes are ordered per area and cached under <output_dir>/.planet.
+    source: str = DEFAULT_SOURCE
+    # Wait for Planet orders; when false, chips whose orders are still processing
+    # are skipped until a rerun.
+    planet_wait: bool = True
+    planet_timeout_minutes: float = 120.0
 
     @property
     def effective_workers(self) -> int:
@@ -737,6 +749,7 @@ class DatasetConfig:
             )
 
         self._validate_imagery_mode()
+        self._validate_source()
 
         pmtiles = self.stages.docs.pmtiles
         if not isinstance(pmtiles, bool) and pmtiles != PMTILES_AUTO:
@@ -784,6 +797,26 @@ class DatasetConfig:
         ):
             raise ConfigError(
                 "stages.masks.crop_column requires a column name and mask_types: [instance]"
+            )
+
+    def _validate_source(self) -> None:
+        select = self.stages.select_images
+        if select.source not in IMAGERY_SOURCES:
+            raise ConfigError(
+                f"stages.select_images.source must be one of {list(IMAGERY_SOURCES)} "
+                f"(got {select.source!r})"
+            )
+        if not isinstance(select.planet_wait, bool):
+            raise ConfigError("stages.select_images.planet_wait must be true or false")
+        timeout = select.planet_timeout_minutes
+        if not isinstance(timeout, int | float) or isinstance(timeout, bool) or timeout < 0:
+            raise ConfigError(
+                "stages.select_images.planet_timeout_minutes must be a non-negative number "
+                f"(got {timeout!r})"
+            )
+        if select.source == "planetscope" and select.imagery_mode != "scenes":
+            raise ConfigError(
+                "stages.select_images.source 'planetscope' supports imagery_mode 'scenes' only."
             )
 
     def _validate_imagery_mode(self) -> None:

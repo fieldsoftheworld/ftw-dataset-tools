@@ -21,6 +21,7 @@ from ftw_dataset_tools.api.imagery import (
 )
 from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
 from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
+from ftw_dataset_tools.api.imagery.planet_api import PlanetAPIError, PlanetUnavailableError
 from ftw_dataset_tools.api.imagery.selection_workflow import (
     NoCloudFreeScenesError,
     SelectionWorkflowResult,
@@ -28,7 +29,9 @@ from ftw_dataset_tools.api.imagery.selection_workflow import (
 from ftw_dataset_tools.api.stac_items import copy_catalog
 from ftw_dataset_tools.commands.cli_logging import is_verbose, verbose_alias_option
 from ftw_dataset_tools.commands.imagery_mode import (
+    check_source_options,
     imagery_mode_option,
+    planet_options,
     reject_scene_only_options,
     resolve_mosaic_year,
 )
@@ -256,6 +259,7 @@ def _write_report(
 @click.argument("input_path", type=click.Path(exists=True))
 @verbose_alias_option
 @imagery_mode_option
+@planet_options
 @click.option(
     "--year",
     type=int,
@@ -354,6 +358,9 @@ def _write_report(
 def select_images_cmd(
     input_path: str,
     imagery_mode: str,
+    source: str,
+    planet_wait: bool,
+    planet_timeout: float,
     year: int | None,
     cloud_cover_chip: float,
     nodata_max: float,
@@ -395,8 +402,10 @@ def select_images_cmd(
         ftwd select-images ./my-dataset --force  # Overwrite existing selections
     """
     mosaics = imagery_mode == "mosaics"
+    ctx = click.get_current_context()
+    check_source_options(ctx, source, imagery_mode)
     if mosaics:
-        reject_scene_only_options(click.get_current_context(), _SCENE_ONLY_OPTIONS)
+        reject_scene_only_options(ctx, _SCENE_ONLY_OPTIONS)
 
     if workers is None:
         workers = default_selection_workers(search_backend)
@@ -409,6 +418,10 @@ def select_images_cmd(
         return
 
     if clear_selections:
+        if source != "sentinel-2":
+            raise click.BadParameter(
+                "clears Sentinel-2 selections only for now.", param_hint="'--clear-selections'"
+            )
         _clear_all_selections(chip_items)
         return
 
@@ -441,8 +454,11 @@ def select_images_cmd(
             search_backend=search_backend,
             imagery_mode=imagery_mode,
             chip_items=chip_entries,
+            source=source,
+            planet_wait=planet_wait,
+            planet_timeout_minutes=planet_timeout,
         )
-    except NoCloudFreeScenesError as e:
+    except (NoCloudFreeScenesError, PlanetUnavailableError, PlanetAPIError) as e:
         raise click.ClickException(str(e)) from e
     except SelectionConflictError as err:
         raise click.ClickException(

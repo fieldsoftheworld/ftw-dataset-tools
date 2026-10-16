@@ -1971,6 +1971,28 @@ class TestStageSelectImagesWiring:
         assert seen["search_backend"] == "earth-search"
         assert seen["workers"] == 4
 
+    def test_planetscope_source_and_order_options_reach_selection(
+        self,
+        sample_geoparquet_4326: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seen = self._run_stage(
+            sample_geoparquet_4326,
+            tmp_path,
+            monkeypatch,
+            stages={
+                "select_images": {
+                    "source": "planetscope",
+                    "planet_wait": False,
+                    "planet_timeout_minutes": 30,
+                }
+            },
+        )
+        assert seen["source"] == "planetscope"
+        assert seen["planet_wait"] is False
+        assert seen["planet_timeout_minutes"] == 30
+
     def test_mosaic_mode_uses_the_configured_year(
         self,
         sample_geoparquet_4326: Path,

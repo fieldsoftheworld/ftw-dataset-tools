@@ -824,6 +824,9 @@ def stage_select_images(ctx: PipelineContext) -> None:
         buffer_expansion_size=select_cfg.buffer_expansion_size,
         workers=select_cfg.effective_workers,
         search_backend=select_cfg.search_backend,
+        source=select_cfg.source,
+        planet_wait=select_cfg.planet_wait,
+        planet_timeout_minutes=select_cfg.planet_timeout_minutes,
     )
 
 
