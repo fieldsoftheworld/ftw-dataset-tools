@@ -911,6 +911,140 @@ def _run_work_items(
     return created, failures, pool_restarts
 
 
+def _read_grid_cells(
+    conn: duckdb.DuckDBPyConnection,
+    chips_path: Path,
+    grid_id_col: str,
+    grid_geom_col: str,
+    coverage_col: str,
+    min_coverage: float,
+) -> list[tuple]:
+    """(grid_id, minx, miny, maxx, maxy) for each cell passing the coverage filter.
+
+    Raises:
+        ValueError: If the grid id or coverage column is missing from the chips file.
+    """
+    coverage_filter = ""
+    if coverage_col:
+        coverage_filter = f'WHERE "{coverage_col}" >= {min_coverage}'
+
+    query = f"""
+        SELECT
+            "{grid_id_col}" as grid_id,
+            ST_XMin("{grid_geom_col}") as minx,
+            ST_YMin("{grid_geom_col}") as miny,
+            ST_XMax("{grid_geom_col}") as maxx,
+            ST_YMax("{grid_geom_col}") as maxy
+        FROM '{sql_path(chips_path)}'
+        {coverage_filter}
+    """
+
+    try:
+        return conn.execute(query).fetchall()
+    except duckdb.BinderException as e:
+        if grid_id_col in str(e):
+            raise ValueError(f"Grid ID column '{grid_id_col}' not found in grid file") from e
+        if coverage_col and coverage_col in str(e):
+            raise ValueError(f"Coverage column '{coverage_col}' not found in grid file") from e
+        raise
+
+
+def _grid_crs(conn: duckdb.DuckDBPyConnection, chips_path: Path, grid_geom_col: str) -> CRS:
+    """CRS of the chips file's geometry column, from its GeoParquet metadata."""
+    geo_meta_result = conn.execute(
+        "SELECT value FROM parquet_kv_metadata(?) WHERE key = 'geo'", [str(chips_path)]
+    ).fetchone()
+    if not geo_meta_result:
+        return CRS.from_epsg(4326)
+
+    geo_meta = json.loads(geo_meta_result[0])
+    crs_info = geo_meta.get("columns", {}).get(grid_geom_col, {}).get("crs")
+    if crs_info and isinstance(crs_info, dict):
+        # Convert PROJJSON to CRS
+        return CRS.from_user_input(crs_info)
+    # GeoParquet spec: missing CRS means WGS84 (and anything unreadable falls back to it too)
+    return CRS.from_epsg(4326)
+
+
+def _instance_id_column(conn: duckdb.DuckDBPyConnection, boundaries_path: Path) -> str | None:
+    """Find an ID column in the boundaries file to number instance masks by."""
+    try:
+        schema = conn.execute(f"DESCRIBE SELECT * FROM '{sql_path(boundaries_path)}'").fetchall()
+    except Exception:
+        return None
+    col_names = {row[0] for row in schema}
+    for candidate in ["id", "ID", "fid", "FID", "objectid", "OBJECTID"]:
+        if candidate in col_names:
+            return candidate
+    return None
+
+
+def _outputs_to_write(
+    grid_id: str,
+    group: list[MaskType],
+    *,
+    chip_dirs: dict[str, Path] | None,
+    output_path: Path,
+    field_dataset: str,
+    year: int | None,
+    skip_existing: bool,
+    existing: dict[MaskType, int],
+) -> list[tuple[MaskType, str]]:
+    """The (mask type, path) outputs of one cell's group that still need writing."""
+    outputs: list[tuple[MaskType, str]] = []
+    for mask_type in group:
+        mask_path = get_mask_output_path(
+            grid_id=grid_id,
+            mask_type=mask_type,
+            chip_dirs=chip_dirs,
+            output_dir=output_path,
+            field_dataset=field_dataset,
+            year=year,
+        )
+
+        # Ensure parent directory exists when using chip_dirs
+        if chip_dirs is not None:
+            mask_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Filter per output rather than per group: a group whose 2-class
+        # mask is already on disk still has to burn when one of the
+        # DECODE layers derived from it is missing.
+        if skip_existing and mask_path.exists() and mask_path.stat().st_size > 0:
+            existing[mask_type] += 1
+            continue
+
+        outputs.append((mask_type, str(mask_path)))
+    return outputs
+
+
+def _build_work_items(
+    grid_cells: list[tuple],
+    groups: dict[MaskType, list[MaskType]],
+    *,
+    shared_task_fields: dict,
+    existing: dict[MaskType, int],
+    **output_opts,
+) -> list[_MaskTask]:
+    """One task per (grid cell, group) that still has an output to write."""
+    work_items: list[_MaskTask] = []
+    for grid_id, minx, miny, maxx, maxy in grid_cells:
+        grid_id_str = str(grid_id)
+        for source_type, group in groups.items():
+            outputs = _outputs_to_write(grid_id_str, group, existing=existing, **output_opts)
+            if not outputs:
+                continue
+            work_items.append(
+                _MaskTask(
+                    grid_id=grid_id_str,
+                    bounds=(minx, miny, maxx, maxy),
+                    source_type=source_type,
+                    outputs=tuple(outputs),
+                    **shared_task_fields,
+                )
+            )
+    return work_items
+
+
 def create_masks(
     chips_file: str | Path,
     boundaries_file: str | Path,
@@ -1003,32 +1137,9 @@ def create_masks(
     total_count_result = conn.execute(f"SELECT COUNT(*) FROM '{sql_path(chips_path)}'").fetchone()
     total_grids = total_count_result[0] if total_count_result else 0
 
-    # Build query with optional coverage filter
-    coverage_filter = ""
-    if coverage_col:
-        coverage_filter = f'WHERE "{coverage_col}" >= {min_coverage}'
-
-    # Get grid cells with bounds
-    query = f"""
-        SELECT
-            "{grid_id_col}" as grid_id,
-            ST_XMin("{grid_geom_col}") as minx,
-            ST_YMin("{grid_geom_col}") as miny,
-            ST_XMax("{grid_geom_col}") as maxx,
-            ST_YMax("{grid_geom_col}") as maxy
-        FROM '{sql_path(chips_path)}'
-        {coverage_filter}
-    """
-
-    try:
-        grid_cells = conn.execute(query).fetchall()
-    except duckdb.BinderException as e:
-        if grid_id_col in str(e):
-            raise ValueError(f"Grid ID column '{grid_id_col}' not found in grid file") from e
-        if coverage_col and coverage_col in str(e):
-            raise ValueError(f"Coverage column '{coverage_col}' not found in grid file") from e
-        raise
-
+    grid_cells = _read_grid_cells(
+        conn, chips_path, grid_id_col, grid_geom_col, coverage_col, min_coverage
+    )
     total_cells = len(grid_cells)
 
     if chip_dirs is None:
@@ -1044,42 +1155,11 @@ def create_masks(
     # One task per (grid cell, group of mask types sharing a rasterization).
     groups = _group_by_source(mask_types)
 
-    # Get CRS from GeoParquet metadata
-    geo_meta_result = conn.execute(
-        "SELECT value FROM parquet_kv_metadata(?) WHERE key = 'geo'", [str(chips_path)]
-    ).fetchone()
+    crs = _grid_crs(conn, chips_path, grid_geom_col)
 
-    crs = None
-    if geo_meta_result:
-        geo_meta = json.loads(geo_meta_result[0])
-        columns = geo_meta.get("columns", {})
-        geom_info = columns.get(grid_geom_col, {})
-        crs_info = geom_info.get("crs")
-        if crs_info and isinstance(crs_info, dict):
-            # Convert PROJJSON to CRS
-            crs = CRS.from_user_input(crs_info)
-        elif crs_info is None:
-            # GeoParquet spec: missing CRS means WGS84
-            crs = CRS.from_epsg(4326)
-
-    if not crs:
-        crs = CRS.from_epsg(4326)
-
-    # Determine ID column for instance masks
     id_col_for_instance = None
     if MaskType.INSTANCE in mask_types:
-        # Try to find an ID column in boundaries file
-        try:
-            schema = conn.execute(
-                f"DESCRIBE SELECT * FROM '{sql_path(boundaries_path)}'"
-            ).fetchall()
-            col_names = [row[0] for row in schema]
-            for candidate in ["id", "ID", "fid", "FID", "objectid", "OBJECTID"]:
-                if candidate in col_names:
-                    id_col_for_instance = candidate
-                    break
-        except Exception:
-            pass
+        id_col_for_instance = _instance_id_column(conn, boundaries_path)
 
     # Close the main connection - workers will create their own
     conn.close()
@@ -1095,59 +1175,30 @@ def create_masks(
         _worker_memory_limit_mb(total_ram, num_workers) if total_ram else _FALLBACK_MEMORY_LIMIT_MB
     )
 
-    # Convert CRS to WKT for serialization
-    crs_wkt = crs.to_wkt()
-
-    work_items: list[_MaskTask] = []
     # Per-type tally of outputs left in place because skip_existing found them.
     existing: dict[MaskType, int] = dict.fromkeys(mask_types, 0)
-    for grid_id, minx, miny, maxx, maxy in grid_cells:
-        grid_id_str = str(grid_id)
-        for source_type, group in groups.items():
-            outputs: list[tuple[MaskType, str]] = []
-            for mask_type in group:
-                mask_path = get_mask_output_path(
-                    grid_id=grid_id_str,
-                    mask_type=mask_type,
-                    chip_dirs=chip_dirs,
-                    output_dir=output_path,
-                    field_dataset=field_dataset,
-                    year=year,
-                )
-
-                # Ensure parent directory exists when using chip_dirs
-                if chip_dirs is not None:
-                    mask_path.parent.mkdir(parents=True, exist_ok=True)
-
-                # Filter per output rather than per group: a group whose 2-class
-                # mask is already on disk still has to burn when one of the
-                # DECODE layers derived from it is missing.
-                if skip_existing and mask_path.exists() and mask_path.stat().st_size > 0:
-                    existing[mask_type] += 1
-                    continue
-
-                outputs.append((mask_type, str(mask_path)))
-
-            if not outputs:
-                continue
-
-            work_items.append(
-                _MaskTask(
-                    grid_id=grid_id_str,
-                    bounds=(minx, miny, maxx, maxy),
-                    crs_wkt=crs_wkt,
-                    boundaries_path=str(boundaries_path),
-                    boundary_lines_path=str(boundary_lines_path),
-                    boundaries_geom_col=boundaries_geom_col,
-                    boundary_lines_geom_col=boundary_lines_geom_col,
-                    source_type=source_type,
-                    outputs=tuple(outputs),
-                    resolution=resolution,
-                    id_col=id_col_for_instance,
-                    background_class_value=background_class_value,
-                    memory_limit_mb=memory_limit_mb,
-                )
-            )
+    work_items = _build_work_items(
+        grid_cells,
+        groups,
+        shared_task_fields={
+            # WKT, since the task is pickled to the worker processes
+            "crs_wkt": crs.to_wkt(),
+            "boundaries_path": str(boundaries_path),
+            "boundary_lines_path": str(boundary_lines_path),
+            "boundaries_geom_col": boundaries_geom_col,
+            "boundary_lines_geom_col": boundary_lines_geom_col,
+            "resolution": resolution,
+            "id_col": id_col_for_instance,
+            "background_class_value": background_class_value,
+            "memory_limit_mb": memory_limit_mb,
+        },
+        chip_dirs=chip_dirs,
+        output_path=output_path,
+        field_dataset=field_dataset,
+        year=year,
+        skip_existing=skip_existing,
+        existing=existing,
+    )
 
     # Announce (and count progress against) the work that is actually queued:
     # taking the total before the skip_existing filter would leave a gap-filling
@@ -1159,7 +1210,18 @@ def create_masks(
     results, failures, pool_restarts = _run_work_items(
         work_items, num_workers, total_tasks, on_progress
     )
+    return _results_by_type(mask_types, results, failures, pool_restarts, existing, field_dataset)
 
+
+def _results_by_type(
+    mask_types: list[MaskType],
+    results: list[tuple[MaskType, MaskResult]],
+    failures: list[tuple[_MaskTask, tuple[str, str], set[MaskType]]],
+    pool_restarts: int,
+    existing: dict[MaskType, int],
+    field_dataset: str,
+) -> dict[MaskType, CreateMasksResult]:
+    """Split the pooled run's outcomes back out into one result per mask type."""
     created: dict[MaskType, list[MaskResult]] = {mask_type: [] for mask_type in mask_types}
     skipped: dict[MaskType, list[tuple[str, str]]] = {mask_type: [] for mask_type in mask_types}
 

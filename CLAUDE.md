@@ -311,10 +311,9 @@ ruff format .
 
 ---
 
-## Code Complexity (TODO)
+## Code Complexity
 
-> **Note:** Complexity monitoring is not yet enforced via pre-commit.
-> See GitHub issue for tracking: https://github.com/fieldsoftheworld/ftw-dataset-tools/issues/15
+Enforced by xenon in pre-commit and CI at `--max-absolute=D --max-modules=C --max-average=B`.
 
 **Target: Aim for grade 'A' complexity on all new code.**
 
@@ -323,12 +322,12 @@ ruff format .
 - **B**: Acceptable, low complexity
 - **C-F**: Needs refactoring
 
-### Target Pre-commit Thresholds
+### Thresholds
 ```bash
 # Strict check - aim for this
 xenon --max-absolute=A --max-modules=A --max-average=A src/ftw_dataset_tools/
 
-# Target pre-commit threshold
+# Enforced threshold
 xenon --max-absolute=D --max-modules=C --max-average=B src/ftw_dataset_tools/
 ```
 

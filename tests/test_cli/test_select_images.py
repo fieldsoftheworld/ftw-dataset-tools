@@ -93,6 +93,49 @@ class TestSelectImagesSingleChipMode:
         assert "collection.json" in result.output
 
 
+class TestChipYear:
+    """A chip's year comes from its ID, then from the item's own dates."""
+
+    @staticmethod
+    def _item(item_id: str, **properties) -> pystac.Item:
+        return pystac.Item(
+            id=item_id,
+            geometry=None,
+            bbox=None,
+            datetime=datetime(2021, 6, 1, tzinfo=UTC),
+            properties=properties,
+        )
+
+    def test_year_from_chip_id(self) -> None:
+        from ftw_dataset_tools.api.imagery.selection_workflow import chip_year
+
+        assert chip_year(self._item("ftw-34UFF1628_2024")) == 2024
+
+    def test_year_from_start_datetime(self) -> None:
+        from ftw_dataset_tools.api.imagery.selection_workflow import chip_year
+
+        item = self._item("ftw-34UFF1628", start_datetime="2023-03-01T00:00:00Z")
+        assert chip_year(item) == 2023
+
+    def test_year_from_item_datetime(self) -> None:
+        from ftw_dataset_tools.api.imagery.selection_workflow import chip_year
+
+        assert chip_year(self._item("ftw-34UFF1628")) == 2021
+
+
+class TestClearSelections:
+    def test_nothing_to_clear(self, tmp_path: Path) -> None:
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        _write_minimal_collection(dataset_dir / "collection.json")
+        _write_chip_item(dataset_dir / "chips" / "33UXP" / "ftw-item1", "ftw-item1")
+
+        result = CliRunner().invoke(cli, ["select-images", str(dataset_dir), "--clear-selections"])
+
+        assert result.exit_code == 0, result.output
+        assert "No chips have imagery selections to clear." in result.output
+
+
 class TestSelectImagesDirectoryMode:
     """Tests for directory-mode chip discovery under the single-collection layout.
 

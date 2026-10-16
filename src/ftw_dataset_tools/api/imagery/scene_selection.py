@@ -437,6 +437,92 @@ def _select_best_scene(
     return None
 
 
+@dataclass
+class _SeasonSearch:
+    """One season's search state, carried across buffer expansions."""
+
+    season: Literal["planting", "harvest"]
+    center_date: datetime
+    buffer_days: int
+    scene: SelectedScene | None = None
+    candidates_checked: int = 0
+    checked_ids: set[str] = field(default_factory=set)
+
+    def meets_threshold(self, cloud_cover_chip: float) -> bool:
+        return self.scene is not None and self.scene.cloud_cover <= cloud_cover_chip
+
+
+def _log_query(query: STACQueryResult, log: Callable[[str], None]) -> None:
+    log(f"STAC Query: {query.catalog_url}")
+    log(f"  Collection: {query.collection}")
+    log(f"  Bbox: {query.bbox}")
+    log(f"  Date range: {query.date_range}")
+    log(f"  Cloud cover max: {query.cloud_cover_max}%")
+
+
+def _search_season(
+    state: _SeasonSearch,
+    expansion: int,
+    run_search: Callable[[datetime, int], STACQueryResult],
+    *,
+    bbox: tuple[float, float, float, float],
+    cloud_cover_chip: float,
+    nodata_max: float,
+    on_progress: Callable[[str], None] | None,
+) -> None:
+    """Query one season's window and select its best scene among unseen candidates.
+
+    Raises:
+        ValueError: If the scene query fails.
+    """
+
+    def log(msg: str) -> None:
+        if on_progress:
+            on_progress(msg)
+
+    season = state.season
+    if expansion > 0:
+        log(f"Expansion {expansion}: {season} buffer now {state.buffer_days} days")
+    log(f"Searching for {season} scene around {state.center_date.date()}...")
+    query = run_search(state.center_date, state.buffer_days)
+    _log_query(query, log)
+
+    # Filter out scenes already checked on an earlier expansion
+    new_items = [item for item in query.items if item.id not in state.checked_ids]
+    state.candidates_checked += len(new_items)
+
+    if expansion > 0 and len(query.items) > len(new_items):
+        log(f"Found {len(query.items)} total, {len(new_items)} new {season} scene candidates")
+    else:
+        log(f"Found {len(new_items)} {season} scene candidates")
+
+    for item in new_items[:5]:
+        cc = EOExtension.ext(item).cloud_cover or 0.0
+        log(f"  - {item.id}: {cc:.1f}% cloud, {item.datetime}")
+
+    state.checked_ids.update(item.id for item in new_items)
+    state.scene = _select_best_scene(
+        new_items,
+        season=season,
+        bbox=bbox,
+        cloud_cover_chip=cloud_cover_chip,
+        nodata_max=nodata_max,
+        on_progress=on_progress,
+    )
+    if state.scene:
+        log(f"Selected {season} scene: {state.scene.id} ({state.scene.cloud_cover:.1f}% cloud)")
+
+
+def _missing_scene_reason(planting: _SeasonSearch, harvest: _SeasonSearch) -> str | None:
+    if planting.scene is None and harvest.scene is None:
+        return "No cloud-free scenes found for either season"
+    if planting.scene is None:
+        return "No cloud-free planting scene found"
+    if harvest.scene is None:
+        return "No cloud-free harvest scene found"
+    return None
+
+
 def select_scenes_for_chip(
     chip_id: str,
     bbox: tuple[float, float, float, float],
@@ -524,186 +610,60 @@ def select_scenes_for_chip(
         "buffer_expansion_size": buffer_expansion_size,
     }
 
-    # Helper to check if a scene meets threshold
-    def _meets_threshold(scene: SelectedScene | None) -> bool:
-        if scene is None:
-            return False
-        return scene.cloud_cover <= cloud_cover_chip
-
-    # Initialize buffers and scenes for iterative expansion
-    planting_buffer = buffer_days
-    harvest_buffer = buffer_days
-    planting_scene: SelectedScene | None = None
-    harvest_scene: SelectedScene | None = None
-    candidates_checked = 0
+    planting = _SeasonSearch("planting", planting_dt, buffer_days)
+    harvest = _SeasonSearch("harvest", harvest_dt, buffer_days)
     expansions_performed = 0
 
-    # Track already-checked scene IDs to avoid re-checking on expansion
-    planting_checked_ids: set[str] = set()
-    harvest_checked_ids: set[str] = set()
+    def result(**kwargs) -> SceneSelectionResult:
+        return SceneSelectionResult(
+            chip_id=chip_id,
+            bbox=bbox,
+            year=year,
+            crop_calendar=crop_dates,
+            planting_scene=planting.scene,
+            selection_params=selection_params,
+            planting_buffer_used=planting.buffer_days,
+            harvest_buffer_used=harvest.buffer_days,
+            expansions_performed=expansions_performed,
+            **kwargs,
+        )
 
-    # Iterative buffer expansion loop
+    # Iterative buffer expansion loop; each season expands only until it has a scene
     for expansion in range(num_buffer_expansions + 1):
-        # Query and select planting scene if not yet found/meeting threshold
-        if not _meets_threshold(planting_scene):
+        for state in (planting, harvest):
+            if state.meets_threshold(cloud_cover_chip):
+                continue
             try:
-                if expansion > 0:
-                    log(f"Expansion {expansion}: planting buffer now {planting_buffer} days")
-                log(f"Searching for planting scene around {planting_dt.date()}...")
-                planting_result = _run_search(planting_dt, planting_buffer)
-                log(f"STAC Query: {planting_result.catalog_url}")
-                log(f"  Collection: {planting_result.collection}")
-                log(f"  Bbox: {planting_result.bbox}")
-                log(f"  Date range: {planting_result.date_range}")
-                log(f"  Cloud cover max: {planting_result.cloud_cover_max}%")
-
-                # Filter out already-checked scenes
-                new_items = [
-                    item for item in planting_result.items if item.id not in planting_checked_ids
-                ]
-                candidates_checked += len(new_items)
-
-                if expansion > 0 and len(planting_result.items) > len(new_items):
-                    log(
-                        f"Found {len(planting_result.items)} total, "
-                        f"{len(new_items)} new planting scene candidates"
-                    )
-                else:
-                    log(f"Found {len(new_items)} planting scene candidates")
-
-                for item in new_items[:5]:
-                    cc = EOExtension.ext(item).cloud_cover or 0.0
-                    log(f"  - {item.id}: {cc:.1f}% cloud, {item.datetime}")
-
-                # Track all items we're about to check
-                planting_checked_ids.update(item.id for item in new_items)
-
-                planting_scene = _select_best_scene(
-                    new_items,
-                    season="planting",
+                _search_season(
+                    state,
+                    expansion,
+                    _run_search,
                     bbox=bbox,
                     cloud_cover_chip=cloud_cover_chip,
                     nodata_max=nodata_max,
                     on_progress=on_progress,
                 )
-
-                if planting_scene:
-                    log(
-                        f"Selected planting scene: {planting_scene.id} "
-                        f"({planting_scene.cloud_cover:.1f}% cloud)"
-                    )
             except ValueError as e:
-                return SceneSelectionResult(
-                    chip_id=chip_id,
-                    bbox=bbox,
-                    year=year,
-                    crop_calendar=crop_dates,
-                    skipped_reason=f"Planting query error: {e}",
-                    selection_params=selection_params,
-                    planting_buffer_used=planting_buffer,
-                    harvest_buffer_used=harvest_buffer,
-                    expansions_performed=expansions_performed,
-                )
-
-        # Query and select harvest scene if not yet found/meeting threshold
-        if not _meets_threshold(harvest_scene):
-            try:
-                if expansion > 0:
-                    log(f"Expansion {expansion}: harvest buffer now {harvest_buffer} days")
-                log(f"Searching for harvest scene around {harvest_dt.date()}...")
-                harvest_result = _run_search(harvest_dt, harvest_buffer)
-                log(f"STAC Query: {harvest_result.catalog_url}")
-                log(f"  Collection: {harvest_result.collection}")
-                log(f"  Bbox: {harvest_result.bbox}")
-                log(f"  Date range: {harvest_result.date_range}")
-                log(f"  Cloud cover max: {harvest_result.cloud_cover_max}%")
-
-                # Filter out already-checked scenes
-                new_items = [
-                    item for item in harvest_result.items if item.id not in harvest_checked_ids
-                ]
-                candidates_checked += len(new_items)
-
-                if expansion > 0 and len(harvest_result.items) > len(new_items):
-                    log(
-                        f"Found {len(harvest_result.items)} total, "
-                        f"{len(new_items)} new harvest scene candidates"
-                    )
-                else:
-                    log(f"Found {len(new_items)} harvest scene candidates")
-
-                for item in new_items[:5]:
-                    cc = EOExtension.ext(item).cloud_cover or 0.0
-                    log(f"  - {item.id}: {cc:.1f}% cloud, {item.datetime}")
-
-                # Track all items we're about to check
-                harvest_checked_ids.update(item.id for item in new_items)
-
-                harvest_scene = _select_best_scene(
-                    new_items,
-                    season="harvest",
-                    bbox=bbox,
-                    cloud_cover_chip=cloud_cover_chip,
-                    nodata_max=nodata_max,
-                    on_progress=on_progress,
-                )
-
-                if harvest_scene:
-                    log(
-                        f"Selected harvest scene: {harvest_scene.id} "
-                        f"({harvest_scene.cloud_cover:.1f}% cloud)"
-                    )
-            except ValueError as e:
-                return SceneSelectionResult(
-                    chip_id=chip_id,
-                    bbox=bbox,
-                    year=year,
-                    crop_calendar=crop_dates,
-                    planting_scene=planting_scene,
+                if state is planting:
+                    return result(skipped_reason=f"Planting query error: {e}")
+                return result(
                     skipped_reason=f"Harvest query error: {e}",
-                    candidates_checked=candidates_checked,
-                    selection_params=selection_params,
-                    planting_buffer_used=planting_buffer,
-                    harvest_buffer_used=harvest_buffer,
-                    expansions_performed=expansions_performed,
+                    candidates_checked=planting.candidates_checked + harvest.candidates_checked,
                 )
 
-        # Check if both seasons meet threshold
-        planting_ok = _meets_threshold(planting_scene)
-        harvest_ok = _meets_threshold(harvest_scene)
-
-        if planting_ok and harvest_ok:
+        pending = [s for s in (planting, harvest) if not s.meets_threshold(cloud_cover_chip)]
+        if not pending:
             log(f"Both seasons meet threshold after {expansion} expansion(s)")
             break
 
         # If we have more expansions to try, expand buffers for failing seasons
         if expansion < num_buffer_expansions:
-            if not planting_ok:
-                planting_buffer += buffer_expansion_size
-            if not harvest_ok:
-                harvest_buffer += buffer_expansion_size
+            for state in pending:
+                state.buffer_days += buffer_expansion_size
             expansions_performed = expansion + 1
 
-    # Determine skip reason if any scene is missing
-    skipped_reason = None
-    if planting_scene is None and harvest_scene is None:
-        skipped_reason = "No cloud-free scenes found for either season"
-    elif planting_scene is None:
-        skipped_reason = "No cloud-free planting scene found"
-    elif harvest_scene is None:
-        skipped_reason = "No cloud-free harvest scene found"
-
-    return SceneSelectionResult(
-        chip_id=chip_id,
-        bbox=bbox,
-        year=year,
-        crop_calendar=crop_dates,
-        planting_scene=planting_scene,
-        harvest_scene=harvest_scene,
-        skipped_reason=skipped_reason,
-        candidates_checked=candidates_checked,
-        selection_params=selection_params,
-        planting_buffer_used=planting_buffer,
-        harvest_buffer_used=harvest_buffer,
-        expansions_performed=expansions_performed,
+    return result(
+        harvest_scene=harvest.scene,
+        skipped_reason=_missing_scene_reason(planting, harvest),
+        candidates_checked=planting.candidates_checked + harvest.candidates_checked,
     )
