@@ -1,40 +1,70 @@
-"""PlanetScope scene search and per-chip scene choice for scenes mode.
+"""PlanetScope planting and harvest scene selection for a run's chips.
 
-Plugs into :func:`scene_selection.select_scenes_for_chip` in place of the Sentinel-2
-search and pixel check, so the crop calendar windows and buffer expansion stay shared.
+The Planet counterpart of ``select_scenes_for_chip``: same crop calendar windows,
+same cloud and nodata limits, same buffer expansion. The difference is where the
+candidates come from. :func:`planet_prefetch.prefetch_scenes` orders and downloads
+them for the whole run at once, and each chip then rates its candidates from their
+delivered UDM2 files, so no chip ever calls the Planet API itself.
 """
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import pystac
 from pystac.extensions.eo import EOExtension
-from shapely.geometry import box, shape
+from shapely.geometry import shape
 
 from ftw_dataset_tools.api.imagery import planet_api
-from ftw_dataset_tools.api.imagery.scene_selection import (
-    SelectedScene,
-    STACQueryResult,
-    _format_date_range,
-    _status,
-    _validate_date_not_future,
+from ftw_dataset_tools.api.imagery.cloud_analysis import read_udm2_chip_stats
+from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates, get_crop_calendar_dates
+from ftw_dataset_tools.api.imagery.parallel import ParallelOutcome, run_in_parallel
+from ftw_dataset_tools.api.imagery.planet_prefetch import (
+    ChipWindow,
+    PlanetCache,
+    PrefetchResult,
+    prefetch_scenes,
 )
+from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult, SelectedScene
+from ftw_dataset_tools.api.imagery.settings import DEFAULT_CLOUD_COVER_SCENE
 from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
-    from typing import Literal
+    from pathlib import Path
 
 logger = get_logger(__name__)
 
-__all__ = ["MAX_UDM2_CANDIDATES", "query_planet", "select_best_planet_scene", "to_item"]
+__all__ = ["PENDING_REASON", "PlanetChip", "select_planet_scenes", "to_item"]
 
-#: Candidates rated with UDM2 per season window. Rating one takes minutes the first
-#: time (Planet activates the scene's UDM2), so they are rated together, and the
-#: scene-level clear percent picks which ones.
-MAX_UDM2_CANDIDATES = 10
+PENDING_REASON = "Planet orders still processing; rerun to finish"
+SEASONS = ("planting", "harvest")
+
+
+@dataclass
+class PlanetChip:
+    """A chip to select PlanetScope scenes for."""
+
+    chip_id: str
+    bbox: tuple[float, float, float, float]
+    year: int
+
+
+@dataclass
+class _Season:
+    window: ChipWindow
+    scene: SelectedScene | None = None
+    candidates_checked: int = 0
+    pending: bool = False
+
+
+@dataclass
+class _ChipState:
+    chip: PlanetChip
+    calendar: CropCalendarDates
+    seasons: dict[str, _Season] = field(default_factory=dict)
+    expansions: int = 0
 
 
 def to_item(feature: dict) -> pystac.Item:
@@ -61,102 +91,194 @@ def to_item(feature: dict) -> pystac.Item:
     return item
 
 
-def _scene_clear(item: pystac.Item) -> float:
-    clear = item.properties.get("pl:clear_percent")
-    if clear is not None:
-        return float(clear)
-    return 100.0 - float(item.properties.get("eo:cloud_cover") or 0.0)
-
-
-def query_planet(
-    bbox: tuple[float, float, float, float],
-    center_date: datetime,
-    cloud_cover_max: int,
-    buffer_days: int,
-) -> STACQueryResult:
-    """PSScene candidates in the window around ``center_date``, clearest scene first."""
-    _validate_date_not_future(center_date, buffer_days)
-    start = (center_date - timedelta(days=buffer_days)).replace(hour=0, minute=0, second=0)
-    end = (center_date + timedelta(days=buffer_days)).replace(hour=23, minute=59, second=59)
-    try:
-        features = planet_api.search_scenes(bbox, start, end, cloud_cover_max=cloud_cover_max)
-    except planet_api.PlanetAPIError as err:
-        # The season loop reports a failed query as the chip's skip reason.
-        raise ValueError(str(err)) from err
-    items = sorted((to_item(f) for f in features), key=_scene_clear, reverse=True)
-    return STACQueryResult(
-        items=items,
-        catalog_url=planet_api.DATA_URL,
-        collection=f"{planet_api.ITEM_TYPE}/{planet_api.SCENE_ASSET}",
-        bbox=bbox,
-        date_range=_format_date_range(center_date, buffer_days),
-        cloud_cover_max=cloud_cover_max,
-    )
-
-
-def _outside_footprint_pct(item: pystac.Item, bbox: tuple[float, float, float, float]) -> float:
-    chip = box(*bbox)
-    return 100.0 * (1.0 - chip.intersection(shape(item.geometry)).area / chip.area)
-
-
-def _chip_cloud(item: pystac.Item, bbox: tuple[float, float, float, float]) -> float | Exception:
-    """Not-clear percent of the chip from the scene's UDM2, or the error that stopped it."""
-    try:
-        return 100.0 - planet_api.chip_clear_percent(item.id, bbox)
-    except planet_api.PlanetUnavailableError:
-        raise
-    except Exception as e:
-        return e
-
-
-def select_best_planet_scene(
-    items: list[pystac.Item],
-    season: Literal["planting", "harvest"],
-    bbox: tuple[float, float, float, float],
+def _choose(
+    window: ChipWindow,
+    features: list[dict],
+    cache: PlanetCache,
+    *,
     cloud_cover_chip: float,
     nodata_max: float,
 ) -> SelectedScene | None:
-    """The clearest candidate over the chip within ``cloud_cover_chip``, or None.
-
-    Nodata is the part of the chip outside the scene footprint. Cloud is the chip's
-    not-clear share in the scene's UDM2, falling back to the scene-level value when
-    the coverage request fails.
-    """
-    usable: list[pystac.Item] = []
-    for item in items:
-        outside = _outside_footprint_pct(item, bbox)
-        if outside > nodata_max:
-            _status("✗", f"Skipping {item.id}: {outside:.1f}% of chip outside the scene")
-        else:
-            usable.append(item)
-    candidates = usable[:MAX_UDM2_CANDIDATES]
-    if not candidates:
-        return None
-
-    # Rated on a pool, but logged here: log capture follows the calling thread.
-    with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
-        ratings = list(pool.map(lambda item: _chip_cloud(item, bbox), candidates))
-
-    best: tuple[float, pystac.Item] | None = None
-    for item, rating in zip(candidates, ratings, strict=True):
-        if isinstance(rating, Exception):
-            cloud = float(item.properties.get("eo:cloud_cover") or 0.0)
-            logger.debug(f"{item.id}: UDM2 check failed ({rating}), using scene cloud cover")
-        else:
-            cloud = rating
-            logger.debug(f"{item.id}: chip {cloud:.1f}% not clear (UDM2)")
-        if cloud > cloud_cover_chip:
-            _status("✗", f"Skipping {item.id}: {cloud:.1f}% cloud over the chip")
-        elif best is None or cloud < best[0]:
-            best = (cloud, item)
-
+    """The candidate clearest over the chip, judged from its delivered UDM2."""
+    best: tuple[float, dict, object] | None = None
+    for feature in features:
+        for delivery in cache.delivered(feature["id"]):
+            stats = read_udm2_chip_stats(str(delivery.udm2), window.bbox)
+            if stats.nodata_pct > nodata_max or stats.cloud_pct > cloud_cover_chip:
+                continue
+            if best is None or stats.cloud_pct < best[0]:
+                best = (stats.cloud_pct, feature, delivery)
     if best is None:
         return None
-    cloud, item = best
+    cloud, feature, delivery = best
+    item = to_item(feature)
+    item.add_asset("analytic", pystac.Asset(href=str(delivery.analytic), roles=["data"]))
+    item.add_asset("udm2", pystac.Asset(href=str(delivery.udm2), roles=["cloud"]))
+    item.properties["ftw:planet_order_id"] = delivery.order_id
     return SelectedScene(
         item=item,
-        season=season,
+        season=window.season,
         cloud_cover=cloud,
         datetime=item.datetime,
         stac_url=item.get_self_href() or "",
     )
+
+
+def _start(chip: PlanetChip, buffer_days: int) -> _ChipState | SceneSelectionResult:
+    """The chip's seasonal windows, or a skipped result when the crop calendar fails."""
+    try:
+        calendar = get_crop_calendar_dates(chip.bbox)
+    except ValueError as e:
+        return SceneSelectionResult(
+            chip_id=chip.chip_id,
+            bbox=chip.bbox,
+            year=chip.year,
+            crop_calendar=CropCalendarDates(0, 0),
+            skipped_reason=f"Crop calendar error: {e}",
+        )
+    state = _ChipState(chip, calendar)
+    for season, center in zip(SEASONS, calendar.to_datetime(chip.year), strict=True):
+        state.seasons[season] = _Season(
+            ChipWindow(chip.chip_id, chip.bbox, season, center, buffer_days)
+        )
+    return state
+
+
+def _rate_round(
+    open_seasons: list[_Season],
+    prefetched: PrefetchResult,
+    cache: PlanetCache,
+    *,
+    cloud_cover_chip: float,
+    nodata_max: float,
+    workers: int,
+) -> None:
+    """Rate each open season's delivered candidates; record chosen scenes on the states."""
+    pending_groups = bool(prefetched.pending_orders)
+
+    def work(season: _Season) -> SelectedScene | None:
+        features = prefetched.candidates.get((season.window.chip_id, season.window.season), [])
+        season.candidates_checked += len(features)
+        return _choose(
+            season.window,
+            features,
+            cache,
+            cloud_cover_chip=cloud_cover_chip,
+            nodata_max=nodata_max,
+        )
+
+    def apply(outcome: ParallelOutcome[_Season, SelectedScene | None]) -> None:
+        season = outcome.task
+        if outcome.error is not None:
+            logger.warning(f"{season.window.chip_id} {season.window.season}: {outcome.error}")
+            return
+        season.scene = outcome.value
+        season.pending = season.scene is None and pending_groups
+
+    run_in_parallel(open_seasons, work=work, apply=apply, workers=workers)
+
+
+def _result(state: _ChipState, selection_params: dict) -> SceneSelectionResult:
+    planting, harvest = state.seasons["planting"], state.seasons["harvest"]
+    missing = [s for s in SEASONS if state.seasons[s].scene is None]
+    reason = None
+    if any(state.seasons[s].pending for s in missing):
+        reason = PENDING_REASON
+    elif len(missing) == 2:
+        reason = "No cloud-free scenes found for either season"
+    elif missing:
+        reason = f"No cloud-free {missing[0]} scene found"
+    return SceneSelectionResult(
+        chip_id=state.chip.chip_id,
+        bbox=state.chip.bbox,
+        year=state.chip.year,
+        crop_calendar=state.calendar,
+        planting_scene=planting.scene,
+        harvest_scene=harvest.scene,
+        skipped_reason=reason,
+        candidates_checked=planting.candidates_checked + harvest.candidates_checked,
+        selection_params=selection_params,
+        planting_buffer_used=planting.window.buffer_days,
+        harvest_buffer_used=harvest.window.buffer_days,
+        expansions_performed=state.expansions,
+    )
+
+
+def select_planet_scenes(
+    chips: list[PlanetChip],
+    cache_root: Path,
+    *,
+    cloud_cover_chip: float,
+    nodata_max: float,
+    buffer_days: int,
+    num_buffer_expansions: int,
+    buffer_expansion_size: int,
+    workers: int,
+    harmonize: bool = False,
+    wait: bool = True,
+    timeout_minutes: float = 120.0,
+) -> dict[str, SceneSelectionResult]:
+    """Choose a planting and a harvest PlanetScope scene for every chip.
+
+    Each round prefetches the candidates of every season still open, then rates
+    them chip by chip; seasons left without a scene widen their window for the next
+    round, as ``select_scenes_for_chip`` does for Sentinel-2.
+    """
+    results: dict[str, SceneSelectionResult] = {}
+    states: list[_ChipState] = []
+    for chip in chips:
+        started = _start(chip, buffer_days)
+        if isinstance(started, SceneSelectionResult):
+            results[chip.chip_id] = started
+        else:
+            states.append(started)
+
+    selection_params = {
+        "stac_host": "planet-data-api",
+        "cloud_cover_chip_threshold": cloud_cover_chip,
+        "buffer_days": buffer_days,
+        "num_buffer_expansions": num_buffer_expansions,
+        "buffer_expansion_size": buffer_expansion_size,
+    }
+    cache = PlanetCache(cache_root)
+    for expansion in range(num_buffer_expansions + 1):
+        open_seasons = [s for st in states for s in st.seasons.values() if s.scene is None]
+        if not open_seasons:
+            break
+        logger.info(f"Planet round {expansion}: {len(open_seasons)} chip season(s) to select")
+        prefetched = prefetch_scenes(
+            [s.window for s in open_seasons],
+            cache_root,
+            cloud_cover_max=DEFAULT_CLOUD_COVER_SCENE,
+            nodata_max=nodata_max,
+            harmonize=harmonize,
+            wait=wait,
+            timeout_minutes=timeout_minutes,
+        )
+        cache = PlanetCache(cache_root)
+        _rate_round(
+            open_seasons,
+            prefetched,
+            cache,
+            cloud_cover_chip=cloud_cover_chip,
+            nodata_max=nodata_max,
+            workers=workers,
+        )
+        if prefetched.pending_orders or expansion == num_buffer_expansions:
+            # Orders still processing: widening windows now would just order more.
+            break
+        for state in states:
+            widened = False
+            for season in state.seasons.values():
+                if season.scene is None:
+                    w = season.window
+                    season.window = ChipWindow(
+                        w.chip_id, w.bbox, w.season, w.center, w.buffer_days + buffer_expansion_size
+                    )
+                    widened = True
+            if widened:
+                state.expansions = expansion + 1
+
+    for state in states:
+        results[state.chip.chip_id] = _result(state, selection_params)
+    return results

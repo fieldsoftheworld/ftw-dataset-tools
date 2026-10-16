@@ -25,6 +25,10 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 BBOX = (6.05, 49.60, 6.078, 49.618)
+AOI = {
+    "type": "Polygon",
+    "coordinates": [[[6.05, 49.6], [6.08, 49.6], [6.08, 49.62], [6.05, 49.6]]],
+}
 
 
 class _Response(io.BytesIO):
@@ -154,18 +158,18 @@ class TestOrders:
     def test_order_is_clipped_sr_without_harmonize_by_default(self, fake: FakePlanet) -> None:
         fake.reply(planet_api.ORDERS_URL, {"id": "order-1"})
 
-        assert create_order("chip_planting", ["s1"], BBOX) == "order-1"
+        assert create_order("chip_planting", ["s1"], aoi=AOI) == "order-1"
 
         body = fake.requests[0][2]
         assert body["products"] == [
             {"item_ids": ["s1"], "item_type": "PSScene", "product_bundle": "analytic_sr_udm2"}
         ]
-        assert [next(iter(tool)) for tool in body["tools"]] == ["clip"]
+        assert body["tools"] == [{"clip": {"aoi": AOI}}]
 
     def test_harmonize_is_opt_in(self, fake: FakePlanet) -> None:
         fake.reply(planet_api.ORDERS_URL, {"id": "order-1"})
 
-        create_order("chip_planting", ["s1"], BBOX, harmonize=True)
+        create_order("chip_planting", ["s1"], aoi=AOI, harmonize=True)
 
         tools = fake.requests[0][2]["tools"]
         assert {"harmonize": {"target_sensor": "Sentinel-2"}} in tools

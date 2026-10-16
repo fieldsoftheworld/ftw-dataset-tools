@@ -1,152 +1,215 @@
-"""Tests for PlanetScope scene search and per-chip scene choice (no network)."""
+"""Tests for PlanetScope scene selection over prefetched deliveries (no network)."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import patch
+from typing import TYPE_CHECKING
 
+import numpy as np
 import pytest
+import rasterio
+from rasterio.transform import from_bounds
 
-from ftw_dataset_tools.api.imagery import planet_api, planet_scenes
+from ftw_dataset_tools.api.imagery import planet_scenes
+from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
+from ftw_dataset_tools.api.imagery.planet_prefetch import PlanetCache, PrefetchResult
 from ftw_dataset_tools.api.imagery.planet_scenes import (
-    query_planet,
-    select_best_planet_scene,
+    PENDING_REASON,
+    PlanetChip,
+    select_planet_scenes,
     to_item,
 )
-from ftw_dataset_tools.api.imagery.scene_selection import select_scenes_for_chip
 
-CHIP = (6.05, 49.60, 6.078, 49.618)
-# A footprint that covers the chip with room to spare, and one that covers half of it.
-COVERING = [[[6.0, 49.5], [6.2, 49.5], [6.2, 49.7], [6.0, 49.7], [6.0, 49.5]]]
-HALF = [[[6.064, 49.5], [6.2, 49.5], [6.2, 49.7], [6.064, 49.7], [6.064, 49.5]]]
+if TYPE_CHECKING:
+    from pathlib import Path
+
+CHIP = PlanetChip("ftw-32ULA0101_2024", (6.05, 49.60, 6.078, 49.618), 2024)
+FOOTPRINT = [[[5.9, 49.4], [6.4, 49.4], [6.4, 49.8], [5.9, 49.8], [5.9, 49.4]]]
 
 
-def _feature(scene_id: str, *, clear: int = 90, cloud: float = 0.05, coords=COVERING) -> dict:
+def _feature(scene: str, clear: int = 90) -> dict:
     return {
-        "id": scene_id,
-        "geometry": {"type": "Polygon", "coordinates": coords},
+        "id": scene,
+        "geometry": {"type": "Polygon", "coordinates": FOOTPRINT},
         "properties": {
-            "acquired": "2024-06-03T10:42:34.71Z",
-            "cloud_cover": cloud,
+            "acquired": "2024-04-06T09:47:29.80Z",
+            "cloud_cover": 0.05,
             "clear_percent": clear,
-            "instrument": "PSB.SD",
-            "satellite_id": "24fb",
-            "gsd": 4,
+            "satellite_id": "24c0",
+            "gsd": 3.7,
         },
     }
 
 
+def _deliver(
+    cache: PlanetCache, scene: str, *, cloud_fraction: float, blackfill: float = 0.0
+) -> None:
+    """Write a UDM2 over the chip with the given not-clear and blackfill shares."""
+    size = 100
+    clear = np.ones((size, size), dtype=np.uint8)
+    clear[:, : int(size * cloud_fraction)] = 0
+    unusable = np.zeros((size, size), dtype=np.uint8)
+    unusable[: int(size * blackfill), :] = 1
+    bands = np.zeros((8, size, size), dtype=np.uint8)
+    bands[0], bands[7] = clear, unusable
+    order_dir = cache.root / f"order-{scene}"
+    order_dir.mkdir(parents=True, exist_ok=True)
+    udm2 = order_dir / f"{scene}_3B_udm2_clip.tif"
+    with rasterio.open(
+        udm2,
+        "w",
+        driver="GTiff",
+        width=size,
+        height=size,
+        count=8,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_bounds(*CHIP.bbox, size, size),
+    ) as dst:
+        dst.write(bands)
+    analytic = order_dir / f"{scene}_3B_AnalyticMS_SR_clip.tif"
+    analytic.write_bytes(b"x")
+    cache.deliveries.setdefault(scene, []).append(
+        {
+            "order_id": f"order-{scene}",
+            "analytic": str(analytic.relative_to(cache.root)),
+            "udm2": str(udm2.relative_to(cache.root)),
+        }
+    )
+    cache.save()
+
+
+@pytest.fixture
+def calendar(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        planet_scenes, "get_crop_calendar_dates", lambda _bbox: CropCalendarDates(97, 263)
+    )
+
+
+class StubPrefetch:
+    """Hands out fixed candidates per season and records the windows asked for."""
+
+    def __init__(self, by_season: dict[str, list[dict]], pending: bool = False) -> None:
+        self.by_season = by_season
+        self.pending = pending
+        self.calls: list[list] = []
+
+    def __call__(self, windows, _root, **_kwargs) -> PrefetchResult:
+        self.calls.append(list(windows))
+        result = PrefetchResult(pending_orders=["order-x"] if self.pending else [])
+        for w in windows:
+            result.candidates[(w.chip_id, w.season)] = self.by_season.get(w.season, [])
+        return result
+
+
+def _select(tmp_path: Path, **kwargs) -> planet_scenes.SceneSelectionResult:
+    options = {
+        "cloud_cover_chip": 2.0,
+        "nodata_max": 0.0,
+        "buffer_days": 14,
+        "num_buffer_expansions": 1,
+        "buffer_expansion_size": 14,
+        "workers": 2,
+    }
+    options.update(kwargs)
+    return select_planet_scenes([CHIP], tmp_path, **options)[CHIP.chip_id]
+
+
 class TestToItem:
     def test_converts_cloud_to_percent_and_keeps_planet_fields(self) -> None:
-        item = to_item(_feature("s1", cloud=0.16, clear=74))
+        item = to_item(_feature("s1", clear=74))
 
-        assert item.id == "s1"
-        assert item.datetime == datetime(2024, 6, 3, 10, 42, 34, 710000, tzinfo=UTC)
-        assert item.properties["eo:cloud_cover"] == 16.0
+        assert item.datetime == datetime(2024, 4, 6, 9, 47, 29, 800000, tzinfo=UTC)
+        assert item.properties["eo:cloud_cover"] == 5.0
         assert item.properties["pl:clear_percent"] == 74
         assert item.get_self_href().endswith("/item-types/PSScene/items/s1")
 
 
-class TestQueryPlanet:
-    def test_sorts_clearest_first_and_uses_the_window(self) -> None:
-        features = [_feature("cloudy", clear=40), _feature("clear", clear=95)]
-        with patch.object(planet_api, "search_scenes", return_value=features) as search:
-            result = query_planet(CHIP, datetime(2024, 6, 10), 75, 14)
-
-        assert [item.id for item in result.items] == ["clear", "cloudy"]
-        _bbox, start, end = search.call_args.args
-        assert (start.date(), end.date()) == (
-            datetime(2024, 5, 27).date(),
-            datetime(2024, 6, 24).date(),
+class TestSelection:
+    @pytest.mark.usefixtures("calendar")
+    def test_picks_the_clearest_chip_not_the_clearest_scene(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cache = PlanetCache(tmp_path)
+        _deliver(cache, "scene_clear", cloud_fraction=0.2)
+        _deliver(cache, "chip_clear", cloud_fraction=0.0)
+        features = [_feature("scene_clear", 74), _feature("chip_clear", 66)]
+        monkeypatch.setattr(
+            planet_scenes,
+            "prefetch_scenes",
+            StubPrefetch({"planting": features, "harvest": features}),
         )
-        assert search.call_args.kwargs == {"cloud_cover_max": 75}
 
-    def test_api_errors_become_query_errors(self) -> None:
-        error = planet_api.PlanetAPIError("u", "boom", 500)
-        with (
-            patch.object(planet_api, "search_scenes", side_effect=error),
-            pytest.raises(ValueError, match="boom"),
-        ):
-            query_planet(CHIP, datetime(2024, 6, 10), 75, 14)
-
-
-class TestSelectBest:
-    def test_picks_the_clearest_chip_not_the_clearest_scene(self) -> None:
-        # Mirrors the live Luxembourg check: the scene that is less clear overall is
-        # nearly cloud-free over this chip.
-        items = [
-            to_item(_feature("scene_clear", clear=74)),
-            to_item(_feature("chip_clear", clear=66)),
-        ]
-        chip_clear = {"scene_clear": 80.0, "chip_clear": 99.0}
-        with patch.object(
-            planet_api, "chip_clear_percent", side_effect=lambda i, _b: chip_clear[i]
-        ):
-            scene = select_best_planet_scene(
-                items, "planting", CHIP, cloud_cover_chip=5, nodata_max=0
-            )
-
-        assert scene is not None
-        assert scene.id == "chip_clear"
-        assert scene.cloud_cover == pytest.approx(1.0)
-        assert scene.season == "planting"
-
-    def test_scene_not_covering_the_chip_is_skipped(self) -> None:
-        items = [to_item(_feature("half", coords=HALF))]
-        with patch.object(planet_api, "chip_clear_percent") as coverage:
-            assert (
-                select_best_planet_scene(items, "harvest", CHIP, cloud_cover_chip=5, nodata_max=0)
-                is None
-            )
-        coverage.assert_not_called()
-
-    def test_nothing_within_the_cloud_limit(self) -> None:
-        items = [to_item(_feature("s1"))]
-        with patch.object(planet_api, "chip_clear_percent", return_value=50.0):
-            assert (
-                select_best_planet_scene(items, "harvest", CHIP, cloud_cover_chip=5, nodata_max=0)
-                is None
-            )
-
-    def test_failed_udm2_falls_back_to_scene_cloud(self) -> None:
-        items = [to_item(_feature("s1", cloud=0.01))]
-        error = planet_api.PlanetAPIError("u", "coverage did not complete")
-        with patch.object(planet_api, "chip_clear_percent", side_effect=error):
-            scene = select_best_planet_scene(
-                items, "planting", CHIP, cloud_cover_chip=5, nodata_max=0
-            )
-
-        assert scene is not None
-        assert scene.cloud_cover == 1.0
-
-    def test_missing_key_is_not_swallowed(self) -> None:
-        items = [to_item(_feature("s1"))]
-        error = planet_api.PlanetUnavailableError("Set PL_API_KEY")
-        with (
-            patch.object(planet_api, "chip_clear_percent", side_effect=error),
-            pytest.raises(planet_api.PlanetUnavailableError),
-        ):
-            select_best_planet_scene(items, "planting", CHIP, cloud_cover_chip=5, nodata_max=0)
-
-    def test_rates_at_most_the_top_candidates(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(planet_scenes, "MAX_UDM2_CANDIDATES", 2)
-        items = [to_item(_feature(f"s{n}")) for n in range(5)]
-        with patch.object(planet_api, "chip_clear_percent", return_value=100.0) as coverage:
-            select_best_planet_scene(items, "planting", CHIP, cloud_cover_chip=5, nodata_max=0)
-
-        assert sorted(call.args[0] for call in coverage.call_args_list) == ["s0", "s1"]
-
-
-class TestSelectScenesForChip:
-    def test_planetscope_source_uses_planet_search_and_rating(self) -> None:
-        features = [_feature("s1")]
-        with (
-            patch.object(planet_api, "search_scenes", return_value=features),
-            patch.object(planet_api, "chip_clear_percent", return_value=100.0),
-        ):
-            result = select_scenes_for_chip("chip_2023", CHIP, 2023, source="planetscope")
+        result = _select(tmp_path)
 
         assert result.success
-        assert result.planting_scene.id == "s1"
-        assert result.harvest_scene.id == "s1"
+        assert result.planting_scene.id == "chip_clear"
+        assert result.planting_scene.cloud_cover == pytest.approx(0.0)
+        assets = result.planting_scene.item.assets
+        assert assets["analytic"].href.endswith("chip_clear_3B_AnalyticMS_SR_clip.tif")
+        assert result.planting_scene.item.properties["ftw:planet_order_id"] == "order-chip_clear"
         assert result.selection_params["stac_host"] == "planet-data-api"
+
+    @pytest.mark.usefixtures("calendar")
+    def test_cloud_and_nodata_limits_apply(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cache = PlanetCache(tmp_path)
+        _deliver(cache, "cloudy", cloud_fraction=0.3)
+        _deliver(cache, "edge", cloud_fraction=0.0, blackfill=0.3)
+        features = [_feature("cloudy"), _feature("edge")]
+        monkeypatch.setattr(
+            planet_scenes,
+            "prefetch_scenes",
+            StubPrefetch({"planting": features, "harvest": features}),
+        )
+
+        result = _select(tmp_path, num_buffer_expansions=0)
+
+        assert not result.success
+        assert result.skipped_reason == "No cloud-free scenes found for either season"
+
+    @pytest.mark.usefixtures("calendar")
+    def test_unresolved_season_widens_and_tries_again(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cache = PlanetCache(tmp_path)
+        _deliver(cache, "clear", cloud_fraction=0.0)
+        stub = StubPrefetch({"planting": [_feature("clear")], "harvest": []})
+        monkeypatch.setattr(planet_scenes, "prefetch_scenes", stub)
+
+        result = _select(tmp_path, num_buffer_expansions=1)
+
+        assert [len(call) for call in stub.calls] == [2, 1]
+        assert stub.calls[1][0].season == "harvest"
+        assert stub.calls[1][0].buffer_days == 28
+        assert result.skipped_reason == "No cloud-free harvest scene found"
+        assert result.harvest_buffer_used == 28
+        assert result.expansions_performed == 1
+
+    @pytest.mark.usefixtures("calendar")
+    def test_pending_orders_are_reported_as_pending(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stub = StubPrefetch({}, pending=True)
+        monkeypatch.setattr(planet_scenes, "prefetch_scenes", stub)
+
+        result = _select(tmp_path, num_buffer_expansions=2)
+
+        assert result.skipped_reason == PENDING_REASON
+        assert len(stub.calls) == 1  # no widening while orders are processing
+
+    def test_crop_calendar_error_skips_the_chip(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fail(_bbox):
+            raise ValueError("no calendar here")
+
+        monkeypatch.setattr(planet_scenes, "get_crop_calendar_dates", fail)
+        stub = StubPrefetch({})
+        monkeypatch.setattr(planet_scenes, "prefetch_scenes", stub)
+
+        result = _select(tmp_path)
+
+        assert result.skipped_reason == "Crop calendar error: no calendar here"
+        assert stub.calls == []

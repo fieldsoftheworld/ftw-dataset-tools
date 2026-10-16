@@ -185,17 +185,17 @@ def chip_clear_percent(item_id: str, bbox: tuple[float, float, float, float]) ->
 def create_order(
     name: str,
     item_ids: Iterable[str],
-    bbox: tuple[float, float, float, float],
     *,
+    aoi: dict,
     harmonize: bool = False,
-    clip_pad: float = 0.0005,
 ) -> str:
-    """Submit a clipped 4-band SR order for ``item_ids`` and return its id.
+    """Submit an order for ``item_ids`` clipped to the GeoJSON ``aoi`` and return its id.
 
-    Scenes are delivered as plain surface reflectance by default; ``harmonize``
-    asks Planet to adjust them to Sentinel-2 radiometry instead.
+    The bundle is 4-band surface reflectance plus UDM2. Scenes stay plain surface
+    reflectance by default; ``harmonize`` asks Planet to adjust them to Sentinel-2
+    radiometry instead.
     """
-    tools: list[dict] = [{"clip": {"aoi": _bbox_geometry(bbox, clip_pad)}}]
+    tools: list[dict] = [{"clip": {"aoi": aoi}}]
     if harmonize:
         tools.append({"harmonize": {"target_sensor": "Sentinel-2"}})
     order = _request(
