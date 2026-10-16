@@ -39,6 +39,7 @@ from ftw_dataset_tools.api.imagery.settings import (
     S2_COLLECTIONS,
     STAC_URL,
 )
+from ftw_dataset_tools.api.imagery.slots import DEFAULT_SOURCE
 from ftw_dataset_tools.api.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -483,6 +484,7 @@ def _search_season(
     bbox: tuple[float, float, float, float],
     cloud_cover_chip: float,
     nodata_max: float,
+    select_best: Callable[..., SelectedScene | None] | None = None,
 ) -> None:
     """Query one season's window and select its best scene among unseen candidates.
 
@@ -511,7 +513,7 @@ def _search_season(
     _log_candidates(new_items)
 
     state.checked_ids.update(item.id for item in new_items)
-    state.scene = _select_best_scene(
+    state.scene = (select_best or _select_best_scene)(
         new_items,
         season=season,
         bbox=bbox,
@@ -546,9 +548,10 @@ def select_scenes_for_chip(
     num_buffer_expansions: int = DEFAULT_NUM_BUFFER_EXPANSIONS,
     buffer_expansion_size: int = DEFAULT_BUFFER_EXPANSION_SIZE,
     search_backend: str = "parquet",
+    source: str = DEFAULT_SOURCE,
 ) -> SceneSelectionResult:
     """
-    Select optimal Sentinel-2 scenes for a chip based on crop calendar.
+    Select optimal planting and harvest scenes for a chip based on crop calendar.
 
     Args:
         chip_id: Chip identifier
@@ -562,7 +565,9 @@ def select_scenes_for_chip(
         num_buffer_expansions: Number of times to expand buffer for seasons without cloud-free scenes
         buffer_expansion_size: Days to add to buffer on each expansion
         search_backend: "parquet" (the STAC-GeoParquet mirror, default) or
-            "earth-search" (the Earth Search STAC API)
+            "earth-search" (the Earth Search STAC API); Sentinel-2 only
+        source: "sentinel-2" (default) or "planetscope" (PSScene 4-band SR, rated
+            per chip with UDM2)
 
     Returns:
         SceneSelectionResult with selected scenes or skip reason
@@ -577,7 +582,21 @@ def select_scenes_for_chip(
             f"Unknown search_backend {search_backend!r}; use 'parquet' or 'earth-search'."
         )
 
+    select_best = None
+    stac_host = "parquet-mirror" if search_backend == "parquet" else "earthsearch"
+    if source == "planetscope":
+        # Imported here: planet_scenes builds on this module.
+        from ftw_dataset_tools.api.imagery.planet_scenes import (
+            query_planet,
+            select_best_planet_scene,
+        )
+
+        select_best = select_best_planet_scene
+        stac_host = "planet-data-api"
+
     def _run_search(center_date: datetime, buffer: int) -> STACQueryResult:
+        if source == "planetscope":
+            return query_planet(bbox, center_date, DEFAULT_CLOUD_COVER_SCENE, buffer)
         if search_backend == "parquet":
             return _query_parquet(
                 bbox, center_date, DEFAULT_CLOUD_COVER_SCENE, buffer, s2_collection
@@ -609,7 +628,7 @@ def select_scenes_for_chip(
 
     # Store selection parameters
     selection_params = {
-        "stac_host": "parquet-mirror" if search_backend == "parquet" else "earthsearch",
+        "stac_host": stac_host,
         "cloud_cover_chip_threshold": cloud_cover_chip,
         "buffer_days": buffer_days,
         "num_buffer_expansions": num_buffer_expansions,
@@ -647,6 +666,7 @@ def select_scenes_for_chip(
                     bbox=bbox,
                     cloud_cover_chip=cloud_cover_chip,
                     nodata_max=nodata_max,
+                    select_best=select_best,
                 )
             except ValueError as e:
                 if state is planting:
