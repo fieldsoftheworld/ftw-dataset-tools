@@ -61,7 +61,7 @@ class TestOptionChecks:
         result = _run(str(_dataset(tmp_path)), "--no-planet-wait")
 
         assert result.exit_code == 2
-        assert "only applies to --source planetscope" in result.output
+        assert "only applies to the planetscope source" in result.output
 
     def test_planetscope_mosaics_are_rejected(self, tmp_path: Path) -> None:
         result = _run(
@@ -77,7 +77,7 @@ class TestOptionChecks:
         )
 
         assert result.exit_code == 2
-        assert "only applies to --source sentinel-2" in result.output
+        assert "only applies to the sentinel-2 source" in result.output
 
     def test_clear_selections_is_sentinel2_only_for_now(self, tmp_path: Path) -> None:
         result = _run(str(_dataset(tmp_path)), "--source", "planetscope", "--clear-selections")
@@ -159,3 +159,62 @@ class TestConfig:
     def test_invalid_values(self, select: dict, message: str) -> None:
         with pytest.raises(ConfigError, match=message):
             self._config(select)
+
+
+class TestCreateDatasetImageSource:
+    def test_planet_options_reach_the_dataset_and_selection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sample_fields_geoparquet: Path
+    ) -> None:
+        from ftw_dataset_tools.api import dataset
+        from ftw_dataset_tools.commands import create_dataset as command
+
+        seen: dict = {}
+
+        def fake_create_dataset(**kwargs):
+            seen["image_source"] = kwargs["image_source"]
+            kwargs["on_imagery"](tmp_path)
+            raise SystemExit(0)
+
+        def fake_select(**kwargs):
+            seen.update(kwargs)
+            return selection_workflow.SelectionWorkflowResult()
+
+        monkeypatch.setattr(dataset, "create_dataset", fake_create_dataset)
+        monkeypatch.setattr(command, "select_imagery_for_catalog", fake_select)
+
+        CliRunner().invoke(
+            cli,
+            [
+                "create-dataset",
+                str(sample_fields_geoparquet),
+                "--split-type",
+                "random-uniform",
+                "--year",
+                "2024",
+                "--image-source",
+                "planetscope",
+                "--no-planet-wait",
+            ],
+        )
+
+        assert seen["image_source"] == "planetscope"
+        assert seen["source"] == "planetscope"
+        assert seen["planet_wait"] is False
+
+    def test_planetscope_mosaics_are_rejected(self, sample_fields_geoparquet: Path) -> None:
+        result = CliRunner().invoke(
+            cli,
+            [
+                "create-dataset",
+                str(sample_fields_geoparquet),
+                "--split-type",
+                "random-uniform",
+                "--image-source",
+                "planetscope",
+                "--imagery-mode",
+                "mosaics",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "scenes only for now" in result.output

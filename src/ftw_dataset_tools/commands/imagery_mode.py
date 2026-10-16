@@ -50,8 +50,16 @@ def resolve_mosaic_year(year: int | None) -> int:
     return year
 
 
-def planet_options(command):
-    """``--source`` plus the PlanetScope order options, for commands that select imagery."""
+def planet_options(source_flag: str = "--source"):
+    """The imagery source option (named ``source_flag``) plus the PlanetScope order options."""
+
+    def decorate(command):
+        return _add_planet_options(command, source_flag)
+
+    return decorate
+
+
+def _add_planet_options(command, source_flag: str):
     command = click.option(
         "--planet-timeout",
         type=click.FloatRange(min=0),
@@ -67,7 +75,8 @@ def planet_options(command):
         "orders are still processing are skipped and picked up by a rerun.",
     )(command)
     return click.option(
-        "--source",
+        source_flag,
+        "source",
         type=click.Choice(IMAGERY_SOURCES),
         default=DEFAULT_SOURCE,
         show_default=True,
@@ -83,7 +92,7 @@ def check_source_options(ctx: click.Context, source: str, imagery_mode: str) -> 
             if ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE:
                 flag = "--" + name.replace("_", "-")
                 raise click.BadParameter(
-                    "only applies to --source planetscope.", param_hint=f"'{flag}'"
+                    "only applies to the planetscope source.", param_hint=f"'{flag}'"
                 )
         return
     if imagery_mode == "mosaics":
@@ -93,5 +102,5 @@ def check_source_options(ctx: click.Context, source: str, imagery_mode: str) -> 
         )
     if ctx.get_parameter_source("search_backend") == ParameterSource.COMMANDLINE:
         raise click.BadParameter(
-            "only applies to --source sentinel-2.", param_hint="'--search-backend'"
+            "only applies to the sentinel-2 source.", param_hint="'--search-backend'"
         )

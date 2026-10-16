@@ -259,7 +259,7 @@ def _write_report(
 @click.argument("input_path", type=click.Path(exists=True))
 @verbose_alias_option
 @imagery_mode_option
-@planet_options
+@planet_options()
 @click.option(
     "--year",
     type=int,

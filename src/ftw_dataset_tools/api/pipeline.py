@@ -756,8 +756,9 @@ def stage_masks(ctx: PipelineContext) -> None:
 
 
 def _selects_planet(ctx: PipelineContext) -> bool:
-    select_cfg = ctx.config.stages.select_images
-    return select_cfg.enabled and select_cfg.source == "planetscope"
+    # Not tied to the select stage being enabled: create-dataset selects through its
+    # own hook, and masks for the configured source are useful either way.
+    return ctx.config.stages.select_images.source == "planetscope"
 
 
 def _create_planet_masks(

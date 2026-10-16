@@ -18,6 +18,7 @@ from ftw_dataset_tools.api import (
 )
 from ftw_dataset_tools.api.chip_borders import DEFAULT_BORDER_GAP_CHIPS
 from ftw_dataset_tools.api.config import ClassFilter, DatasetConfig
+from ftw_dataset_tools.api.imagery.slots import DEFAULT_SOURCE
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -68,6 +69,7 @@ def create_dataset(
     drop_border_chips: bool = False,
     border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS,
     land_cover: bool = False,
+    image_source: str = DEFAULT_SOURCE,
     checksums: bool = False,
     class_filter: str | Path | None = None,
     scale_percent: float = scale.DEFAULT_SCALE_PERCENT,
@@ -115,6 +117,8 @@ def create_dataset(
         border_gap_chips: How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.
         land_cover: Add per-chip land cover from the Impact Observatory annual maps
             (reads remote rasters from Planetary Computer; default False).
+        image_source: Imagery source on_imagery selects from; "planetscope" also writes
+            each chip's masks on its 3 m UTM grid (default "sentinel-2").
         checksums: Compute file:checksum for every asset (slow; default False).
         class_filter: Optional path to a class filter YAML (column + include/exclude
             lists). Include classes count as field; all others become background.
@@ -159,6 +163,9 @@ def create_dataset(
         land_cover=land_cover,
     )
     config.stages.stac.checksums = checksums
+    # Imagery runs through on_imagery, but the masks stage reads the source to also
+    # write masks on the PlanetScope grid.
+    config.stages.select_images.source = image_source
     if class_filter is not None:
         config.stages.masks.class_filter = str(class_filter)
         config.class_filter = ClassFilter.from_file(class_filter)

@@ -26,10 +26,14 @@ from ftw_dataset_tools.api.imagery import (
 )
 from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
+from ftw_dataset_tools.api.imagery.planet_api import PlanetAPIError, PlanetUnavailableError
+from ftw_dataset_tools.api.imagery.planet_download import download_planet_imagery_for_catalog
 from ftw_dataset_tools.api.pipeline import docs_summary_line
 from ftw_dataset_tools.api.stac import resolve_year
 from ftw_dataset_tools.commands.imagery_mode import (
+    check_source_options,
     imagery_mode_option,
+    planet_options,
     reject_scene_only_options,
     resolve_mosaic_year,
 )
@@ -165,6 +169,7 @@ def _selection_year(fields_file: Path, year: int | None, mosaic_year: int | None
     help="Download images after selection.",
 )
 @imagery_mode_option
+@planet_options("--image-source")
 @click.option(
     "--cloud-cover-chip",
     type=click.FloatRange(0.0, 100.0),
@@ -304,6 +309,9 @@ def create_dataset_cmd(
     skip_images: bool,
     download_images: bool,
     imagery_mode: str,
+    source: str,
+    planet_wait: bool,
+    planet_timeout: float,
     cloud_cover_chip: float,
     nodata_max: float,
     buffer_days: int,
@@ -420,6 +428,8 @@ def create_dataset_cmd(
 
         # Image selection (by default enabled, unless --skip-images is set)
         should_select_images = not skip_images or download_images
+        if should_select_images:
+            check_source_options(click.get_current_context(), source, imagery_mode)
 
         # Mosaic checks run before the masks are built, so a bad flag fails fast.
         mosaic_year = None
@@ -465,7 +475,12 @@ def create_dataset_cmd(
                     workers=image_workers,
                     search_backend=search_backend,
                     imagery_mode=imagery_mode,
+                    source=source,
+                    planet_wait=planet_wait,
+                    planet_timeout_minutes=planet_timeout,
                 )
+            except (PlanetUnavailableError, PlanetAPIError) as err:
+                raise click.ClickException(str(err)) from err
             except SelectionConflictError as err:
                 raise click.ClickException(
                     f"{err} Pass --force-image-selection to replace it, or use a new output dir."
@@ -486,13 +501,7 @@ def create_dataset_cmd(
             # `ftwd run` use, so all three download in parallel and write STAC
             # identically. resume=True keeps the pipeline's behaviour of leaving
             # already-downloaded scenes alone on a re-run.
-            download_stats = download_imagery_for_catalog(
-                catalog_dir=catalog_dir,
-                bands=["red", "green", "blue", "nir"],
-                resolution=resolution,
-                resume=True,
-                workers=image_workers,
-            )
+            download_stats = _download(catalog_dir, source, resolution, image_workers)
 
             click.echo(f"  Downloaded: {download_stats.successful}")
             if download_stats.skipped:
@@ -518,6 +527,7 @@ def create_dataset_cmd(
             drop_border_chips=drop_border_chips,
             border_gap_chips=border_gap_chips,
             land_cover=land_cover,
+            image_source=source,
             class_filter=class_filter,
             checksums=checksums,
             scale_percent=scale_percent,
@@ -591,6 +601,19 @@ def create_dataset_cmd(
     except (FileNotFoundError, ValueError, RuntimeError, MaskReadError) as e:
         click.echo(click.style(f"\nError: {e}", fg="red"))
         raise SystemExit(1) from e
+
+
+def _download(catalog_dir: Path, source: str, resolution: float, workers: int):
+    """Download the selected imagery with the workflow for its source."""
+    if source == "planetscope":
+        return download_planet_imagery_for_catalog(catalog_dir, workers=workers, resume=True)
+    return download_imagery_for_catalog(
+        catalog_dir=catalog_dir,
+        bands=["red", "green", "blue", "nir"],
+        resolution=resolution,
+        resume=True,
+        workers=workers,
+    )
 
 
 # Alias for registration
