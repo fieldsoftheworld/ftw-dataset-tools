@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import click
 import geopandas as gpd
 import pytest
 from click.testing import CliRunner
@@ -86,7 +87,7 @@ class TestCreateMasksCommand:
     """Tests for create-masks command."""
 
     def test_min_coverage_defaults_to_one_percent(self) -> None:
-        params = {p.name: p for p in cli.commands["create-masks"].params}
+        params = {p.name: p for p in cli.get_command(click.Context(cli), "create-masks").params}
         assert params["min_coverage"].default == 1.0
 
     def test_help(self) -> None:

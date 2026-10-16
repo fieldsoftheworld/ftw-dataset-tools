@@ -8,10 +8,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
-import matplotlib
-
-matplotlib.use("Agg")  # Use non-interactive backend
-import matplotlib.pyplot as plt
 import numpy as np
 import pystac
 
@@ -461,6 +457,16 @@ def _generate_visualizations(
         )
 
 
+def _pyplot():
+    """Import pyplot on first use with the non-interactive backend."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    return plt
+
+
 def _create_split_map(df: pd.DataFrame, output_path: Path, log: Callable[[str], None]) -> None:
     """Create a map visualization of train/val/test splits."""
     log("Creating split map...")
@@ -512,6 +518,7 @@ def _create_split_map(df: pd.DataFrame, output_path: Path, log: Callable[[str], 
         log(f"Plotting {len(df)} chips on map...")
 
         # Plot splits
+        plt = _pyplot()
         fig, ax = plt.subplots(figsize=(12, 8))
 
         # Define colors
@@ -560,6 +567,7 @@ def _create_date_histogram(
     try:
         import matplotlib.dates as mdates
 
+        plt = _pyplot()
         fig, ax = plt.subplots(figsize=(10, 5))
 
         # Convert to matplotlib dates using date2num
@@ -594,6 +602,7 @@ def _create_histogram(
     log(f"Creating {label.lower()} histogram...")
 
     try:
+        plt = _pyplot()
         fig, ax = plt.subplots(figsize=(10, 5))
 
         ax.hist(values, bins=bins, edgecolor="black", alpha=0.7)

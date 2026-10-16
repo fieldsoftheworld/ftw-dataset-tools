@@ -37,8 +37,8 @@ class TestReproject:
         with pytest.raises(FileNotFoundError, match="Input file not found"):
             reproject("/nonexistent/input.parquet")
 
-    @patch("ftw_dataset_tools.api.geo.gpio")
-    def test_reproject_with_epsg_crs(self, mock_gpio: MagicMock, tmp_path: Path) -> None:
+    @patch("geoparquet_io.read")
+    def test_reproject_with_epsg_crs(self, mock_read: MagicMock, tmp_path: Path) -> None:
         """Test reprojection with EPSG code in PROJJSON format."""
         # Create a dummy input file
         input_file = tmp_path / "input.parquet"
@@ -57,7 +57,7 @@ class TestReproject:
 
         # Second read: for adding bbox after writing temp file
         mock_temp_table = MagicMock()
-        mock_gpio.read.side_effect = [mock_table, mock_temp_table]
+        mock_read.side_effect = [mock_table, mock_temp_table]
 
         output_file = tmp_path / "output.parquet"
 
@@ -73,8 +73,8 @@ class TestReproject:
         mock_temp_table.add_bbox.assert_called_once()
         mock_temp_table.add_bbox.return_value.write.assert_called_once()
 
-    @patch("ftw_dataset_tools.api.geo.gpio")
-    def test_reproject_with_string_crs(self, mock_gpio: MagicMock, tmp_path: Path) -> None:
+    @patch("geoparquet_io.read")
+    def test_reproject_with_string_crs(self, mock_read: MagicMock, tmp_path: Path) -> None:
         """Test reprojection with string CRS identifier."""
         input_file = tmp_path / "input.parquet"
         input_file.touch()
@@ -84,7 +84,7 @@ class TestReproject:
         mock_table.num_rows = 50
         mock_reprojected = MagicMock()
         mock_table.reproject.return_value = mock_reprojected
-        mock_gpio.read.return_value = mock_table
+        mock_read.return_value = mock_table
 
         output_file = tmp_path / "output.parquet"
 
@@ -94,8 +94,8 @@ class TestReproject:
         assert result.target_crs == "EPSG:32610"
         assert result.feature_count == 50
 
-    @patch("ftw_dataset_tools.api.geo.gpio")
-    def test_reproject_with_none_crs(self, mock_gpio: MagicMock, tmp_path: Path) -> None:
+    @patch("geoparquet_io.read")
+    def test_reproject_with_none_crs(self, mock_read: MagicMock, tmp_path: Path) -> None:
         """Test reprojection when source CRS is None."""
         input_file = tmp_path / "input.parquet"
         input_file.touch()
@@ -105,7 +105,7 @@ class TestReproject:
         mock_table.num_rows = 25
         mock_reprojected = MagicMock()
         mock_table.reproject.return_value = mock_reprojected
-        mock_gpio.read.return_value = mock_table
+        mock_read.return_value = mock_table
 
         output_file = tmp_path / "output.parquet"
 
@@ -113,8 +113,8 @@ class TestReproject:
 
         assert result.source_crs == "unknown"
 
-    @patch("ftw_dataset_tools.api.geo.gpio")
-    def test_reproject_with_projjson_without_id(self, mock_gpio: MagicMock, tmp_path: Path) -> None:
+    @patch("geoparquet_io.read")
+    def test_reproject_with_projjson_without_id(self, mock_read: MagicMock, tmp_path: Path) -> None:
         """Test reprojection with PROJJSON that lacks an id field."""
         input_file = tmp_path / "input.parquet"
         input_file.touch()
@@ -124,7 +124,7 @@ class TestReproject:
         mock_table.num_rows = 10
         mock_reprojected = MagicMock()
         mock_table.reproject.return_value = mock_reprojected
-        mock_gpio.read.return_value = mock_table
+        mock_read.return_value = mock_table
 
         output_file = tmp_path / "output.parquet"
 
@@ -132,9 +132,9 @@ class TestReproject:
 
         assert result.source_crs == "Custom CRS"
 
-    @patch("ftw_dataset_tools.api.geo.gpio")
+    @patch("geoparquet_io.read")
     def test_reproject_auto_generated_output_path(
-        self, mock_gpio: MagicMock, tmp_path: Path
+        self, mock_read: MagicMock, tmp_path: Path
     ) -> None:
         """Test that output path is auto-generated when not provided."""
         input_file = tmp_path / "my_data.parquet"
@@ -145,15 +145,15 @@ class TestReproject:
         mock_table.num_rows = 10
         mock_reprojected = MagicMock()
         mock_table.reproject.return_value = mock_reprojected
-        mock_gpio.read.return_value = mock_table
+        mock_read.return_value = mock_table
 
         result = reproject(str(input_file), target_crs="EPSG:4326")
 
         expected_output = tmp_path / "my_data_epsg_4326.parquet"
         assert result.output_path == expected_output
 
-    @patch("ftw_dataset_tools.api.geo.gpio")
-    def test_reproject_progress_callback(self, mock_gpio: MagicMock, tmp_path: Path) -> None:
+    @patch("geoparquet_io.read")
+    def test_reproject_progress_callback(self, mock_read: MagicMock, tmp_path: Path) -> None:
         """Test that progress callback is invoked."""
         input_file = tmp_path / "input.parquet"
         input_file.touch()
@@ -163,7 +163,7 @@ class TestReproject:
         mock_table.num_rows = 100
         mock_reprojected = MagicMock()
         mock_table.reproject.return_value = mock_reprojected
-        mock_gpio.read.return_value = mock_table
+        mock_read.return_value = mock_table
 
         output_file = tmp_path / "output.parquet"
         progress_messages = []

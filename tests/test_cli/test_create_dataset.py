@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+import click
 import geopandas as gpd
 import pytest
 from click.testing import CliRunner, Result
@@ -27,7 +28,7 @@ class TestCreateDatasetCommand:
     """Tests for create-dataset command."""
 
     def test_min_coverage_defaults_to_one_percent(self) -> None:
-        params = {p.name: p for p in cli.commands["create-dataset"].params}
+        params = {p.name: p for p in cli.get_command(click.Context(cli), "create-dataset").params}
         assert params["min_coverage"].default == 1.0
 
     def test_help(self) -> None:
