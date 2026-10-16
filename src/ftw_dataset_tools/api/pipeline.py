@@ -54,6 +54,7 @@ from ftw_dataset_tools.api.imagery import (
     select_imagery_for_catalog,
 )
 from ftw_dataset_tools.api.imagery.mosaic_selection import check_mosaic_year
+from ftw_dataset_tools.api.imagery.planet_download import download_planet_imagery_for_catalog
 from ftw_dataset_tools.api.imagery.preview_workflow import preview_imagery_for_catalog
 from ftw_dataset_tools.api.imagery.settings import MOSAIC_FALLBACK_YEAR
 from ftw_dataset_tools.api.imagery.slots import mask_suffix
@@ -886,6 +887,12 @@ def stage_download_images(ctx: PipelineContext) -> None:
             catalog_dir=ctx.output_dir,
             resume=download_cfg.resume,
             workers=download_cfg.workers,
+        )
+        return
+    if _selects_planet(ctx):
+        logger.info("Cutting PlanetScope imagery onto the chip grids...")
+        ctx.download_result = download_planet_imagery_for_catalog(
+            ctx.output_dir, workers=download_cfg.workers, resume=download_cfg.resume
         )
         return
     logger.info("Downloading imagery...")

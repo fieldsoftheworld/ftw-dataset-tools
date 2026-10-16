@@ -818,6 +818,14 @@ class DatasetConfig:
             raise ConfigError(
                 "stages.select_images.source 'planetscope' supports imagery_mode 'scenes' only."
             )
+        if (
+            select.source == "planetscope"
+            and self.stages.download_images.mode == DOWNLOAD_MODE_PREVIEW
+        ):
+            raise ConfigError(
+                "stages.download_images.mode 'preview' renders remote Sentinel-2 scenes; "
+                "use 'clip' with source 'planetscope'."
+            )
 
     def _validate_imagery_mode(self) -> None:
         select = self.stages.select_images

@@ -6,9 +6,12 @@ import json
 from pathlib import Path
 
 import click
+from click.core import ParameterSource
 
 from ftw_dataset_tools.api.imagery import download_imagery_for_catalog, find_collection_dir
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
+from ftw_dataset_tools.api.imagery.planet_download import download_planet_imagery_for_catalog
+from ftw_dataset_tools.api.imagery.slots import DEFAULT_SOURCE, IMAGERY_SOURCES
 
 # All valid Sentinel-2 bands from EarthSearch
 VALID_BANDS: tuple[str, ...] = (
@@ -42,6 +45,14 @@ VALID_BANDS: tuple[str, ...] = (
 
 @click.command("download-images")
 @click.argument("catalog_path", type=click.Path(exists=True))
+@click.option(
+    "--source",
+    type=click.Choice(IMAGERY_SOURCES),
+    default=DEFAULT_SOURCE,
+    show_default=True,
+    help="Which selection to download. planetscope cuts the scenes select-images already "
+    "fetched onto each chip's 3 m UTM grid (needs the chip's PlanetScope masks).",
+)
 @click.option(
     "--bands",
     type=click.Choice(VALID_BANDS, case_sensitive=False),
@@ -98,6 +109,7 @@ VALID_BANDS: tuple[str, ...] = (
 )
 def download_images_cmd(
     catalog_path: str,
+    source: str,
     bands: tuple[str, ...],
     resolution: float,
     resume: bool,
@@ -138,28 +150,33 @@ def download_images_cmd(
         raise click.ClickException(str(e)) from e
 
     band_list = list(bands)
-
     click.echo(f"Catalog: {catalog_path}")
-    click.echo(f"Bands: {band_list}")
-    click.echo(f"Resolution: {resolution}m")
 
-    result = download_imagery_for_catalog(
-        catalog_dir,
-        bands=band_list,
-        resolution=resolution,
-        generate_thumbnails=preview,
-        resume=resume,
-        workers=workers,
-        keep_remote_refs=keep_remote_refs,
-    )
+    if source == "planetscope":
+        _reject_sentinel2_options(click.get_current_context())
+        result = download_planet_imagery_for_catalog(catalog_dir, workers=workers, resume=resume)
+        missing = (
+            "No PlanetScope child items found. Run 'select-images --source planetscope' first."
+        )
+    else:
+        click.echo(f"Bands: {band_list}")
+        click.echo(f"Resolution: {resolution}m")
+        result = download_imagery_for_catalog(
+            catalog_dir,
+            bands=band_list,
+            resolution=resolution,
+            generate_thumbnails=preview,
+            resume=resume,
+            workers=workers,
+            keep_remote_refs=keep_remote_refs,
+        )
+        missing = "No S2 child items found. Run 'select-images' first to create them."
     skipped = result.skipped_details
     failed = result.failed_details
     total = result.successful + result.skipped + result.failed
 
     if total == 0:
-        raise click.ClickException(
-            "No S2 child items found. Run 'select-images' first to create them."
-        )
+        raise click.ClickException(missing)
 
     # Print summary
     click.echo("\n" + "=" * 50)
@@ -206,6 +223,16 @@ def download_images_cmd(
         click.echo(click.style("\nAll items were already downloaded.", fg="cyan"))
     else:
         click.echo(click.style("\nNo items successfully downloaded.", fg="yellow"))
+
+
+_SENTINEL2_ONLY = ("bands", "resolution", "keep_remote_refs")
+
+
+def _reject_sentinel2_options(ctx: click.Context) -> None:
+    for name in _SENTINEL2_ONLY:
+        if ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE:
+            flag = "--" + name.replace("_", "-")
+            raise click.BadParameter("only applies to --source sentinel-2.", param_hint=f"'{flag}'")
 
 
 # Alias for registration
