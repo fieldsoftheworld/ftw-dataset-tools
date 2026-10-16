@@ -26,6 +26,10 @@ if TYPE_CHECKING:
 class TestCreateDatasetCommand:
     """Tests for create-dataset command."""
 
+    def test_min_coverage_defaults_to_one_percent(self) -> None:
+        params = {p.name: p for p in cli.commands["create-dataset"].params}
+        assert params["min_coverage"].default == 1.0
+
     def test_help(self) -> None:
         """Test --help works."""
         runner = CliRunner()

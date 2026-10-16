@@ -36,6 +36,8 @@ LEGACY_PREVIEW_MEDIA_TYPE = "image/jpeg"
 #: conversion is still handled whole.
 PREVIEW_EXTENSIONS = (PREVIEW_SUFFIX, *LEGACY_PREVIEW_SUFFIXES)
 
+REFERENCE_MASK_SUFFIX = "_semantic_3_class.tif"
+
 #: Slowest, smallest setting of the WebP encoder. A preview is written once and
 #: served many times, and at chip size the extra encode cost is far below the
 #: network read it follows.

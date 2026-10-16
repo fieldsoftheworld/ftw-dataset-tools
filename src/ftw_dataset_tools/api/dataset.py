@@ -54,7 +54,7 @@ def create_dataset(
     field_dataset: str | None = None,
     split_type: str | None = None,
     split_percents: tuple[int, int, int] = (80, 10, 10),
-    min_coverage: float = 0.01,
+    min_coverage: float = field_stats.DEFAULT_MIN_COVERAGE,
     resolution: float = 10.0,
     num_workers: int | None = None,
     skip_reproject: bool = False,
@@ -94,7 +94,7 @@ def create_dataset(
         field_dataset: Name for the dataset (default: input filename stem)
         split_type: Dataset split strategy
         split_percents: Train/val/test percentages (must be three integers summing to 100; default: 80 10 10)
-        min_coverage: Minimum coverage percentage to include grids (default: 0.01)
+        min_coverage: Minimum coverage percentage (0-100) to include grids (default: 1.0)
         resolution: Pixel resolution in meters for masks (default: 10.0)
         num_workers: Number of parallel workers for mask creation
         skip_reproject: If True, fail instead of reprojecting non-4326 inputs

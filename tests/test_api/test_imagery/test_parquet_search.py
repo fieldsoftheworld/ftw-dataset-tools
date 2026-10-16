@@ -6,9 +6,13 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from ftw_dataset_tools.api.imagery import parquet_search
 from ftw_dataset_tools.api.imagery.parquet_search import (
     COLLECTION_C1,
     COLLECTION_OLD,
+    build_local_index,
+    index_years,
+    local_index,
     mgrs_tiles_for_bbox,
     part_urls_for_query,
     query_scenes,
@@ -537,3 +541,114 @@ class TestC1QueryScenes:
         href = item.get_self_href()
         assert href is not None
         assert href.endswith("/collections/sentinel-2-c1-l2a/items/S2B_T33TVM_20250610T101021_L2A")
+
+
+class TestLocalIndex:
+    """Tests for the prefetched local scene index."""
+
+    @pytest.fixture
+    def base_dir(self, tmp_path):
+        mirror = tmp_path / "mirror"
+        _write_c1_part(
+            mirror / "year=2025" / "items.parquet",
+            [
+                {
+                    "id": "S2B_T33TVM_20250610T101021_L2A",
+                    "datetime": datetime(2025, 6, 10, 10, 10, tzinfo=UTC),
+                    "cloud": 0.5,
+                    "nodata": 3.2,
+                },
+                {
+                    "id": "S2A_T33TVM_20250605T101011_L2A",
+                    "datetime": datetime(2025, 6, 5, 10, 10, tzinfo=UTC),
+                    "cloud": 20.0,
+                },
+                {
+                    # Far-away tile: must not survive into the index.
+                    "id": "S2A_T18TWL_20250605T101011_L2A",
+                    "datetime": datetime(2025, 6, 5, 10, 10, tzinfo=UTC),
+                    "cloud": 1.0,
+                    "tile": "18TWL",
+                    "bbox": [-74.0, 40.0, -73.0, 41.0],
+                },
+            ],
+        )
+        return mirror
+
+    def _build(self, base_dir, tmp_path, **kwargs):
+        defaults = {
+            "bbox": SI_BBOX,
+            "years": [2025],
+            "collection": COLLECTION_C1,
+            "base_url": str(base_dir),
+            "cache_dir": tmp_path / "cache",
+            "today": date(2026, 9, 21),
+        }
+        return build_local_index(**{**defaults, **kwargs})
+
+    def test_index_holds_only_the_requested_tiles(self, base_dir, tmp_path):
+        path = self._build(base_dir, tmp_path)
+        ids = {r[0] for r in duckdb.connect().execute(f"SELECT id FROM '{path}'").fetchall()}
+        assert ids == {
+            "S2B_T33TVM_20250610T101021_L2A",
+            "S2A_T33TVM_20250605T101011_L2A",
+        }
+
+    def test_query_through_index_matches_query_against_mirror(self, base_dir, tmp_path):
+        args = {
+            "bbox": SI_BBOX,
+            "start": datetime(2025, 6, 1, tzinfo=UTC),
+            "end": datetime(2025, 6, 30, tzinfo=UTC),
+            "cloud_cover_max": 75,
+            "collection": COLLECTION_C1,
+            "today": date(2026, 9, 21),
+        }
+        direct = query_scenes(base_url=str(base_dir), **args)
+        with local_index(self._build(base_dir, tmp_path)):
+            # base_url is ignored while an index is active.
+            via_index = query_scenes(base_url="https://unreachable.invalid", **args)
+
+        assert [i.id for i in direct] == [i.id for i in via_index]
+        assert [i.datetime for i in direct] == [i.datetime for i in via_index]
+        assert [i.bbox for i in direct] == [i.bbox for i in via_index]
+        assert [i.properties for i in direct] == [i.properties for i in via_index]
+        assert [i.assets["scl"].href for i in direct] == [i.assets["scl"].href for i in via_index]
+
+    def test_index_is_reused_across_calls(self, base_dir, tmp_path):
+        first = self._build(base_dir, tmp_path)
+        stamp = first.stat().st_mtime_ns
+        assert self._build(base_dir, tmp_path) == first
+        assert first.stat().st_mtime_ns == stamp
+
+    def test_different_areas_get_different_indexes(self, base_dir, tmp_path):
+        si = self._build(base_dir, tmp_path)
+        nyc = self._build(base_dir, tmp_path, bbox=(-74.0, 40.5, -73.9, 40.6))
+        assert si != nyc
+
+    def test_years_outside_the_archive_build_nothing(self, base_dir, tmp_path):
+        assert self._build(base_dir, tmp_path, years=[1999]) is None
+
+    def test_local_index_none_leaves_the_mirror_in_use(self, base_dir):
+        with local_index(None):
+            items = query_scenes(
+                bbox=SI_BBOX,
+                start=datetime(2025, 6, 1, tzinfo=UTC),
+                end=datetime(2025, 6, 30, tzinfo=UTC),
+                cloud_cover_max=75,
+                collection=COLLECTION_C1,
+                base_url=str(base_dir),
+                today=date(2026, 9, 21),
+            )
+        assert [i.id for i in items] == [
+            "S2B_T33TVM_20250610T101021_L2A",
+            "S2A_T33TVM_20250605T101011_L2A",
+        ]
+
+    def test_index_is_restored_after_the_block(self, base_dir, tmp_path):
+        path = self._build(base_dir, tmp_path)
+        with local_index(path):
+            pass
+        assert parquet_search._active_index is None
+
+    def test_index_years_spans_one_year_either_side(self):
+        assert index_years(2023) == [2022, 2023, 2024]

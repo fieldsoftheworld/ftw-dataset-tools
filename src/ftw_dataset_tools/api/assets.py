@@ -74,8 +74,7 @@ MASK_CLASSES: dict[str, list[tuple[int, str, str]]] = {
 # Mask kinds that are continuous or id-valued: described, never classified.
 MASK_DESCRIPTIONS: dict[str, str] = {
     "instance": (
-        "Instance mask: the background value (0, or 3 for presence-only labels) marks "
-        "non-field pixels; other values are per-field instance ids"
+        "Instance mask: 0 marks non-field pixels; other values are per-field instance ids"
     ),
     "decode_distance": (
         "DECODE normalized Euclidean distance to the nearest field boundary in [0, 1]; "

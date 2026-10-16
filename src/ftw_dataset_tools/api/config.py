@@ -267,7 +267,7 @@ class ClassFilter:
 class ChipsConfig:
     """Settings for the chips stage (field coverage statistics)."""
 
-    min_coverage: float = 0.01
+    min_coverage: float = field_stats.DEFAULT_MIN_COVERAGE
     drop_border_chips: bool = False
     # How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.
     border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS
@@ -321,6 +321,8 @@ class StacConfig:
     # Compute file:checksum (multihash sha256) for every asset. Optional in
     # Portolan and slow on tens of thousands of COGs, so off by default.
     checksums: bool = False
+    # Date chip items by their crop calendar season instead of the whole year.
+    crop_calendar: bool = True
 
 
 @dataclass

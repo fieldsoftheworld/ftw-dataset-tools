@@ -18,7 +18,7 @@ from ftw_dataset_tools.cli import cli
 if TYPE_CHECKING:
     from pathlib import Path
 
-_SELECT = "ftw_dataset_tools.commands.select_images"
+_WORKFLOW = "ftw_dataset_tools.api.imagery.selection_workflow"
 _YEAR_AVAILABLE = "ftw_dataset_tools.api.imagery.mosaic_selection.year_available"
 
 
@@ -80,8 +80,8 @@ class TestSelectImagesMosaics:
     def test_without_year_warns_and_uses_2025(self, tmp_path: Path) -> None:
         with (
             patch(_YEAR_AVAILABLE, return_value=True),
-            patch(f"{_SELECT}.run_chip_selection", return_value=_success()) as run,
-            patch(f"{_SELECT}.ensure_crop_calendar_exists") as warm,
+            patch(f"{_WORKFLOW}.run_chip_selection", return_value=_success()) as run,
+            patch(f"{_WORKFLOW}.ensure_crop_calendar_exists") as warm,
         ):
             result = CliRunner().invoke(
                 cli, ["select-images", str(_catalog(tmp_path)), "--imagery-mode", "mosaics"]
@@ -117,7 +117,7 @@ class TestSelectImagesMosaics:
         )
         with (
             patch(_YEAR_AVAILABLE, return_value=True),
-            patch(f"{_SELECT}.run_chip_selection", return_value=_success()) as run,
+            patch(f"{_WORKFLOW}.run_chip_selection", return_value=_success()) as run,
         ):
             result = CliRunner().invoke(
                 cli,
@@ -136,7 +136,7 @@ class TestSelectImagesMosaics:
         )
         with (
             patch(_YEAR_AVAILABLE, return_value=True),
-            patch(f"{_SELECT}.run_chip_selection", return_value=_success()) as run,
+            patch(f"{_WORKFLOW}.run_chip_selection", return_value=_success()) as run,
         ):
             result = CliRunner().invoke(
                 cli,
@@ -168,7 +168,7 @@ class TestSelectImagesMosaics:
         skipped = MagicMock(success=False, skipped_reason="No complete mosaic year (tried 2024)")
         with (
             patch(_YEAR_AVAILABLE, return_value=True),
-            patch(f"{_SELECT}.run_chip_selection", return_value=skipped),
+            patch(f"{_WORKFLOW}.run_chip_selection", return_value=skipped),
         ):
             result = CliRunner().invoke(
                 cli,

@@ -142,7 +142,7 @@ class TestBackgroundValue:
 
         assert renders["semantic_2class"]["nodata"] == 3
         assert renders["semantic_3class"]["nodata"] == 3
-        assert renders["instance"]["nodata"] == 3
+        assert renders["instance"]["nodata"] == 0
 
     def test_decode_layers_always_use_zero(self) -> None:
         """The DECODE layers fold presence-only background into 0, so 0 it stays."""
@@ -171,7 +171,7 @@ class TestBackgroundValue:
         renders = build_collection_renders(background_value=3)
 
         assert renders["semantic_2class_mask"]["nodata"] == 3
-        assert renders["instance_mask"]["nodata"] == 3
+        assert renders["instance_mask"]["nodata"] == 0
         assert renders["decode_boundary_mask"]["nodata"] == 0
 
 
