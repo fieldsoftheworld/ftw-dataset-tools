@@ -710,6 +710,7 @@ def stage_masks(ctx: PipelineContext) -> None:
         year=ctx.effective_year,
         background_class_value=background_class_value,
         skip_existing=masks_cfg.skip_existing,
+        crop_column=masks_cfg.crop_column,
         on_progress=ctx.on_mask_progress,
         on_start=ctx.on_mask_start,
     )

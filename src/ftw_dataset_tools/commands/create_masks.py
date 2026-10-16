@@ -79,6 +79,10 @@ from ftw_dataset_tools.api.masks import MaskType
     default=False,
     help="Reuse masks that are already on disk instead of recreating them.",
 )
+@click.option(
+    "--crop-column",
+    help="Source crop column to save alongside instance masks (requires --mask-type instance).",
+)
 def create_masks_cmd(
     chips_file: str,
     boundaries_file: str,
@@ -93,6 +97,7 @@ def create_masks_cmd(
     resolution: float,
     num_workers: int | None,
     skip_existing: bool,
+    crop_column: str | None,
 ) -> None:
     """Create raster masks from vector boundaries for each grid cell.
 
@@ -185,6 +190,7 @@ def create_masks_cmd(
             num_workers=num_workers,
             year=year,
             skip_existing=skip_existing,
+            crop_column=crop_column,
             on_progress=on_progress,
             on_start=on_start,
         )

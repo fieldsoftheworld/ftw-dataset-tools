@@ -90,6 +90,7 @@ stages:
     # covers all three), so requesting either of them requires semantic_2_class
     # in this list.
     mask_types: [instance, semantic_2_class, semantic_3_class]
+    crop_column: null  # Optional source column, e.g. crop:name, for instance labels.
     # Pixel resolution in meters.
     resolution: 10.0
     # Parallel workers (null = CPU count, capped at 8). Each worker's DuckDB

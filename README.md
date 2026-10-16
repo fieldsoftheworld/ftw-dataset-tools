@@ -397,6 +397,22 @@ ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spa
 - `--workers` - Number of parallel workers (default: CPU count, capped at 8)
 - `--skip-existing` - Reuse masks already on disk instead of recreating them
 
+#### Crop labels for instance masks
+
+Use `--crop-column crop:name` with `create-dataset` or `create-masks --mask-type instance`.
+For `ftwd run`, set `stages.masks.crop_column: crop:name` and select the `instance` mask.
+Read `{item_id}_instance_labels.json` (also linked as the STAC item's `instance_labels` asset):
+
+```python
+import json
+from pathlib import Path
+
+labels = json.loads(Path("{item_id}_instance_labels.json").read_text(encoding="utf-8"))
+crop_by_instance = {row["instance_value"]: row["crop_value"] for row in labels["instances"]}
+```
+
+Keys match pixels in `instance_mask`; missing crops are null. See the [lookup format](docs/stac-extension.md#instance-crop-labels).
+
 ### create-boundaries
 
 Convert polygon geometries to boundary lines using ST_Boundary.

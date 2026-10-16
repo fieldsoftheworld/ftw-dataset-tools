@@ -35,7 +35,7 @@ from ftw_dataset_tools.api.assets import (
     add_table_columns,
 )
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
-from ftw_dataset_tools.api.masks import MaskType, get_mgrs_square
+from ftw_dataset_tools.api.masks import MaskType, get_mgrs_square, instance_labels_path
 from ftw_dataset_tools.api.renders import (
     RENDER_ORDER_PROP,
     add_render_schema,
@@ -781,6 +781,17 @@ def _create_chip_item(
         add_mask_classification(
             asset, key.removesuffix("_mask"), background_value=background_class_value
         )
+        if key == "instance_mask":
+            labels_path = instance_labels_path(mask_path)
+            if labels_path.exists():
+                labels = Asset(
+                    href=f"./{labels_path.name}",
+                    media_type="application/json",
+                    title="Field instance crop labels",
+                    roles=["labels", "metadata"],
+                )
+                item.add_asset("instance_labels", labels)
+                add_file_info(labels, labels_path, checksum=checksums)
 
     # Season children survive a STAC rerun on disk; put their links and imagery
     # assets back onto the item this run rebuilt from the mask files alone.

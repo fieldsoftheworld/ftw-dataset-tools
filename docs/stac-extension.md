@@ -9,6 +9,29 @@ The FTW extension adds properties to STAC items that describe:
 - Image selection parameters
 - Source imagery provenance
 
+## Instance crop labels
+
+The optional `instance_labels` asset references `{item_id}_instance_labels.json`
+(`application/json`, roles `labels`, `metadata`):
+
+```json
+{
+  "crop_column": "crop:name",
+  "background_value": 0,
+  "instances": [
+    {"instance_value": 1, "field_id": "field-a", "crop_value": "Wheat"},
+    {"instance_value": 2, "field_id": "field-b", "crop_value": null}
+  ]
+}
+```
+
+Join `instance_value` to this chip's `instance_mask` pixels. Source field IDs and
+crop values are strings or null, without taxonomy conversion. Background and fields
+with no remaining pixels are excluded; null crops mean unknown.
+
+`skip_existing` regenerates missing or mismatched-column lookups. Rerun without
+it after changing source values. Disabling labels removes them on the next mask run.
+
 ## Extension Prefix
 
 All FTW properties use the `ftw:` prefix.

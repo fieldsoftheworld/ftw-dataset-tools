@@ -278,6 +278,7 @@ def _get_geometries_in_bounds(
     geom_col: str,
     bounds: tuple[float, float, float, float],
     id_col: str | None = None,
+    crop_column: str | None = None,
 ) -> list[tuple]:
     """Get geometries from a parquet file that intersect the given bounds."""
     minx, miny, maxx, maxy = bounds
@@ -288,6 +289,12 @@ def _get_geometries_in_bounds(
     else:
         select_cols = f'ST_AsText("{geom_col}") as wkt'
 
+    if crop_column is not None:
+        crop_sql = crop_column.replace('"', '""')
+        if id_col is None:
+            select_cols = f"NULL AS id, {select_cols}"
+        select_cols += f', CAST("{crop_sql}" AS VARCHAR) AS crop'
+
     query = f"""
         SELECT {select_cols}
         FROM '{sql_path(file_path)}'
@@ -296,6 +303,9 @@ def _get_geometries_in_bounds(
             ST_GeomFromText('POLYGON(({minx} {miny}, {maxx} {miny}, {maxx} {maxy}, {minx} {maxy}, {minx} {miny}))')
         )
     """
+
+    if crop_column is not None:
+        query += " ORDER BY id, wkt, crop"
 
     return conn.execute(query).fetchall()
 
@@ -339,7 +349,7 @@ def _instance_ids_for_shapes(boundaries: list[tuple]) -> list[int]:
     large for uint32 - a partial fallback could collide with valid ids already
     present in the same cell.
     """
-    values = [_instance_value(id_val) for id_val, _wkt in boundaries]
+    values = [_instance_value(row[0]) for row in boundaries]
     needs_fallback = any(v is None or v <= 0 or v > _UINT32_MAX for v in values)
     if needs_fallback:
         return list(range(1, len(boundaries) + 1))
@@ -408,6 +418,7 @@ class _MaskTask:
     id_col: str | None
     background_class_value: int
     memory_limit_mb: int
+    crop_column: str | None = None
 
 
 def _grid_raster_geometry(
@@ -451,6 +462,8 @@ def _rasterize_mask(
     mask_type: MaskType,
     id_col: str | None,
     background_class_value: int,
+    crop_column: str | None = None,
+    instance_labels: list[dict] | None = None,
 ) -> np.ndarray:
     """Burn field polygons and boundary lines into a label array."""
     # Set data type based on mask type
@@ -465,18 +478,35 @@ def _rasterize_mask(
     mask = np.full((height, width), background_class_value, dtype=dtype)
 
     # Get boundaries within bounds
-    if mask_type == MaskType.INSTANCE and id_col:
+    if mask_type == MaskType.INSTANCE and (id_col or crop_column is not None):
         boundaries = _get_geometries_in_bounds(
-            conn, boundaries_path, boundaries_geom_col, bounds, id_col=id_col
+            conn,
+            boundaries_path,
+            boundaries_geom_col,
+            bounds,
+            id_col=id_col,
+            crop_column=crop_column,
         )
         # Rasterize with ID values
         if boundaries:
             ids = _instance_ids_for_shapes(boundaries)
+            # A lookup must identify exactly one polygon per raster value.
+            if crop_column is not None and len(set(ids)) != len(ids):
+                ids = list(range(1, len(boundaries) + 1))
             shapes = [
-                (_wkt_to_geometry(wkt), value)
-                for (_id_val, wkt), value in zip(boundaries, ids, strict=True)
+                (_wkt_to_geometry(row[1]), value)
+                for row, value in zip(boundaries, ids, strict=True)
             ]
             features.rasterize(shapes, out=mask, transform=transform, all_touched=False)
+            if instance_labels is not None and crop_column is not None:
+                instance_labels.extend(
+                    {
+                        "instance_value": value,
+                        "field_id": str(row[0]) if row[0] is not None else None,
+                        "crop_value": row[2],
+                    }
+                    for row, value in zip(boundaries, ids, strict=True)
+                )
     else:
         boundaries = _get_geometries_in_bounds(conn, boundaries_path, boundaries_geom_col, bounds)
         # Rasterize with value 1
@@ -500,6 +530,9 @@ def _rasterize_mask(
             all_touched=True,
         )
 
+    if instance_labels is not None:
+        visible = set(np.unique(mask)) - {background_class_value}
+        instance_labels[:] = [r for r in instance_labels if r["instance_value"] in visible]
     return mask
 
 
@@ -580,6 +613,44 @@ def _write_mask_raster(
         raise
 
 
+def instance_labels_path(mask_path: Path) -> Path:
+    """Crop lookup co-located with its instance raster."""
+    return mask_path.with_name(f"{mask_path.stem}_labels.json")
+
+
+def _write_instance_labels(mask_path: Path, crop_column: str, background: int, rows: list) -> None:
+    path = instance_labels_path(mask_path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(
+            json.dumps(
+                {
+                    "crop_column": crop_column,
+                    "background_value": background,
+                    "instances": rows,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _lookup_matches(mask_path: Path, crop_column: str | None) -> bool:
+    path = instance_labels_path(mask_path)
+    if crop_column is None:
+        return not path.exists()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data["crop_column"] == crop_column and isinstance(data["instances"], list)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def _create_masks_for_cell(
     conn: duckdb.DuckDBPyConnection,
     grid_id: str,
@@ -594,6 +665,7 @@ def _create_masks_for_cell(
     resolution: float = 10.0,
     id_col: str | None = None,
     background_class_value: int = 0,
+    crop_column: str | None = None,
 ) -> list[tuple[MaskType, MaskResult]]:
     """Rasterize ``source_type`` once for a grid cell and write every output from it.
 
@@ -603,6 +675,7 @@ def _create_masks_for_cell(
     boundary queries, which dominate the cost of a chip.
     """
     transform, width, height = _grid_raster_geometry(bounds, crs, resolution)
+    instance_labels: list[dict] = []
 
     source = _rasterize_mask(
         conn=conn,
@@ -617,6 +690,8 @@ def _create_masks_for_cell(
         mask_type=source_type,
         id_col=id_col,
         background_class_value=background_class_value,
+        crop_column=crop_column,
+        instance_labels=instance_labels if crop_column is not None else None,
     )
 
     results: list[tuple[MaskType, MaskResult]] = []
@@ -632,6 +707,9 @@ def _create_masks_for_cell(
             # Instance ids are arbitrary and often global, so a viewer needs the chip's own
             # id range to stretch over: keeping the background out of the embedded statistics
             # makes the render's rescale start at the smallest field id.
+            if mask_type == MaskType.INSTANCE:
+                # Missing lookups trigger regeneration on resume; stale ones must not survive.
+                instance_labels_path(output_path).unlink(missing_ok=True)
             _write_mask_raster(
                 mask,
                 output_path,
@@ -640,6 +718,9 @@ def _create_masks_for_cell(
                 tags=tags,
                 nodata=0 if mask_type == MaskType.INSTANCE else None,
             )
+            if mask_type == MaskType.INSTANCE and crop_column is not None:
+                # Instance masks always use 0 as background, whatever the semantic masks use.
+                _write_instance_labels(output_path, crop_column, 0, instance_labels)
         except Exception as e:
             # The earlier outputs are on disk; hand them back with the error.
             raise _PartialCellFailure(results, f"{mask_type.value}: {e}") from e
@@ -703,6 +784,7 @@ def _create_masks_with_retry(
                 resolution=task.resolution,
                 id_col=task.id_col,
                 background_class_value=task.background_class_value,
+                crop_column=task.crop_column,
             )
             return (results, None)
         except _PartialCellFailure as exc:
@@ -966,13 +1048,17 @@ def _grid_crs(conn: duckdb.DuckDBPyConnection, chips_path: Path, grid_geom_col: 
     return CRS.from_epsg(4326)
 
 
+def _column_names(conn: duckdb.DuckDBPyConnection, path: Path) -> set[str]:
+    schema = conn.execute(f"DESCRIBE SELECT * FROM '{sql_path(path)}'").fetchall()
+    return {row[0] for row in schema}
+
+
 def _instance_id_column(conn: duckdb.DuckDBPyConnection, boundaries_path: Path) -> str | None:
     """Find an ID column in the boundaries file to number instance masks by."""
     try:
-        schema = conn.execute(f"DESCRIBE SELECT * FROM '{sql_path(boundaries_path)}'").fetchall()
+        col_names = _column_names(conn, boundaries_path)
     except Exception:
         return None
-    col_names = {row[0] for row in schema}
     for candidate in ["id", "ID", "fid", "FID", "objectid", "OBJECTID"]:
         if candidate in col_names:
             return candidate
@@ -989,6 +1075,7 @@ def _outputs_to_write(
     year: int | None,
     skip_existing: bool,
     existing: dict[MaskType, int],
+    crop_column: str | None = None,
 ) -> list[tuple[MaskType, str]]:
     """The (mask type, path) outputs of one cell's group that still need writing."""
     outputs: list[tuple[MaskType, str]] = []
@@ -1009,7 +1096,12 @@ def _outputs_to_write(
         # Filter per output rather than per group: a group whose 2-class
         # mask is already on disk still has to burn when one of the
         # DECODE layers derived from it is missing.
-        if skip_existing and mask_path.exists() and mask_path.stat().st_size > 0:
+        if (
+            skip_existing
+            and mask_path.exists()
+            and mask_path.stat().st_size > 0
+            and (mask_type != MaskType.INSTANCE or _lookup_matches(mask_path, crop_column))
+        ):
             existing[mask_type] += 1
             continue
 
@@ -1023,6 +1115,7 @@ def _build_work_items(
     *,
     shared_task_fields: dict,
     existing: dict[MaskType, int],
+    crop_column: str | None = None,
     **output_opts,
 ) -> list[_MaskTask]:
     """One task per (grid cell, group) that still has an output to write."""
@@ -1030,7 +1123,9 @@ def _build_work_items(
     for grid_id, minx, miny, maxx, maxy in grid_cells:
         grid_id_str = str(grid_id)
         for source_type, group in groups.items():
-            outputs = _outputs_to_write(grid_id_str, group, existing=existing, **output_opts)
+            outputs = _outputs_to_write(
+                grid_id_str, group, existing=existing, crop_column=crop_column, **output_opts
+            )
             if not outputs:
                 continue
             work_items.append(
@@ -1039,6 +1134,7 @@ def _build_work_items(
                     bounds=(minx, miny, maxx, maxy),
                     source_type=source_type,
                     outputs=tuple(outputs),
+                    crop_column=crop_column if source_type == MaskType.INSTANCE else None,
                     **shared_task_fields,
                 )
             )
@@ -1063,12 +1159,14 @@ def create_masks(
     skip_existing: bool = False,
     on_progress: Callable[[int, int], None] | None = None,
     on_start: Callable[[int, int, int], None] | None = None,
+    crop_column: str | None = None,
 ) -> dict[MaskType, CreateMasksResult]:
     """
     Create raster masks from vector boundaries for each grid cell.
 
     Args:
         chips_file: Path to chips GeoParquet file (from create-chips)
+        crop_column: Source crop column to save in the instance mask's JSON lookup.
         boundaries_file: Path to boundaries GeoParquet file (polygons)
         boundary_lines_file: Path to boundary lines GeoParquet file
         output_dir: Output directory for masks (default: ./masks)
@@ -1107,6 +1205,12 @@ def create_masks(
         raise ValueError("mask_types must name at least one mask type")
     # A repeated type would write the same path twice and double-count it.
     mask_types = list(dict.fromkeys(mask_types))
+    if crop_column is not None and (
+        not isinstance(crop_column, str)
+        or not crop_column.strip()
+        or MaskType.INSTANCE not in mask_types
+    ):
+        raise ValueError("crop_column requires a non-empty column name and the instance mask type")
 
     chips_path = Path(chips_file).resolve()
     boundaries_path = Path(boundaries_file).resolve()
@@ -1162,7 +1266,11 @@ def create_masks(
         id_col_for_instance = _instance_id_column(conn, boundaries_path)
 
     # Close the main connection - workers will create their own
-    conn.close()
+    try:
+        if crop_column is not None and crop_column not in _column_names(conn, boundaries_path):
+            raise ValueError(f"Crop column '{crop_column}' not found in fields file")
+    finally:
+        conn.close()
 
     # Determine number of workers, and each one's DuckDB memory budget so a
     # many-worker run can't oversubscribe the machine's RAM (see
@@ -1198,6 +1306,7 @@ def create_masks(
         year=year,
         skip_existing=skip_existing,
         existing=existing,
+        crop_column=crop_column,
     )
 
     # Announce (and count progress against) the work that is actually queued:

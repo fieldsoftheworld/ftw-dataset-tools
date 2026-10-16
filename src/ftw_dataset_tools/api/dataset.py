@@ -69,6 +69,7 @@ def create_dataset(
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int, int], None] | None = None,
+    crop_column: str | None = None,
 ) -> CreateDatasetResult:
     """
     Create a complete training dataset from a fields file.
@@ -101,6 +102,7 @@ def create_dataset(
         year: Year for temporal extent (required if fields lack determination_datetime)
         mask_types: List of mask types to generate (e.g., ["instance", "semantic_2_class"]). If None, generates all types.
         presence_only: If True, background class value is 3 instead of 0 (for presence-only labels)
+        crop_column: Source column to preserve in per-chip instance crop lookups.
         drop_border_chips: If True, remove chips on the edge of any labelled cluster. Useful when fields at a cluster boundary may have partial coverage.
         border_gap_chips: How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.
         checksums: Compute file:checksum for every asset (slow; default False).
@@ -137,6 +139,7 @@ def create_dataset(
         year=year,
         mask_types=mask_types,
         presence_only=presence_only,
+        crop_column=crop_column,
         drop_border_chips=drop_border_chips,
         border_gap_chips=border_gap_chips,
     )

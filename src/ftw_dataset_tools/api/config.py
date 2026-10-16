@@ -312,6 +312,8 @@ class MasksConfig:
     class_filter: str | None = None
     # When true, cells whose mask file already exists (non-empty) are not recreated.
     skip_existing: bool = False
+    # Source crop column for instance labels.
+    crop_column: str | None = None
 
 
 @dataclass
@@ -598,6 +600,7 @@ class DatasetConfig:
         presence_only: bool,
         drop_border_chips: bool,
         border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS,
+        crop_column: str | None = None,
     ) -> DatasetConfig:
         """Build a config from ``create_dataset`` keyword arguments.
 
@@ -625,6 +628,7 @@ class DatasetConfig:
                     resolution=resolution,
                     workers=num_workers,
                     presence_only=presence_only,
+                    crop_column=crop_column,
                 ),
                 select_images=SelectImagesConfig(enabled=False),
                 download_images=DownloadImagesConfig(enabled=False),
@@ -659,29 +663,7 @@ class DatasetConfig:
             raise ConfigError(f"Invalid split_percents: {err}") from err
         self.stages.splits.split_percents = resolved
 
-        for mask_type in self.stages.masks.mask_types:
-            if mask_type not in VALID_MASK_TYPES:
-                raise ConfigError(
-                    f"Invalid mask type '{mask_type}'. "
-                    f"Must be one of: {', '.join(VALID_MASK_TYPES)}."
-                )
-        if not self.stages.masks.mask_types:
-            raise ConfigError("masks.mask_types must list at least one mask type.")
-
-        # The DECODE layers are derived from the 2-class mask, which is also the
-        # field-extent target of the DECODE multi-task set (see api/decode.py).
-        # Requesting them without it yields an incomplete label set, so require it
-        # rather than silently writing a mask the caller did not ask for.
-        requested = set(self.stages.masks.mask_types)
-        derived = requested.intersection(DERIVED_MASK_TYPES)
-        if derived and DERIVED_MASK_SOURCE not in requested:
-            fixed = [DERIVED_MASK_SOURCE, *self.stages.masks.mask_types]
-            raise ConfigError(
-                f"Mask type(s) {', '.join(sorted(derived))} are derived from "
-                f"'{DERIVED_MASK_SOURCE}', which is also the DECODE field-extent "
-                f"target. Add '{DERIVED_MASK_SOURCE}' to masks.mask_types, i.e. "
-                f"mask_types: [{', '.join(fixed)}]"
-            )
+        self._validate_masks()
 
         if not isinstance(self.stages.chips.crop_stats, bool):
             raise ConfigError("stages.chips.crop_stats must be true or false")
@@ -706,9 +688,6 @@ class DatasetConfig:
         km_size = self.stages.chips.km_size
         if not isinstance(km_size, int | float) or isinstance(km_size, bool) or km_size <= 0:
             raise ConfigError(f"stages.chips.km_size must be a positive number (got {km_size!r})")
-
-        if not isinstance(self.stages.masks.skip_existing, bool):
-            raise ConfigError("stages.masks.skip_existing must be true or false")
 
         if not isinstance(self.stages.download_images.resume, bool):
             raise ConfigError("stages.download_images.resume must be true or false")
@@ -739,6 +718,44 @@ class DatasetConfig:
 
         if self.metadata is not None:
             self.metadata.validate()
+
+    def _validate_masks(self) -> None:
+        for mask_type in self.stages.masks.mask_types:
+            if mask_type not in VALID_MASK_TYPES:
+                raise ConfigError(
+                    f"Invalid mask type '{mask_type}'. "
+                    f"Must be one of: {', '.join(VALID_MASK_TYPES)}."
+                )
+        if not self.stages.masks.mask_types:
+            raise ConfigError("masks.mask_types must list at least one mask type.")
+
+        # The DECODE layers are derived from the 2-class mask, which is also the
+        # field-extent target of the DECODE multi-task set (see api/decode.py).
+        # Requesting them without it yields an incomplete label set, so require it
+        # rather than silently writing a mask the caller did not ask for.
+        requested = set(self.stages.masks.mask_types)
+        derived = requested.intersection(DERIVED_MASK_TYPES)
+        if derived and DERIVED_MASK_SOURCE not in requested:
+            fixed = [DERIVED_MASK_SOURCE, *self.stages.masks.mask_types]
+            raise ConfigError(
+                f"Mask type(s) {', '.join(sorted(derived))} are derived from "
+                f"'{DERIVED_MASK_SOURCE}', which is also the DECODE field-extent "
+                f"target. Add '{DERIVED_MASK_SOURCE}' to masks.mask_types, i.e. "
+                f"mask_types: [{', '.join(fixed)}]"
+            )
+
+        if not isinstance(self.stages.masks.skip_existing, bool):
+            raise ConfigError("stages.masks.skip_existing must be true or false")
+
+        crop_column = self.stages.masks.crop_column
+        if crop_column is not None and (
+            not isinstance(crop_column, str)
+            or not crop_column.strip()
+            or "instance" not in self.stages.masks.mask_types
+        ):
+            raise ConfigError(
+                "stages.masks.crop_column requires a column name and mask_types: [instance]"
+            )
 
     def _validate_imagery_mode(self) -> None:
         select = self.stages.select_images
