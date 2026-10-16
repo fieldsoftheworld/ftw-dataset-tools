@@ -75,11 +75,12 @@ def get_item_id(grid_id: str, year: int | None = None) -> str:
     return grid_id
 
 
-_FTW_GRID_ID = re.compile(r"^ftw-(?P<square>.+?)\d{4}$")
+# 2 to 5 digits per axis, the precision growing as chips shrink below 1 km.
+_FTW_GRID_ID = re.compile(r"^ftw-(?P<square>.+?)(?:\d{2}){2,5}$")
 
 
 def get_mgrs_square(grid_id: str) -> str:
-    """MGRS 100 km square of an FTW grid id ('ftw-33UXP0410' -> '33UXP').
+    """MGRS 100 km square of an FTW grid id ('ftw-33UXP0410', 'ftw-33UXP041100' -> '33UXP').
 
     Ids that are not FTW grid ids (custom grids) return 'other' so they still
     get a sub-catalog.

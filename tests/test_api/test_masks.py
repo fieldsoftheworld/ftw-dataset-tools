@@ -1496,6 +1496,14 @@ class TestMgrsSquare:
         assert get_mgrs_square("ftw-33UXP0410") == "33UXP"
         assert get_mgrs_square("ftw-1CDE0001") == "1CDE"
 
+    @pytest.mark.parametrize(
+        "grid_id", ["ftw-33UXP041100", "ftw-33UXP04101000", "ftw-33UXP0410010000"]
+    )
+    def test_sub_km_ids_keep_their_square(self, grid_id: str) -> None:
+        from ftw_dataset_tools.api.masks import get_mgrs_square
+
+        assert get_mgrs_square(grid_id) == "33UXP"
+
     def test_non_ftw_id_goes_to_other(self) -> None:
         from ftw_dataset_tools.api.masks import get_mgrs_square
 

@@ -300,10 +300,13 @@ ftwd create-dataset fields.parquet --split-type block3x3 --year 2023
 
 # Custom options
 ftwd create-dataset fields.parquet --split-type block3x3 --min-coverage 1.0 --resolution 5.0 --workers 8
+
+# Smaller chips for high-resolution imagery: 500 m chips (--km-size is in kilometres)
+ftwd create-dataset fields.parquet --split-type block3x3 --km-size 0.5 --resolution 0.5
 ```
 
 **Options:**
-- `--split-type` - **Required.** Split strategy: `random-uniform` (random assignment of chips) or `block3x3` (3x3 blocks of chips assigned together for spatial coherence)
+- `--split-type` - **Required.** Split strategy: `random-uniform` (random assignment of chips), `block3x3` (3x3 blocks of chips assigned together for spatial coherence), `block3x3-hash` (3x3 blocks assigned by a stable hash, so a block keeps its split across scales) or `predefined`
 - `--split-percents` - Train/val/test split percentages as three integers that sum to 100 (default: 80 10 10)
 - `--mask-types` - Comma-separated list of mask types to generate: `instance`, `semantic_2_class`, `semantic_3_class` (default: all three)
 - `--presence-only` - Flag indicating labels are presence-only; semantic mask background will be 3 instead of 0 (instance masks keep 0)
@@ -311,6 +314,9 @@ ftwd create-dataset fields.parquet --split-type block3x3 --min-coverage 1.0 --re
 - `--field-dataset` - Dataset name for output filenames (defaults to input filename stem)
 - `--year` - Year for temporal extent (only required if fields lack `determination_datetime` column)
 - `--min-coverage` - Minimum coverage percentage (0-100) to include grids (default: 1.0)
+- `--km-size` - Chip edge length in **kilometres** (default: 2.0). The 2 km FTW grid is cut to this size, so `0.1` gives 100 m chips; any whole number of metres up to 100 km works. Chips under 1 km get longer ids (see [Chip ids](#chip-ids))
+- `--scale-percent` - Percent of 3x3 chip blocks to keep, chosen by a stable hash so smaller scales are subsets of larger ones (default: 100). `ftwd create-subset` applies the same to an existing chips file
+- `--scale-min-blocks` - Blocks always kept per MGRS 100 km square when scaling (default: 1)
 - `--resolution` - Pixel resolution in meters for masks (default: 10.0)
 - `--workers` - Number of parallel workers (default: half of CPUs)
 - `--skip-reproject` - Fail if input is not EPSG:4326 instead of auto-reprojecting
@@ -347,6 +353,19 @@ The output directory is a self-contained STAC collection with chip items grouped
 
 The MGRS square (e.g., `33UXP`) is extracted from FTW grid ids like `ftw-33UXP0410`; custom grid ids are placed under `other`.
 
+#### Chip ids
+
+A chip id is `ftw-{mgrs_square}{easting}{northing}`, the chip's south-west corner inside its MGRS 100 km square. The offsets use the coarsest precision that fits the chip size, so 2 km chips keep the published grid's ids and smaller chips get more digits:
+
+| `--km-size` | Digits per axis | Example |
+|-------------|-----------------|---------|
+| Whole km (`2`, `1`, `5`) | 2 (1 km) | `ftw-33UXP0410` |
+| Multiples of 100 m (`0.5`, `0.1`) | 3 (100 m) | `ftw-33UXP041100` |
+| Multiples of 10 m (`0.25`) | 4 (10 m) | `ftw-33UXP04101000` |
+| Any other whole metre (`0.256`) | 5 (1 m) | `ftw-33UXP0410010000` |
+
+Chips never cross an MGRS 100 km square, UTM zone or latitude band, so those on a boundary are clipped and dropped by `--min-chip-area`. A size that does not divide 100 km evenly (e.g. `0.3`) also clips the last row and column of each square. The collection records the size as `ftw:chip_size_km`.
+
 ### create-chips
 
 Create chip definitions with field coverage statistics. Calculates what percentage of each grid cell is covered by field boundary polygons.
@@ -371,7 +390,7 @@ ftwd create-chips fields.parquet --reproject
 - `--coverage-col` - Name for coverage column (default: `field_coverage_pct`)
 - `--min-coverage` - Exclude grid cells below this coverage percentage
 - `--min-chip-area` - Exclude chips smaller than this percentage of a full `--km-size` cell (default: 99.5, so chips truncated at UTM zone boundaries are removed - about 1.4% of cells - while every full cell is kept; pass 0 to keep them)
-- `--km-size` - Nominal chip edge length in km, the reference for `--min-chip-area` (default: 2.0)
+- `--km-size` - Chip edge length in **kilometres** (default: 2.0). The FTW grid is cut to this size (e.g. `0.1` for 100 m chips); with `--grid-file` the grid is used as-is, so match it. Also the reference for `--min-chip-area`
 - `--reproject` - Reproject both inputs to EPSG:4326 if CRS don't match
 - `--grid-geom-col`, `--fields-geom-col` - Geometry column names (auto-detected)
 - `--grid-bbox-col`, `--fields-bbox-col` - Bbox column names (auto-detected)

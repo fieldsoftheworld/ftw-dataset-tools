@@ -44,6 +44,7 @@ from ftw_dataset_tools.api.renders import (
     build_item_renders,
     build_render_order,
 )
+from ftw_dataset_tools.api.scale import SCALE_VERSION
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -346,6 +347,7 @@ OPTIONAL_CHIP_COLUMNS = {
     "hcat_dominant_name_en": "ftw:hcat_dominant_name_en",
     "hcat_dominant_pct": "ftw:hcat_dominant_pct",
     "hcat_top": "ftw:hcat_top",
+    "scale_score": "ftw:scale_score",
     **{col: f"ftw:{col}" for col in land_cover.OUTPUT_COLUMNS},
 }
 
@@ -499,11 +501,20 @@ def _collection_ftw_properties(config: DatasetConfig) -> dict:
         "ftw:split_type": stages.splits.split_type,
         "ftw:split_seed": stages.splits.random_seed,
         "ftw:split_percents": list(stages.splits.split_percents),
+        "ftw:chip_size_km": stages.chips.km_size,
         "ftw:mask_types": list(stages.masks.mask_types),
         "ftw:mask_resolution_m": stages.masks.resolution,
         "ftw:presence_only": stages.masks.presence_only,
         "ftw:min_coverage_pct": stages.chips.min_coverage,
     }
+    if stages.scale.percent < 100:
+        props.update(
+            {
+                "ftw:scale_percent": stages.scale.percent,
+                "ftw:scale_min_blocks_per_square": stages.scale.min_blocks_per_square,
+                "ftw:scale_version": SCALE_VERSION,
+            }
+        )
     if stages.chips.land_cover:
         props["ftw:landcover_product"] = land_cover.PRODUCT
     if stages.select_images.enabled:

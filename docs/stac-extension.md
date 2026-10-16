@@ -92,6 +92,7 @@ independently of imagery:
 | `ftw:hcat_dominant_name_en` | string | English name of the dominant HCAT code |
 | `ftw:hcat_dominant_pct` | number | Area share (0-100) of the dominant HCAT code |
 | `ftw:hcat_top` | array | Top HCAT codes by area, each `{code, name_en, pct}` |
+| `ftw:scale_score` | number | Stable hash score in [0, 1) of the chip's 3x3 block (present only for scaled datasets) |
 | `ftw:landcover_year` | integer | Year of the Impact Observatory land-cover map the chip was read from |
 | `ftw:landcover_year_exact` | boolean | `true` when `ftw:landcover_year` is the dataset year; `false` when the nearest available year was used |
 | `ftw:landcover_dominant_code` | integer | Impact Observatory class value covering most of the chip |
@@ -165,13 +166,17 @@ describing how the whole dataset was built:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `ftw:split_type` | string | Split strategy used: `random-uniform` or `block3x3` |
+| `ftw:split_type` | string | Split strategy used: `random-uniform`, `block3x3`, `block3x3-hash` or `predefined` |
 | `ftw:split_seed` | integer | Random seed used for split assignment |
 | `ftw:split_percents` | integer[3] | Train/val/test split percentages |
+| `ftw:chip_size_km` | number | Chip edge length in kilometres (2 for the FTW grid; smaller chips have longer ids, see below) |
 | `ftw:mask_types` | string[] | Mask types generated for the dataset |
 | `ftw:mask_resolution_m` | number | Mask pixel resolution in meters |
 | `ftw:presence_only` | boolean | Whether labels are presence-only (semantic mask background is 3 instead of 0) |
 | `ftw:min_coverage_pct` | number | Minimum field-coverage percentage required to keep a grid cell |
+| `ftw:scale_percent` | number | Percent of 3x3 chip blocks kept (present only for scaled datasets) |
+| `ftw:scale_min_blocks_per_square` | integer | Blocks always kept per MGRS 100 km square (present only for scaled datasets) |
+| `ftw:scale_version` | string | Hash version used to score blocks (present only for scaled datasets) |
 | `ftw:landcover_product` | string | Land-cover product behind the `ftw:landcover_*` item properties: `io-lulc-annual-v02` (present only when land cover is enabled, alongside a `derived_from` link to that collection) |
 | `ftw:cloud_cover_chip_threshold` | number | Chip-level cloud cover threshold percentage (present only when image selection is enabled) |
 | `ftw:nodata_max` | number | Maximum allowed nodata percentage (0-100) for a selected scene (present only when image selection is enabled) |
@@ -527,6 +532,23 @@ All files include the calendar year for consistency. Chip item files and their a
 - Mask files: `chips/{mgrs100k}/{item_id}/{item_id}_{mask_type}.tif`
 
 where `{mgrs100k}` is the MGRS 100 km square (or `other` for custom grids) and `{item_id}` is the chip identifier.
+
+### Chip ids
+
+A chip id is `ftw-{mgrs100k}{easting}{northing}`: the south-west corner of the chip as an
+offset inside its MGRS 100 km square. The offsets use the coarsest MGRS precision that places
+every corner of the dataset's chip size (`ftw:chip_size_km`) exactly, so the digit count grows
+as chips shrink below 1 km:
+
+| Chip size | Digits per axis | Example |
+|-----------|-----------------|---------|
+| Whole kilometres (the 2 km FTW grid) | 2 (1 km) | `ftw-33UXP0410` |
+| Multiples of 100 m (e.g. 0.5, 0.1 km) | 3 (100 m) | `ftw-33UXP041100` |
+| Multiples of 10 m (e.g. 0.25 km) | 4 (10 m) | `ftw-33UXP04101000` |
+| Any other whole metre (e.g. 0.256 km) | 5 (1 m) | `ftw-33UXP0410010000` |
+
+An id names a corner, not a size: the same corner has the same id at every chip size that shares
+its precision, so read `ftw:chip_size_km` to know a chip's extent.
 
 ## Future Work
 

@@ -806,6 +806,102 @@ class TestMinChipArea:
         assert any("could not measure the area of 1 grid cells" in msg for msg in messages)
 
 
+# MGRS square 33UXP, anchored at a 100 km multiple in UTM zone 33N.
+_SQ_X0, _SQ_Y0 = 500_000, 5_300_000
+
+
+def _ftw_grid_source(path: Path) -> Path:
+    """A stand-in for the remote FTW grid: 3 x 3 cells of 2 km, with a bbox column."""
+    cells = [
+        (
+            f"ftw-33UXP{e:02d}{n:02d}",
+            box(
+                _SQ_X0 + e * 1000,
+                _SQ_Y0 + n * 1000,
+                _SQ_X0 + (e + 2) * 1000,
+                _SQ_Y0 + (n + 2) * 1000,
+            ),
+        )
+        for e in (0, 2, 4)
+        for n in (0, 2, 4)
+    ]
+    gdf = gpd.GeoDataFrame(
+        {
+            "gzd": "33U",
+            "mgrs_10km": "33UXP00",
+            "id": [cell_id for cell_id, _ in cells],
+        },
+        geometry=[geom for _, geom in cells],
+        crs=_UTM_CRS,
+    ).to_crs("EPSG:4326")
+    gdf.to_parquet(path)
+    gpio.read(str(path)).add_bbox().write(str(path))
+    return path
+
+
+def _middle_field(path: Path) -> Path:
+    """One field inside the middle 2 km cell, clear of its edges."""
+    field = box(_SQ_X0 + 2100, _SQ_Y0 + 2100, _SQ_X0 + 3900, _SQ_Y0 + 3900)
+    gdf = gpd.GeoDataFrame({"fid": [1]}, geometry=[field], crs=_UTM_CRS).to_crs("EPSG:4326")
+    gdf.to_parquet(path)
+    gpio.read(str(path)).add_bbox().write(str(path))
+    return path
+
+
+class TestRemoteGridChipSize:
+    """The remote 2 km grid is cut to km_size."""
+
+    def _run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, km_size: float):
+        from ftw_dataset_tools.api import field_stats
+
+        # The stand-in grid is a local file, so S3 setup is not needed.
+        monkeypatch.setattr(field_stats, "configure_source_coop_s3", lambda _conn: None)
+        messages: list[str] = []
+        result = field_stats.add_field_stats(
+            fields_file=_middle_field(tmp_path / "fields.parquet"),
+            grid_source=str(_ftw_grid_source(tmp_path / "grid.parquet")),
+            output_file=tmp_path / "chips.parquet",
+            min_chip_area=99.5,
+            km_size=km_size,
+            on_progress=messages.append,
+        )
+        return result, sorted(_chip_ids(result.output_path)), messages
+
+    def test_default_size_keeps_the_source_cells(self, tmp_path: Path, monkeypatch) -> None:
+        _, ids, messages = self._run(tmp_path, monkeypatch, 2.0)
+        assert ids == ["ftw-33UXP0202"]
+        assert not any("Cutting" in msg for msg in messages)
+        assert "Chip size: 2 km (2,000 m) per side (km_size is in kilometres)" in messages
+
+    def test_sub_km_chips_cover_the_fields(self, tmp_path: Path, monkeypatch) -> None:
+        result, ids, messages = self._run(tmp_path, monkeypatch, 0.5)
+        assert ids == [
+            f"ftw-33UXP{e:03d}{n:03d}" for e in (20, 25, 30, 35) for n in (20, 25, 30, 35)
+        ]
+        assert result.cells_dropped_undersized == 0
+        assert result.cells_with_coverage == 16
+        assert any("Cutting the 2 km grid into 0.5 km (500 m) chips" in msg for msg in messages)
+
+    def test_chips_larger_than_the_source_fetch_their_neighbours(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # The 6 km chip needs all nine source cells, not just the one under the field.
+        result, ids, _ = self._run(tmp_path, monkeypatch, 6)
+        assert ids == ["ftw-33UXP0000"]
+        assert result.cells_dropped_undersized == 0
+
+    def test_size_not_dividing_100_km_warns(self, tmp_path: Path, monkeypatch) -> None:
+        _, _, messages = self._run(tmp_path, monkeypatch, 0.3)
+        assert any("does not divide an MGRS 100 km square evenly" in msg for msg in messages)
+
+    def test_invalid_size_rejected_before_reading_inputs(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.chip_grid import InvalidChipSizeError
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        with pytest.raises(InvalidChipSizeError, match="kilometres"):
+            add_field_stats(fields_file=tmp_path / "missing.parquet", km_size=500)
+
+
 # A fully labelled block across the zone 32/33 seam at 12°E. Cells are 2 km squares in
 # each zone's own UTM grid, clipped at the seam as MGRS does, which reproduces the FTW
 # grid there cell for cell.

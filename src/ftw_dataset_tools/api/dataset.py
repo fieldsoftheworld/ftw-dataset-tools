@@ -12,6 +12,7 @@ from ftw_dataset_tools.api import (
     land_cover,
     masks,
     pipeline,
+    scale,
     splits,
     stac,
 )
@@ -57,6 +58,7 @@ def create_dataset(
     split_type: str | None = None,
     split_percents: tuple[int, int, int] = (80, 10, 10),
     min_coverage: float = field_stats.DEFAULT_MIN_COVERAGE,
+    km_size: float = field_stats.DEFAULT_CHIP_KM_SIZE,
     resolution: float = 10.0,
     num_workers: int | None = None,
     skip_reproject: bool = False,
@@ -68,6 +70,8 @@ def create_dataset(
     land_cover: bool = False,
     checksums: bool = False,
     class_filter: str | Path | None = None,
+    scale_percent: float = scale.DEFAULT_SCALE_PERCENT,
+    scale_min_blocks: int = scale.DEFAULT_MIN_BLOCKS_PER_SQUARE,
     on_imagery: Callable[[Path], None] | None = None,
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
@@ -99,6 +103,8 @@ def create_dataset(
         split_type: Dataset split strategy
         split_percents: Train/val/test percentages (must be three integers summing to 100; default: 80 10 10)
         min_coverage: Minimum coverage percentage (0-100) to include grids (default: 1.0)
+        km_size: Chip edge length in kilometres (default: 2.0); the 2 km FTW grid is
+            cut to this size, e.g. 0.1 for 100 m chips
         resolution: Pixel resolution in meters for masks (default: 10.0)
         num_workers: Number of parallel workers for mask creation
         skip_reproject: If True, fail instead of reprojecting non-4326 inputs
@@ -113,6 +119,8 @@ def create_dataset(
         checksums: Compute file:checksum for every asset (slow; default False).
         class_filter: Optional path to a class filter YAML (column + include/exclude
             lists). Include classes count as field; all others become background.
+        scale_percent: Percent of 3x3 chip blocks to keep (default 100 keeps all).
+        scale_min_blocks: Blocks always kept per MGRS 100 km square when scaling.
         on_imagery: Optional callback given the collection directory, invoked at the
             imagery stages' position in the pipeline. ``create-dataset`` selects and
             downloads imagery itself through this hook, so the documents it writes
@@ -147,6 +155,9 @@ def create_dataset(
         crop_column=crop_column,
         drop_border_chips=drop_border_chips,
         border_gap_chips=border_gap_chips,
+        scale_percent=scale_percent,
+        scale_min_blocks=scale_min_blocks,
+        km_size=km_size,
         land_cover=land_cover,
     )
     config.stages.stac.checksums = checksums

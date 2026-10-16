@@ -770,6 +770,7 @@ class TestCollectionMetadata:
         assert coll["ftw:split_percents"] == [80, 10, 10]
         assert coll["ftw:mask_types"] == ["instance", "semantic_2_class", "semantic_3_class"]
         assert coll["ftw:mask_resolution_m"] == 10.0
+        assert coll["ftw:chip_size_km"] == 2.0
         assert "ftw:cloud_cover_chip_threshold" in coll  # select_images enabled by default
         assert coll["ftw:config"]["config"]["metadata"]["license"] == "CC0-1.0"
         assert coll["updated"] == provenance["generated_at"].replace("+00:00", "Z")
@@ -805,6 +806,21 @@ class TestCollectionMetadata:
 
         coll = json.loads(result.collection_path.read_text())
         assert "ftw:split_type" not in coll
+
+    def test_scale_properties_only_for_scaled_datasets(self) -> None:
+        from ftw_dataset_tools.api.config import DatasetConfig
+        from ftw_dataset_tools.api.stac import _collection_ftw_properties
+
+        full = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+        assert "ftw:scale_percent" not in _collection_ftw_properties(full)
+
+        scaled = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"scale": {"percent": 10}}}
+        )
+        props = _collection_ftw_properties(scaled)
+        assert props["ftw:scale_percent"] == 10
+        assert props["ftw:scale_min_blocks_per_square"] == 1
+        assert props["ftw:scale_version"] == "ftw-scale-v1"
 
     def test_warns_without_license(self, tmp_path: Path) -> None:
         messages: list[str] = []

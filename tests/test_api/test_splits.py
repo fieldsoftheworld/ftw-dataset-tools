@@ -7,7 +7,8 @@ import pandas as pd
 import pytest
 from shapely.geometry import Point, box
 
-from ftw_dataset_tools.api.splits import _infer_grid_step, assign_splits, validate_split_percents
+from ftw_dataset_tools.api.blocks import _infer_grid_step, chip_block_ids
+from ftw_dataset_tools.api.splits import assign_splits, validate_split_percents
 
 
 class TestValidateSplitPercents:
@@ -298,6 +299,37 @@ class TestAssignSplits:
             assert len(block_chips["split"].unique()) == 1, (
                 f"Block ({block_east}, {block_north}) has mixed splits"
             )
+
+    def test_block3x3_uses_explicit_km_size(self, tmp_path: Path) -> None:
+        chips_file = tmp_path / "chips.parquet"
+        # Inference sees a step of 12 here and would put both chips in one block.
+        chip_ids = ["ftw-36NXF0000", "ftw-36NXF1200"]
+        gpd.GeoDataFrame(
+            {"id": chip_ids, "geometry": [Point(0, 0), Point(1, 1)]}, crs="EPSG:4326"
+        ).to_parquet(chips_file)
+
+        assign_splits(chips_file, "block3x3", (50, 0, 50), random_seed=1, km_size=2)
+
+        assert set(gpd.read_parquet(chips_file)["split"]) == {"train", "test"}
+
+    def test_block3x3_hash_keeps_splits_across_subsets(self, tmp_path: Path) -> None:
+        chip_ids = [f"ftw-36NXF{e:02d}{n:02d}" for e in range(0, 60, 2) for n in range(0, 60, 2)]
+
+        def run(ids: list[str], name: str) -> pd.Series:
+            path = tmp_path / name
+            gpd.GeoDataFrame(
+                {"id": ids, "geometry": [Point(k, k) for k in range(len(ids))]},
+                crs="EPSG:4326",
+            ).to_parquet(path)
+            result = assign_splits(path, "block3x3-hash", (80, 10, 10), km_size=2)
+            assert sum(result.split_percents) == pytest.approx(100)
+            return gpd.read_parquet(path).set_index("id")["split"]
+
+        full = run(chip_ids, "full.parquet")
+        subset = run(chip_ids[::7], "subset.parquet")
+        assert (full[subset.index] == subset).all()
+        assert set(full) == {"train", "val", "test"}
+        assert (full.groupby(chip_block_ids(full.index.to_series(), 2).values).nunique() == 1).all()
 
     def test_block3x3_invalid_chip_id_format(self, tmp_path: Path) -> None:
         """Test that malformed chip IDs raise an error in block3x3."""

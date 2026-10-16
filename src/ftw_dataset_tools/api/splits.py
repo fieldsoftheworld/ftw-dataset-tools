@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import duckdb
 import numpy as np
 
+from ftw_dataset_tools.api.blocks import block_scores, chip_block_ids
 from ftw_dataset_tools.api.geo import sql_path, write_geoparquet
 
 if TYPE_CHECKING:
@@ -20,10 +21,13 @@ if TYPE_CHECKING:
 
 SPLIT_TYPE_CHOICES: tuple[str, ...] = (
     "block3x3",
+    "block3x3-hash",
     "predefined",
     "random-uniform",
 )
 SPLIT_TYPE_CHOICES_STR = ", ".join(SPLIT_TYPE_CHOICES)
+
+SPLIT_HASH_VERSION = "ftw-split-v1"
 
 #: DuckDB type names that must survive the pandas round-trip as integers.
 _INTEGER_TYPES = frozenset(
@@ -107,6 +111,7 @@ def assign_splits(
     random_seed: int = 42,
     fields_file: str | Path | None = None,
     on_progress: Callable[[str], None] | None = None,
+    km_size: float | None = None,
 ) -> CreateSplitsResult:
     """
     Assign train/val/test splits to chips file.
@@ -117,12 +122,15 @@ def assign_splits(
         chips_file: Path to chips parquet file
         split_type: Split strategy (required). Must be one of: 'random-uniform' (random
             individual chip assignment), 'block3x3' (3x3 spatial block assignment),
-            or 'predefined' (use split column from fields file with majority vote per chip)
+            'block3x3-hash' (3x3 blocks assigned by a stable hash, so a block keeps its
+            split across scales), or 'predefined' (use split column from fields file
+            with majority vote per chip)
         split_percents: Tuple of (train_pct, val_pct, test_pct) summing to 100.
             Default: (80, 10, 10)
         random_seed: Random seed for reproducibility. Default: 42
         fields_file: Fields GeoParquet path (required for split_type='predefined').
         on_progress: Optional callback for progress messages
+        km_size: Grid cell size in km for block grouping; inferred from chip IDs if None.
 
     Returns:
         CreateSplitsResult with statistics about the split assignment
@@ -171,7 +179,9 @@ def assign_splits(
     if split_type == "random-uniform":
         splits = _assign_random_uniform(gdf, split_percents, random_seed)
     elif split_type == "block3x3":
-        splits = _assign_block3x3(gdf, split_percents, random_seed)
+        splits = _assign_block3x3(gdf, split_percents, random_seed, km_size)
+    elif split_type == "block3x3-hash":
+        splits = _assign_block3x3_hash(gdf, split_percents, km_size)
     elif split_type == "predefined":
         splits = _assign_predefined(gdf, fields_file, random_seed, log)
     else:
@@ -190,7 +200,7 @@ def assign_splits(
     test_count = int((splits == "test").sum())
 
     actual_split_percents = split_percents
-    if split_type == "predefined":
+    if split_type in ("predefined", "block3x3-hash"):
         total = max(n_chips, 1)
         actual_split_percents = (
             100.0 * train_count / total,
@@ -237,31 +247,11 @@ def _assign_random_uniform(
     return splits
 
 
-def _infer_grid_step(values: pd.Series) -> int:
-    """Infer the spacing between adjacent grid cells from a series of coordinates.
-
-    FTW grid IDs encode easting/northing as multiples of the grid's km_size
-    (e.g. 0, 2, 4, 6... for km_size=2), not as sequential integers. Block grouping
-    must divide by this step size rather than by 1, or blocks end up lopsided.
-
-    Coordinates are 0-aligned multiples of km_size, so the GCD of the gaps
-    recovers the step even when no two adjacent cells are populated (sparse
-    coverage such as 0, 6, 10 still yields 2), where the smallest gap would
-    overestimate it.
-
-    Returns 0 when the axis has fewer than two distinct values (e.g. a single
-    column or row of chips), meaning the spacing cannot be observed.
-    """
-    unique_sorted = np.sort(values.unique())
-    if len(unique_sorted) < 2:
-        return 0
-    return int(np.gcd.reduce(np.diff(unique_sorted)))
-
-
 def _assign_block3x3(
     gdf: gpd.GeoDataFrame,
     split_percents: tuple[int, int, int],
     random_seed: int,
+    km_size: float | None = None,
 ) -> np.ndarray:
     """Assign splits using 3x3 block pattern.
 
@@ -269,54 +259,7 @@ def _assign_block3x3(
     then randomly assigns each block to train/val/test. This ensures spatial coherence
     within each split.
     """
-    # Validate chip ID format
-    # IDs should follow format: ftw-<zone><band><grid><easting><northing>
-    # Example: ftw-36NXF6658 (minimum length 13)
-    chip_ids = gdf["id"].astype(str)
-    min_length = chip_ids.str.len().min()
-    if min_length < 13:
-        raise ValueError(
-            f"Invalid chip ID format: IDs must be at least 13 characters (e.g., 'ftw-36NXF6658'). "
-            f"Found chip ID with length {min_length}"
-        )
-
-    # Validate prefix
-    if not all(chip_ids.str.startswith("ftw-")):
-        invalid_ids = chip_ids[~chip_ids.str.startswith("ftw-")].tolist()
-        raise ValueError(
-            f"Invalid chip ID format: IDs must start with 'ftw-'. "
-            f"Found invalid IDs: {invalid_ids[:5]}"  # Show first 5 for brevity
-        )
-
-    # Extract easting and northing from chip IDs (last 4 digits: EENN)
-    # Example: ftw-36NXF6658 -> zone=36N, grid=XF, easting=66, northing=58
-    try:
-        eastings = chip_ids.str[-4:-2].astype(int)
-        northings = chip_ids.str[-2:].astype(int)
-    except (ValueError, TypeError) as e:
-        raise ValueError(
-            "Invalid chip ID format: Unable to extract numeric easting/northing from last "
-            f"4 characters. Expected format: ftw-<zone><band><grid><EENN>. Error: {e}"
-        ) from e
-
-    # Extract the full MGRS grid identifier (zone + band + 100km grid square)
-    # This is characters 4-9 of the chip ID (after "ftw-")
-    # Example: ftw-36NXF6658 -> 36NXF
-    mgrs_grids = chip_ids.str[4:9]
-
-    # Create 3x3 block IDs by grouping every 3 grid steps together.
-    # Grid coordinates are spaced by the grid's km_size (e.g. 0, 2, 4, 6... for
-    # km_size=2), not by 1, so we must divide by the actual step size before
-    # grouping into blocks of 3 cells.
-    # km_size is a single value for the whole grid, so share one step across
-    # both axes; np.gcd treats an unobservable axis (0) as neutral, and the
-    # final fallback of 1 only applies when neither axis has two distinct values.
-    grid_step = int(np.gcd(_infer_grid_step(eastings), _infer_grid_step(northings))) or 1
-    block_east = (eastings // grid_step) // 3
-    block_north = (northings // grid_step) // 3
-
-    # Create unique block identifier combining MGRS grid and block coordinates
-    block_ids = mgrs_grids + "_" + block_east.astype(str) + "_" + block_north.astype(str)
+    block_ids = chip_block_ids(gdf["id"], km_size)
 
     # Get unique blocks and their counts
     unique_blocks = block_ids.unique()
@@ -344,6 +287,18 @@ def _assign_block3x3(
     chip_splits = block_ids.map(block_to_split).values
 
     return chip_splits
+
+
+def _assign_block3x3_hash(
+    gdf: gpd.GeoDataFrame,
+    split_percents: tuple[int, int, int],
+    km_size: float | None = None,
+) -> np.ndarray:
+    """Assign each 3x3 block by its hash score, independent of which other blocks exist."""
+    scores = block_scores(chip_block_ids(gdf["id"], km_size), SPLIT_HASH_VERSION).to_numpy()
+    train_cut = split_percents[0] / 100
+    val_cut = (split_percents[0] + split_percents[1]) / 100
+    return np.where(scores < train_cut, "train", np.where(scores < val_cut, "val", "test"))
 
 
 def _normalize_predefined_split(value: object) -> str | None:

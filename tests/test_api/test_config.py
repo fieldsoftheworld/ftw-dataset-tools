@@ -88,12 +88,25 @@ class TestFromDict:
                 {"fields_file": "f.parquet", "stages": {"chips": {"min_chip_area": bad}}}
             )
 
-    @pytest.mark.parametrize("bad", [0, -2, "big", True])
+    @pytest.mark.parametrize("bad", [0, -2, "big", True, 0.0005, 0.1234, 150])
     def test_invalid_km_size_raises(self, bad: object) -> None:
         with pytest.raises(ConfigError, match="km_size"):
             DatasetConfig.from_dict(
                 {"fields_file": "f.parquet", "stages": {"chips": {"km_size": bad}}}
             )
+
+    def test_km_size_in_metres_is_caught(self) -> None:
+        with pytest.raises(ConfigError, match=r"stages\.chips\.km_size is in kilometres.*0\.5"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"chips": {"km_size": 500}}}
+            )
+
+    @pytest.mark.parametrize("km", [0.1, 0.5, 0.256, 3])
+    def test_custom_km_size_accepted(self, km: float) -> None:
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"chips": {"km_size": km}}}
+        )
+        assert config.stages.chips.km_size == km
 
     def test_missing_fields_file_raises(self) -> None:
         with pytest.raises(ConfigError, match="must specify 'fields_file'"):
@@ -297,6 +310,25 @@ class TestFromDict:
                 {"fields_file": "f.parquet", "stages": {"docs": {"pmtiles": "true"}}}
             )
 
+    def test_scale_defaults_and_override(self) -> None:
+        default = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+        assert default.stages.scale.percent == 100
+        assert default.stages.scale.min_blocks_per_square == 1
+
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "f.parquet",
+                "stages": {"scale": {"percent": 10, "min_blocks_per_square": 0}},
+            }
+        )
+        assert config.stages.scale.percent == 10
+        assert config.stages.scale.min_blocks_per_square == 0
+
+    @pytest.mark.parametrize("section", [{"percent": 150}, {"min_blocks_per_square": -1}])
+    def test_invalid_scale_raises(self, section: dict) -> None:
+        with pytest.raises(ConfigError, match=r"Invalid stages\.scale"):
+            DatasetConfig.from_dict({"fields_file": "f.parquet", "stages": {"scale": section}})
+
 
 class TestFromKwargs:
     """Tests for building a config from create_dataset kwargs."""
@@ -316,9 +348,15 @@ class TestFromKwargs:
             mask_types=["instance"],
             presence_only=True,
             drop_border_chips=True,
+            scale_percent=25.0,
+            scale_min_blocks=2,
+            km_size=0.5,
             land_cover=True,
         )
         assert config.name == "ds"
+        assert config.stages.chips.km_size == 0.5
+        assert config.stages.scale.percent == 25.0
+        assert config.stages.scale.min_blocks_per_square == 2
         assert config.stages.chips.min_coverage == 0.02
         assert config.stages.chips.drop_border_chips is True
         assert config.stages.chips.land_cover is True

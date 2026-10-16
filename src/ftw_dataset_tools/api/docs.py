@@ -101,6 +101,7 @@ CHIP_COLUMN_NOTES = {
     "split": "which benchmark split the chip belongs to (train / val / test)",
     "field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
     "field_count": "number of field polygons intersecting the chip",
+    "scale_score": "stable hash score of the chip's 3x3 block; a scale keeps scores below it",
     **_HCAT_NOTES,
     **_LANDCOVER_NOTES,
     "gzd": "MGRS grid zone designator of the chip's grid cell",
@@ -111,6 +112,7 @@ CHIP_COLUMN_NOTES = {
 
 ITEM_PROPERTY_NOTES = {
     "ftw:split": "which benchmark split the chip belongs to (train / val / test)",
+    "ftw:scale_score": "stable hash score of the chip's 3x3 block; a scale keeps scores below it",
     "ftw:calendar_year": "calendar year of the crop cycle the chip documents",
     "ftw:planting_day": "day of year the planting window is centred on",
     "ftw:harvest_day": "day of year the harvest window is centred on",
@@ -626,6 +628,9 @@ def _config_lines(collection: dict, config_dict: dict) -> list[str]:
     splits = stages.get("splits") or {}
     masks = stages.get("masks") or {}
     lines = []
+    chip_km = (stages.get("chips") or {}).get("km_size") or collection.get("ftw:chip_size_km")
+    if chip_km:
+        lines.append(f"- Chips are {chip_km:g} km ({chip_km * 1000:,.0f} m) on a side")
     split_type = splits.get("split_type") or collection.get("ftw:split_type")
     if split_type:
         seed = splits.get("random_seed")

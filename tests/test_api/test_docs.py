@@ -867,3 +867,21 @@ class TestQueriesResolveAgainstTheCollection:
 
         assert [path.name for path in written] == ["README.md", "AGENTS.md"]
         assert "Chips per split" not in (tmp_path / "AGENTS.md").read_text()
+
+
+class TestChipSizeLine:
+    """The README states the chip size, from the config or the collection."""
+
+    def test_from_config(self) -> None:
+        from ftw_dataset_tools.api.docs import _readme_provenance
+
+        text = _readme_provenance({"links": []}, {"stages": {"chips": {"km_size": 0.1}}})
+
+        assert "- Chips are 0.1 km (100 m) on a side" in text
+
+    def test_from_collection(self) -> None:
+        from ftw_dataset_tools.api.docs import _readme_provenance
+
+        text = _readme_provenance({"links": [], "ftw:chip_size_km": 2.0}, {})
+
+        assert "- Chips are 2 km (2,000 m) on a side" in text

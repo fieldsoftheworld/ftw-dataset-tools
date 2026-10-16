@@ -17,6 +17,7 @@ COMMAND_MODULES = (
     "create_ftw_grid",
     "create_masks",
     "create_splits",
+    "create_subset",
     "download_images",
     "export_coco",
     "get_grid",

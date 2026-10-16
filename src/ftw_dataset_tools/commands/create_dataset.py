@@ -7,7 +7,16 @@ from pathlib import Path
 
 import click
 
-from ftw_dataset_tools.api import chip_borders, crop_stats, dataset, field_stats, masks, splits
+from ftw_dataset_tools.api import (
+    chip_borders,
+    chip_grid,
+    crop_stats,
+    dataset,
+    field_stats,
+    masks,
+    scale,
+    splits,
+)
 from ftw_dataset_tools.api import land_cover as land_cover_api
 from ftw_dataset_tools.api.assets import MaskReadError
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
@@ -24,6 +33,7 @@ from ftw_dataset_tools.commands.imagery_mode import (
     reject_scene_only_options,
     resolve_mosaic_year,
 )
+from ftw_dataset_tools.commands.options import KM_SIZE, KM_SIZE_HELP
 
 # Options that only mean something for --imagery-mode scenes.
 _SCENE_ONLY_OPTIONS = (
@@ -65,7 +75,8 @@ def _selection_year(fields_file: Path, year: int | None, mosaic_year: int | None
     required=True,
     help=(
         "Dataset train/val/test split strategy. "
-        "Use 'block3x3' for spatially coherent 3x3 blocks, or "
+        "Use 'block3x3' for spatially coherent 3x3 blocks, "
+        "'block3x3-hash' for blocks that keep their split across scales, or "
         "'random-uniform' for random chip assignment across the dataset, or "
         "'predefined' to use a split column from the input fields file. "
         f"Available choices: {splits.SPLIT_TYPE_CHOICES_STR}."
@@ -86,6 +97,13 @@ def _selection_year(fields_file: Path, year: int | None, mosaic_year: int | None
     default=field_stats.DEFAULT_MIN_COVERAGE,
     show_default=True,
     help="Minimum coverage percentage (0-100) to include grids.",
+)
+@click.option(
+    "--km-size",
+    type=KM_SIZE,
+    default=field_stats.DEFAULT_CHIP_KM_SIZE,
+    show_default=True,
+    help=f"{KM_SIZE_HELP} The 2 km FTW grid is cut to this size.",
 )
 @click.option(
     "--resolution",
@@ -237,6 +255,21 @@ def _selection_year(fields_file: Path, year: int | None, mosaic_year: int | None
     ),
 )
 @click.option(
+    "--scale-percent",
+    type=click.FloatRange(0, 100),
+    default=scale.DEFAULT_SCALE_PERCENT,
+    show_default=True,
+    help="Percent of 3x3 chip blocks to keep, chosen by a stable hash so smaller scales "
+    "are subsets of larger ones.",
+)
+@click.option(
+    "--scale-min-blocks",
+    type=click.IntRange(min=0),
+    default=scale.DEFAULT_MIN_BLOCKS_PER_SQUARE,
+    show_default=True,
+    help="Blocks always kept per MGRS 100 km square when --scale-percent is below 100.",
+)
+@click.option(
     "--class-filter",
     "class_filter",
     type=click.Path(exists=True),
@@ -261,6 +294,7 @@ def create_dataset_cmd(
     split_type: str,
     split_percents: tuple[int, int, int],
     min_coverage: float,
+    km_size: float,
     resolution: float,
     num_workers: int | None,
     image_workers: int,
@@ -281,6 +315,8 @@ def create_dataset_cmd(
     crop_column: str | None,
     drop_border_chips: bool,
     border_gap_chips: int,
+    scale_percent: float,
+    scale_min_blocks: int,
     land_cover: bool,
     class_filter: str | None,
     checksums: bool,
@@ -327,6 +363,7 @@ def create_dataset_cmd(
         ftwd create-dataset fields.parquet --split-type random-uniform --min-coverage 1.0 --resolution 5.0 --year 2024
         ftwd create-dataset fields.parquet --split-type block3x3 --mask-types semantic_2_class,semantic_3_class --year 2023
         ftwd create-dataset fields.parquet --split-type block3x3 --presence-only --year 2023
+        ftwd create-dataset fields.parquet --split-type block3x3 --km-size 0.5 --year 2023
     """
     # Derive output directory from input filename if not specified
     if output_dir is None:
@@ -336,6 +373,7 @@ def create_dataset_cmd(
     click.echo(click.style("Creating dataset from fields file", fg="cyan", bold=True))
     click.echo(f"Input: {fields_file}")
     click.echo(f"Output: {output_dir}")
+    click.echo(f"Chip size: {chip_grid.chip_size_label(km_size)} (--km-size is in kilometres)")
 
     # Progress callback for general messages
     def on_progress(msg: str) -> None:
@@ -482,6 +520,7 @@ def create_dataset_cmd(
             split_type=split_type,
             split_percents=validated_split_percents,
             min_coverage=min_coverage,
+            km_size=km_size,
             resolution=resolution,
             num_workers=num_workers,
             skip_reproject=skip_reproject,
@@ -494,6 +533,8 @@ def create_dataset_cmd(
             land_cover=land_cover,
             class_filter=class_filter,
             checksums=checksums,
+            scale_percent=scale_percent,
+            scale_min_blocks=scale_min_blocks,
             on_imagery=select_and_download if should_select_images else None,
             on_progress=on_progress,
             on_mask_progress=on_mask_progress,

@@ -136,6 +136,17 @@ class TestResolveStages:
         with pytest.raises(ValueError, match="Unknown stage"):
             pipeline.resolve_stages(only="bogus")
 
+    def test_scale_runs_only_below_100_percent(self) -> None:
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"scale": {"percent": 10}}}
+        )
+        assert pipeline.resolve_stages(through_stage="splits", config=config) == [
+            "reproject",
+            "chips",
+            "scale",
+            "splits",
+        ]
+
 
 class TestBuildContext:
     """Tests for context construction and temporal detection."""
@@ -1163,9 +1174,13 @@ class TestChipsStageBatchSize:
         self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
     ) -> None:
         seen = _chips_stage_kwargs(
-            sample_geoparquet_4326, tmp_path, monkeypatch, {"coverage_batch_size": 37}
+            sample_geoparquet_4326,
+            tmp_path,
+            monkeypatch,
+            {"coverage_batch_size": 37, "km_size": 0.5},
         )
         assert seen["batch_size"] == 37
+        assert seen["km_size"] == 0.5
 
 
 class TestChipsStageSizeFilter:
@@ -1315,6 +1330,49 @@ class TestChipsStageCropStats:
         assert codes == [(1,), (None,)]  # the NULL is what makes pandas widen the column
         assert types["hcat_dominant_code"] == "BIGINT"
         assert types["split"] == "VARCHAR"
+
+
+class TestScaleStage:
+    def _ctx(self, tmp_path: Path) -> pipeline.PipelineContext:
+        config = _config(
+            tmp_path / "fields.parquet",
+            tmp_path / "out",
+            stages={
+                "chips": {"km_size": 2.0},
+                "scale": {"percent": 50, "min_blocks_per_square": 0},
+                "splits": {"split_type": "block3x3-hash"},
+            },
+        )
+        ctx = pipeline.build_context(config, stages=["scale", "splits"])
+        ctx.output_dir.mkdir()
+        ids = [f"ftw-33UXP{e:02d}{n:02d}" for e in range(0, 36, 2) for n in range(0, 36, 2)]
+        gpd.GeoDataFrame(
+            {"id": ids}, geometry=[box(i, 0, i + 1, 1) for i in range(len(ids))], crs="EPSG:4326"
+        ).to_parquet(ctx.chips_path)
+        return ctx
+
+    def test_stage_scale_subsets_chips(self, tmp_path: Path) -> None:
+        ctx = self._ctx(tmp_path)
+        logs: list[str] = []
+        ctx.on_progress = logs.append
+
+        pipeline.stage_scale(ctx)
+
+        assert ctx.scale_result is not None
+        assert ctx.scale_result.total_chips == 324
+        assert 0 < ctx.scale_result.kept_chips < 324
+        assert len(gpd.read_parquet(ctx.chips_path)) == ctx.scale_result.kept_chips
+        assert logs == [f"Scale 50%: kept {ctx.scale_result.kept_chips:,} of 324 chips"]
+
+    def test_stage_splits_passes_km_size(self, tmp_path: Path, monkeypatch) -> None:
+        ctx = self._ctx(tmp_path)
+        seen: dict = {}
+        monkeypatch.setattr(pipeline.splits, "assign_splits", lambda **kw: seen.update(kw))
+
+        pipeline.stage_splits(ctx)
+
+        assert seen["km_size"] == 2.0
+        assert seen["split_type"] == "block3x3-hash"
 
 
 class TestStacStageStaleCropStats:

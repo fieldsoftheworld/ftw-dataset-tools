@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from ftw_dataset_tools import __version__
-from ftw_dataset_tools.api import field_stats, splits
+from ftw_dataset_tools.api import chip_grid, field_stats, scale, splits
 from ftw_dataset_tools.api.chip_borders import DEFAULT_BORDER_GAP_CHIPS
 from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
 from ftw_dataset_tools.api.imagery.slots import DEFAULT_IMAGERY_MODE, IMAGERY_MODES
@@ -275,8 +275,9 @@ class ChipsConfig:
     # slivers left where MGRS cells are clipped at UTM zone boundaries. Set to 0 to
     # keep them.
     min_chip_area: float = field_stats.DEFAULT_MIN_CHIP_AREA
-    # Nominal chip edge length in km, the reference for min_chip_area. Match this to
-    # the grid in grid_file when it was not built at the default size.
+    # Chip edge length in kilometres (0.1 = 100 m chips). The remote FTW grid is cut to
+    # this size; a grid_file is used as-is, so match this to it. Also the reference for
+    # min_chip_area.
     km_size: float = field_stats.DEFAULT_CHIP_KM_SIZE
     # Local FTW grid parquet to use instead of fetching from Source Coop. Path is
     # resolved relative to the config file. Optional.
@@ -292,6 +293,14 @@ class ChipsConfig:
     # Grid cells per coverage batch. Lower it when the coverage step runs the
     # machine out of memory on a dense, country-sized input.
     coverage_batch_size: int = field_stats.DEFAULT_COVERAGE_BATCH_SIZE
+
+
+@dataclass
+class ScaleConfig:
+    """Settings for the scale stage (nested, hash-based chip subsets)."""
+
+    percent: float = scale.DEFAULT_SCALE_PERCENT
+    min_blocks_per_square: int = scale.DEFAULT_MIN_BLOCKS_PER_SQUARE
 
 
 @dataclass
@@ -508,6 +517,7 @@ class StagesConfig:
     """Per-stage settings. Stages with no options (boundaries) still run."""
 
     chips: ChipsConfig = field(default_factory=ChipsConfig)
+    scale: ScaleConfig = field(default_factory=ScaleConfig)
     splits: SplitsConfig = field(default_factory=SplitsConfig)
     masks: MasksConfig = field(default_factory=MasksConfig)
     select_images: SelectImagesConfig = field(default_factory=SelectImagesConfig)
@@ -603,6 +613,9 @@ class DatasetConfig:
         presence_only: bool,
         drop_border_chips: bool,
         border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS,
+        scale_percent: float = scale.DEFAULT_SCALE_PERCENT,
+        scale_min_blocks: int = scale.DEFAULT_MIN_BLOCKS_PER_SQUARE,
+        km_size: float = field_stats.DEFAULT_CHIP_KM_SIZE,
         land_cover: bool = False,
         crop_column: str | None = None,
     ) -> DatasetConfig:
@@ -623,8 +636,10 @@ class DatasetConfig:
                     min_coverage=min_coverage,
                     drop_border_chips=drop_border_chips,
                     border_gap_chips=border_gap_chips,
+                    km_size=km_size,
                     land_cover=land_cover,
                 ),
+                scale=ScaleConfig(percent=scale_percent, min_blocks_per_square=scale_min_blocks),
                 splits=SplitsConfig(split_type=split_type, split_percents=split_percents),
                 masks=MasksConfig(
                     mask_types=list(mask_types)
@@ -692,9 +707,15 @@ class DatasetConfig:
                 f"(got {min_chip_area!r})"
             )
 
-        km_size = self.stages.chips.km_size
-        if not isinstance(km_size, int | float) or isinstance(km_size, bool) or km_size <= 0:
-            raise ConfigError(f"stages.chips.km_size must be a positive number (got {km_size!r})")
+        try:
+            chip_grid.chip_size_m(self.stages.chips.km_size)
+        except chip_grid.InvalidChipSizeError as err:
+            raise ConfigError(f"stages.chips.{err}") from err
+
+        try:
+            scale.validate_scale(self.stages.scale.percent, self.stages.scale.min_blocks_per_square)
+        except ValueError as err:
+            raise ConfigError(f"Invalid stages.scale: {err}") from err
 
         if not isinstance(self.stages.download_images.resume, bool):
             raise ConfigError("stages.download_images.resume must be true or false")
@@ -918,6 +939,7 @@ def _as_str_list(value: Any, key: str, source: Path) -> list[str]:
 
 _STAGE_TYPES: dict[str, type] = {
     "chips": ChipsConfig,
+    "scale": ScaleConfig,
     "splits": SplitsConfig,
     "masks": MasksConfig,
     "select_images": SelectImagesConfig,

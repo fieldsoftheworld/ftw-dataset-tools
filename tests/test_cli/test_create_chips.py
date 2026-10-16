@@ -279,6 +279,24 @@ class TestCreateChipsCommand:
         assert result.exit_code != 0
         assert "Invalid value for '--km-size'" in result.output
 
+    def test_km_size_in_metres_rejected_with_a_hint(
+        self, sample_fields_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        result = CliRunner().invoke(
+            cli,
+            [
+                "create-chips",
+                str(sample_fields_geoparquet),
+                "-o",
+                str(tmp_path / "chips.parquet"),
+                "--km-size",
+                "100.5",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "km_size is in kilometres" in result.output
+        assert "For 100.5 m chips pass 0.1005" in result.output
+
 
 class TestCli:
     """Tests for the main CLI."""

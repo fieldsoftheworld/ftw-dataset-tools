@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import duckdb
 import pyproj
 
+from ftw_dataset_tools.api import chip_grid
 from ftw_dataset_tools.api.chip_borders import (
     DEFAULT_BORDER_GAP_CHIPS,
     find_border_chips,
@@ -44,9 +45,13 @@ CHIP_ID_COLUMN = "id"
 # Grid cells per coverage batch (see _compute_coverage_in_batches).
 DEFAULT_COVERAGE_BATCH_SIZE = 2000
 
-# Nominal chip edge length in km. The FTW grid on Source Coop is built at 2 km;
-# a different grid_file needs its own km_size or the size filter misjudges it.
-DEFAULT_CHIP_KM_SIZE = 2.0
+# Cell size of the FTW grid on Source Coop. A remote grid is cut to km_size when the
+# two differ.
+SOURCE_GRID_KM_SIZE = 2.0
+
+# Chip edge length in km. A grid_file is used as-is, so it needs its own km_size or
+# the size filter misjudges it.
+DEFAULT_CHIP_KM_SIZE = SOURCE_GRID_KM_SIZE
 
 # Minimum chip area, as a percentage of a full km_size x km_size cell, for a chip
 # to be kept. Cells on a UTM zone boundary or an MGRS latitude-band boundary are
@@ -404,6 +409,44 @@ def _drop_undersized_chips(
     return removed
 
 
+def _fetch_grid_cells(
+    conn: duckdb.DuckDBPyConnection,
+    grid_source: str,
+    bounds: tuple[float, float, float, float],
+    km_size: float,
+    log: Callable[[str], None],
+) -> None:
+    """Load the remote grid cells over ``bounds`` into grid_table, cut to ``km_size``.
+
+    The source grid is 2 km; any other size is cut from it, which needs the source
+    cells up to one chip beyond ``bounds`` to finish the chips on the edge.
+    """
+    recut = km_size != SOURCE_GRID_KM_SIZE
+    xmin, ymin, xmax, ymax = chip_grid.expand_bounds(bounds, km_size) if recut else bounds
+    configure_source_coop_s3(conn)
+    log("Fetching grid cells by bounding box...")
+    conn.execute(f"""
+        CREATE TABLE grid_table AS
+        SELECT *
+        FROM '{sql_path(grid_source)}'
+        WHERE bbox.xmin <= {xmax}
+          AND bbox.xmax >= {xmin}
+          AND bbox.ymin <= {ymax}
+          AND bbox.ymax >= {ymin}
+    """)
+    if not recut:
+        return
+    label = chip_grid.chip_size_label(km_size)
+    log(f"Cutting the {SOURCE_GRID_KM_SIZE:g} km grid into {label} chips...")
+    chip_grid.cut_grid(conn, "grid_table", km_size, keep_bounds=bounds)
+    if chip_grid.SQUARE_M % chip_grid.chip_size_m(km_size):
+        log(
+            f"Warning: {label} does not divide an MGRS 100 km square evenly, so the last "
+            "row and column of chips in each square are cut short (the minimum chip "
+            "area filter drops them)."
+        )
+
+
 def _reproject_to_4326(
     path: Path, temp_files: list[Path], on_progress: Callable[[str], None] | None
 ) -> Path:
@@ -478,9 +521,10 @@ def _load_remote_grid(
     grid_geom_col: str | None,
     fields_geom_col: str,
     grid_source: str,
+    km_size: float,
     log: Callable[[str], None],
 ) -> str:
-    """Fetch the grid cells overlapping the fields' bounds into grid_table.
+    """Fetch the grid cells overlapping the fields' bounds into grid_table, cut to km_size.
 
     Returns the grid geometry column.
 
@@ -521,18 +565,7 @@ def _load_remote_grid(
             "EPSG:4326."
         )
 
-    configure_source_coop_s3(conn)
-
-    log("Fetching grid cells by bounding box...")
-    conn.execute(f"""
-        CREATE TABLE grid_table AS
-        SELECT *
-        FROM '{sql_path(grid_source)}'
-        WHERE bbox.xmin <= {xmax}
-          AND bbox.xmax >= {xmin}
-          AND bbox.ymin <= {ymax}
-          AND bbox.ymax >= {ymin}
-    """)
+    _fetch_grid_cells(conn, grid_source, (xmin, ymin, xmax, ymax), km_size, log)
 
     if grid_geom_col is None:
         grid_geom_col = "geometry"
@@ -669,8 +702,10 @@ def add_field_stats(
         min_chip_area: If set, exclude grid cells whose area is below this percentage of
             a full km_size x km_size cell (e.g., 99.5 to drop the slivers left where MGRS
             cells are clipped at UTM zone boundaries). None disables the check.
-        km_size: Nominal chip edge length in km, used as the reference for min_chip_area
-            (default 2.0, matching the FTW grid on Source Coop)
+        km_size: Chip edge length in kilometres (default 2.0, the size of the FTW grid on
+            Source Coop), e.g. 0.1 for 100 m chips. The remote grid is cut to this size;
+            a grid_file is used as-is, so km_size must match it. Also the reference for
+            min_chip_area.
         reproject_to_4326: If True, reproject both inputs to EPSG:4326 before processing
         drop_border_chips: If True, remove chips on the edge of any labelled cluster
             (where fields may have partial coverage)
@@ -687,12 +722,15 @@ def add_field_stats(
 
     Raises:
         ValueError: If batch_size is less than 1
+        InvalidChipSizeError: If km_size is not a whole number of metres up to 100 km
+        GridCutError: If the remote grid must be cut but its ids are not FTW chip ids
         FileNotFoundError: If input files don't exist
         CRSMismatchError: If input files have different CRS and reproject_to_4326 is False
         duckdb.Error: If there are issues with the spatial queries
     """
     if batch_size < 1:
         raise ValueError(f"batch_size must be at least 1, got {batch_size}")
+    chip_grid.chip_size_m(km_size)
 
     fields_path = Path(fields_file).resolve()
 
@@ -708,6 +746,9 @@ def add_field_stats(
     def log(msg: str) -> None:
         if on_progress:
             on_progress(msg)
+
+    # km_size is easy to mistake for metres, so state it up front.
+    log(f"Chip size: {chip_grid.chip_size_label(km_size)} per side (km_size is in kilometres)")
 
     # Auto-detect fields geometry column from GeoParquet metadata
     if fields_geom_col is None:
@@ -750,6 +791,7 @@ def add_field_stats(
                 grid_geom_col=grid_geom_col,
                 fields_geom_col=fields_geom_col,
                 grid_source=grid_source,
+                km_size=km_size,
                 log=log,
             )
 
