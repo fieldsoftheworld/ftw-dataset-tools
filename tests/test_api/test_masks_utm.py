@@ -103,3 +103,73 @@ class TestUtmMasks:
         assert path.name == f"{GRID_ID}_2024_semantic_2_class.tif"
         with rasterio.open(path) as src:
             assert src.crs.to_epsg() == 4326
+
+
+class TestPlanetMaskWiring:
+    def test_create_masks_cli_planet_grid(self, tmp_path: Path) -> None:
+        from click.testing import CliRunner
+
+        from ftw_dataset_tools.cli import cli
+
+        inputs = _inputs(tmp_path)
+        out = tmp_path / "out"
+        result = CliRunner().invoke(
+            cli,
+            [
+                "create-masks",
+                str(inputs["chips_file"]),
+                str(inputs["boundaries_file"]),
+                str(inputs["boundary_lines_file"]),
+                "--output-dir",
+                str(out),
+                "--field-dataset",
+                "test",
+                "--mask-type",
+                "semantic_2_class",
+                "--year",
+                "2024",
+                "--planet-grid",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        (path,) = out.rglob("*_semantic_2_class_planet.tif")
+        with rasterio.open(path) as src:
+            assert src.crs.to_string() == "EPSG:32632"
+            assert src.res == (3.0, 3.0)
+
+    @pytest.mark.parametrize(("source", "passes"), [("sentinel-2", 1), ("planetscope", 2)])
+    def test_pipeline_adds_a_planet_pass(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str, passes: int
+    ) -> None:
+        from ftw_dataset_tools.api import pipeline
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        calls: list[dict] = []
+        monkeypatch.setattr(masks, "create_masks", lambda **kw: calls.append(kw) or {})
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(_inputs(tmp_path)["boundaries_file"]),
+                "output_dir": str(tmp_path / "out"),
+                "name": "ds",
+                "year": 2024,
+                "stages": {"select_images": {"source": source}},
+            }
+        )
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir()
+        gpd.GeoDataFrame(
+            {"id": [GRID_ID], "field_coverage_pct": [50.0]}, geometry=[CELL], crs=4326
+        ).to_parquet(ctx.chips_path)
+        ctx.output_fields_path.write_bytes(b"")
+        ctx.boundary_lines_path.write_bytes(b"")
+
+        pipeline.stage_masks(ctx)
+
+        assert len(calls) == passes
+        assert "utm" not in calls[0]
+        if passes == 2:
+            assert calls[1]["utm"] is True
+            assert calls[1]["resolution"] == 3.0
+            assert calls[1]["filename_suffix"] == "_planet"
+            assert calls[1]["mask_types"] == calls[0]["mask_types"]

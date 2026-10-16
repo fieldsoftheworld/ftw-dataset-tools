@@ -4,9 +4,12 @@ import sys
 from pathlib import Path
 
 import click
+from click.core import ParameterSource
 
 from ftw_dataset_tools.api import field_stats, masks, stac
 from ftw_dataset_tools.api.config import VALID_MASK_TYPES
+from ftw_dataset_tools.api.imagery import planet_api
+from ftw_dataset_tools.api.imagery.slots import mask_suffix
 from ftw_dataset_tools.api.masks import MaskType
 
 
@@ -64,7 +67,14 @@ from ftw_dataset_tools.api.masks import MaskType
     type=float,
     default=10.0,
     show_default=True,
-    help="Pixel resolution in CRS units (e.g., meters).",
+    help="Pixel resolution in CRS units (e.g., meters). 3 with --planet-grid unless given.",
+)
+@click.option(
+    "--planet-grid",
+    is_flag=True,
+    default=False,
+    help="Write the masks for PlanetScope imagery instead: each chip on a grid in its own "
+    "UTM zone (3 m by default), named <chip>_<type>_planet.tif.",
 )
 @click.option(
     "--workers",
@@ -95,6 +105,7 @@ def create_masks_cmd(
     coverage_col: str | None,
     min_coverage: float,
     resolution: float,
+    planet_grid: bool,
     num_workers: int | None,
     skip_existing: bool,
     crop_column: str | None,
@@ -150,6 +161,8 @@ def create_masks_cmd(
 
     # Convert mask type string to enum
     mask_type_enum = MaskType(mask_type)
+    planet_options = _planet_grid_options(planet_grid, resolution)
+    resolution = planet_options.pop("resolution")
 
     # Callback to show grid counts before processing
     def on_start(total_grids: int, filtered_grids: int, total_tasks: int) -> None:
@@ -193,6 +206,7 @@ def create_masks_cmd(
             crop_column=crop_column,
             on_progress=on_progress,
             on_start=on_start,
+            **planet_options,
         )
         # This command builds one mask type at a time.
         result = results[mask_type_enum]
@@ -250,6 +264,21 @@ def create_masks_cmd(
         sys.stdout.write("\n")
         click.echo(click.style(f"Error: {e}", fg="red"))
         raise SystemExit(1) from e
+
+
+def _planet_grid_options(planet_grid: bool, resolution: float) -> dict:
+    """create_masks keyword arguments for the PlanetScope grid, or just the resolution."""
+    if not planet_grid:
+        return {"resolution": resolution}
+    explicit = (
+        click.get_current_context().get_parameter_source("resolution")
+        == ParameterSource.COMMANDLINE
+    )
+    return {
+        "resolution": resolution if explicit else planet_api.GRID_RESOLUTION_M,
+        "utm": True,
+        "filename_suffix": mask_suffix("planetscope"),
+    }
 
 
 # Alias for registration

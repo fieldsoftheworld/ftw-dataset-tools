@@ -50,6 +50,8 @@ ITEM_TYPE = "PSScene"
 #: 4-band (blue, green, red, NIR) surface reflectance, the product Fields of the Planet uses.
 SCENE_ASSET = "ortho_analytic_4b_sr"
 SCENE_BUNDLE = "analytic_sr_udm2"
+#: Pixel size of PlanetScope ortho products, and of the masks and chips made for them.
+GRID_RESOLUTION_M = 3.0
 
 _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 _ATTEMPTS = 4

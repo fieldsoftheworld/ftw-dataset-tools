@@ -17,6 +17,7 @@ __all__ = [
     "THUMBNAIL_SLOTS",
     "child_item_id",
     "image_filename",
+    "mask_suffix",
     "parse_child",
     "parse_child_id",
     "parse_image",
@@ -53,6 +54,11 @@ def child_item_id(chip_id: str, slot: str, source: str = DEFAULT_SOURCE) -> str:
 
 def image_filename(chip_id: str, slot: str, source: str = DEFAULT_SOURCE) -> str:
     return f"{chip_id}_{slot}_image_{SOURCE_SUFFIXES[source]}.tif"
+
+
+def mask_suffix(source: str) -> str:
+    """Filename suffix of the masks made on a source's own grid ("" for Sentinel-2)."""
+    return "" if source == DEFAULT_SOURCE else f"_{SOURCE_SUFFIXES[source]}"
 
 
 def _split(value: str, infix: str) -> tuple[str, str, str] | None:
