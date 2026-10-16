@@ -36,8 +36,14 @@ from ftw_dataset_tools.api.assets import (
     add_table_columns,
 )
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
+from ftw_dataset_tools.api.imagery.slots import mask_suffix
 from ftw_dataset_tools.api.logging_config import get_logger, success
-from ftw_dataset_tools.api.masks import MaskType, get_mgrs_square, instance_labels_path
+from ftw_dataset_tools.api.masks import (
+    MaskType,
+    get_mask_filename,
+    get_mgrs_square,
+    instance_labels_path,
+)
 from ftw_dataset_tools.api.renders import (
     RENDER_ORDER_PROP,
     add_render_schema,
@@ -721,6 +727,10 @@ def _create_collection(
     return collection
 
 
+#: (filename suffix, title suffix) of each grid masks are made on.
+_MASK_GRIDS = (("", ""), (mask_suffix("planetscope"), " (PlanetScope 3 m UTM grid)"))
+
+
 def _create_chip_item(
     chip_info: ChipInfo,
     temporal_extent: tuple[datetime, datetime],
@@ -746,25 +756,24 @@ def _create_chip_item(
     item_id = chip_info.item_id  # Includes year if set
     year = chip_info.year
 
-    # Check which mask files exist (masks co-located with the item)
+    # Check which mask files exist (masks co-located with the item). PlanetScope
+    # masks, on the chip's 3 m UTM grid, sit beside the default ones.
     mask_assets = {}
-    for mask_name, mask_type in _MASK_TYPE_BY_ASSET_NAME.items():
-        # Filename includes year if year is set
-        if year is not None:
-            mask_filename = f"{grid_id}_{year}_{mask_type.value}.tif"
-        else:
-            mask_filename = f"{grid_id}_{mask_type.value}.tif"
-        mask_path = chip_dir / mask_filename
-        if mask_path.exists():
-            mask_assets[f"{mask_name}_mask"] = (
-                Asset(
-                    href=f"./{mask_filename}",
-                    media_type=MEDIA_TYPE_COG,
-                    title=_get_mask_title(mask_name),
-                    roles=["labels"],
-                ),
-                mask_path,
-            )
+    for suffix, grid_title in _MASK_GRIDS:
+        for mask_name, mask_type in _MASK_TYPE_BY_ASSET_NAME.items():
+            mask_filename = get_mask_filename(grid_id, mask_type, year, suffix)
+            mask_path = chip_dir / mask_filename
+            if mask_path.exists():
+                mask_assets[f"{mask_name}_mask{suffix}"] = (
+                    Asset(
+                        href=f"./{mask_filename}",
+                        media_type=MEDIA_TYPE_COG,
+                        title=_get_mask_title(mask_name) + grid_title,
+                        roles=["labels"],
+                    ),
+                    mask_path,
+                    mask_name,
+                )
 
     # Skip if no masks exist
     if not mask_assets:
@@ -793,13 +802,11 @@ def _create_chip_item(
     )
 
     # Add mask assets, then decorate them (owner must be set first)
-    for key, (asset, mask_path) in mask_assets.items():
+    for key, (asset, mask_path, mask_name) in mask_assets.items():
         item.add_asset(key=key, asset=asset)
         add_file_info(asset, mask_path, checksum=checksums)
         add_raster_bands(asset, mask_path)
-        add_mask_classification(
-            asset, key.removesuffix("_mask"), background_value=background_class_value
-        )
+        add_mask_classification(asset, mask_name, background_value=background_class_value)
         if key == "instance_mask":
             labels_path = instance_labels_path(mask_path)
             if labels_path.exists():

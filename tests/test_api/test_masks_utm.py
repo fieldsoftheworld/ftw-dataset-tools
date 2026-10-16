@@ -173,3 +173,28 @@ class TestPlanetMaskWiring:
             assert calls[1]["resolution"] == 3.0
             assert calls[1]["filename_suffix"] == "_planet"
             assert calls[1]["mask_types"] == calls[0]["mask_types"]
+
+
+def test_stac_item_lists_planet_masks_beside_the_default_ones(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from ftw_dataset_tools.api.stac import ChipInfo, _create_chip_item
+
+    chip_dir = tmp_path / "chip"
+    chip_dir.mkdir()
+    inputs = _inputs(tmp_path)
+    common = {**inputs, "chip_dirs": {f"{GRID_ID}_2024": chip_dir}}
+    masks.create_masks(**common)
+    masks.create_masks(**common, utm=True, resolution=3.0, filename_suffix="_planet")
+    info = ChipInfo(GRID_ID, CELL.__geo_interface__, CELL.bounds, year=2024)
+    extent = (datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 12, 31, tzinfo=UTC))
+
+    item = _create_chip_item(info, extent, chip_dir)
+
+    assert {"semantic_2class_mask", "semantic_2class_mask_planet"} <= set(item.assets)
+    planet = item.assets["semantic_2class_mask_planet"]
+    assert planet.href == f"./{GRID_ID}_2024_semantic_2_class_planet.tif"
+    assert "PlanetScope 3 m UTM grid" in planet.title
+    band = planet.extra_fields["raster:bands"][0]
+    assert band["classification:classes"]
+    assert band["spatial_resolution"] == 3.0
