@@ -7,11 +7,12 @@ from pathlib import Path
 import click
 
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
-from ftw_dataset_tools.commands.cli_logging import is_verbose
+from ftw_dataset_tools.commands.cli_logging import is_verbose, verbose_alias_option
 
 
 @click.command("convert-previews")
 @click.argument("catalog_dir", type=click.Path(exists=True, file_okay=False))
+@verbose_alias_option
 @click.option(
     "--dry-run",
     is_flag=True,
@@ -33,12 +34,11 @@ def convert_previews(catalog_dir: str, dry_run: bool, workers: int) -> None:
 
     Each preview is re-rendered from the imagery it was made from -- the chip's
     local clipped GeoTIFF when there is one, otherwise its remote scene -- so the
-    result is compressed once rather than re-encoded from an already-lossy JPEG.
+    old JPEG is not transcoded. Overlay composition re-encodes its WebP base.
     The chip item and its season children are repointed at the WebP, and only then
     is the superseded .jpg removed.
 
-    Chips that already have only WebP previews are skipped, so the command is safe
-    to re-run and resumes cleanly after an interruption.
+    Converted chips are skipped; reruns retry remaining JPEGs.
 
     \b
     CATALOG_DIR: Path to the collection directory (holding collection.json)
@@ -63,8 +63,8 @@ def convert_previews(catalog_dir: str, dry_run: bool, workers: int) -> None:
     if dry_run:
         click.echo(
             f"Would convert {result.chips_converted} chips "
-            f"({result.previews_written} previews, {result.legacy_removed} JPEGs removed), "
-            f"{result.skipped} skipped."
+            f"({result.previews_written} previews, {result.legacy_removed} JPEGs removed); "
+            f"{result.skipped} skipped, {result.failed} failed."
         )
     else:
         click.echo(conversion_summary_line(result))

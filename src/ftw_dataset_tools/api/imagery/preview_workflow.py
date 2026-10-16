@@ -25,6 +25,7 @@ from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
 from ftw_dataset_tools.api.imagery.stac_child_items import attach_thumbnail_to_parent
 from ftw_dataset_tools.api.imagery.thumbnails import (
     PREVIEW_SUFFIX,
+    REFERENCE_MASK_SUFFIX,
     generate_overlay_thumbnail,
     generate_scene_thumbnail,
 )
@@ -34,9 +35,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ftw_dataset_tools.api.imagery.parallel import ParallelOutcome
-
-#: Mask used both as the preview's grid reference and as the overlay layer.
-_REFERENCE_MASK_SUFFIX = "_semantic_3_class.tif"
 
 #: Seasons to draw the preview from, in preference order.
 _PREVIEW_SEASONS = ("planting", "harvest")
@@ -89,7 +87,7 @@ def _visual_href(chip_dir: Path, item_id: str) -> str | None:
 def build_preview_task(item: pystac.Item, item_path: Path) -> PreviewTask | str:
     """Derive one chip's preview task, or a reason it has none."""
     chip_dir = item_path.parent
-    mask_path = chip_dir / f"{item.id}{_REFERENCE_MASK_SUFFIX}"
+    mask_path = chip_dir / f"{item.id}{REFERENCE_MASK_SUFFIX}"
     if not mask_path.exists():
         return "No semantic mask to use as the preview grid"
     href = _visual_href(chip_dir, item.id)

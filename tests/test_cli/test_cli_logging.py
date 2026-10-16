@@ -85,9 +85,13 @@ class TestVerboseFlag:
         assert result.exit_code == 0
         assert not is_verbose()
 
-    @pytest.mark.parametrize("command", ["select-images", "convert-previews"])
-    def test_per_command_verbose_is_gone(self, command: str) -> None:
-        result = CliRunner().invoke(cli, [command, "--verbose", "x"])
+    @pytest.mark.parametrize(
+        "command", ["select-images", "convert-previews", "create-dataset-summary"]
+    )
+    @pytest.mark.parametrize("flag", ["--verbose", "-v"])
+    def test_per_command_verbose_still_enables_debug(self, command: str, flag: str) -> None:
+        """The old per-command flag is kept as an alias of ``ftwd -v``."""
+        result = CliRunner().invoke(cli, [command, flag, "missing-path"])
 
-        assert result.exit_code == 2
-        assert "No such option" in result.output
+        assert "No such option" not in result.output
+        assert is_verbose()

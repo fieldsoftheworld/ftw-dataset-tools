@@ -20,9 +20,10 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from ftw_dataset_tools import __version__
-from ftw_dataset_tools.api import field_stats, splits
+from ftw_dataset_tools.api import chip_grid, field_stats, scale, splits
 from ftw_dataset_tools.api.chip_borders import DEFAULT_BORDER_GAP_CHIPS
 from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
+from ftw_dataset_tools.api.imagery.slots import DEFAULT_IMAGERY_MODE, IMAGERY_MODES
 from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -77,6 +78,21 @@ DEFAULT_IMAGERY_WORKERS = 4
 # "earth-search" queries the Earth Search STAC API, which rate-bans
 # aggressive clients, so its worker default stays low.
 SEARCH_BACKENDS = ("parquet", "earth-search")
+
+# select_images keys that only mean something for imagery_mode "scenes".
+SCENE_ONLY_SELECT_KEYS = (
+    "cloud_cover_chip",
+    "buffer_days",
+    "num_buffer_expansions",
+    "buffer_expansion_size",
+    "search_backend",
+)
+
+MOSAIC_PREVIEW_UNSUPPORTED = (
+    "stages.download_images.mode 'preview' is not available with imagery_mode 'mosaics'. "
+    "This is expected: preview mode draws from each scene's ready-made true-colour image, "
+    "which mosaics do not have. Use mode 'clip'."
+)
 DEFAULT_PARQUET_WORKERS = 16
 
 
@@ -252,7 +268,7 @@ class ClassFilter:
 class ChipsConfig:
     """Settings for the chips stage (field coverage statistics)."""
 
-    min_coverage: float = 0.01
+    min_coverage: float = field_stats.DEFAULT_MIN_COVERAGE
     drop_border_chips: bool = False
     # How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.
     border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS
@@ -260,8 +276,9 @@ class ChipsConfig:
     # slivers left where MGRS cells are clipped at UTM zone boundaries. Set to 0 to
     # keep them.
     min_chip_area: float = field_stats.DEFAULT_MIN_CHIP_AREA
-    # Nominal chip edge length in km, the reference for min_chip_area. Match this to
-    # the grid in grid_file when it was not built at the default size.
+    # Chip edge length in kilometres (0.1 = 100 m chips). The remote FTW grid is cut to
+    # this size; a grid_file is used as-is, so match this to it. Also the reference for
+    # min_chip_area.
     km_size: float = field_stats.DEFAULT_CHIP_KM_SIZE
     # Local FTW grid parquet to use instead of fetching from Source Coop. Path is
     # resolved relative to the config file. Optional.
@@ -271,9 +288,20 @@ class ChipsConfig:
     grid_source: str | None = None
     # Per-chip HCAT crop composition (skipped automatically when the fields lack hcat:code).
     crop_stats: bool = True
+    # Per-chip land cover from the Impact Observatory annual maps on Planetary
+    # Computer. Off by default: it reads remote rasters for every chip.
+    land_cover: bool = False
     # Grid cells per coverage batch. Lower it when the coverage step runs the
     # machine out of memory on a dense, country-sized input.
     coverage_batch_size: int = field_stats.DEFAULT_COVERAGE_BATCH_SIZE
+
+
+@dataclass
+class ScaleConfig:
+    """Settings for the scale stage (nested, hash-based chip subsets)."""
+
+    percent: float = scale.DEFAULT_SCALE_PERCENT
+    min_blocks_per_square: int = scale.DEFAULT_MIN_BLOCKS_PER_SQUARE
 
 
 @dataclass
@@ -297,6 +325,8 @@ class MasksConfig:
     class_filter: str | None = None
     # When true, cells whose mask file already exists (non-empty) are not recreated.
     skip_existing: bool = False
+    # Source crop column for instance labels.
+    crop_column: str | None = None
 
 
 @dataclass
@@ -306,6 +336,8 @@ class StacConfig:
     # Compute file:checksum (multihash sha256) for every asset. Optional in
     # Portolan and slow on tens of thousands of COGs, so off by default.
     checksums: bool = False
+    # Date chip items by their crop calendar season instead of the whole year.
+    crop_calendar: bool = True
 
 
 @dataclass
@@ -430,6 +462,8 @@ class SelectImagesConfig:
     """Settings for the imagery selection stage."""
 
     enabled: bool = True
+    # "scenes" (planting/harvest, crop calendar) or "mosaics" (Q1-Q4 of the top-level year).
+    imagery_mode: str = DEFAULT_IMAGERY_MODE
     cloud_cover_chip: float = 2.0
     nodata_max: float = 0.0
     buffer_days: int = 14
@@ -484,6 +518,7 @@ class StagesConfig:
     """Per-stage settings. Stages with no options (boundaries) still run."""
 
     chips: ChipsConfig = field(default_factory=ChipsConfig)
+    scale: ScaleConfig = field(default_factory=ScaleConfig)
     splits: SplitsConfig = field(default_factory=SplitsConfig)
     masks: MasksConfig = field(default_factory=MasksConfig)
     select_images: SelectImagesConfig = field(default_factory=SelectImagesConfig)
@@ -579,6 +614,11 @@ class DatasetConfig:
         presence_only: bool,
         drop_border_chips: bool,
         border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS,
+        scale_percent: float = scale.DEFAULT_SCALE_PERCENT,
+        scale_min_blocks: int = scale.DEFAULT_MIN_BLOCKS_PER_SQUARE,
+        km_size: float = field_stats.DEFAULT_CHIP_KM_SIZE,
+        land_cover: bool = False,
+        crop_column: str | None = None,
     ) -> DatasetConfig:
         """Build a config from ``create_dataset`` keyword arguments.
 
@@ -597,7 +637,10 @@ class DatasetConfig:
                     min_coverage=min_coverage,
                     drop_border_chips=drop_border_chips,
                     border_gap_chips=border_gap_chips,
+                    km_size=km_size,
+                    land_cover=land_cover,
                 ),
+                scale=ScaleConfig(percent=scale_percent, min_blocks_per_square=scale_min_blocks),
                 splits=SplitsConfig(split_type=split_type, split_percents=split_percents),
                 masks=MasksConfig(
                     mask_types=list(mask_types)
@@ -606,6 +649,7 @@ class DatasetConfig:
                     resolution=resolution,
                     workers=num_workers,
                     presence_only=presence_only,
+                    crop_column=crop_column,
                 ),
                 select_images=SelectImagesConfig(enabled=False),
                 download_images=DownloadImagesConfig(enabled=False),
@@ -640,6 +684,71 @@ class DatasetConfig:
             raise ConfigError(f"Invalid split_percents: {err}") from err
         self.stages.splits.split_percents = resolved
 
+        self._validate_masks()
+
+        if not isinstance(self.stages.chips.crop_stats, bool):
+            raise ConfigError("stages.chips.crop_stats must be true or false")
+        if not isinstance(self.stages.chips.land_cover, bool):
+            raise ConfigError("stages.chips.land_cover must be true or false")
+
+        batch_size = self.stages.chips.coverage_batch_size
+        if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+            raise ConfigError(
+                f"stages.chips.coverage_batch_size must be a positive integer (got {batch_size!r})"
+            )
+
+        min_chip_area = self.stages.chips.min_chip_area
+        if (
+            not isinstance(min_chip_area, int | float)
+            or isinstance(min_chip_area, bool)
+            or not 0 <= min_chip_area <= 100
+        ):
+            raise ConfigError(
+                "stages.chips.min_chip_area must be a percentage between 0 and 100 "
+                f"(got {min_chip_area!r})"
+            )
+
+        try:
+            chip_grid.chip_size_m(self.stages.chips.km_size)
+        except chip_grid.InvalidChipSizeError as err:
+            raise ConfigError(f"stages.chips.{err}") from err
+
+        try:
+            scale.validate_scale(self.stages.scale.percent, self.stages.scale.min_blocks_per_square)
+        except ValueError as err:
+            raise ConfigError(f"Invalid stages.scale: {err}") from err
+
+        if not isinstance(self.stages.download_images.resume, bool):
+            raise ConfigError("stages.download_images.resume must be true or false")
+
+        if self.stages.select_images.search_backend not in SEARCH_BACKENDS:
+            raise ConfigError(
+                f"stages.select_images.search_backend must be one of {list(SEARCH_BACKENDS)} "
+                f"(got {self.stages.select_images.search_backend!r})"
+            )
+        if self.stages.select_images.workers is not None:
+            _validate_workers(self.stages.select_images.workers, "stages.select_images.workers")
+        _validate_workers(self.stages.download_images.workers, "stages.download_images.workers")
+
+        mode = self.stages.download_images.mode
+        if mode not in DOWNLOAD_MODES:
+            raise ConfigError(
+                f"stages.download_images.mode must be one of {list(DOWNLOAD_MODES)} (got {mode!r})"
+            )
+
+        self._validate_imagery_mode()
+
+        pmtiles = self.stages.docs.pmtiles
+        if not isinstance(pmtiles, bool) and pmtiles != PMTILES_AUTO:
+            raise ConfigError(
+                'stages.docs.pmtiles must be "auto", true or false '
+                f'(got {pmtiles!r}). Note that a quoted "true" is a string, not a boolean.'
+            )
+
+        if self.metadata is not None:
+            self.metadata.validate()
+
+    def _validate_masks(self) -> None:
         for mask_type in self.stages.masks.mask_types:
             if mask_type not in VALID_MASK_TYPES:
                 raise ConfigError(
@@ -664,60 +773,37 @@ class DatasetConfig:
                 f"mask_types: [{', '.join(fixed)}]"
             )
 
-        if not isinstance(self.stages.chips.crop_stats, bool):
-            raise ConfigError("stages.chips.crop_stats must be true or false")
-
-        batch_size = self.stages.chips.coverage_batch_size
-        if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
-            raise ConfigError(
-                f"stages.chips.coverage_batch_size must be a positive integer (got {batch_size!r})"
-            )
-
-        min_chip_area = self.stages.chips.min_chip_area
-        if (
-            not isinstance(min_chip_area, int | float)
-            or isinstance(min_chip_area, bool)
-            or not 0 <= min_chip_area <= 100
-        ):
-            raise ConfigError(
-                "stages.chips.min_chip_area must be a percentage between 0 and 100 "
-                f"(got {min_chip_area!r})"
-            )
-
-        km_size = self.stages.chips.km_size
-        if not isinstance(km_size, int | float) or isinstance(km_size, bool) or km_size <= 0:
-            raise ConfigError(f"stages.chips.km_size must be a positive number (got {km_size!r})")
-
         if not isinstance(self.stages.masks.skip_existing, bool):
             raise ConfigError("stages.masks.skip_existing must be true or false")
 
-        if not isinstance(self.stages.download_images.resume, bool):
-            raise ConfigError("stages.download_images.resume must be true or false")
-
-        if self.stages.select_images.search_backend not in SEARCH_BACKENDS:
+        crop_column = self.stages.masks.crop_column
+        if crop_column is not None and (
+            not isinstance(crop_column, str)
+            or not crop_column.strip()
+            or "instance" not in self.stages.masks.mask_types
+        ):
             raise ConfigError(
-                f"stages.select_images.search_backend must be one of {list(SEARCH_BACKENDS)} "
-                f"(got {self.stages.select_images.search_backend!r})"
-            )
-        if self.stages.select_images.workers is not None:
-            _validate_workers(self.stages.select_images.workers, "stages.select_images.workers")
-        _validate_workers(self.stages.download_images.workers, "stages.download_images.workers")
-
-        mode = self.stages.download_images.mode
-        if mode not in DOWNLOAD_MODES:
-            raise ConfigError(
-                f"stages.download_images.mode must be one of {list(DOWNLOAD_MODES)} (got {mode!r})"
+                "stages.masks.crop_column requires a column name and mask_types: [instance]"
             )
 
-        pmtiles = self.stages.docs.pmtiles
-        if not isinstance(pmtiles, bool) and pmtiles != PMTILES_AUTO:
+    def _validate_imagery_mode(self) -> None:
+        select = self.stages.select_images
+        if select.imagery_mode not in IMAGERY_MODES:
             raise ConfigError(
-                'stages.docs.pmtiles must be "auto", true or false '
-                f'(got {pmtiles!r}). Note that a quoted "true" is a string, not a boolean.'
+                f"stages.select_images.imagery_mode must be one of {list(IMAGERY_MODES)} "
+                f"(got {select.imagery_mode!r})"
             )
-
-        if self.metadata is not None:
-            self.metadata.validate()
+        if select.imagery_mode != "mosaics":
+            return
+        defaults = SelectImagesConfig()
+        for key in SCENE_ONLY_SELECT_KEYS:
+            if getattr(select, key) != getattr(defaults, key):
+                raise ConfigError(
+                    f"stages.select_images.{key} only applies to imagery_mode 'scenes'; "
+                    "remove it for mosaics."
+                )
+        if self.stages.download_images.mode == DOWNLOAD_MODE_PREVIEW:
+            raise ConfigError(MOSAIC_PREVIEW_UNSUPPORTED)
 
     # ---- provenance -----------------------------------------------------
 
@@ -854,6 +940,7 @@ def _as_str_list(value: Any, key: str, source: Path) -> list[str]:
 
 _STAGE_TYPES: dict[str, type] = {
     "chips": ChipsConfig,
+    "scale": ScaleConfig,
     "splits": SplitsConfig,
     "masks": MasksConfig,
     "select_images": SelectImagesConfig,

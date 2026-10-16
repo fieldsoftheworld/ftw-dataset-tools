@@ -48,3 +48,20 @@ def configure_cli_logging(verbose: bool = False) -> None:
 def is_verbose() -> bool:
     """Whether ``ftwd -v`` was given."""
     return logging.getLogger(PACKAGE_LOGGER).isEnabledFor(logging.DEBUG)
+
+
+def _enable_verbose(_ctx: click.Context, _param: click.Parameter, value: bool) -> None:
+    if value:
+        configure_cli_logging(verbose=True)
+
+
+#: The per-command ``-v/--verbose`` these commands had before the global ``ftwd -v``.
+#: Kept so existing scripts keep working; it turns on the same debug output.
+verbose_alias_option = click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    expose_value=False,
+    callback=_enable_verbose,
+    help="Show debug output (same as ftwd -v).",
+)

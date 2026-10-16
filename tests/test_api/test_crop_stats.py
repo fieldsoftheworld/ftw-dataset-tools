@@ -502,12 +502,12 @@ class TestAtomicWrite:
     """The chips file is its own input and the only copy, so it is never truncated."""
 
     def _fail_on_write(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from ftw_dataset_tools.api import crop_stats
+        from ftw_dataset_tools.api import chips_io
 
         def boom(*_args: object, **_kwargs: object) -> None:
             raise RuntimeError("interrupted mid-write")
 
-        monkeypatch.setattr(crop_stats, "write_geoparquet", boom)
+        monkeypatch.setattr(chips_io, "write_geoparquet", boom)
 
     def test_add_leaves_the_original_intact(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -544,19 +544,19 @@ class TestAtomicWrite:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The rename must stay on one filesystem, so the temp file lives alongside."""
-        from ftw_dataset_tools.api import crop_stats as crop_stats_module
+        from ftw_dataset_tools.api import chips_io
         from ftw_dataset_tools.api.crop_stats import add_crop_stats
 
         chips = _chips(tmp_path)
         created: list[Path] = []
-        real = crop_stats_module.create_temp_file
+        real = chips_io.create_temp_file
 
         def spy(target: Path, suffix: str = "") -> Path:
             path = real(target, suffix=suffix)
             created.append(path)
             return path
 
-        monkeypatch.setattr(crop_stats_module, "create_temp_file", spy)
+        monkeypatch.setattr(chips_io, "create_temp_file", spy)
 
         add_crop_stats(chips, _fields(tmp_path))
 
@@ -609,17 +609,17 @@ class TestWriteOrdering:
 
     def test_the_written_query_orders_by_id(self, tmp_path: Path) -> None:
         """Pins the ORDER BY itself, since small fixtures can come out sorted by luck."""
-        from ftw_dataset_tools.api import crop_stats
+        from ftw_dataset_tools.api import chips_io, crop_stats
 
         seen: list[str] = []
-        real = crop_stats.write_geoparquet
+        real = chips_io.write_geoparquet
 
         def capture(path: Path, **kwargs: object) -> None:
             seen.append(str(kwargs.get("query")))
             real(path, **kwargs)
 
         monkey = pytest.MonkeyPatch()
-        monkey.setattr(crop_stats, "write_geoparquet", capture)
+        monkey.setattr(chips_io, "write_geoparquet", capture)
         try:
             crop_stats.add_crop_stats(self._shuffled_chips(tmp_path), _fields(tmp_path))
         finally:

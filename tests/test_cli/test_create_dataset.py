@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+import click
 import geopandas as gpd
 import pytest
 from click.testing import CliRunner, Result
@@ -26,6 +27,10 @@ if TYPE_CHECKING:
 class TestCreateDatasetCommand:
     """Tests for create-dataset command."""
 
+    def test_min_coverage_defaults_to_one_percent(self) -> None:
+        params = {p.name: p for p in cli.get_command(click.Context(cli), "create-dataset").params}
+        assert params["min_coverage"].default == 1.0
+
     def test_help(self) -> None:
         """Test --help works."""
         runner = CliRunner()
@@ -44,6 +49,101 @@ class TestCreateDatasetCommand:
         runner = CliRunner()
         result = runner.invoke(cli, ["create-dataset", "/nonexistent/fields.parquet"])
         assert result.exit_code != 0
+
+    def test_scale_options_reach_create_dataset(
+        self, sample_fields_geoparquet: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_create_dataset(**kwargs: Any) -> CreateDatasetResult:
+            captured.update(kwargs)
+            raise SystemExit(0)
+
+        monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
+
+        CliRunner().invoke(
+            cli,
+            [
+                "create-dataset",
+                str(sample_fields_geoparquet),
+                "--split-type",
+                "block3x3-hash",
+                "--scale-percent",
+                "10",
+                "--scale-min-blocks",
+                "0",
+            ],
+        )
+
+        assert captured["split_type"] == "block3x3-hash"
+        assert captured["scale_percent"] == 10
+        assert captured["scale_min_blocks"] == 0
+
+    def test_km_size_reaches_create_dataset_and_is_reported(
+        self, sample_fields_geoparquet: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_create_dataset(**kwargs: Any) -> CreateDatasetResult:
+            captured.update(kwargs)
+            raise SystemExit(0)
+
+        monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
+
+        result = CliRunner().invoke(
+            cli,
+            [
+                "create-dataset",
+                str(sample_fields_geoparquet),
+                "--split-type",
+                "block3x3",
+                "--km-size",
+                "0.5",
+            ],
+        )
+
+        assert captured["km_size"] == 0.5
+        assert "Chip size: 0.5 km (500 m) (--km-size is in kilometres)" in result.output
+
+    def test_km_size_defaults_to_the_ftw_grid(
+        self, sample_fields_geoparquet: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_create_dataset(**kwargs: Any) -> CreateDatasetResult:
+            captured.update(kwargs)
+            raise SystemExit(0)
+
+        monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
+
+        CliRunner().invoke(
+            cli, ["create-dataset", str(sample_fields_geoparquet), "--split-type", "block3x3"]
+        )
+
+        assert captured["km_size"] == 2.0
+
+    @pytest.mark.parametrize(
+        ("bad", "message"),
+        [("500", "kilometres"), ("0.1234", "whole number of metres"), ("big", "not a number")],
+    )
+    def test_invalid_km_size_rejected(
+        self, sample_fields_geoparquet: Path, bad: str, message: str
+    ) -> None:
+        result = CliRunner().invoke(
+            cli,
+            [
+                "create-dataset",
+                str(sample_fields_geoparquet),
+                "--split-type",
+                "block3x3",
+                "--km-size",
+                bad,
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "Invalid value for '--km-size'" in result.output
+        assert message in result.output
 
 
 class TestCreateDatasetMaskTypes:
@@ -138,6 +238,32 @@ class TestCreateDatasetMaskTypes:
         )
 
         assert captured["mask_types"] == ["semantic_2_class", "decode_distance"]
+
+    @pytest.mark.parametrize(("extra", "expected"), [([], False), (["--land-cover"], True)])
+    def test_land_cover_flag_reaches_the_api(
+        self,
+        sample_fields_geoparquet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        extra: list[str],
+        expected: bool,
+    ) -> None:
+        """Land cover is off unless --land-cover is passed."""
+        captured: dict[str, Any] = {}
+
+        def fake_create_dataset(**kwargs: Any) -> CreateDatasetResult:
+            captured.update(kwargs)
+            raise SystemExit(0)
+
+        monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
+
+        _invoke(sample_fields_geoparquet, *extra)
+
+        assert captured["land_cover"] is expected
+
+    def test_land_cover_flag_in_help(self) -> None:
+        result = CliRunner().invoke(cli, ["create-dataset", "--help"])
+
+        assert "--land-cover" in result.output
 
 
 @dataclass
@@ -646,3 +772,39 @@ class TestCreateDatasetImageDownload:
         result = _invoke(sample_fields_geoparquet, "--image-workers", "0")
 
         assert result.exit_code == 2
+
+
+class TestCreateDatasetMosaics:
+    """--imagery-mode mosaics reaches the shared selection workflow."""
+
+    def test_mosaic_mode_and_year_reach_the_workflow(
+        self,
+        stub_pipeline: SelectionStub,
+        sample_fields_geoparquet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ftw_dataset_tools.api.imagery import mosaic_selection
+
+        monkeypatch.setattr(mosaic_selection, "year_available", lambda _year: True)
+        result = _invoke(sample_fields_geoparquet, "--imagery-mode", "mosaics", year="2022")
+
+        assert result.exit_code == 0, result.output
+        assert stub_pipeline.calls[0]["imagery_mode"] == "mosaics"
+        assert stub_pipeline.calls[0]["year"] == 2022
+
+    def test_selection_conflict_names_the_force_flag(
+        self,
+        stub_pipeline: SelectionStub,
+        sample_fields_geoparquet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ftw_dataset_tools.api.imagery import mosaic_selection
+        from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
+
+        monkeypatch.setattr(mosaic_selection, "year_available", lambda _year: True)
+        stub_pipeline.error = SelectionConflictError("3 chip(s) already hold imagery.")
+        result = _invoke(sample_fields_geoparquet, "--imagery-mode", "mosaics")
+
+        assert result.exit_code == 1
+        assert "already hold imagery" in result.output
+        assert "--force-image-selection" in result.output

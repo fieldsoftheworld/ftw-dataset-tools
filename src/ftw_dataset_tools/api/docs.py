@@ -30,6 +30,7 @@ QUANTILES = (5, 25, 50, 75, 95)
 TOP_CROP_LIMIT = 10
 RESULT_ROWS = 3
 SEASONS = ("planting", "harvest")
+MOSAIC_QUARTERS = ("q1", "q2", "q3", "q4")
 
 # Columns that would mark a row in items.parquet as a season child item rather
 # than a chip. The catalogue written today mirrors chips only, so the child
@@ -75,6 +76,23 @@ _HCAT_NOTES = {
     ),
 }
 
+# Land cover notes, shared the same way between the landcover_* chips columns and
+# the ftw:landcover_* item properties.
+_LANDCOVER_NOTES = {
+    "landcover_year": "year of the Impact Observatory land-cover map the chip was read from",
+    "landcover_year_exact": (
+        "true when landcover_year is the dataset year; false when IO had no map for that "
+        "year and the nearest year was used, so the land may have changed since"
+    ),
+    "landcover_dominant_code": "Impact Observatory class value covering most of the chip",
+    "landcover_dominant_name": "name of landcover_dominant_code (e.g. Crops, Trees, Built area)",
+    "landcover_dominant_pct": "share of the chip's valid land-cover pixels in the dominant class",
+    "landcover_classes": (
+        "every Impact Observatory class in the chip, as {code, name, pct} entries ordered "
+        "by share of the chip's valid pixels"
+    ),
+}
+
 # Plain-language meanings for the columns and item properties FTW writes. Anything
 # not listed is carried through from the source dataset and described as such.
 CHIP_COLUMN_NOTES = {
@@ -84,7 +102,9 @@ CHIP_COLUMN_NOTES = {
     "split": "which benchmark split the chip belongs to (train / val / test)",
     "field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
     "field_count": "number of field polygons intersecting the chip",
+    "scale_score": "stable hash score of the chip's 3x3 block; a scale keeps scores below it",
     **_HCAT_NOTES,
+    **_LANDCOVER_NOTES,
     "gzd": "MGRS grid zone designator of the chip's grid cell",
     "mgrs_10km": "MGRS 100 km square plus 10 km cell identifier the chip belongs to",
     "grid_id": "identifier of the FTW grid cell the chip was cut from",
@@ -93,17 +113,23 @@ CHIP_COLUMN_NOTES = {
 
 ITEM_PROPERTY_NOTES = {
     "ftw:split": "which benchmark split the chip belongs to (train / val / test)",
+    "ftw:scale_score": "stable hash score of the chip's 3x3 block; a scale keeps scores below it",
     "ftw:calendar_year": "calendar year of the crop cycle the chip documents",
     "ftw:planting_day": "day of year the planting window is centred on",
     "ftw:harvest_day": "day of year the harvest window is centred on",
     "ftw:planting_cloud_cover": "cloud cover of the selected planting scene, in percent",
     "ftw:harvest_cloud_cover": "cloud cover of the selected harvest scene, in percent",
     "ftw:stac_host": "STAC API the imagery was selected from",
-    "ftw:season": "which crop-calendar window a child imagery item covers",
+    "ftw:season": "which crop-calendar window (or mosaic quarter) a child imagery item covers",
     "ftw:source": "satellite mission the imagery came from",
+    "ftw:imagery_mode": "scenes (planting/harvest) or mosaics (quarterly, Q1-Q4)",
+    "ftw:requested_year": "mosaic year the selection asked for",
+    "ftw:imagery_year": "mosaic year actually used (differs when a nearby year was needed)",
+    "ftw:mosaic_tile": "quarterly mosaic tile the imagery came from",
     "ftw:buffer_days": "half-width of the search window around the target day, in days",
     "ftw:field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
     **{f"ftw:{name}": note for name, note in _HCAT_NOTES.items()},
+    **{f"ftw:{name}": note for name, note in _LANDCOVER_NOTES.items()},
 }
 
 ASSET_NOTES = {
@@ -298,7 +324,7 @@ def imagery_stats(
     if not records:
         return None
     stats: dict = {"chips_with_imagery": len({r["parent"] for r in records})}
-    for season in SEASONS:
+    for season in (*SEASONS, *MOSAIC_QUARTERS):
         summary = _season_summary(records, season)
         if summary:
             stats[season] = summary
@@ -539,6 +565,11 @@ def _imagery_block(stats: dict) -> str:
     imagery = stats["imagery"]
     if not imagery:
         return ""
+    if any(imagery.get(q) for q in MOSAIC_QUARTERS):
+        return (
+            f"{imagery['chips_with_imagery']:,} chips have Sentinel-2 quarterly cloudless "
+            "mosaics selected for them, one for each quarter (Q1-Q4) of a single year."
+        )
     lines = [
         f"{imagery['chips_with_imagery']:,} chips have Sentinel-2 scenes selected for them, "
         "one in the planting window and one in the harvest window of the crop calendar."
@@ -598,6 +629,9 @@ def _config_lines(collection: dict, config_dict: dict) -> list[str]:
     splits = stages.get("splits") or {}
     masks = stages.get("masks") or {}
     lines = []
+    chip_km = (stages.get("chips") or {}).get("km_size") or collection.get("ftw:chip_size_km")
+    if chip_km:
+        lines.append(f"- Chips are {chip_km:g} km ({chip_km * 1000:,.0f} m) on a side")
     split_type = splits.get("split_type") or collection.get("ftw:split_type")
     if split_type:
         seed = splits.get("random_seed")

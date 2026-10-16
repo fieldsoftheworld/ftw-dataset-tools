@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pystac
+import pytest
 from click.testing import CliRunner
 
 from ftw_dataset_tools.api.imagery.image_download import DownloadResult
@@ -17,8 +18,6 @@ from ftw_dataset_tools.cli import cli
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 def _write_minimal_collection(path: Path) -> None:
@@ -206,7 +205,7 @@ class TestDownloadImagesWorkers:
             fake_download,
         )
         monkeypatch.setattr(
-            "ftw_dataset_tools.commands.download_images.process_downloaded_scene",
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
             lambda **_kwargs: update_threads.append(threading.current_thread().name),
         )
 
@@ -231,7 +230,7 @@ class TestDownloadImagesWorkers:
             fake_download,
         )
         monkeypatch.setattr(
-            "ftw_dataset_tools.commands.download_images.process_downloaded_scene",
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
             lambda **_kwargs: None,
         )
 
@@ -258,7 +257,7 @@ class TestDownloadImagesWorkers:
             lambda **_kwargs: MagicMock(success=True, error=None),
         )
         monkeypatch.setattr(
-            "ftw_dataset_tools.commands.download_images.process_downloaded_scene",
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
             lambda **_kwargs: None,
         )
 
@@ -267,6 +266,68 @@ class TestDownloadImagesWorkers:
         assert result.exit_code == 0, result.output
         assert "Downloaded: 1" in result.output
         assert "Skipped: 1" in result.output
+
+
+class TestDownloadImagesOutput:
+    """What the command prints and reports around the shared workflow."""
+
+    @pytest.mark.parametrize("verbose", [False, True])
+    def test_grid_lines_need_verbose(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verbose: bool
+    ) -> None:
+        from ftw_dataset_tools.api.logging_config import get_logger
+
+        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+        scene_logger = get_logger("ftw_dataset_tools.api.imagery.image_download")
+
+        def fake_download(**_kwargs: object) -> MagicMock:
+            scene_logger.debug("Grid: EPSG:32633 2x2")
+            return MagicMock(success=True, error=None)
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            fake_download,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
+            lambda **_kwargs: None,
+        )
+
+        args = ["-v"] if verbose else []
+        result = CliRunner().invoke(cli, [*args, "download-images", str(dataset_dir)])
+
+        assert result.exit_code == 0, result.output
+        assert ("Grid: EPSG:32633 2x2" in result.output) is verbose
+
+    def test_empty_catalog_fails(self, tmp_path: Path) -> None:
+        dataset_dir = _write_catalog(tmp_path, [])
+
+        result = CliRunner().invoke(cli, ["download-images", str(dataset_dir)])
+
+        assert result.exit_code == 1
+        assert "No S2 child items found" in result.output
+
+    def test_writes_report(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+        report_path = tmp_path / "report.json"
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            lambda **_kwargs: MagicMock(success=True, error=None),
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
+            lambda **_kwargs: None,
+        )
+
+        result = CliRunner().invoke(
+            cli, ["download-images", str(dataset_dir), "--output-report", str(report_path)]
+        )
+
+        assert result.exit_code == 0, result.output
+        report = json.loads(report_path.read_text())
+        assert report["total_processed"] == 2
+        assert report["successful"] == 2
+        assert report["failed"] == []
 
 
 class TestDownloadImagesResumeDefault:
@@ -339,7 +400,7 @@ class TestDownloadImagesResumeDefault:
             fake_download,
         )
         monkeypatch.setattr(
-            "ftw_dataset_tools.commands.download_images.process_downloaded_scene",
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
             lambda **_kwargs: None,
         )
 

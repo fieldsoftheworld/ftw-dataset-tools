@@ -14,8 +14,11 @@ import pytest
 
 from ftw_dataset_tools.api.imagery.catalog_ops import has_existing_scenes
 from ftw_dataset_tools.api.imagery.selection_workflow import (
+    NO_YEAR_REASON,
     ChipSelectionJob,
+    NoCloudFreeScenesError,
     SelectionWorkflowResult,
+    chip_year,
     find_chip_items,
     run_chip_selection,
     select_imagery_for_catalog,
@@ -950,3 +953,190 @@ class TestCropCalendarWarmup:
         select_imagery_for_catalog(catalog_dir=catalog, year=2024)
 
         crop_calendar_warmup.assert_not_called()
+
+
+def _chip(item_id: str, **kwargs: object) -> pystac.Item:
+    kwargs.setdefault("datetime", datetime(2021, 1, 1, tzinfo=UTC))
+    kwargs.setdefault("properties", {})
+    return pystac.Item(
+        id=item_id,
+        geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+        bbox=(10.0, 50.0, 10.01, 50.01),
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+class TestChipYear:
+    """chip_year reads the id suffix first, then the item's temporal properties."""
+
+    def test_from_id_suffix(self) -> None:
+        assert chip_year(_chip("ftw-34UFF1628_2024")) == 2024
+
+    def test_from_start_datetime(self) -> None:
+        item = _chip("chip", properties={"start_datetime": "2023-03-01T00:00:00Z"})
+        assert chip_year(item) == 2023
+
+    def test_bad_start_datetime_falls_back_to_datetime(self) -> None:
+        item = _chip("chip", properties={"start_datetime": "not-a-date"})
+        assert chip_year(item) == 2021
+
+    def test_none_without_any_date(self) -> None:
+        item = _chip(
+            "chip",
+            datetime=None,
+            properties={"start_datetime": "not-a-date", "end_datetime": "not-a-date"},
+        )
+        assert chip_year(item) is None
+
+
+class TestPerChipYearAndExplicitItems:
+    """Options the standalone select-images command relies on."""
+
+    def test_year_none_uses_each_chips_own_year(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        seen: dict[str, int] = {}
+
+        def fake_select(*, chip_id: str, year: int, **_kwargs: object) -> SceneSelectionResult:
+            seen[chip_id] = year
+            return mock_selection_result
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip",
+            fake_select,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.create_child_items_from_selection",
+            lambda **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar",
+            RecordingProgressBar,
+        )
+        undated = _chip(
+            "undated",
+            datetime=None,
+            properties={"start_datetime": "x", "end_datetime": "x"},
+        )
+        chip_items = [
+            (_chip("a_2022"), tmp_path / "a_2022.json"),
+            (_chip("b"), tmp_path / "b.json"),
+            (undated, tmp_path / "undated.json"),
+        ]
+
+        result = select_imagery_for_catalog(
+            catalog_dir=tmp_path, year=None, chip_items=chip_items, workers=1
+        )
+
+        assert seen == {"a_2022": 2022, "b": 2021}
+        assert result.successful == 2
+        assert result.skipped_details == [{"chip": "undated", "reason": NO_YEAR_REASON}]
+
+    def test_chip_items_replace_discovery(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        mock_selection_result: SceneSelectionResult,
+    ) -> None:
+        catalog = _write_chip_catalog(tmp_path, ["chip_000", "chip_001"])
+        jobs: list[ChipSelectionJob] = []
+
+        def fake_run(job: ChipSelectionJob, **_kwargs: object) -> SceneSelectionResult:
+            jobs.append(job)
+            return mock_selection_result
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.run_chip_selection", fake_run
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar",
+            RecordingProgressBar,
+        )
+        item_path = catalog / "chips" / "33UXP" / "chip_001" / "chip_001.json"
+        item = pystac.Item.from_file(str(item_path))
+
+        result = select_imagery_for_catalog(
+            catalog_dir=catalog, year=2024, chip_items=[(item, item_path)]
+        )
+
+        assert result.successful == 1
+        assert [(job.item.id, job.item_path) for job in jobs] == [("chip_001", item_path)]
+
+    def test_on_missing_fail_raises_domain_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        catalog = _write_chip_catalog(tmp_path, ["chip_000"])
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.select_scenes_for_chip",
+            lambda **_kwargs: MagicMock(success=False, skipped_reason="too cloudy"),
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.selection_workflow.ImageryProgressBar",
+            RecordingProgressBar,
+        )
+
+        with pytest.raises(NoCloudFreeScenesError) as excinfo:
+            select_imagery_for_catalog(catalog_dir=catalog, year=2024, on_missing="fail")
+
+        assert excinfo.value.chip_id == "chip_000"
+        assert "too cloudy" in str(excinfo.value)
+
+
+class TestBuildSceneIndex:
+    """The run's scene index spans every chip's bbox and every chip's year."""
+
+    @staticmethod
+    def _job(chip_id: str, bbox: list[float] | None, year: int) -> ChipSelectionJob:
+        item = pystac.Item(
+            id=chip_id,
+            geometry=None,
+            bbox=bbox,
+            datetime=datetime(year, 6, 1, tzinfo=UTC),
+            properties={},
+        )
+        return ChipSelectionJob(item=item, item_path=MagicMock(), year=year)
+
+    def test_covers_union_of_bboxes_and_years(self) -> None:
+        from ftw_dataset_tools.api.imagery import selection_workflow
+
+        jobs = [
+            self._job("ftw-a_2022", [10.0, 45.0, 10.1, 45.1], 2022),
+            self._job("ftw-b_2024", [11.0, 46.0, 11.2, 46.2], 2024),
+        ]
+        with patch.object(
+            selection_workflow.parquet_search, "build_local_index", return_value="idx"
+        ) as build:
+            index = selection_workflow._build_scene_index(jobs, "parquet")
+
+        assert index == "idx"
+        bbox, years = build.call_args.args
+        assert bbox == (10.0, 45.0, 11.2, 46.2)
+        assert years == [2021, 2022, 2023, 2024, 2025]
+
+    def test_earth_search_backend_skips_index(self) -> None:
+        from ftw_dataset_tools.api.imagery import selection_workflow
+
+        jobs = [self._job("ftw-a_2022", [10.0, 45.0, 10.1, 45.1], 2022)]
+        with patch.object(selection_workflow.parquet_search, "build_local_index") as build:
+            index = selection_workflow._build_scene_index(jobs, "earth-search")
+
+        assert index is None
+        build.assert_not_called()
+
+    def test_failed_build_falls_back_to_mirror(self) -> None:
+        from ftw_dataset_tools.api.imagery import selection_workflow
+
+        jobs = [self._job("ftw-a_2022", [10.0, 45.0, 10.1, 45.1], 2022)]
+        with patch.object(
+            selection_workflow.parquet_search,
+            "build_local_index",
+            side_effect=OSError("mirror unreachable"),
+        ):
+            index = selection_workflow._build_scene_index(jobs, "parquet")
+
+        assert index is None

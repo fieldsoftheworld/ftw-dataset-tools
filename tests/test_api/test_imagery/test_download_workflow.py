@@ -756,3 +756,79 @@ class TestParallelDownload:
         )
 
         assert seen == [(1, 4), (2, 4), (3, 4), (4, 4)]
+
+
+class TestKeepRemoteRefsAndLogs:
+    """Options the standalone download-images command relies on."""
+
+    def test_keep_remote_refs_adds_clipped_asset(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        catalog = _write_s2_catalog(tmp_path, ["chip_000"])
+        process = MagicMock()
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            lambda **_kwargs: MagicMock(success=True, error=None),
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene", process
+        )
+
+        result = download_imagery_for_catalog(
+            catalog_dir=catalog, show_progress_bar=False, keep_remote_refs=True
+        )
+
+        assert result.successful == 2
+        process.assert_not_called()
+        item_path = catalog / "chips" / "33UXP" / "chip_000" / "chip_000_planting_s2.json"
+        item = pystac.Item.from_file(str(item_path))
+        assert item.assets["clipped"].href.endswith("chip_000_planting_image_s2.tif")
+        assert "red" in item.assets
+
+    def test_keep_remote_refs_write_failure_is_recorded(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        catalog = _write_s2_catalog(tmp_path, ["chip_000"])
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            lambda **_kwargs: MagicMock(success=True, error=None),
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.write_item",
+            MagicMock(side_effect=OSError("disk full")),
+        )
+
+        result = download_imagery_for_catalog(
+            catalog_dir=catalog, show_progress_bar=False, keep_remote_refs=True
+        )
+
+        assert result.successful == 0
+        assert result.failed == 2
+        assert {d["error"] for d in result.failed_details} == {"disk full"}
+
+    def test_each_scenes_log_lines_are_replayed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from ftw_dataset_tools.api.logging_config import get_logger
+
+        caplog.set_level("DEBUG", logger="ftw_dataset_tools")
+        catalog = _write_s2_catalog(tmp_path, ["chip_000"])
+        scene_logger = get_logger("ftw_dataset_tools.api.imagery.image_download")
+
+        def fake_download(*, scene: object, **_kwargs: object) -> MagicMock:
+            scene_logger.debug(f"Grid: {scene.item.id}")  # type: ignore[attr-defined]
+            return MagicMock(success=True, error=None)
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            fake_download,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
+            lambda **_kwargs: None,
+        )
+
+        download_imagery_for_catalog(catalog_dir=catalog, show_progress_bar=False)
+
+        grid_lines = [msg for msg in caplog.messages if msg.startswith("Grid:")]
+        assert sorted(grid_lines) == ["Grid: chip_000_harvest_s2", "Grid: chip_000_planting_s2"]

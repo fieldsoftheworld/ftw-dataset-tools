@@ -7,11 +7,12 @@ from pathlib import Path
 import click
 
 from ftw_dataset_tools.api import dataset_summary
-from ftw_dataset_tools.commands.cli_logging import is_verbose
+from ftw_dataset_tools.commands.cli_logging import is_verbose, verbose_alias_option
 
 
 @click.command("create-dataset-summary")
 @click.argument("dataset_dir", type=click.Path(exists=True))
+@verbose_alias_option
 @click.option(
     "-o",
     "--output",

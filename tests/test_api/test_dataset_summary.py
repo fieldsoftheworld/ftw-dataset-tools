@@ -761,3 +761,32 @@ class TestMaskStatisticsMarkdown:
 
         # But histogram image should not be included
         assert "![Field Coverage](figures/field_coverage.png)" not in content
+
+
+class TestHistograms:
+    """Tests for the histogram figures."""
+
+    def test_creates_value_histogram(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from ftw_dataset_tools.api.dataset_summary import _create_histogram
+
+        caplog.set_level("DEBUG", logger="ftw_dataset_tools")
+        output = tmp_path / "coverage.png"
+        _create_histogram([10.0, 50.0, 90.0], "Coverage (%)", output)
+
+        assert output.stat().st_size > 0
+        assert any("Saved: coverage.png" in msg for msg in caplog.messages)
+
+    def test_creates_date_histogram(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        from datetime import datetime
+
+        from ftw_dataset_tools.api.dataset_summary import _create_date_histogram
+
+        output = tmp_path / "dates.png"
+        caplog.set_level("DEBUG", logger="ftw_dataset_tools")
+        dates = [datetime(2023, 4, 1), datetime(2023, 5, 15), datetime(2023, 9, 1)]
+        _create_date_histogram(dates, "Planting", output)
+
+        assert output.stat().st_size > 0
+        assert any("Saved: dates.png" in msg for msg in caplog.messages)

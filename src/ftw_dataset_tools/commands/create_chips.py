@@ -5,6 +5,7 @@ from tqdm import tqdm
 
 from ftw_dataset_tools.api import field_stats
 from ftw_dataset_tools.api.geo import CRSMismatchError
+from ftw_dataset_tools.commands.options import KM_SIZE, KM_SIZE_HELP
 
 
 @click.command("create-chips")
@@ -68,10 +69,13 @@ from ftw_dataset_tools.api.geo import CRSMismatchError
 )
 @click.option(
     "--km-size",
-    type=click.FloatRange(min=0, min_open=True),
+    type=KM_SIZE,
     default=field_stats.DEFAULT_CHIP_KM_SIZE,
     show_default=True,
-    help="Nominal chip edge length in km, used as the reference for --min-chip-area.",
+    help=(
+        f"{KM_SIZE_HELP} The FTW grid is cut to this size; with --grid-file it must "
+        "match that grid. Also the reference for --min-chip-area."
+    ),
 )
 @click.option(
     "--reproject",
@@ -91,7 +95,10 @@ from ftw_dataset_tools.api.geo import CRSMismatchError
     type=click.IntRange(min=0),
     default=field_stats.DEFAULT_BORDER_GAP_CHIPS,
     show_default=True,
-    help="How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.",
+    help=(
+        "How wide an unlabelled gap must be, in chips, before it counts as a cluster edge. "
+        "Below 2, UTM zone seams emptied by --min-chip-area count as edges."
+    ),
 )
 @click.option(
     "--batch-size",
@@ -123,7 +130,8 @@ def create_chips_cmd(
     polygons using DuckDB's spatial extension.
 
     If no grid file is provided, fetches grid cells from the FTW grid on
-    Source Cooperative, filtered by the bounds of the fields file.
+    Source Cooperative, filtered by the bounds of the fields file, and cuts
+    them to --km-size (in kilometres; 2 km by default).
 
     When using a local grid file, the grid and fields files must have the same
     CRS. If they don't match, use --reproject to automatically reproject both
@@ -136,6 +144,7 @@ def create_chips_cmd(
     Examples:
         ftwd create-chips fields.parquet
         ftwd create-chips fields.parquet --grid-file grid.parquet
+        ftwd create-chips fields.parquet --km-size 0.5
         ftwd create-chips fields.parquet -o output.parquet
         ftwd create-chips fields.parquet --reproject
         ftwd create-chips fields.parquet --batch-size 250

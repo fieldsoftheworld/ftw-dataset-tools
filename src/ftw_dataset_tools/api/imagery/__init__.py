@@ -1,94 +1,52 @@
 """Imagery pipeline for selecting and downloading satellite imagery."""
 
-from ftw_dataset_tools.api.imagery.catalog_ops import (
-    ClearResult,
-    ImageryStats,
-    chip_dir_for_item,
-    clear_chip_selections,
-    find_collection_dir,
-    get_imagery_stats,
-    has_existing_scenes,
-    iter_chip_dirs,
-)
-from ftw_dataset_tools.api.imagery.cloud_analysis import calculate_pixel_cloud_cover
-from ftw_dataset_tools.api.imagery.crop_calendar import (
-    CropCalendarDates,
-    get_crop_calendar_dates,
-)
-from ftw_dataset_tools.api.imagery.download_workflow import (
-    DownloadWorkflowResult,
-    download_imagery_for_catalog,
-    find_s2_child_items,
-)
-from ftw_dataset_tools.api.imagery.image_download import (
-    DownloadResult,
-    ProcessedSceneResult,
-    download_and_clip_scene,
-    process_downloaded_scene,
-)
-from ftw_dataset_tools.api.imagery.preview_conversion import (
-    ConversionResult,
-    conversion_summary_line,
-    convert_previews_for_catalog,
-)
-from ftw_dataset_tools.api.imagery.preview_workflow import (
-    preview_imagery_for_catalog,
-    preview_summary_line,
-)
-from ftw_dataset_tools.api.imagery.progress import ImageryProgressBar, SelectionStats
-from ftw_dataset_tools.api.imagery.scene_selection import (
-    SceneSelectionResult,
-    SelectedScene,
-    select_scenes_for_chip,
-)
-from ftw_dataset_tools.api.imagery.selection_workflow import (
-    SelectionWorkflowResult,
-    find_chip_items,
-    select_imagery_for_catalog,
-)
-from ftw_dataset_tools.api.imagery.settings import (
-    BANDS_OF_INTEREST,
-    CROP_CALENDAR_BASE_URL,
-    CROP_CALENDAR_FILES,
-    STAC_URL,
-)
-from ftw_dataset_tools.api.imagery.stac_child_items import create_child_items_from_selection
+from ftw_dataset_tools._lazy import lazy_exports
 
-__all__ = [
-    "BANDS_OF_INTEREST",
-    "CROP_CALENDAR_BASE_URL",
-    "CROP_CALENDAR_FILES",
-    "STAC_URL",
-    "ClearResult",
-    "ConversionResult",
-    "CropCalendarDates",
-    "DownloadResult",
-    "DownloadWorkflowResult",
-    "ImageryProgressBar",
-    "ImageryStats",
-    "ProcessedSceneResult",
-    "SceneSelectionResult",
-    "SelectedScene",
-    "SelectionStats",
-    "SelectionWorkflowResult",
-    "calculate_pixel_cloud_cover",
-    "chip_dir_for_item",
-    "clear_chip_selections",
-    "conversion_summary_line",
-    "convert_previews_for_catalog",
-    "create_child_items_from_selection",
-    "download_and_clip_scene",
-    "download_imagery_for_catalog",
-    "find_chip_items",
-    "find_collection_dir",
-    "find_s2_child_items",
-    "get_crop_calendar_dates",
-    "get_imagery_stats",
-    "has_existing_scenes",
-    "iter_chip_dirs",
-    "preview_imagery_for_catalog",
-    "preview_summary_line",
-    "process_downloaded_scene",
-    "select_imagery_for_catalog",
-    "select_scenes_for_chip",
-]
+__getattr__, __all__ = lazy_exports(
+    __name__,
+    {
+        "catalog_ops": (
+            "ClearResult",
+            "ImageryStats",
+            "chip_dir_for_item",
+            "clear_chip_selections",
+            "find_collection_dir",
+            "get_imagery_stats",
+            "has_existing_scenes",
+            "iter_chip_dirs",
+        ),
+        "cloud_analysis": ("calculate_pixel_cloud_cover", "read_scl_chip_stats"),
+        "crop_calendar": ("CropCalendarDates", "get_crop_calendar_dates"),
+        "download_workflow": (
+            "DownloadWorkflowResult",
+            "download_imagery_for_catalog",
+            "find_s2_child_items",
+        ),
+        "image_download": (
+            "DownloadResult",
+            "ProcessedSceneResult",
+            "download_and_clip_scene",
+            "process_downloaded_scene",
+        ),
+        "preview_conversion": (
+            "ConversionResult",
+            "conversion_summary_line",
+            "convert_previews_for_catalog",
+        ),
+        "preview_workflow": ("preview_imagery_for_catalog", "preview_summary_line"),
+        "progress": ("ImageryProgressBar", "SelectionStats"),
+        "scene_selection": ("SceneSelectionResult", "SelectedScene", "select_scenes_for_chip"),
+        "selection_workflow": (
+            "SelectionWorkflowResult",
+            "find_chip_items",
+            "select_imagery_for_catalog",
+        ),
+        "settings": (
+            "BANDS_OF_INTEREST",
+            "CROP_CALENDAR_BASE_URL",
+            "CROP_CALENDAR_FILES",
+            "STAC_URL",
+        ),
+        "stac_child_items": ("create_child_items_from_selection",),
+    },
+)

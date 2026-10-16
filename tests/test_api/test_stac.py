@@ -391,6 +391,7 @@ def build_catalog(
     chips_path: Path | None = None,
     fields_path: Path | None = None,
     background_class_value: int = 0,
+    crop_calendar: bool = True,
 ):
     """Build a one-chip STAC catalog in ``tmp_path``; safe to call again on the same tree."""
     import geopandas as gpd
@@ -442,7 +443,67 @@ def build_catalog(
         config=config,
         provenance=provenance,
         background_class_value=background_class_value,
+        crop_calendar=crop_calendar,
     )
+
+
+class TestCropCalendarExtent:
+    def _item(self, tmp_path: Path) -> dict:
+        import json
+
+        chip_id = "ftw-33UXP0410_2024"
+        return json.loads((tmp_path / "chips" / "33UXP" / chip_id / f"{chip_id}.json").read_text())
+
+    def _use_season(self, lookup, planting_day: int, harvest_day: int) -> None:
+        from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
+
+        lookup.side_effect = None
+        lookup.return_value = CropCalendarDates(planting_day, harvest_day)
+
+    def test_item_spans_crop_season(self, tmp_path: Path, stac_crop_calendar) -> None:
+        self._use_season(stac_crop_calendar, 100, 250)
+
+        result = build_catalog(tmp_path)
+
+        props = self._item(tmp_path)["properties"]
+        assert props["start_datetime"] == "2024-04-09T00:00:00+00:00"
+        assert props["end_datetime"] == "2024-09-06T23:59:59+00:00"
+        assert result.temporal_extent == (
+            datetime(2024, 1, 1, tzinfo=UTC),
+            datetime(2024, 12, 31, 23, 59, 59, tzinfo=UTC),
+        )
+
+    def test_next_year_harvest_widens_collection(self, tmp_path: Path, stac_crop_calendar) -> None:
+        import json
+
+        self._use_season(stac_crop_calendar, 300, 60)
+
+        result = build_catalog(tmp_path)
+
+        assert self._item(tmp_path)["properties"]["end_datetime"] == "2025-03-01T23:59:59+00:00"
+        assert result.temporal_extent[1] == datetime(2025, 3, 1, 23, 59, 59, tzinfo=UTC)
+        coll = json.loads(result.collection_path.read_text())
+        assert coll["extent"]["temporal"]["interval"][0][1] == "2025-03-01T23:59:59Z"
+
+    def test_outside_calendar_keeps_year(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level("INFO")
+
+        build_catalog(tmp_path)
+
+        props = self._item(tmp_path)["properties"]
+        assert props["start_datetime"] == "2024-01-01T00:00:00+00:00"
+        assert props["end_datetime"] == "2024-12-31T23:59:59+00:00"
+        assert any("outside the crop calendar" in m for m in caplog.messages)
+
+    def test_disabled_skips_lookup(self, tmp_path: Path, stac_crop_calendar) -> None:
+        self._use_season(stac_crop_calendar, 100, 250)
+
+        build_catalog(tmp_path, crop_calendar=False)
+
+        stac_crop_calendar.assert_not_called()
+        assert self._item(tmp_path)["properties"]["start_datetime"] == "2024-01-01T00:00:00+00:00"
 
 
 class TestCollectionAssetMetadata:
@@ -709,6 +770,7 @@ class TestCollectionMetadata:
         assert coll["ftw:split_percents"] == [80, 10, 10]
         assert coll["ftw:mask_types"] == ["instance", "semantic_2_class", "semantic_3_class"]
         assert coll["ftw:mask_resolution_m"] == 10.0
+        assert coll["ftw:chip_size_km"] == 2.0
         assert "ftw:cloud_cover_chip_threshold" in coll  # select_images enabled by default
         assert coll["ftw:config"]["config"]["metadata"]["license"] == "CC0-1.0"
         assert coll["updated"] == provenance["generated_at"].replace("+00:00", "Z")
@@ -745,6 +807,21 @@ class TestCollectionMetadata:
         coll = json.loads(result.collection_path.read_text())
         assert "ftw:split_type" not in coll
 
+    def test_scale_properties_only_for_scaled_datasets(self) -> None:
+        from ftw_dataset_tools.api.config import DatasetConfig
+        from ftw_dataset_tools.api.stac import _collection_ftw_properties
+
+        full = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+        assert "ftw:scale_percent" not in _collection_ftw_properties(full)
+
+        scaled = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"scale": {"percent": 10}}}
+        )
+        props = _collection_ftw_properties(scaled)
+        assert props["ftw:scale_percent"] == 10
+        assert props["ftw:scale_min_blocks_per_square"] == 1
+        assert props["ftw:scale_version"] == "ftw-scale-v1"
+
     def test_warns_without_license(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         build_catalog(tmp_path)
 
@@ -777,6 +854,128 @@ class TestCollectionMetadata:
                 "title": "Source field boundary collection",
             }
         ]
+
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_land_cover_product_and_source_link(self, tmp_path: Path, enabled: bool) -> None:
+        import json
+
+        from ftw_dataset_tools.api import land_cover
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        config = DatasetConfig.from_dict(
+            {"fields_file": "unused.parquet", "stages": {"chips": {"land_cover": enabled}}}
+        )
+        result = build_catalog(tmp_path, config=config)
+
+        coll = json.loads(result.collection_path.read_text())
+        derived = [link for link in coll["links"] if link["rel"] == "derived_from"]
+        if enabled:
+            assert coll["ftw:landcover_product"] == "io-lulc-annual-v02"
+            assert [link["href"] for link in derived] == [land_cover.COLLECTION_URL]
+            assert "CC-BY-4.0" in derived[0]["title"]
+        else:
+            assert "ftw:landcover_product" not in coll
+            assert derived == []
+
+
+class TestConfiglessRerunPreservesMetadata:
+    """create-masks rebuilds the catalog without a config over a pipeline output."""
+
+    def _config(self):
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        return DatasetConfig.from_dict(
+            {
+                "fields_file": "unused.parquet",
+                "source_via": "https://x/collection.json",
+                "stages": {"splits": {"split_type": "block3x3", "random_seed": 7}},
+                "metadata": {
+                    "title": "Austria",
+                    "license": "other",
+                    "license_url": "https://x/license",
+                    "version": "1.0.0",
+                    "keywords": ["austria"],
+                    "providers": [{"name": "AMA", "roles": ["producer"]}],
+                },
+            }
+        )
+
+    def _pipeline_build(self, tmp_path: Path) -> dict:
+        import json
+
+        config = self._config()
+        result = build_catalog(
+            tmp_path, config=config, provenance=config.provenance_dict(), filtered=True
+        )
+        return json.loads(result.collection_path.read_text())
+
+    def test_metadata_survives_a_configless_rebuild(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import json
+
+        before = self._pipeline_build(tmp_path)
+        caplog.set_level("INFO")
+        result = build_catalog(tmp_path)
+        after = json.loads(result.collection_path.read_text())
+
+        for key in ("title", "license", "keywords", "providers", "version", "ftw:config"):
+            assert after[key] == before[key], key
+        assert after["ftw:split_type"] == "block3x3"
+        assert (
+            "https://stac-extensions.github.io/version/v1.2.0/schema.json"
+            in after["stac_extensions"]
+        )
+        rels = [link["rel"] for link in after["links"]]
+        assert rels.count("via") == 1
+        assert rels.count("license") == 1
+        assert after["assets"]["fields_filtered"]["href"] == "./ds_fields_filtered.parquet"
+        assert not any("not Portolan-publishable" in m for m in caplog.messages)
+
+    def test_config_rebuild_does_not_inherit(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        self._pipeline_build(tmp_path)
+        config = DatasetConfig.from_dict({"fields_file": "unused.parquet"})
+        result = build_catalog(tmp_path, config=config)
+        after = json.loads(result.collection_path.read_text())
+
+        assert "keywords" not in after
+        assert "ftw:config" not in after
+        assert "fields_filtered" not in after["assets"]
+        assert not [link for link in after["links"] if link["rel"] == "via"]
+
+    def test_other_dataset_is_not_inherited(self, tmp_path: Path) -> None:
+        import json
+
+        self._pipeline_build(tmp_path)
+        path = tmp_path / "collection.json"
+        path.write_text(json.dumps({**json.loads(path.read_text()), "id": "other"}))
+
+        after = json.loads(build_catalog(tmp_path).collection_path.read_text())
+
+        assert "keywords" not in after
+        assert "ftw:config" not in after
+
+    def test_unlicensed_rebuild_still_warns(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        build_catalog(tmp_path)
+        caplog.clear()
+        build_catalog(tmp_path)
+
+        assert any("not Portolan-publishable" in m for m in caplog.messages)
+
+    def test_corrupt_collection_is_rebuilt(self, tmp_path: Path) -> None:
+        import json
+
+        (tmp_path / "collection.json").write_text("{not json")
+
+        after = json.loads(build_catalog(tmp_path).collection_path.read_text())
+
+        assert after["id"] == "ds"
 
 
 class TestChipProperties:
@@ -870,7 +1069,80 @@ class TestChipProperties:
         item_path = next((tmp_path / "chips").glob("*/*/*.json"))
         props = json.loads(item_path.read_text())["properties"]
         assert "ftw:hcat_dominant_code" not in props
+        assert "ftw:landcover_year" not in props
         assert "ftw:split" not in props  # the default fixture has no split column
+
+    def _land_cover_chips(self, tmp_path: Path, *, blank: bool = False) -> Path:
+        """One chip carrying land cover columns as ``add_land_cover`` writes them."""
+        import duckdb
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.geo import ensure_spatial_loaded, write_geoparquet
+
+        chips_path = tmp_path / "ds_chips.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["ftw-33UXP0410"], "field_coverage_pct": [50.0]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(chips_path)
+        classes_type = "STRUCT(code BIGINT, name VARCHAR, pct DOUBLE)[]"
+        values = {
+            "landcover_year": "2023::INTEGER",
+            "landcover_year_exact": "false",
+            "landcover_dominant_code": "5::BIGINT",
+            "landcover_dominant_name": "'Crops'",
+            "landcover_dominant_pct": "71.43::DOUBLE",
+            "landcover_classes": (
+                "[{'code': 5, 'name': 'Crops', 'pct': 71.43}, "
+                f"{{'code': 2, 'name': 'Trees', 'pct': 28.57}}]::{classes_type}"
+            ),
+        }
+        if blank:
+            types = ["INTEGER", "BOOLEAN", "BIGINT", "VARCHAR", "DOUBLE", classes_type]
+            values = {name: f"NULL::{t}" for name, t in zip(values, types, strict=True)}
+        selected = ", ".join(f"{expr} AS {name}" for name, expr in values.items())
+
+        con = duckdb.connect()
+        ensure_spatial_loaded(con)
+        con.execute(f"CREATE TABLE chips AS SELECT *, {selected} FROM read_parquet('{chips_path}')")
+        write_geoparquet(chips_path, conn=con, query="SELECT * FROM chips")
+        con.close()
+        return chips_path
+
+    def test_land_cover_on_items(self, tmp_path: Path) -> None:
+        import json
+
+        import duckdb
+
+        result = build_catalog(tmp_path, chips_path=self._land_cover_chips(tmp_path))
+
+        item_path = tmp_path / "chips" / "33UXP" / "ftw-33UXP0410_2024" / "ftw-33UXP0410_2024.json"
+        props = json.loads(item_path.read_text())["properties"]
+        assert props["ftw:landcover_year"] == 2023
+        assert props["ftw:landcover_year_exact"] is False
+        assert props["ftw:landcover_dominant_code"] == 5
+        assert props["ftw:landcover_dominant_name"] == "Crops"
+        assert props["ftw:landcover_dominant_pct"] == pytest.approx(71.43)
+        assert [c["code"] for c in props["ftw:landcover_classes"]] == [5, 2]
+
+        con = duckdb.connect()
+        row = con.execute(
+            'SELECT "ftw:landcover_year_exact", "ftw:landcover_classes" '
+            f"FROM read_parquet('{result.items_parquet_path}')"
+        ).fetchone()
+        con.close()
+        assert row[0] is False
+        assert row[1][1]["name"] == "Trees"
+
+    def test_blank_land_cover_is_not_published(self, tmp_path: Path) -> None:
+        import json
+
+        build_catalog(tmp_path, chips_path=self._land_cover_chips(tmp_path, blank=True))
+
+        item_path = next((tmp_path / "chips").glob("*/*/*.json"))
+        props = json.loads(item_path.read_text())["properties"]
+        assert not [key for key in props if key.startswith("ftw:landcover_")]
 
 
 class TestChipsPathEscaping:
@@ -986,6 +1258,7 @@ class TestRendersOnCatalog:
         assert item["properties"]["renders"]["semantic_2class"]["nodata"] == 3
         coll = json.loads(result.collection_path.read_text())
         assert coll["renders"]["semantic_2class_mask"]["nodata"] == 3
+        assert coll["renders"]["instance_mask"]["nodata"] == 0
 
     def test_collection_renders_keyed_by_asset_name(self, tmp_path: Path) -> None:
         import json
@@ -1280,3 +1553,81 @@ class TestImageryReattachedOnStacRerun:
         item = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())
         rels = [link["rel"] for link in item["links"]]
         assert rels.count("ftw:planting") == 1
+
+
+@pytest.mark.parametrize(
+    "suffixes",
+    [
+        ("_overlay.jpeg",),
+        ("_planting_image_s2.jpeg",),
+        ("_overlay.jpg", "_planting_image_s2.webp"),
+        ("_overlay.webp", "_planting_image_s2.webp", "_overlay.jpg"),
+    ],
+)
+def test_thumbnail_candidates_support_legacy_and_mixed_formats(tmp_path, suffixes):
+    import pystac
+
+    from ftw_dataset_tools.api.imagery.stac_child_items import attach_thumbnail_to_parent
+    from ftw_dataset_tools.api.stac import _build_item_assets
+
+    item = pystac.Item("chip_a", None, None, datetime(2024, 1, 1, tzinfo=UTC), {})
+    for suffix in suffixes:
+        (tmp_path / f"chip_a{suffix}").write_bytes(b"preview")
+
+    attach_thumbnail_to_parent(item, tmp_path)
+
+    expected = next((s for s in suffixes if s.endswith(".webp")), suffixes[0])
+    asset = item.assets["thumbnail"]
+    assert asset.href == f"./chip_a{expected}"
+    assert asset.media_type == ("image/webp" if expected.endswith(".webp") else "image/jpeg")
+    definition = _build_item_assets()["thumbnail"].to_dict()
+    assert "type" not in definition
+    assert definition["roles"] == ["thumbnail"]
+    assert definition["title"] == "Chip preview"
+
+
+def _write_fields(path: Path, datetimes: list | None) -> Path:
+    import geopandas as gpd
+    import pandas as pd
+    from shapely.geometry import box
+
+    data: dict = {"id": [1, 2, 3]}
+    if datetimes is not None:
+        data["determination_datetime"] = pd.Series(
+            pd.to_datetime(datetimes), dtype="datetime64[ns]"
+        )
+    gpd.GeoDataFrame(data, geometry=[box(0, 0, 1, 1)] * 3, crs="EPSG:4326").to_parquet(path)
+    return path
+
+
+class TestResolveYear:
+    def test_explicit_year_wins(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.stac import resolve_year
+
+        path = _write_fields(tmp_path / "f.parquet", ["2021-06-01"] * 3)
+        assert resolve_year(path, 2024) == 2024
+
+    def test_derives_most_common_year(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.stac import resolve_year
+
+        path = _write_fields(tmp_path / "f.parquet", ["2021-06-01", "2022-06-01", "2022-07-01"])
+        assert resolve_year(path) == 2022
+
+    def test_none_without_datetime_column(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.stac import resolve_year
+
+        assert resolve_year(_write_fields(tmp_path / "f.parquet", None)) is None
+
+    def test_all_null_column_raises(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.stac import TemporalExtentError, resolve_year
+
+        path = _write_fields(tmp_path / "f.parquet", [None, None, None])
+        with pytest.raises(TemporalExtentError, match="no usable values") as exc:
+            resolve_year(path)
+        assert exc.value.path == path
+
+    def test_all_null_column_with_year_uses_year_for_extent(self, tmp_path: Path) -> None:
+        fields = _write_fields(tmp_path / "ds_fields.parquet", [None, None, None])
+        result = build_catalog(tmp_path, fields_path=fields)
+        start, end = result.temporal_extent
+        assert (start.year, end.year) == (2024, 2024)

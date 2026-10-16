@@ -614,6 +614,43 @@ class TestMinChipArea:
         ids = duckdb.connect().execute(f"SELECT id FROM '{output_file}'").fetchall()
         assert [row[0] for row in ids] == ["full"]
 
+    def test_default_threshold_keeps_the_smallest_full_cell(self, tmp_path: Path) -> None:
+        """The default must keep ftw-32VJH2824, the smallest full cell on the FTW grid.
+
+        UTM scale factor shrinks it to 99.743% of nominal on the west edge of the
+        widened zone 32V, so a default above that would drop real full cells.
+        """
+        from ftw_dataset_tools.api.field_stats import (
+            DEFAULT_MIN_CHIP_AREA,
+            _chip_area_expr,
+            add_field_stats,
+        )
+
+        cell = gpd.GeoDataFrame(
+            {"id": ["ftw-32VJH2824"]},
+            geometry=[box(128000, 6224000, 130000, 6226000)],
+            crs="EPSG:32632",
+        )
+        grid = _write_size_test_file(tmp_path / "grid.parquet", cell, "EPSG:4326")
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        pct = conn.execute(
+            f"SELECT {_chip_area_expr('geometry', is_geographic=True)} / 4e4 FROM '{grid}'"
+        ).fetchone()[0]
+        conn.close()
+        assert pct == pytest.approx(99.743, abs=0.001)
+
+        result = add_field_stats(
+            grid_file=grid,
+            fields_file=_write_size_test_file(tmp_path / "fields.parquet", cell, "EPSG:4326"),
+            output_file=tmp_path / "chips.parquet",
+            min_chip_area=DEFAULT_MIN_CHIP_AREA,
+        )
+
+        assert result.cells_dropped_undersized == 0
+        assert result.total_cells == 1
+
     def test_disabled_by_default(self, tmp_path: Path) -> None:
         """The API keeps every cell unless min_chip_area is passed."""
         from ftw_dataset_tools.api.field_stats import add_field_stats
@@ -765,3 +802,175 @@ class TestMinChipArea:
         assert result.cells_dropped_undersized == 1
         assert result.total_cells == 2  # the full cell plus the unmeasurable row
         assert any("could not measure the area of 1 grid cells" in msg for msg in caplog.messages)
+
+
+# MGRS square 33UXP, anchored at a 100 km multiple in UTM zone 33N.
+_SQ_X0, _SQ_Y0 = 500_000, 5_300_000
+
+
+def _ftw_grid_source(path: Path) -> Path:
+    """A stand-in for the remote FTW grid: 3 x 3 cells of 2 km, with a bbox column."""
+    cells = [
+        (
+            f"ftw-33UXP{e:02d}{n:02d}",
+            box(
+                _SQ_X0 + e * 1000,
+                _SQ_Y0 + n * 1000,
+                _SQ_X0 + (e + 2) * 1000,
+                _SQ_Y0 + (n + 2) * 1000,
+            ),
+        )
+        for e in (0, 2, 4)
+        for n in (0, 2, 4)
+    ]
+    gdf = gpd.GeoDataFrame(
+        {
+            "gzd": "33U",
+            "mgrs_10km": "33UXP00",
+            "id": [cell_id for cell_id, _ in cells],
+        },
+        geometry=[geom for _, geom in cells],
+        crs=_UTM_CRS,
+    ).to_crs("EPSG:4326")
+    gdf.to_parquet(path)
+    gpio.read(str(path)).add_bbox().write(str(path))
+    return path
+
+
+def _middle_field(path: Path) -> Path:
+    """One field inside the middle 2 km cell, clear of its edges."""
+    field = box(_SQ_X0 + 2100, _SQ_Y0 + 2100, _SQ_X0 + 3900, _SQ_Y0 + 3900)
+    gdf = gpd.GeoDataFrame({"fid": [1]}, geometry=[field], crs=_UTM_CRS).to_crs("EPSG:4326")
+    gdf.to_parquet(path)
+    gpio.read(str(path)).add_bbox().write(str(path))
+    return path
+
+
+class TestRemoteGridChipSize:
+    """The remote 2 km grid is cut to km_size."""
+
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        km_size: float,
+    ):
+        from ftw_dataset_tools.api import field_stats
+
+        # The stand-in grid is a local file, so S3 setup is not needed.
+        monkeypatch.setattr(field_stats, "configure_source_coop_s3", lambda _conn: None)
+        caplog.set_level("INFO")
+        result = field_stats.add_field_stats(
+            fields_file=_middle_field(tmp_path / "fields.parquet"),
+            grid_source=str(_ftw_grid_source(tmp_path / "grid.parquet")),
+            output_file=tmp_path / "chips.parquet",
+            min_chip_area=99.5,
+            km_size=km_size,
+        )
+        return result, sorted(_chip_ids(result.output_path)), caplog.messages
+
+    def test_default_size_keeps_the_source_cells(self, tmp_path: Path, monkeypatch, caplog) -> None:
+        _, ids, messages = self._run(tmp_path, monkeypatch, caplog, 2.0)
+        assert ids == ["ftw-33UXP0202"]
+        assert not any("Cutting" in msg for msg in messages)
+        assert "Chip size: 2 km (2,000 m) per side (km_size is in kilometres)" in messages
+
+    def test_sub_km_chips_cover_the_fields(self, tmp_path: Path, monkeypatch, caplog) -> None:
+        result, ids, messages = self._run(tmp_path, monkeypatch, caplog, 0.5)
+        assert ids == [
+            f"ftw-33UXP{e:03d}{n:03d}" for e in (20, 25, 30, 35) for n in (20, 25, 30, 35)
+        ]
+        assert result.cells_dropped_undersized == 0
+        assert result.cells_with_coverage == 16
+        assert any("Cutting the 2 km grid into 0.5 km (500 m) chips" in msg for msg in messages)
+
+    def test_chips_larger_than_the_source_fetch_their_neighbours(
+        self, tmp_path: Path, monkeypatch, caplog
+    ) -> None:
+        # The 6 km chip needs all nine source cells, not just the one under the field.
+        result, ids, _ = self._run(tmp_path, monkeypatch, caplog, 6)
+        assert ids == ["ftw-33UXP0000"]
+        assert result.cells_dropped_undersized == 0
+
+    def test_size_not_dividing_100_km_warns(self, tmp_path: Path, monkeypatch, caplog) -> None:
+        _, _, messages = self._run(tmp_path, monkeypatch, caplog, 0.3)
+        assert any("does not divide an MGRS 100 km square evenly" in msg for msg in messages)
+
+    def test_invalid_size_rejected_before_reading_inputs(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.chip_grid import InvalidChipSizeError
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        with pytest.raises(InvalidChipSizeError, match="kilometres"):
+            add_field_stats(fields_file=tmp_path / "missing.parquet", km_size=500)
+
+
+# A fully labelled block across the zone 32/33 seam at 12°E. Cells are 2 km squares in
+# each zone's own UTM grid, clipped at the seam as MGRS does, which reproduces the FTW
+# grid there cell for cell.
+_SEAM_LON = 12.0
+_SEAM_LABELLED = box(11.8, 50.0, 12.2, 50.3)
+
+
+def _seam_grid(path: Path) -> tuple[Path, set[str]]:
+    """Write the seam grid and return it with the ids of cells well inside the block."""
+    extent = _SEAM_LABELLED.buffer(0.06, join_style="mitre")
+    ids, geoms = [], []
+    for zone, side in ((32, box(-180, -90, _SEAM_LON, 90)), (33, box(_SEAM_LON, -90, 180, 90))):
+        crs = f"EPSG:326{zone}"
+        x0, y0, x1, y1 = gpd.GeoSeries([extent & side], crs="EPSG:4326").to_crs(crs).total_bounds
+        cells = [
+            box(x, y, x + 2000, y + 2000)
+            for x in range(int(x0 // 2000) * 2000, int(x1) + 1, 2000)
+            for y in range(int(y0 // 2000) * 2000, int(y1) + 1, 2000)
+        ]
+        for i, cell in enumerate(gpd.GeoSeries(cells, crs=crs).to_crs("EPSG:4326")):
+            clipped = cell & side
+            if not clipped.is_empty and clipped.intersects(extent):
+                ids.append(f"{zone}-{i}")
+                geoms.append(clipped)
+    grid = gpd.GeoDataFrame({"id": ids}, geometry=geoms, crs="EPSG:4326")
+    interior = grid[grid.within(_SEAM_LABELLED.buffer(-0.05, join_style="mitre"))]
+    return _write_size_test_file(path, grid, "EPSG:4326"), set(interior["id"])
+
+
+class TestSizeFilterAtUtmSeam:
+    """Dropping seam slivers must not make the seam look like a cluster edge."""
+
+    def _interior_border_drops(self, tmp_path: Path, gap_chips: int) -> tuple[int, int]:
+        """Run the size filter and border drop; count interior chips lost to the border drop."""
+        from ftw_dataset_tools.api.field_stats import DEFAULT_MIN_CHIP_AREA, add_field_stats
+
+        grid, interior = _seam_grid(tmp_path / "grid.parquet")
+        fields = gpd.GeoDataFrame({"id": ["f"]}, geometry=[_SEAM_LABELLED], crs="EPSG:4326")
+        fields_file = _write_size_test_file(tmp_path / "fields.parquet", fields, "EPSG:4326")
+
+        def kept(output: Path, **kwargs: object) -> set[str]:
+            add_field_stats(
+                grid_file=grid,
+                fields_file=fields_file,
+                output_file=output,
+                min_chip_area=DEFAULT_MIN_CHIP_AREA,
+                **kwargs,
+            )
+            return {
+                row[0] for row in duckdb.connect().execute(f"SELECT id FROM '{output}'").fetchall()
+            }
+
+        sized = interior & kept(tmp_path / "sized.parquet")
+        bordered = kept(
+            tmp_path / "bordered.parquet", drop_border_chips=True, border_gap_chips=gap_chips
+        )
+        return len(sized - bordered), len(sized)
+
+    def test_default_gap_bridges_the_seam(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.field_stats import DEFAULT_BORDER_GAP_CHIPS
+
+        lost, interior = self._interior_border_drops(tmp_path, DEFAULT_BORDER_GAP_CHIPS)
+        assert interior > 0
+        assert lost == 0
+
+    def test_one_chip_gap_splits_at_the_seam(self, tmp_path: Path) -> None:
+        """Documented limit: below the default, the seam counts as a cluster edge."""
+        lost, _ = self._interior_border_drops(tmp_path, 1)
+        assert lost > 0

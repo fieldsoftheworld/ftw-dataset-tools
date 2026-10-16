@@ -9,7 +9,7 @@ Intermediate outputs live in the output directory under a fixed naming
 convention, so any stage can be re-run on its own as long as its inputs exist:
 
     {output_dir}/{name}_fields.parquet          (reproject)
-    {output_dir}/{name}_chips.parquet           (chips, splits)
+    {output_dir}/{name}_chips.parquet           (chips, scale, splits)
     {output_dir}/{name}_boundary_lines.parquet  (boundaries)
     {output_dir}/collection.json                 (stac)
     {output_dir}/chips/<mgrs100k>/<item_id>/     (masks, stac, imagery)
@@ -31,7 +31,9 @@ from ftw_dataset_tools.api import (
     crop_stats,
     docs,
     field_stats,
+    land_cover,
     masks,
+    scale,
     splits,
     stac,
     styles,
@@ -50,7 +52,9 @@ from ftw_dataset_tools.api.imagery import (
     download_imagery_for_catalog,
     select_imagery_for_catalog,
 )
+from ftw_dataset_tools.api.imagery.mosaic_selection import check_mosaic_year
 from ftw_dataset_tools.api.imagery.preview_workflow import preview_imagery_for_catalog
+from ftw_dataset_tools.api.imagery.settings import MOSAIC_FALLBACK_YEAR
 from ftw_dataset_tools.api.logging_config import get_logger, success
 from ftw_dataset_tools.api.masks import MaskType
 from ftw_dataset_tools.api.source import (
@@ -73,6 +77,7 @@ STAGE_ORDER = [
     "reproject",
     "filter",
     "chips",
+    "scale",
     "splits",
     "boundaries",
     "masks",
@@ -153,6 +158,8 @@ class PipelineContext:
     field_dataset: str
     effective_year: int | None = None
     has_temporal: bool = False
+    # Raised by _validate_stage_selection only if a selected stage needs the year.
+    temporal_error: stac.TemporalExtentError | None = None
     provenance: dict[str, Any] | None = None
     source: SourceRecord | None = None
     on_mask_progress: Callable[[int, int], None] | None = None
@@ -163,6 +170,8 @@ class PipelineContext:
     source_crs: str | None = None
     chips_result: field_stats.FieldStatsResult | None = None
     crop_stats_result: crop_stats.CropStatsResult | None = None
+    scale_result: scale.ScaleResult | None = None
+    land_cover_result: land_cover.LandCoverResult | None = None
     splits_result: splits.CreateSplitsResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
@@ -272,21 +281,17 @@ def _detect_temporal(ctx: PipelineContext) -> None:
     fields_path = ctx.fields_input
     if fields_path is None and ctx.output_fields_path.exists():
         fields_path = ctx.output_fields_path
-    if fields_path is None:
-        ctx.has_temporal = ctx.config.year is not None
-        return
-
-    logger.info("Checking temporal extent availability...")
-    datetime_col = stac.detect_datetime_column(fields_path)
-    if datetime_col:
-        logger.info(f"Found '{datetime_col}' column for temporal extent")
-        if ctx.effective_year is None:
-            ctx.effective_year = stac.get_year_from_datetime_column(fields_path, datetime_col)
-            if ctx.effective_year:
-                logger.info(f"Using year {ctx.effective_year} from {datetime_col} for chip naming")
-    elif ctx.config.year is not None:
-        logger.info(f"Using year {ctx.config.year} for temporal extent")
-    ctx.has_temporal = datetime_col is not None or ctx.config.year is not None
+    if fields_path is not None and ctx.config.year is None:
+        logger.info("Checking temporal extent availability...")
+        try:
+            ctx.effective_year = stac.resolve_year(fields_path)
+        except stac.TemporalExtentError as err:
+            ctx.temporal_error = err
+        if ctx.effective_year is not None:
+            logger.info(
+                f"Using year {ctx.effective_year} from determination_datetime for chip naming"
+            )
+    ctx.has_temporal = ctx.effective_year is not None
 
 
 def build_context(
@@ -368,6 +373,8 @@ def resolve_stages(
 def _stage_enabled(stage: str, config: DatasetConfig) -> bool:
     if stage == "filter":
         return config.class_filter is not None
+    if stage == "scale":
+        return config.stages.scale.percent < 100
     if stage == "select_images":
         return config.stages.select_images.enabled
     if stage == "download_images":
@@ -421,11 +428,20 @@ def _validate_stage_selection(ctx: PipelineContext, stages_to_run: list[str]) ->
             raise ValueError(f"split_type must be one of: {splits.SPLIT_TYPE_CHOICES_STR}")
 
     if any(s in _YEAR_STAGES for s in stages_to_run) and not ctx.has_temporal:
+        if ctx.temporal_error is not None:
+            raise ctx.temporal_error
         raise ValueError(
             "Cannot determine temporal extent for STAC catalog. "
             "Either provide a 'year' or ensure the fields file has a "
             "'determination_datetime' column."
         )
+
+    if (
+        "select_images" in stages_to_run
+        and ctx.config.stages.select_images.imagery_mode == "mosaics"
+        and ctx.config.year is not None
+    ):
+        check_mosaic_year(ctx.config.year)
 
 
 def _require(path: Path, *, stage: str, produced_by: str) -> None:
@@ -566,6 +582,31 @@ def stage_chips(ctx: PipelineContext) -> None:
     else:
         # Never publish a previous run's composition when the step is turned off.
         crop_stats.drop_crop_stats(ctx.chips_path)
+    _add_land_cover(ctx)
+
+
+def _add_land_cover(ctx: PipelineContext) -> None:
+    """Run the land cover step, or clear a previous run's columns when it is off."""
+    if not ctx.config.stages.chips.land_cover:
+        land_cover.drop_land_cover(ctx.chips_path)
+        return
+    ctx.land_cover_result = land_cover.add_land_cover(ctx.chips_path, year=ctx.effective_year)
+
+
+def stage_scale(ctx: PipelineContext) -> None:
+    """Keep the configured percent of chip blocks and record each chip's scale score."""
+    _require(ctx.chips_path, stage="scale", produced_by="chips")
+    scale_cfg = ctx.config.stages.scale
+    ctx.scale_result = scale.apply_scale(
+        ctx.chips_path,
+        percent=scale_cfg.percent,
+        min_blocks_per_square=scale_cfg.min_blocks_per_square,
+        km_size=ctx.config.stages.chips.km_size,
+    )
+    logger.info(
+        f"Scale {scale_cfg.percent:g}%: kept {ctx.scale_result.kept_chips:,} of "
+        f"{ctx.scale_result.total_chips:,} chips"
+    )
 
 
 def stage_splits(ctx: PipelineContext) -> None:
@@ -579,6 +620,7 @@ def stage_splits(ctx: PipelineContext) -> None:
         split_percents=split_cfg.split_percents,
         random_seed=split_cfg.random_seed,
         fields_file=str(ctx.field_polygons_path),
+        km_size=ctx.config.stages.chips.km_size,
     )
 
 
@@ -688,6 +730,7 @@ def stage_masks(ctx: PipelineContext) -> None:
         year=ctx.effective_year,
         background_class_value=background_class_value,
         skip_existing=masks_cfg.skip_existing,
+        crop_column=masks_cfg.crop_column,
         on_progress=ctx.on_mask_progress,
         on_start=ctx.on_mask_start,
     )
@@ -720,6 +763,13 @@ def stage_stac(ctx: PipelineContext) -> None:
     # only stage that publishes them, is a no-op when they are absent.
     if not ctx.config.stages.chips.crop_stats and crop_stats.drop_crop_stats(ctx.chips_path):
         logger.info("Dropped stale crop composition columns from the chips file")
+    # The same holds for land cover, including columns added by ``ftwd add-land-cover``:
+    # the config decides what is published, so a backfill needs land_cover: true.
+    if not ctx.config.stages.chips.land_cover and land_cover.drop_land_cover(ctx.chips_path):
+        logger.info(
+            "Dropped land cover columns from the chips file "
+            "(set stages.chips.land_cover: true to publish them)"
+        )
 
     logger.info("Generating STAC catalog...")
     ctx.stac_result = stac.generate_stac_catalog(
@@ -734,6 +784,7 @@ def stage_stac(ctx: PipelineContext) -> None:
         year=ctx.effective_year,
         provenance=ctx.provenance,
         checksums=ctx.config.stages.stac.checksums,
+        crop_calendar=ctx.config.stages.stac.crop_calendar,
         background_class_value=3 if ctx.config.stages.masks.presence_only else 0,
         config=ctx.config,
     )
@@ -742,17 +793,30 @@ def stage_stac(ctx: PipelineContext) -> None:
     logger.info(f"Created STAC collection with {n} items in {k} sub-catalog(s)")
 
 
-def stage_select_images(ctx: PipelineContext) -> None:
-    """Select cloud-free Sentinel-2 scenes for each chip."""
-    _require(ctx.output_dir / "collection.json", stage="select_images", produced_by="stac")
-    if ctx.effective_year is None:
-        raise ValueError("A year is required for image selection.")
+def mosaic_year(config_year: int | None) -> int:
+    """The mosaic year: the configured year, else a warning and the fallback year."""
+    if config_year is not None:
+        return config_year
+    logger.warning(f"no year given; using {MOSAIC_FALLBACK_YEAR} for mosaics.")
+    return MOSAIC_FALLBACK_YEAR
 
+
+def stage_select_images(ctx: PipelineContext) -> None:
+    """Select Sentinel-2 imagery (seasonal scenes or quarterly mosaics) for each chip."""
+    _require(ctx.output_dir / "collection.json", stage="select_images", produced_by="stac")
     select_cfg = ctx.config.stages.select_images
+    if select_cfg.imagery_mode == "mosaics":
+        year = mosaic_year(ctx.config.year)
+    elif ctx.effective_year is None:
+        raise ValueError("A year is required for image selection.")
+    else:
+        year = ctx.effective_year
+
     logger.info("Selecting imagery...")
     ctx.selection_result = select_imagery_for_catalog(
         catalog_dir=ctx.output_dir,
-        year=ctx.effective_year,
+        year=year,
+        imagery_mode=select_cfg.imagery_mode,
         cloud_cover_chip=select_cfg.cloud_cover_chip,
         nodata_max=select_cfg.nodata_max,
         buffer_days=select_cfg.buffer_days,
@@ -891,6 +955,7 @@ _STAGE_FUNCS: dict[str, Callable[[PipelineContext], None]] = {
     "reproject": stage_reproject,
     "filter": stage_filter,
     "chips": stage_chips,
+    "scale": stage_scale,
     "splits": stage_splits,
     "boundaries": stage_boundaries,
     "masks": stage_masks,

@@ -5,30 +5,36 @@ Previews are written as WebP, but a catalog built before that switch still has
 from the imagery it was made from, repoints the chip item and its season children at
 the WebP, and only then removes the superseded ``.jpg``.
 
-Re-rendering rather than transcoding keeps each preview compressed exactly once: the
-``.jpg`` has already discarded pixel data, and re-encoding it to WebP would bake
-those artifacts in permanently. The source is whatever the chip was built from - the
-local clipped GeoTIFF when there is one, otherwise the remote scene COG - so this
-covers both kinds of catalog, which re-running the preview stage alone does not.
+Rendering uses source imagery instead of transcoding the legacy JPEG.
+Overlay composition still re-encodes its WebP base.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import unquote, urlsplit
+from urllib.request import url2pathname
 
 import pystac
+from PIL import Image
 from tqdm import tqdm
 
 from ftw_dataset_tools.api.assets import add_file_info
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, run_in_parallel
-from ftw_dataset_tools.api.imagery.preview_workflow import build_preview_task, render_preview
+from ftw_dataset_tools.api.imagery.preview_workflow import (
+    PreviewTask,
+    build_preview_task,
+    render_preview,
+)
 from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
 from ftw_dataset_tools.api.imagery.stac_child_items import SEASONS, attach_thumbnail_to_parent
 from ftw_dataset_tools.api.imagery.thumbnails import (
     LEGACY_PREVIEW_SUFFIXES,
     PREVIEW_MEDIA_TYPE,
     PREVIEW_SUFFIX,
+    REFERENCE_MASK_SUFFIX,
     generate_overlay_thumbnail,
     generate_thumbnail,
 )
@@ -36,7 +42,6 @@ from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     from ftw_dataset_tools.api.imagery.parallel import ParallelOutcome
 
@@ -45,12 +50,6 @@ __all__ = [
     "conversion_summary_line",
     "convert_previews_for_catalog",
 ]
-
-#: Mask used both as the overlay's grid reference and as the overlay layer.
-_REFERENCE_MASK_SUFFIX = "_semantic_3_class.tif"
-
-#: Reported for a chip whose previews cannot be re-rendered, by a real run or a dry one.
-_NO_SOURCE_REASON = "No imagery to re-render the preview from"
 
 
 @dataclass
@@ -64,6 +63,26 @@ class ConversionResult:
     failed: int = 0
     skipped_details: list[dict] = field(default_factory=list)
     failed_details: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class _ConversionPlan:
+    item: pystac.Item
+    item_path: Path
+    children: list[tuple[pystac.Item, Path]]
+    legacy: list[Path]
+    seasons: tuple[str, ...]
+    overlay: bool
+    remote_task: PreviewTask | None
+    reusable: tuple[Path, ...]
+
+    @property
+    def outputs(self) -> tuple[Path, ...]:
+        chip_dir = self.item_path.parent
+        stems = [f"{self.item.id}_{season}_image_s2" for season in self.seasons]
+        if self.overlay:
+            stems.append(f"{self.item.id}_overlay")
+        return tuple(chip_dir / f"{stem}{PREVIEW_SUFFIX}" for stem in stems)
 
 
 def legacy_previews(chip_dir: Path, item_id: str) -> list[Path]:
@@ -85,185 +104,161 @@ def legacy_previews(chip_dir: Path, item_id: str) -> list[Path]:
     ]
 
 
-def _season_sources(chip_dir: Path, item_id: str) -> dict[str, Path]:
-    """The local clipped GeoTIFFs a season preview can be re-rendered from, by season.
+def _read_children(chip_dir: Path, item_id: str) -> list[tuple[pystac.Item, Path]]:
+    children = []
+    for season in SEASONS:
+        path = chip_dir / f"{item_id}_{season}_s2.json"
+        if path.exists():
+            try:
+                children.append((pystac.Item.from_file(str(path)), path))
+            except Exception as err:
+                raise OSError(f"Unreadable child {path.name}: {err}") from err
+    return children
 
-    The single source of truth for what this chip can render: the dry run plans from
-    it and the real run renders from it, so the two cannot disagree.
-    """
+
+def _local_asset_path(asset: pystac.Asset, chip_dir: Path) -> Path | None:
+    href = asset.href
+    if Path(href).is_absolute():
+        return Path(href).resolve()
+    parsed = urlsplit(href)
+    if parsed.scheme == "file":
+        local = f"//{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path
+        return Path(url2pathname(local)).resolve()
+    if parsed.scheme or parsed.netloc:
+        return None
+    return (chip_dir / unquote(parsed.path)).resolve()
+
+
+def _referenced_legacy(items: list[pystac.Item], chip_dir: Path, item_id: str) -> set[Path]:
+    stems = [f"{item_id}_overlay", *(f"{item_id}_{s}_image_s2" for s in SEASONS)]
+    expected = {
+        (chip_dir / f"{stem}{ext}").resolve() for stem in stems for ext in LEGACY_PREVIEW_SUFFIXES
+    }
     return {
-        season: path
-        for season in SEASONS
-        if (path := chip_dir / f"{item_id}_{season}_image_s2.tif").exists()
+        path
+        for item in items
+        if (asset := item.assets.get("thumbnail")) is not None
+        if (path := _local_asset_path(asset, chip_dir)) in expected
     }
 
 
-def _overlay_is_renderable(item: pystac.Item, item_path: Path, *, has_local_base: bool) -> bool:
-    """Whether the chip's overlay has a source, mirroring what ``_render_overlay`` needs."""
-    if not (item_path.parent / f"{item.id}{_REFERENCE_MASK_SUFFIX}").exists():
+def _valid_webp(path: Path) -> bool:
+    try:
+        with Image.open(path) as image:
+            image.load()
+            return image.format == "WEBP"
+    except (OSError, ValueError):
         return False
-    if has_local_base:
-        return True
-    return not isinstance(build_preview_task(item, item_path), str)
 
 
-def _render_overlay(item: pystac.Item, item_path: Path, base_path: Path | None) -> Path | None:
-    """Re-render the chip's overlay preview, from local imagery or the remote scene."""
+def _plan_conversion(item: pystac.Item, item_path: Path) -> _ConversionPlan | str:
     chip_dir = item_path.parent
-    mask_path = chip_dir / f"{item.id}{_REFERENCE_MASK_SUFFIX}"
-    if not mask_path.exists():
-        return None
+    children = _read_children(chip_dir, item.id)
+    legacy = legacy_previews(chip_dir, item.id)
+    referenced = _referenced_legacy([item, *(child for child, _ in children)], chip_dir, item.id)
+    if not legacy and not referenced:
+        return "No JPEG previews"
 
-    if base_path is not None:
-        output_path = chip_dir / f"{item.id}_overlay{PREVIEW_SUFFIX}"
-        generate_overlay_thumbnail(base_path, mask_path, output_path)
-        return output_path
-
-    # No local imagery: the chip references its scene remotely, so re-read the
-    # window out of the scene COG exactly as the preview stage does.
-    task = build_preview_task(item, item_path)
-    if isinstance(task, str):
-        return None
-    render_preview(task)
-    return task.output_path
-
-
-def render_chip_previews(item: pystac.Item, item_path: Path) -> tuple[Path, ...]:
-    """Re-render every preview this chip needs as WebP, writing them beside the JPEGs.
-
-    Nothing is deleted and no item is touched here; this is the part that runs on a
-    worker thread.
-
-    Args:
-        item: The chip item
-        item_path: Path to the chip item JSON
-
-    Returns:
-        Paths to the previews written, empty if none could be rendered
-    """
-    chip_dir = item_path.parent
-    rendered: list[Path] = []
-
-    season_previews: dict[str, Path] = {}
-    for season, tif_path in _season_sources(chip_dir, item.id).items():
-        output_path = chip_dir / f"{item.id}_{season}_image_s2{PREVIEW_SUFFIX}"
-        generate_thumbnail(tif_path, output_path)
-        season_previews[season] = output_path
-        rendered.append(output_path)
-
-    overlay = _render_overlay(item, item_path, season_previews.get("planting"))
-    if overlay is not None:
-        rendered.append(overlay)
-
-    return tuple(rendered)
-
-
-@dataclass(frozen=True)
-class ChipConversionPlan:
-    """What a conversion run would do to one chip, worked out without rendering anything."""
-
-    previews: tuple[Path, ...]
-    removable: tuple[Path, ...]
-
-
-def plan_chip_conversion(item: pystac.Item, item_path: Path) -> ChipConversionPlan:
-    """The previews a run would render for this chip and the JPEGs it would then remove.
-
-    This is what ``--dry-run`` reports. It reads the same sources ``render_chip_previews``
-    renders from and applies the same deletion rule as ``commit_chip_conversion``, so a
-    dry run cannot promise a conversion the real run will skip.
-
-    Args:
-        item: The chip item
-        item_path: Path to the chip item JSON
-
-    Returns:
-        ChipConversionPlan; empty ``previews`` means the chip has no source to render from
-    """
-    chip_dir = item_path.parent
-    sources = _season_sources(chip_dir, item.id)
-
-    previews = [chip_dir / f"{item.id}_{season}_image_s2{PREVIEW_SUFFIX}" for season in sources]
-    if _overlay_is_renderable(item, item_path, has_local_base="planting" in sources):
-        previews.append(chip_dir / f"{item.id}_overlay{PREVIEW_SUFFIX}")
-
-    planned = set(previews)
-    removable = tuple(
-        path
-        for path in legacy_previews(chip_dir, item.id)
-        if (webp := path.with_suffix(PREVIEW_SUFFIX)) in planned or webp.exists()
+    seasons = tuple(
+        season for season in SEASONS if (chip_dir / f"{item.id}_{season}_image_s2.tif").is_file()
     )
-    return ChipConversionPlan(previews=tuple(previews), removable=removable)
+    remote_task = None
+    overlay = (chip_dir / f"{item.id}{REFERENCE_MASK_SUFFIX}").is_file()
+    if overlay and "planting" not in seasons:
+        task = build_preview_task(item, item_path)
+        remote_task = task if isinstance(task, PreviewTask) else None
+        overlay = remote_task is not None
+
+    plan = _ConversionPlan(item, item_path, children, legacy, seasons, overlay, remote_task, ())
+    stems = [f"{item.id}_overlay", *(f"{item.id}_{s}_image_s2" for s in SEASONS)]
+    existing = tuple(chip_dir / f"{stem}{PREVIEW_SUFFIX}" for stem in stems)
+    plan.reusable = tuple(
+        path for path in existing if path not in plan.outputs and _valid_webp(path)
+    )
+    if not plan.outputs and not plan.reusable:
+        return "No imagery to re-render the preview from"
+    for path in existing:
+        if path.exists() and path not in (*plan.outputs, *plan.reusable):
+            raise OSError(f"Invalid WebP without a render source: {path.name}")
+    return plan
 
 
-def _asset_has_checksum(asset: pystac.Asset | None) -> bool:
-    """Whether this asset carries ``file:checksum``, i.e. the catalog was built with it."""
-    return asset is not None and "file:checksum" in asset.extra_fields
+def render_chip_previews(plan: _ConversionPlan) -> tuple[Path, ...]:
+    """Render the outputs selected by the same planner used for dry-run."""
+    chip_dir = plan.item_path.parent
+    for season in plan.seasons:
+        stem = f"{plan.item.id}_{season}_image_s2"
+        generate_thumbnail(chip_dir / f"{stem}.tif", chip_dir / f"{stem}{PREVIEW_SUFFIX}")
+    if plan.overlay:
+        if plan.remote_task is not None:
+            render_preview(plan.remote_task)
+        else:
+            generate_overlay_thumbnail(
+                chip_dir / f"{plan.item.id}_planting_image_s2{PREVIEW_SUFFIX}",
+                chip_dir / f"{plan.item.id}{REFERENCE_MASK_SUFFIX}",
+                chip_dir / f"{plan.item.id}_overlay{PREVIEW_SUFFIX}",
+            )
+    return plan.outputs
 
 
-def _repoint_child_items(chip_dir: Path, item_id: str) -> None:
-    """Point each season child item's thumbnail at its WebP preview.
-
-    The children carry their own thumbnail asset, so converting only the chip item
-    would leave them referencing a file this run is about to delete.
-    """
-    for season in SEASONS:
-        child_path = chip_dir / f"{item_id}_{season}_s2.json"
-        if not child_path.exists():
+def _repoint_child_items(plan: _ConversionPlan) -> None:
+    for child, child_path in plan.children:
+        preview_path = _child_preview_path(child_path)
+        if preview_path not in (*plan.outputs, *plan.reusable):
             continue
-
-        preview_path = chip_dir / f"{item_id}_{season}_image_s2{PREVIEW_SUFFIX}"
-        if not preview_path.exists():
-            continue
-
-        try:
-            child = pystac.Item.from_file(str(child_path))
-        except Exception:
-            # A child that cannot be read is left alone rather than failing the
-            # chip: its parent still converts, and the stale child is visible in
-            # the catalog either way.
-            continue
-
         thumbnail = child.assets.get("thumbnail")
         if thumbnail is None:
             continue
-
+        checksums = "file:checksum" in thumbnail.extra_fields
         thumbnail.href = f"./{preview_path.name}"
         thumbnail.media_type = PREVIEW_MEDIA_TYPE
         thumbnail.title = "WebP preview"
-        # The asset object is reused, so a stale JPEG checksum would survive the
-        # repoint and claim to verify the WebP. Recompute it, or there is none.
-        add_file_info(thumbnail, preview_path, checksum=_asset_has_checksum(thumbnail))
+        add_file_info(thumbnail, preview_path, checksum=checksums)
         write_item(child, child_path)
 
 
-def commit_chip_conversion(item: pystac.Item, item_path: Path) -> int:
-    """Repoint a converted chip's items at the WebP and delete the superseded JPEGs.
+def _child_preview_path(child_path: Path) -> Path:
+    return child_path.with_name(child_path.stem.removesuffix("_s2") + "_image_s2" + PREVIEW_SUFFIX)
 
-    A JPEG is removed only once its WebP counterpart is on disk, so a chip whose
-    render partly failed keeps the previews it still has.
 
-    Args:
-        item: The chip item, updated in place
-        item_path: Path to the chip item JSON
+def _removable_previews(plan: _ConversionPlan) -> list[Path]:
+    available = (*plan.outputs, *plan.reusable)
+    chip_dir = plan.item_path.parent
+    referenced = set()
+    for owner, path in [(plan.item, plan.item_path), *plan.children]:
+        if path == plan.item_path:
+            repointed = any(
+                chip_dir / f"{plan.item.id}{stem}{PREVIEW_SUFFIX}" in available
+                for stem in ("_overlay", "_planting_image_s2")
+            )
+        else:
+            repointed = _child_preview_path(path) in available
+        referenced.update(
+            _local_asset_path(asset, chip_dir)
+            for key, asset in owner.assets.items()
+            if key != "thumbnail" or not repointed
+        )
+    return [
+        path
+        for path in plan.legacy
+        if path.with_suffix(PREVIEW_SUFFIX) in available and path.resolve() not in referenced
+    ]
 
-    Returns:
-        The number of legacy previews removed
-    """
+
+def commit_chip_conversion(plan: _ConversionPlan) -> int:
+    """Update every readable item before removing its superseded JPEGs."""
+    item, item_path = plan.item, plan.item_path
     chip_dir = item_path.parent
-
-    # A catalog built with --checksums must stay verifiable: the thumbnail asset is
-    # replaced wholesale here, so its checksum has to be recomputed for the WebP.
-    checksums = _asset_has_checksum(item.assets.get("thumbnail"))
+    thumbnail = item.assets.get("thumbnail")
+    checksums = thumbnail is not None and "file:checksum" in thumbnail.extra_fields
     attach_thumbnail_to_parent(item, chip_dir, checksums=checksums)
     write_item(item, item_path)
-    _repoint_child_items(chip_dir, item.id)
+    _repoint_child_items(plan)
 
     removed = 0
-    for path in legacy_previews(chip_dir, item.id):
-        if path.with_suffix(PREVIEW_SUFFIX).exists():
-            path.unlink()
-            removed += 1
+    for path in _removable_previews(plan):
+        path.unlink()
+        removed += 1
     return removed
 
 
@@ -318,37 +313,35 @@ def convert_previews_for_catalog(
         if on_progress:
             on_progress(done, len(pending))
 
-    def work(task: tuple[pystac.Item, Path]) -> tuple[Path, ...]:
-        return render_chip_previews(*task)
-
-    def apply(outcome: ParallelOutcome[tuple[pystac.Item, Path], tuple[Path, ...]]) -> None:
-        item, item_path = outcome.task
+    def apply(outcome: ParallelOutcome[_ConversionPlan, tuple[Path, ...]]) -> None:
+        plan = outcome.task
+        item = plan.item
         if outcome.error is not None:
             result.failed += 1
             result.failed_details.append({"chip": item.id, "error": str(outcome.error)})
             advance()
             return
-        if not outcome.value:
+        if not outcome.value and not plan.reusable:
             result.skipped += 1
-            result.skipped_details.append({"chip": item.id, "reason": _NO_SOURCE_REASON})
+            result.skipped_details.append(
+                {"chip": item.id, "reason": "No imagery to re-render the preview from"}
+            )
             advance()
             return
         try:
-            removed = commit_chip_conversion(item, item_path)
+            removed = commit_chip_conversion(plan)
         except (OSError, pystac.STACError) as err:
-            # The WebP is on disk; only the item update failed. Report it rather
-            # than counting a chip whose items still point at a deleted JPEG.
             result.failed += 1
             result.failed_details.append({"chip": item.id, "error": str(err)})
             advance()
             return
         result.chips_converted += 1
-        result.previews_written += len(outcome.value)
+        result.previews_written += len(outcome.value or ())
         result.legacy_removed += removed
         advance()
 
     try:
-        run_in_parallel(pending, work, apply, workers=workers)
+        run_in_parallel(pending, render_chip_previews, apply, workers=workers)
     finally:
         if progress_bar:
             progress_bar.close()
@@ -361,32 +354,26 @@ def _pending_conversions(
     result: ConversionResult,
     *,
     dry_run: bool,
-) -> list[tuple[pystac.Item, Path]]:
-    """The chips that still have JPEG previews, counting the rest as skipped.
-
-    A dry run gets no further than this, so it plans each chip here instead: reporting
-    every chip with a ``.jpg`` as convertible would promise conversions the real run
-    skips for want of a source, and a dry run is the gate before a destructive migration.
-    """
-    pending: list[tuple[pystac.Item, Path]] = []
+) -> list[_ConversionPlan]:
+    """Plan source-backed work and report chips with nothing convertible."""
+    pending = []
     for item, item_path in chip_items:
-        legacy = legacy_previews(item_path.parent, item.id)
-        if not legacy:
+        try:
+            plan = _plan_conversion(item, item_path)
+        except OSError as err:
+            result.failed += 1
+            result.failed_details.append({"chip": item.id, "error": str(err)})
+            continue
+        if isinstance(plan, str):
             result.skipped += 1
-            result.skipped_details.append({"chip": item.id, "reason": "No JPEG previews"})
+            result.skipped_details.append({"chip": item.id, "reason": plan})
             continue
-        if not dry_run:
-            pending.append((item, item_path))
+        if dry_run:
+            result.chips_converted += 1
+            result.previews_written += len(plan.outputs)
+            result.legacy_removed += len(_removable_previews(plan))
             continue
-
-        plan = plan_chip_conversion(item, item_path)
-        if not plan.previews:
-            result.skipped += 1
-            result.skipped_details.append({"chip": item.id, "reason": _NO_SOURCE_REASON})
-            continue
-        result.chips_converted += 1
-        result.previews_written += len(plan.previews)
-        result.legacy_removed += len(plan.removable)
+        pending.append(plan)
     return pending
 
 

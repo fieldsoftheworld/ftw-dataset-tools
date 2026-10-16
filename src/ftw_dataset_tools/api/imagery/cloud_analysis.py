@@ -2,13 +2,67 @@
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import numpy as np
 import rasterio
 from rasterio.crs import CRS
+from rasterio.errors import WindowError
 from rasterio.warp import transform_bounds
-from rasterio.windows import from_bounds
+from rasterio.windows import Window, from_bounds
 
-__all__ = ["calculate_pixel_cloud_cover"]
+__all__ = ["SCLChipStats", "calculate_pixel_cloud_cover", "read_scl_chip_stats"]
+
+
+class SCLChipStats(NamedTuple):
+    """What one SCL window says about a chip: how much is missing, how much is cloud."""
+
+    nodata_pct: float
+    cloud_pct: float
+
+
+def read_scl_chip_stats(scl_href: str, bbox: tuple[float, float, float, float]) -> SCLChipStats:
+    """Nodata and cloud percentages for a chip, from a single SCL read.
+
+    SCL carries both facts: class 0 is no-data, and classes 3/8/9/10 are the
+    cloud classes. Selection needs both for every candidate scene, so reading
+    them together halves the range requests a candidate costs - the nodata
+    answer used to come from a separate read of the 10 m NIR band.
+
+    ``cloud_pct`` is the share of *valid* pixels that are cloud, matching
+    :func:`calculate_pixel_cloud_cover`; ``nodata_pct`` is the share of the
+    whole window that is missing.
+    """
+    with rasterio.open(scl_href) as src:
+        if src.crs != CRS.from_epsg(4326):
+            src_bbox = transform_bounds(CRS.from_epsg(4326), src.crs, *bbox)
+        else:
+            src_bbox = bbox
+
+        requested = from_bounds(*src_bbox, src.transform)
+        try:
+            window = requested.intersection(Window(0, 0, src.width, src.height))
+        except WindowError:
+            # rasterio raises rather than returning an empty window when the
+            # chip falls outside the scene: nothing of it was imaged.
+            return SCLChipStats(nodata_pct=100.0, cloud_pct=0.0)
+        if window.width <= 0 or window.height <= 0:
+            return SCLChipStats(nodata_pct=100.0, cloud_pct=0.0)
+
+        data = src.read(1, window=window)
+
+    if data.size == 0:
+        return SCLChipStats(nodata_pct=100.0, cloud_pct=0.0)
+
+    valid_mask = data > 0
+    valid_count = int(np.count_nonzero(valid_mask))
+    nodata_pct = (data.size - valid_count) / data.size * 100.0
+    if valid_count == 0:
+        return SCLChipStats(nodata_pct=nodata_pct, cloud_pct=0.0)
+
+    cloud_mask = (data == 3) | (data == 8) | (data == 9) | (data == 10)
+    cloud_pct = int(np.count_nonzero(cloud_mask & valid_mask)) / valid_count * 100.0
+    return SCLChipStats(nodata_pct=float(nodata_pct), cloud_pct=float(cloud_pct))
 
 
 def calculate_pixel_cloud_cover(

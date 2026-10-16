@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pystac
@@ -18,8 +18,11 @@ from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
 from ftw_dataset_tools.api.imagery.settings import (
     BANDS_OF_INTEREST,
     CHILD_ITEM_BAND_ASSETS,
+    MOSAIC_NODATA,
+    MOSAIC_SCALE,
     REFLECTANCE_BANDS,
 )
+from ftw_dataset_tools.api.imagery.slots import MOSAIC_SOURCE, THUMBNAIL_SLOTS, parse_image_stem
 from ftw_dataset_tools.api.imagery.thumbnails import (
     PREVIEW_MEDIA_TYPE,
     PREVIEW_SUFFIX,
@@ -73,7 +76,7 @@ class DownloadResult:
 
     output_path: Path
     scene_id: str
-    season: Literal["planting", "harvest"]
+    season: str
     bands: list[str]
     width: int
     height: int
@@ -139,14 +142,10 @@ def find_reference_mask_for_output(output_path: Path) -> Path | None:
     Returns:
         Path to reference mask if available, otherwise ``None``.
     """
-    stem = output_path.stem
-
-    if stem.endswith("_planting_image_s2"):
-        base_id = stem.removesuffix("_planting_image_s2")
-    elif stem.endswith("_harvest_image_s2"):
-        base_id = stem.removesuffix("_harvest_image_s2")
-    else:
+    parsed = parse_image_stem(output_path.stem)
+    if parsed is None:
         return None
+    base_id = parsed[0]
 
     candidates = [
         output_path.parent / f"{base_id}_semantic_3_class.tif",
@@ -271,12 +270,14 @@ def write_cog(
     found_bands: list[str],
     profile: dict,
     nodata: float | int | None = None,
+    scale: float | None = None,
 ) -> str | None:
     """Write stacked imagery as a COG with band descriptions and embedded statistics.
 
     Statistics are embedded as GDAL band tags on the COG itself, never a sidecar
     file. Checksums are not computed here for imagery in this PR; they are added
-    in the layout PR when item saving is centralized.
+    in the layout PR when item saving is centralized. ``scale`` is written as every
+    band's GDAL scale, with offset 0.
 
     Returns an error message on failure, else None.
     """
@@ -285,6 +286,9 @@ def write_cog(
     try:
         with rasterio.open(output_path, "w", **profile) as destination_dataset:
             destination_dataset.write(stacked)
+            if scale is not None:
+                destination_dataset.scales = [scale] * len(found_bands)
+                destination_dataset.offsets = [0.0] * len(found_bands)
             for band_index, band_name in enumerate(found_bands, start=1):
                 destination_dataset.set_band_description(band_index, band_name)
                 stats = compute_band_stats(stacked[band_index - 1], nodata=nodata)
@@ -444,6 +448,8 @@ def download_and_clip_scene(
     stacked = np.stack(band_data, axis=0)
     logger.debug(f"Stacked shape: {stacked.shape}")
 
+    # Mosaics keep their native int16 values, -32768 fill and 0.0001 scale (no offset).
+    is_mosaic = scene.item.properties.get("ftw:source") == MOSAIC_SOURCE
     profile = {
         "driver": "COG",
         "dtype": stacked.dtype,
@@ -454,13 +460,18 @@ def download_and_clip_scene(
         "transform": target_transform,
         "compress": "deflate",
         # Only set when every band in the stack treats 0 as fill; see stack_nodata.
-        "nodata": stack_nodata(found_bands),
+        "nodata": MOSAIC_NODATA if is_mosaic else stack_nodata(found_bands),
     }
 
     logger.debug(f"Writing to {output_path}...")
 
     write_error = write_cog(
-        output_path, stacked, found_bands, profile, nodata=profile.get("nodata")
+        output_path,
+        stacked,
+        found_bands,
+        profile,
+        nodata=profile.get("nodata"),
+        scale=MOSAIC_SCALE if is_mosaic else None,
     )
     if write_error is not None:
         return DownloadResult(
@@ -518,7 +529,7 @@ def process_downloaded_scene(
     output_path: Path,
     output_filename: str,
     band_list: list[str],
-    season: Literal["planting", "harvest"],
+    season: str,
     base_id: str,
     generate_thumbnails: bool = True,
 ) -> ProcessedSceneResult:
@@ -537,7 +548,7 @@ def process_downloaded_scene(
         output_path: Path to the downloaded image file
         output_filename: Filename of the downloaded image
         band_list: List of bands in the downloaded image
-        season: Season identifier ("planting" or "harvest")
+        season: Imagery slot ("planting", "harvest" or "q1".."q4")
         base_id: Base chip ID (without season suffix)
         generate_thumbnails: Whether to generate thumbnails
 
@@ -581,19 +592,16 @@ def process_downloaded_scene(
         except ThumbnailError:
             pass
 
-    # Save the child item
-    write_item(item, item_path)
-
     # Update parent chip item with asset reference
     parent_item_path = item_path.parent / f"{base_id}.json"
     if parent_item_path.exists():
         parent_item = pystac.Item.from_file(str(parent_item_path))
 
-        # Generate overlay thumbnail for planting season if mask exists
+        # Generate overlay thumbnail for the thumbnail slot if mask exists
         thumb_for_parent = None
         is_overlay = False
 
-        if result.thumbnail_path and season == "planting":
+        if result.thumbnail_path and season in THUMBNAIL_SLOTS:
             # Look for semantic 3-class mask
             mask_path = item_path.parent / f"{base_id}_semantic_3_class.tif"
             if mask_path.exists():
@@ -624,5 +632,8 @@ def process_downloaded_scene(
             thumbnail_filename=thumb_for_parent,
             is_overlay=is_overlay,
         )
+
+    # Save the child last so a parent failure leaves it re-downloadable on resume.
+    write_item(item, item_path)
 
     return result

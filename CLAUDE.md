@@ -141,8 +141,8 @@ The `create-dataset` command is a pipeline that combines multiple standalone ope
 
 | Standalone Command | `create-dataset` Function | Shared `api/` function |
 |--------------------|---------------------------|------------------------|
-| `download-images`  | calls `download_imagery_for_catalog()` | `download_imagery_for_catalog()` (also used by `ftwd run`); `download-images` keeps its own loop for `--keep-remote-refs` but shares `build_download_task()` / `download_task_scene()` / `run_in_parallel()` |
-| `select-images`    | calls `select_imagery_for_catalog()` | `select-images` keeps its own loop (per-chip years) but shares `run_chip_selection()` / `create_child_items_from_selection()` / `has_existing_scenes()` / `run_in_parallel()` |
+| `download-images`  | calls `download_imagery_for_catalog()` | `download_imagery_for_catalog()` (also used by `ftwd run`) |
+| `select-images`    | calls `select_imagery_for_catalog()` | `select_imagery_for_catalog()` (also used by `ftwd run`) |
 
 **IMPORTANT:** When adding or modifying functionality in these commands:
 
@@ -253,6 +253,9 @@ logger.error("Something failed")     # red, "Error: " prefix added by the CLI
 - Work on a thread pool wraps each task in `capture_logs(task.logs)` and the calling thread
   calls `replay(task.logs)`, so each task's lines stay together.
 - `ftwd -v` is global; commands check it with `is_verbose()`. Tests assert on `caplog`.
+- `select-images`, `convert-previews` and `create-dataset-summary` keep their old `-v/--verbose`
+  as an alias of `ftwd -v` (`verbose_alias_option`) so existing scripts still work; don't add
+  it to new commands.
 
 ---
 
@@ -306,10 +309,9 @@ ruff format .
 
 ---
 
-## Code Complexity (TODO)
+## Code Complexity
 
-> **Note:** Complexity monitoring is not yet enforced via pre-commit.
-> See GitHub issue for tracking: https://github.com/fieldsoftheworld/ftw-dataset-tools/issues/15
+Enforced by xenon in pre-commit and CI at `--max-absolute=D --max-modules=C --max-average=B`.
 
 **Target: Aim for grade 'A' complexity on all new code.**
 
@@ -318,12 +320,12 @@ ruff format .
 - **B**: Acceptable, low complexity
 - **C-F**: Needs refactoring
 
-### Target Pre-commit Thresholds
+### Thresholds
 ```bash
 # Strict check - aim for this
 xenon --max-absolute=A --max-modules=A --max-average=A src/ftw_dataset_tools/
 
-# Target pre-commit threshold
+# Enforced threshold
 xenon --max-absolute=D --max-modules=C --max-average=B src/ftw_dataset_tools/
 ```
 
