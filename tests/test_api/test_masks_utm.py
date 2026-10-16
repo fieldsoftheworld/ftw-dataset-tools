@@ -78,9 +78,7 @@ class TestUtmMasks:
         with rasterio.open(path) as src:
             assert src.crs.to_string() == "EPSG:32632"
             assert src.res == (3.0, 3.0)
-            assert src.transform.c % 3 == 0
-            assert src.transform.f % 3 == 0
-            # ~716 m x ~1112 m of cell, snapped outward to whole pixels
+            # ~716 m x ~1112 m of cell, rounded up to whole pixels
             assert 238 <= src.width <= 245
             assert 370 <= src.height <= 376
 
@@ -198,3 +196,28 @@ def test_stac_item_lists_planet_masks_beside_the_default_ones(tmp_path: Path) ->
     band = planet.extra_fields["raster:bands"][0]
     assert band["classification:classes"]
     assert band["spatial_resolution"] == 3.0
+
+
+def test_ftw_chip_grid_is_exactly_the_chip(tmp_path: Path) -> None:
+    """An FTW chip is a 2 km square in its UTM zone; its grid starts at that square's corner."""
+    from pyproj import Transformer
+
+    to_lonlat = Transformer.from_crs("EPSG:32632", "EPSG:4326", always_xy=True).transform
+    from shapely.ops import transform
+
+    square = box(286_000, 5_498_000, 288_000, 5_500_000)
+    chip = transform(to_lonlat, square.segmentize(50))
+    inputs = _inputs(tmp_path)
+    inputs["chips_file"] = write_geoparquet(
+        tmp_path / "ftw_chips.parquet",
+        gdf=gpd.GeoDataFrame(
+            {"id": ["ftw-32UKV8698"], "field_coverage_pct": [50]}, geometry=[chip], crs=4326
+        ),
+    )
+
+    result = masks.create_masks(**inputs, utm=True, resolution=3.0, filename_suffix="_planet")
+
+    (created,) = result[masks.MaskType.SEMANTIC_2_CLASS].masks_created
+    with rasterio.open(created.output_path) as src:
+        assert (src.width, src.height) == (667, 667)
+        assert (src.transform.c, src.transform.f) == pytest.approx((286_000, 5_500_000), abs=0.05)
