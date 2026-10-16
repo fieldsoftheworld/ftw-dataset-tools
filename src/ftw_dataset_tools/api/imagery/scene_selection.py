@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     import pystac
 
 from ftw_dataset_tools.api.imagery import parquet_search
-from ftw_dataset_tools.api.imagery.cloud_analysis import calculate_pixel_cloud_cover
+from ftw_dataset_tools.api.imagery.cloud_analysis import read_scl_chip_stats
 from ftw_dataset_tools.api.imagery.crop_calendar import (
     CropCalendarDates,
     get_crop_calendar_dates,
@@ -362,57 +362,61 @@ def _select_best_scene(
     for item in items:
         short_dt = _short_date(item)
 
-        # Check nodata first (fail fast). A scene-level value of zero proves the
-        # chip's window is clean; any other value says nothing about this chip
-        # (granule-edge nodata may sit far from it), so check the actual pixels.
-        # Old-baseline products in particular carry edge nodata on most scenes.
+        # A scene-level nodata of zero proves the chip's window is clean; any
+        # other value says nothing about this chip (granule-edge nodata may sit
+        # far from it), so check the actual pixels. Old-baseline products in
+        # particular carry edge nodata on most scenes.
         scene_nodata = get_nodata_from_metadata(item)
-        if not (scene_nodata is not None and scene_nodata <= 0) and nodata_max < 100:
-            try:
-                # Use NIR band for nodata check (available in all scenes)
-                nir_asset = item.assets.get("nir")
-                if nir_asset:
-                    nodata_pct = calculate_nodata_percentage(nir_asset.href, bbox)
-                    if nodata_pct > nodata_max:
-                        log(f"  Skipping {short_dt}: {nodata_pct:.1f}% nodata in chip window")
-                        continue
-            except Exception as e:
-                # Without the pixel check, fall back to the scene-level value.
-                if scene_nodata is not None and scene_nodata > nodata_max:
-                    log(
-                        f"  Skipping {short_dt}: nodata check failed ({e}), "
-                        f"scene reports {scene_nodata:.1f}% nodata"
-                    )
-                    continue
-                log(f"  {item.id}: nodata check failed ({e}), continuing")
-
+        needs_nodata_check = (
+            not (scene_nodata is not None and scene_nodata <= 0) and nodata_max < 100
+        )
         scene_cloud_cover = EOExtension.ext(item).cloud_cover or 0.0
+        # For very clear scenes (< 0.1% reported), trust the metadata.
+        needs_cloud_check = scene_cloud_cover >= PIXEL_CHECK_SKIP_THRESHOLD
 
-        # For very clear scenes (< 0.1% reported), trust the metadata
-        if scene_cloud_cover < PIXEL_CHECK_SKIP_THRESHOLD:
+        # Both answers come out of one SCL window: class 0 is no-data, classes
+        # 3/8/9/10 are cloud. Reading them together is what keeps a candidate
+        # to a single COG open instead of an NIR read followed by an SCL one.
+        stats = None
+        scl_asset = item.assets.get("scl")
+        if (needs_nodata_check or needs_cloud_check) and scl_asset:
+            try:
+                stats = read_scl_chip_stats(scl_asset.href, bbox)
+            except Exception as e:
+                log(f"  {item.id}: SCL read failed ({e})")
+
+        if needs_nodata_check:
+            nodata_pct = stats.nodata_pct if stats else None
+            if nodata_pct is None:
+                # No usable SCL: fall back to the NIR band, then to metadata.
+                try:
+                    nir_asset = item.assets.get("nir")
+                    if nir_asset:
+                        nodata_pct = calculate_nodata_percentage(nir_asset.href, bbox)
+                except Exception as e:
+                    if scene_nodata is not None and scene_nodata > nodata_max:
+                        log(
+                            f"  Skipping {short_dt}: nodata check failed ({e}), "
+                            f"scene reports {scene_nodata:.1f}% nodata"
+                        )
+                        continue
+                    log(f"  {item.id}: nodata check failed ({e}), continuing")
+            if nodata_pct is not None and nodata_pct > nodata_max:
+                log(f"  Skipping {short_dt}: {nodata_pct:.1f}% nodata in chip window")
+                continue
+
+        if not needs_cloud_check:
             log(
                 f"  {item.id}: scene cloud {scene_cloud_cover:.1f}% (trusted, < {PIXEL_CHECK_SKIP_THRESHOLD}%)"
             )
             actual_cloud_cover = scene_cloud_cover
+        elif stats is not None:
+            actual_cloud_cover = stats.cloud_pct
+            log(f"  {item.id}: scene {scene_cloud_cover:.1f}% -> chip {actual_cloud_cover:.1f}%")
         else:
-            # Calculate actual chip-level cloud cover using SCL
-            scl_asset = item.assets.get("scl")
-            if scl_asset:
-                try:
-                    actual_cloud_cover = calculate_pixel_cloud_cover(
-                        cloud_href=scl_asset.href,
-                        bbox=bbox,
-                        cloud_type="scl",
-                    )
-                    log(
-                        f"  {item.id}: scene {scene_cloud_cover:.1f}% -> chip {actual_cloud_cover:.1f}%"
-                    )
-                except Exception as e:
-                    log(f"  {item.id}: chip check failed ({e}), using scene cloud cover")
-                    actual_cloud_cover = scene_cloud_cover
-            else:
-                log(f"  {item.id}: no SCL asset, using scene cloud cover {scene_cloud_cover:.1f}%")
-                actual_cloud_cover = scene_cloud_cover
+            reason = "no SCL asset" if scl_asset is None else "chip check failed"
+            log(f"  {item.id}: {reason}, using scene cloud cover {scene_cloud_cover:.1f}%")
+            actual_cloud_cover = scene_cloud_cover
 
         # Check if chip cloud cover exceeds threshold
         if actual_cloud_cover > cloud_cover_chip:

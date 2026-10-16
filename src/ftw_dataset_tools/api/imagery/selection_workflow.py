@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Literal
 
 import pystac
 
+from ftw_dataset_tools.api.imagery import parquet_search
 from ftw_dataset_tools.api.imagery.catalog_ops import has_existing_scenes, iter_chip_dirs
 from ftw_dataset_tools.api.imagery.crop_calendar import ensure_crop_calendar_exists
 from ftw_dataset_tools.api.imagery.parallel import (
@@ -257,19 +258,22 @@ def select_imagery_for_catalog(
     # first-time download must happen once rather than from every worker at once.
     ensure_crop_calendar_exists(on_progress=on_progress)
 
-    _run_selection(
-        jobs,
-        result=result,
-        cloud_cover_chip=cloud_cover_chip,
-        nodata_max=nodata_max,
-        buffer_days=buffer_days,
-        num_buffer_expansions=num_buffer_expansions,
-        buffer_expansion_size=buffer_expansion_size,
-        on_missing=on_missing,
-        verbose=verbose,
-        workers=workers,
-        search_backend=search_backend,
-    )
+    index = _build_scene_index(jobs, search_backend, verbose=verbose)
+
+    with parquet_search.local_index(index):
+        _run_selection(
+            jobs,
+            result=result,
+            cloud_cover_chip=cloud_cover_chip,
+            nodata_max=nodata_max,
+            buffer_days=buffer_days,
+            num_buffer_expansions=num_buffer_expansions,
+            buffer_expansion_size=buffer_expansion_size,
+            on_missing=on_missing,
+            verbose=verbose,
+            workers=workers,
+            search_backend=search_backend,
+        )
 
     return result
 
@@ -283,6 +287,44 @@ def _skip_reason(item: pystac.Item, *, force: bool, year: int | None) -> str | N
     if year is None:
         return NO_YEAR_REASON
     return None
+
+
+def _build_scene_index(
+    jobs: list[ChipSelectionJob],
+    search_backend: str,
+    *,
+    verbose: bool,
+) -> Path | None:
+    """Pull the run's slice of the scene catalog local before fanning out.
+
+    Every chip searches the same few MGRS tiles, so the whole run's candidate
+    scenes are a file of a few hundred kilobytes. Fetching it once turns each
+    chip's searches from remote reads of a multi-gigabyte part file into local
+    ones. Returns ``None`` when there is nothing to index or the build fails -
+    both leave the workers querying the mirror directly, which still works.
+    """
+    if search_backend != "parquet":
+        return None
+
+    boxes = [job.item.bbox for job in jobs if job.item.bbox]
+    if not boxes:
+        return None
+    bbox = (
+        min(b[0] for b in boxes),
+        min(b[1] for b in boxes),
+        max(b[2] for b in boxes),
+        max(b[3] for b in boxes),
+    )
+
+    try:
+        # Chips can carry different years, so the index covers each one's reach.
+        years = {y for job in jobs for y in parquet_search.index_years(job.year)}
+        return parquet_search.build_local_index(bbox, sorted(years))
+    except Exception as e:
+        # An unbuildable index is a performance problem, not a correctness one.
+        if verbose:
+            print(f"Scene index unavailable ({e}); querying the catalog directly.")
+        return None
 
 
 def _run_selection(

@@ -14,6 +14,18 @@ os.environ.update(
         "GDAL_HTTP_TIMEOUT": "30",
         "VSI_CACHE": "TRUE",
         "VSI_CACHE_SIZE": "50000000",  # 50MB cache
+        # Assets are opened by direct URL and have no sidecars, so GDAL's
+        # directory listing on open is pure latency - a wasted round trip on
+        # every candidate scene.
+        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+        # Global curl chunk cache, shared across files and threads (VSI_CACHE
+        # above is per-file). A selection run revisits the same few hundred SCL
+        # COGs from chip to chip, and the 16MB default thrashes on that set.
+        "CPL_VSIL_CURL_CACHE_SIZE": "536870912",  # 512MB
+        # Pull the COG header in the opening request rather than paying a
+        # second round trip for it.
+        "GDAL_INGESTED_BYTES_AT_OPEN": "32768",
+        "GDAL_HTTP_CONNECTTIMEOUT": "10",
     }
 )
 

@@ -1107,3 +1107,58 @@ class TestPerChipYearAndExplicitItems:
 
         assert excinfo.value.chip_id == "chip_000"
         assert "too cloudy" in str(excinfo.value)
+
+
+class TestBuildSceneIndex:
+    """The run's scene index spans every chip's bbox and every chip's year."""
+
+    @staticmethod
+    def _job(chip_id: str, bbox: list[float] | None, year: int) -> ChipSelectionJob:
+        item = pystac.Item(
+            id=chip_id,
+            geometry=None,
+            bbox=bbox,
+            datetime=datetime(year, 6, 1, tzinfo=UTC),
+            properties={},
+        )
+        return ChipSelectionJob(item=item, item_path=MagicMock(), year=year)
+
+    def test_covers_union_of_bboxes_and_years(self) -> None:
+        from ftw_dataset_tools.api.imagery import selection_workflow
+
+        jobs = [
+            self._job("ftw-a_2022", [10.0, 45.0, 10.1, 45.1], 2022),
+            self._job("ftw-b_2024", [11.0, 46.0, 11.2, 46.2], 2024),
+        ]
+        with patch.object(
+            selection_workflow.parquet_search, "build_local_index", return_value="idx"
+        ) as build:
+            index = selection_workflow._build_scene_index(jobs, "parquet", verbose=False)
+
+        assert index == "idx"
+        bbox, years = build.call_args.args
+        assert bbox == (10.0, 45.0, 11.2, 46.2)
+        assert years == [2021, 2022, 2023, 2024, 2025]
+
+    def test_earth_search_backend_skips_index(self) -> None:
+        from ftw_dataset_tools.api.imagery import selection_workflow
+
+        jobs = [self._job("ftw-a_2022", [10.0, 45.0, 10.1, 45.1], 2022)]
+        with patch.object(selection_workflow.parquet_search, "build_local_index") as build:
+            index = selection_workflow._build_scene_index(jobs, "earth-search", verbose=False)
+
+        assert index is None
+        build.assert_not_called()
+
+    def test_failed_build_falls_back_to_mirror(self) -> None:
+        from ftw_dataset_tools.api.imagery import selection_workflow
+
+        jobs = [self._job("ftw-a_2022", [10.0, 45.0, 10.1, 45.1], 2022)]
+        with patch.object(
+            selection_workflow.parquet_search,
+            "build_local_index",
+            side_effect=OSError("mirror unreachable"),
+        ):
+            index = selection_workflow._build_scene_index(jobs, "parquet", verbose=False)
+
+        assert index is None

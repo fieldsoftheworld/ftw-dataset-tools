@@ -10,9 +10,12 @@ return (rebuilt from the scene id), with no rate limit anywhere in the path.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import math
+import os
 import threading
-from datetime import date
+from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
@@ -22,7 +25,7 @@ from pystac.extensions.eo import EOExtension
 from ftw_dataset_tools.api.imagery.settings import STAC_URL
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from collections.abc import Iterator, Sequence
 
 __all__ = [
     "COLLECTION_C1",
@@ -30,6 +33,9 @@ __all__ = [
     "DEFAULT_MIRROR_ROOT",
     "DEFAULT_PARQUET_URL",
     "PARQUET_COLLECTION",
+    "build_local_index",
+    "index_years",
+    "local_index",
     "mgrs_tiles_for_bbox",
     "part_urls_for_query",
     "query_scenes",
@@ -247,6 +253,140 @@ def _connection() -> duckdb.DuckDBPyConnection:
     return con
 
 
+# ---------------------------------------------------------------------------
+# Local index
+#
+# A selection run queries the same handful of MGRS tiles once per chip per
+# season. Against the mirror that is cheap per query but never free: the c1
+# part for a year is a 5 GB whole-world file, so every DuckDB connection pays
+# seconds parsing its footer before it can prune a single row group, and
+# connections are per-thread. Copying the run's tiles into one local parquet up
+# front turns every one of those queries into a local read of a file measured
+# in kilobytes.
+# ---------------------------------------------------------------------------
+
+_active_index: Path | None = None
+
+
+def _tile_column(collection: str) -> str:
+    """The column holding a row's MGRS tile id, which differs by collection."""
+    return "_tile" if collection == COLLECTION_C1 else '"s2:mgrs_tile"'
+
+
+def _index_columns(collection: str) -> str:
+    """Exactly the columns `_scene_sql` reads for a collection.
+
+    The old collection prunes row groups by ``_month``, so the index has to
+    carry it; c1 prunes by tile and never looks at it.
+    """
+    cols = ["id", "bbox", "datetime", '"eo:cloud_cover"', '"s2:nodata_pixel_percentage"']
+    if collection != COLLECTION_C1:
+        cols.append("_month")
+    cols.append(_tile_column(collection))
+    return ", ".join(cols)
+
+
+def index_years(year: int) -> list[int]:
+    """Calendar years a run's searches can reach.
+
+    Selection centres its windows on the crop calendar's planting and harvest
+    days, so a window can spill past either end of ``year``: into the previous
+    year from an early planting date, and into the next from a late harvest or
+    a southern-hemisphere cycle, where harvest is in ``year + 1`` by
+    construction. One year either side covers both.
+    """
+    return [year - 1, year, year + 1]
+
+
+def build_local_index(
+    bbox: tuple[float, float, float, float],
+    years: Sequence[int],
+    *,
+    collection: str = COLLECTION_C1,
+    base_url: str | None = None,
+    cache_dir: Path | None = None,
+    today: date | None = None,
+) -> Path | None:
+    """Copy every catalog row a run can need into one local parquet.
+
+    Filters the mirror down to the MGRS tiles covering ``bbox`` across
+    ``years``. The result is keyed by that tile set, so a rerun of the same
+    area reuses it; returns ``None`` when the area resolves to no catalog
+    parts at all (every year outside the archive).
+    """
+    base_url = base_url or f"{DEFAULT_MIRROR_ROOT}/{collection}"
+    today = today or date.today()
+    wanted = sorted(set(years))
+    if not wanted:
+        return None
+
+    tiles = sorted(mgrs_tiles_for_bbox(bbox))
+    if not tiles:
+        return None
+
+    # Exactly the parts a chip query would read across the whole span, so the
+    # index can never be missing a row the direct path would have found.
+    urls = part_urls_for_query(
+        bbox,
+        datetime(wanted[0], 1, 1, tzinfo=UTC),
+        datetime(wanted[-1], 12, 31, tzinfo=UTC),
+        collection=collection,
+        base_url=base_url,
+        today=today,
+    )
+    if not urls:
+        return None
+
+    cache_dir = cache_dir or _default_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(
+        "|".join([collection, base_url, *tiles, *(str(y) for y in wanted)]).encode()
+    ).hexdigest()[:16]
+    path = cache_dir / f"scenes-{collection}-{key}.parquet"
+    if path.exists():
+        return path
+
+    tile_col = _tile_column(collection)
+    url_list = ", ".join("'" + u.replace("'", "''") + "'" for u in urls)
+    tile_list = ", ".join("'" + t + "'" for t in tiles)
+    # Written to a temp name and renamed, so a crashed or concurrent build can
+    # never leave a half-written index for the next run to read as complete.
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    # The tile column keeps its own name, so `_scene_sql` reads the index with
+    # exactly the SQL it would run against the mirror.
+    _connection().execute(
+        f"""COPY (SELECT {_index_columns(collection)}
+                  FROM read_parquet([{url_list}], union_by_name = true)
+                  WHERE {tile_col} IN ({tile_list}))
+            TO '{tmp}' (FORMAT parquet)"""
+    )
+    tmp.replace(path)
+    return path
+
+
+def _default_cache_dir() -> Path:
+    """Where built indexes live, alongside the other ftw caches."""
+    base = os.environ.get("FTW_CACHE_DIR")
+    root = Path(base) if base else Path.home() / ".cache" / "ftw-tools"
+    return root / "scene_index"
+
+
+@contextlib.contextmanager
+def local_index(path: Path | None) -> Iterator[None]:
+    """Route ``query_scenes`` at a local index for the duration of the block.
+
+    Set once before a selection fans out; every worker thread reads the same
+    file. Passing ``None`` is a no-op, so callers can wrap unconditionally.
+    """
+    global _active_index
+    previous = _active_index
+    _active_index = path
+    try:
+        yield
+    finally:
+        _active_index = previous
+
+
 def _bbox_polygon(bbox: list[float]) -> dict:
     """GeoJSON polygon for a [w, s, e, n] bbox."""
     w, s, e, n = bbox
@@ -403,9 +543,15 @@ def query_scenes(
     datetime window, and ``eo:cloud_cover < cloud_cover_max``, ordered
     ascending by cloud cover.
     """
-    urls = part_urls_for_query(
-        bbox, start, end, collection=collection, base_url=base_url, today=today
-    )
+    index = _active_index
+    if index is not None:
+        # The index already holds only the run's tiles; `_scene_sql`'s own tile
+        # and date filters still narrow it to this chip's window.
+        urls = [str(index)]
+    else:
+        urls = part_urls_for_query(
+            bbox, start, end, collection=collection, base_url=base_url, today=today
+        )
     if not urls:
         return []
     west, south, east, north = bbox
