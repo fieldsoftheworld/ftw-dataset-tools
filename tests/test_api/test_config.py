@@ -24,7 +24,7 @@ class TestFromDict:
         assert config.name is None
         assert config.skip_reproject is False
         # Stage defaults
-        assert config.stages.chips.min_coverage == 0.01
+        assert config.stages.chips.min_coverage == 1.0
         assert config.stages.chips.coverage_batch_size == 2000
         assert config.stages.chips.min_chip_area == 99.5
         assert config.stages.chips.km_size == 2.0
@@ -196,6 +196,7 @@ class TestFromDict:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
 
         assert config.stages.stac.checksums is False
+        assert config.stages.stac.crop_calendar is True
 
     def test_stac_checksums_enabled(self) -> None:
         config = DatasetConfig.from_dict(
@@ -228,6 +229,24 @@ class TestFromDict:
         with pytest.raises(ConfigError, match=r"stages\.chips\.crop_stats must be true or false"):
             DatasetConfig.from_dict(
                 {"fields_file": "f.parquet", "stages": {"chips": {"crop_stats": "yes"}}}
+            )
+
+    def test_land_cover_defaults_false(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+
+        assert config.stages.chips.land_cover is False
+
+    def test_land_cover_can_be_enabled(self) -> None:
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"chips": {"land_cover": True}}}
+        )
+
+        assert config.stages.chips.land_cover is True
+
+    def test_land_cover_non_bool_raises(self) -> None:
+        with pytest.raises(ConfigError, match=r"stages\.chips\.land_cover must be true or false"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"chips": {"land_cover": "yes"}}}
             )
 
     def test_skip_existing_defaults_false(self) -> None:
@@ -332,6 +351,7 @@ class TestFromKwargs:
             scale_percent=25.0,
             scale_min_blocks=2,
             km_size=0.5,
+            land_cover=True,
         )
         assert config.name == "ds"
         assert config.stages.chips.km_size == 0.5
@@ -339,6 +359,7 @@ class TestFromKwargs:
         assert config.stages.scale.min_blocks_per_square == 2
         assert config.stages.chips.min_coverage == 0.02
         assert config.stages.chips.drop_border_chips is True
+        assert config.stages.chips.land_cover is True
         assert config.stages.masks.workers == 4
         assert config.stages.masks.presence_only is True
         assert config.stages.masks.mask_types == ["instance"]
@@ -362,6 +383,7 @@ class TestFromKwargs:
             presence_only=False,
             drop_border_chips=False,
         )
+        assert config.stages.chips.land_cover is False
         assert config.stages.masks.mask_types == list(config_module.DEFAULT_MASK_TYPES)
         # The DECODE layers are valid but opt-in, so they are not in the default set.
         assert "decode_boundary" not in config.stages.masks.mask_types

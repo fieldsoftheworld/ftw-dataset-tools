@@ -10,7 +10,6 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path  # noqa: TC003 - used at runtime for path operations
-from typing import Literal
 from urllib.parse import unquote, urlparse
 
 import pystac
@@ -85,7 +84,7 @@ class STACSaveContext:
 
     item: pystac.Item
     item_dir: Path
-    season: Literal["planting", "harvest"]
+    season: str
     band_list: list[str]
     output_filename: str
 
@@ -116,7 +115,7 @@ def save_child_item(ctx: STACSaveContext) -> None:
 def update_parent_item(
     parent_item: pystac.Item,
     parent_path: Path,
-    season: Literal["planting", "harvest"],
+    season: str,
     output_filename: str,
     band_list: list[str],
     thumbnail_filename: str | None = None,
@@ -133,8 +132,8 @@ def update_parent_item(
         season: Season identifier
         output_filename: Name of downloaded image file
         band_list: List of bands in the image
-        thumbnail_filename: Optional thumbnail filename. If provided and season is
-            "planting", adds as the chip's thumbnail asset.
+        thumbnail_filename: Optional thumbnail filename. If provided and season is a
+            thumbnail slot ("planting" or "q3"), adds as the chip's thumbnail asset.
         is_overlay: If True, thumbnail has mask overlay (used for title).
 
     Raises:
@@ -143,6 +142,7 @@ def update_parent_item(
     # Imported here, not at module scope: ``api.imagery``'s package __init__ pulls
     # preview_workflow, which imports this module, so a top-level import deadlocks
     # whichever of the two is loaded first.
+    from ftw_dataset_tools.api.imagery.slots import THUMBNAIL_SLOTS, slot_title
     from ftw_dataset_tools.api.imagery.thumbnails import preview_media_type
 
     asset_key = f"{season}_image"
@@ -154,7 +154,7 @@ def update_parent_item(
             pystac.Asset(
                 href=f"./{output_filename}",
                 media_type="image/tiff; application=geotiff; profile=cloud-optimized",
-                title=f"{season.capitalize()} season imagery ({','.join(band_list)})",
+                title=f"{slot_title(season)} imagery ({','.join(band_list)})",
                 roles=["data"],
             ),
         )
@@ -163,12 +163,12 @@ def update_parent_item(
             add_file_info(parent_item.assets[asset_key], image_path)
             add_raster_bands(parent_item.assets[asset_key], image_path)
 
-        # Add planting thumbnail as the chip's thumbnail
-        if thumbnail_filename and season == "planting":
+        # The thumbnail slot's preview becomes the chip's thumbnail
+        if thumbnail_filename and season in THUMBNAIL_SLOTS:
             thumb_title = (
                 "Chip preview with field overlay"
                 if is_overlay
-                else "Chip preview (planting season)"
+                else f"Chip preview ({slot_title(season).lower()})"
             )
             parent_item.add_asset(
                 "thumbnail",

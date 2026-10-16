@@ -497,6 +497,26 @@ class TestImageryStats:
 
         assert imagery_stats(tmp_path) is None
 
+    def test_mosaic_quarters_are_described_as_mosaics(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import _imagery_block, imagery_stats
+
+        chip_dir = tmp_path / "chips" / "33UXP" / "ftw-33UXP0001"
+        chip_dir.mkdir(parents=True)
+        for quarter in ("q1", "q2", "q3", "q4"):
+            (chip_dir / f"ftw-33UXP0001_{quarter}_s2.json").write_text(
+                json.dumps(
+                    {"id": f"ftw-33UXP0001_{quarter}_s2", "properties": {"ftw:season": quarter}}
+                )
+            )
+
+        stats = imagery_stats(tmp_path)
+        text = _imagery_block({"imagery": stats})
+
+        assert stats is not None
+        assert set(stats) >= {"q1", "q4"}
+        assert text.startswith("1 chips have Sentinel-2 quarterly cloudless mosaics")
+        assert "planting" not in text
+
 
 class TestRegisterDocsAssetsPruning:
     """A rerun that produces less must leave the collection describing only what exists."""
@@ -669,6 +689,22 @@ class TestSchemaNotes:
 
         assert "see the item JSON" not in agents
         assert "ordered by share (top 5)" in agents
+
+    def test_land_cover_columns_and_properties_have_notes(self) -> None:
+        from ftw_dataset_tools.api import land_cover
+        from ftw_dataset_tools.api.docs import render_agents
+
+        collection = {"title": "T", "links": []}
+        stats = _stats(
+            chip_columns=list(land_cover.OUTPUT_COLUMNS),
+            item_properties=[f"ftw:{col}" for col in land_cover.OUTPUT_COLUMNS],
+        )
+
+        agents = render_agents(collection, stats, [])
+
+        assert "carried through from the source dataset" not in agents
+        assert "see the item JSON" not in agents
+        assert "the nearest year was used" in agents
 
 
 class TestLicenseLink:

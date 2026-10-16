@@ -5,7 +5,7 @@ from pathlib import Path
 
 import click
 
-from ftw_dataset_tools.api import masks, stac
+from ftw_dataset_tools.api import field_stats, masks, stac
 from ftw_dataset_tools.api.config import VALID_MASK_TYPES
 from ftw_dataset_tools.api.masks import MaskType
 
@@ -55,9 +55,9 @@ from ftw_dataset_tools.api.masks import MaskType
 @click.option(
     "--min-coverage",
     type=float,
-    default=0.01,
+    default=field_stats.DEFAULT_MIN_COVERAGE,
     show_default=True,
-    help="Minimum coverage percentage to process (0.01 skips empty grids).",
+    help="Minimum coverage percentage (0-100) to process.",
 )
 @click.option(
     "--resolution",
@@ -79,6 +79,10 @@ from ftw_dataset_tools.api.masks import MaskType
     default=False,
     help="Reuse masks that are already on disk instead of recreating them.",
 )
+@click.option(
+    "--crop-column",
+    help="Source crop column to save alongside instance masks (requires --mask-type instance).",
+)
 def create_masks_cmd(
     chips_file: str,
     boundaries_file: str,
@@ -93,6 +97,7 @@ def create_masks_cmd(
     resolution: float,
     num_workers: int | None,
     skip_existing: bool,
+    crop_column: str | None,
 ) -> None:
     """Create raster masks from vector boundaries for each grid cell.
 
@@ -127,19 +132,18 @@ def create_masks_cmd(
     # is folded into every item id. Resolved before any rasterization so a missing
     # --year fails in a second rather than after a full mask run.
     if year is None:
-        datetime_col = stac.detect_datetime_column(boundaries_file)
-        if datetime_col is None:
+        try:
+            year = stac.resolve_year(boundaries_file)
+        except stac.TemporalExtentError as err:
+            raise click.BadParameter(str(err), param_hint="--year") from err
+        if year is None:
             raise click.BadParameter(
                 "Cannot determine the collection's temporal extent: "
                 f"{boundaries_file} has no 'determination_datetime' column. "
                 "Pass --year.",
                 param_hint="--year",
             )
-        # Derived the same way the pipeline does, so an omitted --year still
-        # produces create-dataset's {grid_id}_{year} item ids and filenames.
-        year = stac.get_year_from_datetime_column(boundaries_file, datetime_col)
-        if year is not None:
-            click.echo(f"Using year {year} from {datetime_col}")
+        click.echo(f"Using year {year} from determination_datetime")
 
     click.echo(f"Creating {mask_type} masks for {field_dataset}")
     click.echo(f"Output: {Path(output_dir) / 'chips'}")
@@ -186,6 +190,7 @@ def create_masks_cmd(
             num_workers=num_workers,
             year=year,
             skip_existing=skip_existing,
+            crop_column=crop_column,
             on_progress=on_progress,
             on_start=on_start,
         )

@@ -8,14 +8,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
-import matplotlib
-
-matplotlib.use("Agg")  # Use non-interactive backend
-import matplotlib.pyplot as plt
 import numpy as np
 import pystac
 
 from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
+from ftw_dataset_tools.api.imagery.slots import parse_child_id
 from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_EXTENSIONS
 
 if TYPE_CHECKING:
@@ -254,9 +251,7 @@ def _collect_stac_metadata(dataset_dir: Path, log: Callable[[str], None]) -> dic
 
     # Separate parent items and child items
     parent_items = [
-        f
-        for f in chip_json_files
-        if not ("_planting_s2" in f.stem or "_harvest_s2" in f.stem or f.name == "collection.json")
+        f for f in chip_json_files if parse_child_id(f.stem) is None and f.name != "collection.json"
     ]
     planting_items = [f for f in chip_json_files if "_planting_s2" in f.stem]
     harvest_items = [f for f in chip_json_files if "_harvest_s2" in f.stem]
@@ -462,6 +457,16 @@ def _generate_visualizations(
         )
 
 
+def _pyplot():
+    """Import pyplot on first use with the non-interactive backend."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    return plt
+
+
 def _create_split_map(df: pd.DataFrame, output_path: Path, log: Callable[[str], None]) -> None:
     """Create a map visualization of train/val/test splits."""
     log("Creating split map...")
@@ -513,6 +518,7 @@ def _create_split_map(df: pd.DataFrame, output_path: Path, log: Callable[[str], 
         log(f"Plotting {len(df)} chips on map...")
 
         # Plot splits
+        plt = _pyplot()
         fig, ax = plt.subplots(figsize=(12, 8))
 
         # Define colors
@@ -561,6 +567,7 @@ def _create_date_histogram(
     try:
         import matplotlib.dates as mdates
 
+        plt = _pyplot()
         fig, ax = plt.subplots(figsize=(10, 5))
 
         # Convert to matplotlib dates using date2num
@@ -595,6 +602,7 @@ def _create_histogram(
     log(f"Creating {label.lower()} histogram...")
 
     try:
+        plt = _pyplot()
         fig, ax = plt.subplots(figsize=(10, 5))
 
         ax.hist(values, bins=bins, edgecolor="black", alpha=0.7)

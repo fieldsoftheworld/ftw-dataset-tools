@@ -7,16 +7,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
-import geopandas as gpd
-import geoparquet_io as gpio
 import numpy as np
-import pandas as pd
 
 from ftw_dataset_tools.api.blocks import block_scores, chip_block_ids
 from ftw_dataset_tools.api.geo import sql_path, write_geoparquet
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+
+    import geopandas as gpd
+    import pandas as pd
 
 
 SPLIT_TYPE_CHOICES: tuple[str, ...] = (
@@ -64,6 +64,8 @@ def _restore_integer_dtypes(gdf: gpd.GeoDataFrame, columns: set[str]) -> None:
     writing the frame straight back would republish e.g. ``hcat_dominant_code`` as a
     DOUBLE and change the published chips schema.
     """
+    import pandas as pd
+
     for col in columns & set(gdf.columns):
         if not pd.api.types.is_integer_dtype(gdf[col]):
             gdf[col] = gdf[col].astype("Int64")
@@ -154,6 +156,8 @@ def assign_splits(
             on_progress(msg)
 
     log(f"Assigning {split_type} splits to {chips_path.name}")
+
+    import geopandas as gpd
 
     # Read chips geoparquet
     integer_columns = _integer_columns(chips_path)
@@ -299,6 +303,8 @@ def _assign_block3x3_hash(
 
 def _normalize_predefined_split(value: object) -> str | None:
     """Normalize user-provided split labels to train/val/test."""
+    import pandas as pd
+
     if pd.isna(value):
         return None
 
@@ -327,6 +333,9 @@ def _validate_fields_file(fields_file: str | Path | None) -> Path:
 
 
 def _load_and_validate_fields(fields_path: Path) -> gpd.GeoDataFrame:
+    import geopandas as gpd
+    import geoparquet_io as gpio
+
     table = gpio.read(str(fields_path))
     fields_gdf = gpd.GeoDataFrame.from_arrow(
         table.to_arrow(),
@@ -388,6 +397,9 @@ def _compute_chip_majority_splits(
     fields_gdf: gpd.GeoDataFrame,
     gdf: gpd.GeoDataFrame,
 ) -> tuple[pd.Series, bool]:
+    import geopandas as gpd
+    import pandas as pd
+
     joined = gpd.sjoin(
         fields_gdf[["_split_norm", "geometry"]],
         gdf[["id", "geometry"]],

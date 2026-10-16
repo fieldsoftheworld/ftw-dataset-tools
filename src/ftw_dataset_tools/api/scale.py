@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import duckdb
-import pandas as pd
 
 from ftw_dataset_tools.api.blocks import block_scores, chip_block_ids, mgrs_squares
-from ftw_dataset_tools.api.crop_stats import write_chips
+from ftw_dataset_tools.api.chips_io import write_chips
 from ftw_dataset_tools.api.field_stats import CHIP_ID_COLUMN, DEFAULT_CHIP_KM_SIZE
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded, sql_path
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 SCALE_VERSION = "ftw-scale-v1"
 SCORE_COLUMN = "scale_score"
@@ -91,6 +94,8 @@ def apply_scale(
 def _kept_chips(
     ids: pd.Series, percent: float, min_blocks_per_square: int, km_size: float
 ) -> pd.DataFrame:
+    import pandas as pd
+
     blocks = chip_block_ids(ids, km_size)
     chips = pd.DataFrame(
         {

@@ -181,6 +181,118 @@ class TestSearchBackendDispatch:
         assert seen["collection"] == expected
 
 
+class TestBufferExpansion:
+    """Each season widens its own search window until it finds a scene."""
+
+    BBOX = (14.9, 45.9, 15.1, 46.1)
+
+    @pytest.fixture(autouse=True)
+    def _crop_calendar(self, monkeypatch):
+        from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
+
+        # Planting 2021-05-30, harvest 2021-09-27
+        monkeypatch.setattr(
+            scene_selection,
+            "get_crop_calendar_dates",
+            lambda _bbox, on_progress=None: CropCalendarDates(150, 270),  # noqa: ARG005
+        )
+
+    @staticmethod
+    def _scene(scene_id: str, cloud_cover: float = 0.05):
+        from datetime import UTC, datetime
+
+        item = _canned_item(scene_id, datetime(2021, 6, 1, 10, 0, tzinfo=UTC))
+        item.properties["eo:cloud_cover"] = cloud_cover
+        return item
+
+    @staticmethod
+    def _backend(monkeypatch, scenes_for) -> list[tuple[str, int]]:
+        """Answer each search with scenes_for(season, buffer_days); record the calls."""
+        calls: list[tuple[str, int]] = []
+
+        def fake_query_parquet(bbox, center_date, cloud_cover_max, buffer_days, _collection):
+            season = "planting" if center_date.month < 7 else "harvest"
+            calls.append((season, buffer_days))
+            return scene_selection.STACQueryResult(
+                items=scenes_for(season, buffer_days),
+                catalog_url="mirror",
+                collection="sentinel-2-c1-l2a",
+                bbox=bbox,
+                date_range="",
+                cloud_cover_max=cloud_cover_max,
+            )
+
+        monkeypatch.setattr(scene_selection, "_query_parquet", fake_query_parquet)
+        return calls
+
+    def _select(self, **kwargs):
+        return scene_selection.select_scenes_for_chip(
+            chip_id="chip_001", bbox=self.BBOX, year=2021, buffer_days=14, **kwargs
+        )
+
+    def test_only_the_missing_season_expands(self, monkeypatch):
+        cloudy = self._scene("harvest_cloudy", cloud_cover=50.0)
+
+        def scenes_for(season, buffer_days):
+            if season == "planting":
+                return [self._scene("planting_clear")]
+            if buffer_days < 28:
+                return [cloudy]
+            return [cloudy, self._scene("harvest_clear")]
+
+        calls = self._backend(monkeypatch, scenes_for)
+        result = self._select(num_buffer_expansions=3, buffer_expansion_size=14)
+
+        assert result.success
+        assert calls == [("planting", 14), ("harvest", 14), ("harvest", 28)]
+        assert (result.planting_buffer_used, result.harvest_buffer_used) == (14, 28)
+        assert result.expansions_performed == 1
+        # The cloudy harvest scene came back twice but is only checked once
+        assert result.candidates_checked == 3
+
+    def test_gives_up_after_the_last_expansion(self, monkeypatch):
+        def scenes_for(season, _buffer_days):
+            return [self._scene("planting_clear")] if season == "planting" else []
+
+        calls = self._backend(monkeypatch, scenes_for)
+        result = self._select(num_buffer_expansions=2, buffer_expansion_size=14)
+
+        assert not result.success
+        assert result.skipped_reason == "No cloud-free harvest scene found"
+        assert [buffer for season, buffer in calls if season == "harvest"] == [14, 28, 42]
+        assert result.harvest_buffer_used == 42
+        assert result.expansions_performed == 2
+
+    def test_planting_query_error_stops_selection(self, monkeypatch):
+        def scenes_for(season, buffer_days):
+            if season == "planting" and buffer_days > 14:
+                raise ValueError("Query date range extends into the future")
+            return [] if season == "planting" else [self._scene("harvest_clear")]
+
+        self._backend(monkeypatch, scenes_for)
+        result = self._select(num_buffer_expansions=3, buffer_expansion_size=14)
+
+        assert result.skipped_reason == (
+            "Planting query error: Query date range extends into the future"
+        )
+        assert result.planting_scene is None
+        assert result.planting_buffer_used == 28
+
+    def test_harvest_query_error_keeps_the_planting_scene(self, monkeypatch):
+        def scenes_for(season, _buffer_days):
+            if season == "harvest":
+                raise ValueError("boom")
+            return [self._scene("planting_clear")]
+
+        self._backend(monkeypatch, scenes_for)
+        result = self._select()
+
+        assert result.skipped_reason == "Harvest query error: boom"
+        assert result.planting_scene is not None
+        assert result.planting_scene.id == "planting_clear"
+        assert result.candidates_checked == 1
+
+
 class TestSelectBestSceneNodata:
     """Scene-level nodata metadata must not reject a chip whose window is clean.
 

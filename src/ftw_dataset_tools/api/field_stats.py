@@ -55,10 +55,13 @@ DEFAULT_CHIP_KM_SIZE = SOURCE_GRID_KM_SIZE
 
 # Minimum chip area, as a percentage of a full km_size x km_size cell, for a chip
 # to be kept. Cells on a UTM zone boundary or an MGRS latitude-band boundary are
-# clipped short and can come out only metres wide. Full cells measure 99.83%-100.08%
-# of nominal (the spread is UTM scale factor, not truncation), so 99.5% clears every
-# full cell and rejects every truncated one.
+# clipped short and can come out only metres wide. Full cells measure 99.74%-100.08%
+# of nominal (the spread is UTM scale factor, not truncation; the low end is on the
+# west edge of the widened zone 32V), so 99.5% clears every full cell.
 DEFAULT_MIN_CHIP_AREA = 99.5
+
+# Minimum field coverage for a chip to be kept, on the 0-100 scale of field_coverage_pct.
+DEFAULT_MIN_COVERAGE = 1.0
 
 # Re-export for convenience
 __all__ = [
@@ -66,6 +69,7 @@ __all__ = [
     "DEFAULT_COVERAGE_BATCH_SIZE",
     "DEFAULT_FTW_GRID_SOURCE",
     "DEFAULT_MIN_CHIP_AREA",
+    "DEFAULT_MIN_COVERAGE",
     "CRSMismatchError",
     "FieldStatsResult",
     "add_field_stats",
@@ -443,6 +447,216 @@ def _fetch_grid_cells(
         )
 
 
+def _reproject_to_4326(
+    path: Path, temp_files: list[Path], on_progress: Callable[[str], None] | None
+) -> Path:
+    """Reproject a file to a tracked temp copy in EPSG:4326 and return the copy's path."""
+    temp = Path(tempfile.mktemp(suffix=".parquet"))
+    temp_files.append(temp)
+    reproject(path, temp, "EPSG:4326", on_progress)
+    return temp
+
+
+def _load_local_grid(
+    conn: duckdb.DuckDBPyConnection,
+    grid_path: Path,
+    fields_path: Path,
+    *,
+    grid_geom_col: str | None,
+    fields_geom_col: str,
+    reproject_to_4326: bool,
+    source_files: tuple[str | Path | None, str | Path],
+    temp_files: list[Path],
+    on_progress: Callable[[str], None] | None,
+    log: Callable[[str], None],
+) -> tuple[Path, Path, str]:
+    """Load a local grid into grid_table, reprojecting both inputs on a CRS mismatch.
+
+    Returns the grid path, fields path and grid geometry column actually loaded;
+    the paths point at the reprojected copies when reprojection happened.
+
+    Raises:
+        CRSMismatchError: If the CRS differ and reproject_to_4326 is False.
+    """
+    if grid_geom_col is None:
+        grid_geom_col = detect_geometry_column(grid_path) or "geometry"
+        log(f"Detected grid geometry column: {grid_geom_col}")
+
+    grid_crs = detect_crs(grid_path, grid_geom_col)
+    fields_crs = detect_crs(fields_path, fields_geom_col)
+    log(f"Grid CRS: {grid_crs}")
+    log(f"Fields CRS: {fields_crs}")
+
+    if not grid_crs.is_equivalent_to(fields_crs):
+        if not reproject_to_4326:
+            raise CRSMismatchError(
+                crs1=str(grid_crs),
+                crs2=str(fields_crs),
+                file1=str(source_files[0]),
+                file2=str(source_files[1]),
+            )
+        log("CRS mismatch detected, reprojecting to EPSG:4326...")
+
+        if grid_crs.authority_code != "EPSG:4326":
+            grid_path = _reproject_to_4326(grid_path, temp_files, on_progress)
+            log(f"Reprojected grid to: {grid_path}")
+
+        # Reprojected fields have to replace the already-loaded fields table
+        if fields_crs.authority_code != "EPSG:4326":
+            fields_path = _reproject_to_4326(fields_path, temp_files, on_progress)
+            log(f"Reprojected fields to: {fields_path}")
+            conn.execute("DROP TABLE fields_table")
+            conn.execute(f"CREATE TABLE fields_table AS SELECT * FROM '{sql_path(fields_path)}'")
+
+    log("Loading grid data...")
+    conn.execute(f"CREATE TABLE grid_table AS SELECT * FROM '{sql_path(grid_path)}'")
+    return grid_path, fields_path, grid_geom_col
+
+
+def _load_remote_grid(
+    conn: duckdb.DuckDBPyConnection,
+    fields_path: Path,
+    fields_file: str | Path,
+    *,
+    grid_geom_col: str | None,
+    fields_geom_col: str,
+    grid_source: str,
+    km_size: float,
+    log: Callable[[str], None],
+) -> str:
+    """Fetch the grid cells overlapping the fields' bounds into grid_table, cut to km_size.
+
+    Returns the grid geometry column.
+
+    Raises:
+        ValueError: If the fields are not in EPSG:4326 degrees, which the remote grid needs.
+    """
+    fields_crs = detect_crs(fields_path, fields_geom_col)
+    if fields_crs.authority_code is None or fields_crs.authority_code.upper() != "EPSG:4326":
+        raise ValueError(
+            f"Fields file must be in EPSG:4326 when using remote grid, "
+            f"but has CRS '{fields_crs}'.\n"
+            f"Please reproject first with:\n"
+            f"  ftwd reproject {fields_file} --target-crs EPSG:4326"
+        )
+
+    log("Fetching grid from Source Coop...")
+
+    xmin, ymin, xmax, ymax = conn.execute(f"""
+        SELECT
+            MIN(ST_XMin("{fields_geom_col}")) as xmin,
+            MIN(ST_YMin("{fields_geom_col}")) as ymin,
+            MAX(ST_XMax("{fields_geom_col}")) as xmax,
+            MAX(ST_YMax("{fields_geom_col}")) as ymax
+        FROM fields_table
+    """).fetchone()
+    log(f"Fields bounds: [{xmin:.6f}, {ymin:.6f}, {xmax:.6f}, {ymax:.6f}]")
+    log(f"BBox Finder URL: https://bboxfinder.com/#{ymin:.6f},{xmin:.6f},{ymax:.6f},{xmax:.6f}")
+
+    # Guard against mislabeled CRS (EPSG:4326 expected degrees)
+    if abs(xmin) > 180 or abs(xmax) > 180 or abs(ymin) > 90 or abs(ymax) > 90:
+        log(
+            "Warning: Fields bounds are outside degree ranges for EPSG:4326. "
+            "This suggests the file CRS metadata may be incorrect."
+        )
+        raise ValueError(
+            "Fields bounds appear to be in projected units, but EPSG:4326 is required "
+            "when using the remote grid. Please fix the CRS metadata and reproject to "
+            "EPSG:4326."
+        )
+
+    _fetch_grid_cells(conn, grid_source, (xmin, ymin, xmax, ymax), km_size, log)
+
+    if grid_geom_col is None:
+        grid_geom_col = "geometry"
+        log(f"Using grid geometry column: {grid_geom_col}")
+    return grid_geom_col
+
+
+def _detect_join_bbox_columns(
+    conn: duckdb.DuckDBPyConnection,
+    grid_path: Path | None,
+    fields_path: Path,
+    *,
+    grid_geom_col: str,
+    fields_geom_col: str,
+    grid_bbox_col: str | None,
+    fields_bbox_col: str | None,
+    log: Callable[[str], None],
+) -> tuple[str | None, str | None]:
+    """Fill in whichever bbox columns were not given, for the coverage join's prefilter."""
+    if grid_bbox_col is None:
+        # The remote grid (grid_path None) always carries a "bbox" column
+        grid_bbox_col = (
+            detect_bbox_column(conn, str(grid_path), grid_geom_col)
+            if grid_path is not None
+            else "bbox"
+        )
+        if grid_bbox_col:
+            log(f"Detected grid bbox column: {grid_bbox_col}")
+        else:
+            log("Warning: grid has no bbox column, spatial queries may be slower")
+
+    if fields_bbox_col is None:
+        fields_bbox_col = detect_bbox_column(conn, str(fields_path), fields_geom_col)
+        if fields_bbox_col:
+            log(f"Detected fields bbox column: {fields_bbox_col}")
+        else:
+            log(f"Warning: {fields_path.name} has no bbox column, spatial queries may be slower")
+
+    if grid_bbox_col and fields_bbox_col:
+        log("Using bbox optimization for spatial joins")
+    else:
+        log("Bbox optimization disabled (missing bbox columns)")
+    return grid_bbox_col, fields_bbox_col
+
+
+def _drop_low_coverage(
+    conn: duckdb.DuckDBPyConnection,
+    coverage_col: str,
+    min_coverage: float,
+    log: Callable[[str], None],
+) -> None:
+    before_count = conn.execute("SELECT COUNT(*) FROM result").fetchone()[0]
+    conn.execute(f"""
+        DELETE FROM result WHERE "{coverage_col}" < {min_coverage}
+    """)
+    after_count = conn.execute("SELECT COUNT(*) FROM result").fetchone()[0]
+    log(f"Filtered out {before_count - after_count:,} cells with coverage < {min_coverage}%")
+
+
+def _drop_result_border_chips(
+    conn: duckdb.DuckDBPyConnection,
+    grid_geom_col: str,
+    coverage_col: str,
+    border_gap_chips: int,
+    log: Callable[[str], None],
+) -> None:
+    log("Identifying border chips to remove...")
+    borders = find_border_chips(
+        conn,
+        "result",
+        grid_geom_col,
+        coverage_col,
+        gap_chips=border_gap_chips,
+    )
+    if borders.border_count == 0:
+        log(f"No border chips found across {borders.cluster_count:,} cluster(s)")
+        return
+
+    # list_contains() raises an internal error against a table holding a
+    # GEOMETRY column, so match through unnest instead.
+    conn.execute(
+        "DELETE FROM result WHERE rowid IN (SELECT unnest(?::BIGINT[]))",
+        [borders.border_rowids],
+    )
+    remaining = conn.execute("SELECT COUNT(*) FROM result").fetchone()[0]
+    log(
+        f"Removed {borders.border_count:,} border chips across "
+        f"{borders.cluster_count:,} cluster(s), {remaining:,} chips remaining"
+    )
+
+
 def add_field_stats(
     fields_file: str | Path,
     grid_file: str | Path | None = None,
@@ -557,103 +771,29 @@ def add_field_stats(
 
         # Handle grid loading - either from local file or S3
         if grid_path is not None:
-            # Local grid file provided
-            if grid_geom_col is None:
-                grid_geom_col = detect_geometry_column(grid_path) or "geometry"
-                log(f"Detected grid geometry column: {grid_geom_col}")
-
-            # Check CRS compatibility
-            grid_crs = detect_crs(grid_path, grid_geom_col)
-            fields_crs = detect_crs(fields_path, fields_geom_col)
-
-            log(f"Grid CRS: {grid_crs}")
-            log(f"Fields CRS: {fields_crs}")
-
-            if not grid_crs.is_equivalent_to(fields_crs):
-                if reproject_to_4326:
-                    log("CRS mismatch detected, reprojecting to EPSG:4326...")
-
-                    # Reproject grid if needed
-                    if grid_crs.authority_code != "EPSG:4326":
-                        grid_temp = Path(tempfile.mktemp(suffix=".parquet"))
-                        temp_files.append(grid_temp)
-                        reproject(grid_path, grid_temp, "EPSG:4326", on_progress)
-                        grid_path = grid_temp
-                        log(f"Reprojected grid to: {grid_temp}")
-
-                    # Reproject fields if needed - need to reload fields table
-                    if fields_crs.authority_code != "EPSG:4326":
-                        fields_temp = Path(tempfile.mktemp(suffix=".parquet"))
-                        temp_files.append(fields_temp)
-                        reproject(fields_path, fields_temp, "EPSG:4326", on_progress)
-                        fields_path = fields_temp
-                        log(f"Reprojected fields to: {fields_temp}")
-                        # Reload fields table with reprojected data
-                        conn.execute("DROP TABLE fields_table")
-                        conn.execute(
-                            f"CREATE TABLE fields_table AS SELECT * FROM '{sql_path(fields_path)}'"
-                        )
-                else:
-                    raise CRSMismatchError(
-                        crs1=str(grid_crs),
-                        crs2=str(fields_crs),
-                        file1=str(grid_file),
-                        file2=str(fields_file),
-                    )
-
-            log("Loading grid data...")
-            conn.execute(f"CREATE TABLE grid_table AS SELECT * FROM '{sql_path(grid_path)}'")
-        else:
-            # Fetch grid from S3 based on fields bounds
-            # First check that fields file is in EPSG:4326 (required for S3 grid)
-            fields_crs = detect_crs(fields_path, fields_geom_col)
-            if (
-                fields_crs.authority_code is None
-                or fields_crs.authority_code.upper() != "EPSG:4326"
-            ):
-                raise ValueError(
-                    f"Fields file must be in EPSG:4326 when using remote grid, "
-                    f"but has CRS '{fields_crs}'.\n"
-                    f"Please reproject first with:\n"
-                    f"  ftwd reproject {fields_file} --target-crs EPSG:4326"
-                )
-
-            log("Fetching grid from Source Coop...")
-
-            # Compute bounds from fields geometry
-            bounds_result = conn.execute(f"""
-                SELECT
-                    MIN(ST_XMin("{fields_geom_col}")) as xmin,
-                    MIN(ST_YMin("{fields_geom_col}")) as ymin,
-                    MAX(ST_XMax("{fields_geom_col}")) as xmax,
-                    MAX(ST_YMax("{fields_geom_col}")) as ymax
-                FROM fields_table
-            """).fetchone()
-            xmin, ymin, xmax, ymax = bounds_result
-            log(f"Fields bounds: [{xmin:.6f}, {ymin:.6f}, {xmax:.6f}, {ymax:.6f}]")
-            log(
-                "BBox Finder URL: "
-                f"https://bboxfinder.com/#{ymin:.6f},{xmin:.6f},{ymax:.6f},{xmax:.6f}"
+            grid_path, fields_path, grid_geom_col = _load_local_grid(
+                conn,
+                grid_path,
+                fields_path,
+                grid_geom_col=grid_geom_col,
+                fields_geom_col=fields_geom_col,
+                reproject_to_4326=reproject_to_4326,
+                source_files=(grid_file, fields_file),
+                temp_files=temp_files,
+                on_progress=on_progress,
+                log=log,
             )
-
-            # Guard against mislabeled CRS (EPSG:4326 expected degrees)
-            if abs(xmin) > 180 or abs(xmax) > 180 or abs(ymin) > 90 or abs(ymax) > 90:
-                log(
-                    "Warning: Fields bounds are outside degree ranges for EPSG:4326. "
-                    "This suggests the file CRS metadata may be incorrect."
-                )
-                raise ValueError(
-                    "Fields bounds appear to be in projected units, but EPSG:4326 is required "
-                    "when using the remote grid. Please fix the CRS metadata and reproject to "
-                    "EPSG:4326."
-                )
-
-            _fetch_grid_cells(conn, grid_source, (xmin, ymin, xmax, ymax), km_size, log)
-
-            # Auto-detect grid geometry column from the fetched data
-            if grid_geom_col is None:
-                grid_geom_col = "geometry"
-                log(f"Using grid geometry column: {grid_geom_col}")
+        else:
+            grid_geom_col = _load_remote_grid(
+                conn,
+                fields_path,
+                fields_file,
+                grid_geom_col=grid_geom_col,
+                fields_geom_col=fields_geom_col,
+                grid_source=grid_source,
+                km_size=km_size,
+                log=log,
+            )
 
         # Get grid count
         grid_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
@@ -675,35 +815,16 @@ def add_field_stats(
             )
             grid_count -= cells_dropped_undersized
 
-        # Auto-detect bbox columns if not specified
-        detected_grid_bbox = grid_bbox_col
-        detected_fields_bbox = fields_bbox_col
-
-        if detected_grid_bbox is None:
-            if grid_path is not None:
-                detected_grid_bbox = detect_bbox_column(conn, str(grid_path), grid_geom_col)
-            else:
-                # For S3 source, we know the bbox column is "bbox"
-                detected_grid_bbox = "bbox"
-            if detected_grid_bbox:
-                log(f"Detected grid bbox column: {detected_grid_bbox}")
-            else:
-                log("Warning: grid has no bbox column, spatial queries may be slower")
-
-        if detected_fields_bbox is None:
-            detected_fields_bbox = detect_bbox_column(conn, str(fields_path), fields_geom_col)
-            if detected_fields_bbox:
-                log(f"Detected fields bbox column: {detected_fields_bbox}")
-            else:
-                log(
-                    f"Warning: {fields_path.name} has no bbox column, spatial queries may be slower"
-                )
-
-        # Report optimization status
-        if detected_grid_bbox and detected_fields_bbox:
-            log("Using bbox optimization for spatial joins")
-        else:
-            log("Bbox optimization disabled (missing bbox columns)")
+        detected_grid_bbox, detected_fields_bbox = _detect_join_bbox_columns(
+            conn,
+            grid_path,
+            fields_path,
+            grid_geom_col=grid_geom_col,
+            fields_geom_col=fields_geom_col,
+            grid_bbox_col=grid_bbox_col,
+            fields_bbox_col=fields_bbox_col,
+            log=log,
+        )
 
         # Build and execute coverage query
         log("Calculating coverage...")
@@ -718,41 +839,13 @@ def add_field_stats(
             log=log,
         )
 
-        # Filter by min_coverage if specified
         if min_coverage is not None:
-            before_count = conn.execute("SELECT COUNT(*) FROM result").fetchone()[0]
-            conn.execute(f"""
-                DELETE FROM result WHERE "{coverage_col}" < {min_coverage}
-            """)
-            after_count = conn.execute("SELECT COUNT(*) FROM result").fetchone()[0]
-            removed = before_count - after_count
-            log(f"Filtered out {removed:,} cells with coverage < {min_coverage}%")
+            _drop_low_coverage(conn, coverage_col, min_coverage, log)
 
         # Border chips are dropped here, after coverage is known: the labelled region is
         # estimated from the chips that actually hold fields.
         if drop_border_chips:
-            log("Identifying border chips to remove...")
-            borders = find_border_chips(
-                conn,
-                "result",
-                grid_geom_col,
-                coverage_col,
-                gap_chips=border_gap_chips,
-            )
-            if borders.border_count > 0:
-                # list_contains() raises an internal error against a table holding a
-                # GEOMETRY column, so match through unnest instead.
-                conn.execute(
-                    "DELETE FROM result WHERE rowid IN (SELECT unnest(?::BIGINT[]))",
-                    [borders.border_rowids],
-                )
-                remaining = conn.execute("SELECT COUNT(*) FROM result").fetchone()[0]
-                log(
-                    f"Removed {borders.border_count:,} border chips across "
-                    f"{borders.cluster_count:,} cluster(s), {remaining:,} chips remaining"
-                )
-            else:
-                log(f"No border chips found across {borders.cluster_count:,} cluster(s)")
+            _drop_result_border_chips(conn, grid_geom_col, coverage_col, border_gap_chips, log)
 
         # Calculate summary statistics
         stats = conn.execute(f"""

@@ -9,6 +9,7 @@ from ftw_dataset_tools.api import (
     boundaries,
     crop_stats,
     field_stats,
+    land_cover,
     masks,
     pipeline,
     scale,
@@ -38,6 +39,7 @@ class CreateDatasetResult:
     chips_result: field_stats.FieldStatsResult | None = None
     splits_result: splits.CreateSplitsResult | None = None
     crop_stats_result: crop_stats.CropStatsResult | None = None
+    land_cover_result: land_cover.LandCoverResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
     stac_result: stac.STACGenerationResult | None = None
@@ -55,7 +57,7 @@ def create_dataset(
     field_dataset: str | None = None,
     split_type: str | None = None,
     split_percents: tuple[int, int, int] = (80, 10, 10),
-    min_coverage: float = 0.01,
+    min_coverage: float = field_stats.DEFAULT_MIN_COVERAGE,
     km_size: float = field_stats.DEFAULT_CHIP_KM_SIZE,
     resolution: float = 10.0,
     num_workers: int | None = None,
@@ -65,6 +67,7 @@ def create_dataset(
     presence_only: bool = False,
     drop_border_chips: bool = False,
     border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS,
+    land_cover: bool = False,
     checksums: bool = False,
     class_filter: str | Path | None = None,
     scale_percent: float = scale.DEFAULT_SCALE_PERCENT,
@@ -73,6 +76,7 @@ def create_dataset(
     on_progress: Callable[[str], None] | None = None,
     on_mask_progress: Callable[[int, int], None] | None = None,
     on_mask_start: Callable[[int, int, int], None] | None = None,
+    crop_column: str | None = None,
 ) -> CreateDatasetResult:
     """
     Create a complete training dataset from a fields file.
@@ -98,7 +102,7 @@ def create_dataset(
         field_dataset: Name for the dataset (default: input filename stem)
         split_type: Dataset split strategy
         split_percents: Train/val/test percentages (must be three integers summing to 100; default: 80 10 10)
-        min_coverage: Minimum coverage percentage to include grids (default: 0.01)
+        min_coverage: Minimum coverage percentage (0-100) to include grids (default: 1.0)
         km_size: Chip edge length in kilometres (default: 2.0); the 2 km FTW grid is
             cut to this size, e.g. 0.1 for 100 m chips
         resolution: Pixel resolution in meters for masks (default: 10.0)
@@ -107,8 +111,11 @@ def create_dataset(
         year: Year for temporal extent (required if fields lack determination_datetime)
         mask_types: List of mask types to generate (e.g., ["instance", "semantic_2_class"]). If None, generates all types.
         presence_only: If True, background class value is 3 instead of 0 (for presence-only labels)
+        crop_column: Source column to preserve in per-chip instance crop lookups.
         drop_border_chips: If True, remove chips on the edge of any labelled cluster. Useful when fields at a cluster boundary may have partial coverage.
         border_gap_chips: How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.
+        land_cover: Add per-chip land cover from the Impact Observatory annual maps
+            (reads remote rasters from Planetary Computer; default False).
         checksums: Compute file:checksum for every asset (slow; default False).
         class_filter: Optional path to a class filter YAML (column + include/exclude
             lists). Include classes count as field; all others become background.
@@ -145,11 +152,13 @@ def create_dataset(
         year=year,
         mask_types=mask_types,
         presence_only=presence_only,
+        crop_column=crop_column,
         drop_border_chips=drop_border_chips,
         border_gap_chips=border_gap_chips,
         scale_percent=scale_percent,
         scale_min_blocks=scale_min_blocks,
         km_size=km_size,
+        land_cover=land_cover,
     )
     config.stages.stac.checksums = checksums
     if class_filter is not None:
@@ -186,6 +195,7 @@ def create_dataset(
         chips_result=ctx.chips_result,
         splits_result=ctx.splits_result,
         crop_stats_result=ctx.crop_stats_result,
+        land_cover_result=ctx.land_cover_result,
         boundaries_result=ctx.boundaries_result,
         masks_results=ctx.masks_results,
         stac_result=ctx.stac_result,

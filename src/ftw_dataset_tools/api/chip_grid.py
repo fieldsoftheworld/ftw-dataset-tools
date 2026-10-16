@@ -10,10 +10,9 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-import pandas as pd
-
 if TYPE_CHECKING:
     import duckdb
+    import pandas as pd
 
 __all__ = [
     "GridCutError",
@@ -101,6 +100,8 @@ def parse_chip_ids(chip_ids: pd.Series) -> pd.DataFrame:
     Raises:
         ValueError: If any id does not match ``ftw-<square><easting><northing>``.
     """
+    import pandas as pd
+
     parts = chip_ids.astype(str).str.extract(CHIP_ID_PATTERN)
     bad = parts[0].isna()
     if bad.any():

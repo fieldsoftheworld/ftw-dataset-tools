@@ -31,6 +31,7 @@ from ftw_dataset_tools.api import (
     crop_stats,
     docs,
     field_stats,
+    land_cover,
     masks,
     scale,
     splits,
@@ -51,7 +52,9 @@ from ftw_dataset_tools.api.imagery import (
     download_imagery_for_catalog,
     select_imagery_for_catalog,
 )
+from ftw_dataset_tools.api.imagery.mosaic_selection import check_mosaic_year
 from ftw_dataset_tools.api.imagery.preview_workflow import preview_imagery_for_catalog
+from ftw_dataset_tools.api.imagery.settings import MOSAIC_FALLBACK_YEAR
 from ftw_dataset_tools.api.masks import MaskType
 from ftw_dataset_tools.api.source import (
     describe_local_source,
@@ -152,6 +155,8 @@ class PipelineContext:
     field_dataset: str
     effective_year: int | None = None
     has_temporal: bool = False
+    # Raised by _validate_stage_selection only if a selected stage needs the year.
+    temporal_error: stac.TemporalExtentError | None = None
     provenance: dict[str, Any] | None = None
     source: SourceRecord | None = None
     on_progress: Callable[[str], None] | None = None
@@ -164,6 +169,7 @@ class PipelineContext:
     chips_result: field_stats.FieldStatsResult | None = None
     crop_stats_result: crop_stats.CropStatsResult | None = None
     scale_result: scale.ScaleResult | None = None
+    land_cover_result: land_cover.LandCoverResult | None = None
     splits_result: splits.CreateSplitsResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
@@ -277,21 +283,15 @@ def _detect_temporal(ctx: PipelineContext, *, log: Callable[[str], None]) -> Non
     fields_path = ctx.fields_input
     if fields_path is None and ctx.output_fields_path.exists():
         fields_path = ctx.output_fields_path
-    if fields_path is None:
-        ctx.has_temporal = ctx.config.year is not None
-        return
-
-    log("Checking temporal extent availability...")
-    datetime_col = stac.detect_datetime_column(fields_path)
-    if datetime_col:
-        log(f"Found '{datetime_col}' column for temporal extent")
-        if ctx.effective_year is None:
-            ctx.effective_year = stac.get_year_from_datetime_column(fields_path, datetime_col)
-            if ctx.effective_year:
-                log(f"Using year {ctx.effective_year} from {datetime_col} for chip naming")
-    elif ctx.config.year is not None:
-        log(f"Using year {ctx.config.year} for temporal extent")
-    ctx.has_temporal = datetime_col is not None or ctx.config.year is not None
+    if fields_path is not None and ctx.config.year is None:
+        log("Checking temporal extent availability...")
+        try:
+            ctx.effective_year = stac.resolve_year(fields_path)
+        except stac.TemporalExtentError as err:
+            ctx.temporal_error = err
+        if ctx.effective_year is not None:
+            log(f"Using year {ctx.effective_year} from determination_datetime for chip naming")
+    ctx.has_temporal = ctx.effective_year is not None
 
 
 def build_context(
@@ -435,11 +435,20 @@ def _validate_stage_selection(ctx: PipelineContext, stages_to_run: list[str]) ->
             raise ValueError(f"split_type must be one of: {splits.SPLIT_TYPE_CHOICES_STR}")
 
     if any(s in _YEAR_STAGES for s in stages_to_run) and not ctx.has_temporal:
+        if ctx.temporal_error is not None:
+            raise ctx.temporal_error
         raise ValueError(
             "Cannot determine temporal extent for STAC catalog. "
             "Either provide a 'year' or ensure the fields file has a "
             "'determination_datetime' column."
         )
+
+    if (
+        "select_images" in stages_to_run
+        and ctx.config.stages.select_images.imagery_mode == "mosaics"
+        and ctx.config.year is not None
+    ):
+        check_mosaic_year(ctx.config.year)
 
 
 def _require(path: Path, *, stage: str, produced_by: str) -> None:
@@ -584,6 +593,17 @@ def stage_chips(ctx: PipelineContext) -> None:
     else:
         # Never publish a previous run's composition when the step is turned off.
         crop_stats.drop_crop_stats(ctx.chips_path)
+    _add_land_cover(ctx)
+
+
+def _add_land_cover(ctx: PipelineContext) -> None:
+    """Run the land cover step, or clear a previous run's columns when it is off."""
+    if not ctx.config.stages.chips.land_cover:
+        land_cover.drop_land_cover(ctx.chips_path)
+        return
+    ctx.land_cover_result = land_cover.add_land_cover(
+        ctx.chips_path, year=ctx.effective_year, on_progress=ctx.log
+    )
 
 
 def stage_scale(ctx: PipelineContext) -> None:
@@ -725,6 +745,7 @@ def stage_masks(ctx: PipelineContext) -> None:
         year=ctx.effective_year,
         background_class_value=background_class_value,
         skip_existing=masks_cfg.skip_existing,
+        crop_column=masks_cfg.crop_column,
         on_progress=ctx.on_mask_progress,
         on_start=ctx.on_mask_start,
     )
@@ -757,6 +778,13 @@ def stage_stac(ctx: PipelineContext) -> None:
     # only stage that publishes them, is a no-op when they are absent.
     if not ctx.config.stages.chips.crop_stats and crop_stats.drop_crop_stats(ctx.chips_path):
         ctx.log("Dropped stale crop composition columns from the chips file")
+    # The same holds for land cover, including columns added by ``ftwd add-land-cover``:
+    # the config decides what is published, so a backfill needs land_cover: true.
+    if not ctx.config.stages.chips.land_cover and land_cover.drop_land_cover(ctx.chips_path):
+        ctx.log(
+            "Dropped land cover columns from the chips file "
+            "(set stages.chips.land_cover: true to publish them)"
+        )
 
     ctx.log("Generating STAC catalog...")
     ctx.stac_result = stac.generate_stac_catalog(
@@ -771,6 +799,7 @@ def stage_stac(ctx: PipelineContext) -> None:
         year=ctx.effective_year,
         provenance=ctx.provenance,
         checksums=ctx.config.stages.stac.checksums,
+        crop_calendar=ctx.config.stages.stac.crop_calendar,
         background_class_value=3 if ctx.config.stages.masks.presence_only else 0,
         on_progress=ctx.log,
         config=ctx.config,
@@ -780,17 +809,30 @@ def stage_stac(ctx: PipelineContext) -> None:
     ctx.log(f"Created STAC collection with {n} items in {k} sub-catalog(s)")
 
 
-def stage_select_images(ctx: PipelineContext) -> None:
-    """Select cloud-free Sentinel-2 scenes for each chip."""
-    _require(ctx.output_dir / "collection.json", stage="select_images", produced_by="stac")
-    if ctx.effective_year is None:
-        raise ValueError("A year is required for image selection.")
+def mosaic_year(config_year: int | None, log: Callable[[str], None]) -> int:
+    """The mosaic year: the configured year, else a warning and the fallback year."""
+    if config_year is not None:
+        return config_year
+    log(f"Warning: no year given; using {MOSAIC_FALLBACK_YEAR} for mosaics.")
+    return MOSAIC_FALLBACK_YEAR
 
+
+def stage_select_images(ctx: PipelineContext) -> None:
+    """Select Sentinel-2 imagery (seasonal scenes or quarterly mosaics) for each chip."""
+    _require(ctx.output_dir / "collection.json", stage="select_images", produced_by="stac")
     select_cfg = ctx.config.stages.select_images
+    if select_cfg.imagery_mode == "mosaics":
+        year = mosaic_year(ctx.config.year, ctx.log)
+    elif ctx.effective_year is None:
+        raise ValueError("A year is required for image selection.")
+    else:
+        year = ctx.effective_year
+
     ctx.log("Selecting imagery...")
     ctx.selection_result = select_imagery_for_catalog(
         catalog_dir=ctx.output_dir,
-        year=ctx.effective_year,
+        year=year,
+        imagery_mode=select_cfg.imagery_mode,
         cloud_cover_chip=select_cfg.cloud_cover_chip,
         nodata_max=select_cfg.nodata_max,
         buffer_days=select_cfg.buffer_days,

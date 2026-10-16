@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
-import geoparquet_io as gpio
 
 from ftw_dataset_tools.api.geo import get_bbox_column_name, has_bbox_column, sql_path
 
@@ -246,6 +245,8 @@ def _create_ftw_grid_partitioned(
     on_file_progress: Callable[[int, int, str], None] | None = None,
 ) -> CreateFTWGridResult:
     """Create FTW grid from partitioned parquet files, output as hive partitions."""
+    import geoparquet_io as gpio
+
     log(f"Creating {km_size}x{km_size}km FTW grid from folder: {input_folder}")
 
     # Find all input parquet files
@@ -528,6 +529,8 @@ def _write_output(
     log: Callable[[str], None],
 ) -> None:
     """Write output as GeoParquet with bbox."""
+    import geoparquet_io as gpio
+
     log(f"Writing output to: {out_path}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 

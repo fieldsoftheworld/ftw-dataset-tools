@@ -1,4 +1,4 @@
-"""Create child STAC items for planting and harvest scenes.
+"""Create child STAC items for a chip's selected imagery (seasonal scenes or quarterly mosaics).
 
 This module provides shared logic for creating child STAC items that is used by both
 the standalone `select-images` command and the `create-dataset` pipeline to ensure
@@ -8,22 +8,37 @@ identical behavior.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import pystac
 
 from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
-from ftw_dataset_tools.api.imagery.catalog_ops import IMAGERY_ASSET_KEYS
+from ftw_dataset_tools.api.imagery.catalog_ops import (
+    IMAGERY_ASSET_KEYS,
+    IMAGERY_LINK_RELS,
+    IMAGERY_PROPERTIES,
+)
 from ftw_dataset_tools.api.imagery.settings import CHILD_ITEM_BANDS
+from ftw_dataset_tools.api.imagery.slots import (
+    IMAGERY_SLOTS,
+    MOSAIC_SOURCE,
+    MOSAIC_THUMBNAIL_SLOT,
+    SCENE_SLOTS,
+    child_item_id,
+    slot_title,
+)
 from ftw_dataset_tools.api.imagery.thumbnails import (
-    LEGACY_PREVIEW_MEDIA_TYPE,
-    PREVIEW_MEDIA_TYPE,
-    PREVIEW_SUFFIX,
+    PREVIEW_EXTENSIONS,
+    preview_media_type,
 )
 from ftw_dataset_tools.api.stac import MEDIA_TYPE_COG, _add_portolan_schema
 from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
+    from ftw_dataset_tools.api.imagery.mosaic_selection import (
+        MosaicSelectionResult,
+        SelectedMosaic,
+    )
     from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult, SelectedScene
 
 __all__ = [
@@ -31,9 +46,10 @@ __all__ = [
     "attach_season_to_parent",
     "attach_thumbnail_to_parent",
     "create_child_items_from_selection",
+    "create_mosaic_child_items",
 ]
 
-SEASONS: tuple[Literal["planting", "harvest"], ...] = ("planting", "harvest")
+SEASONS = SCENE_SLOTS
 
 # Links that place an item in the catalog tree; children live next to their parent
 # chip item, so the parent's relative hrefs are valid for them verbatim.
@@ -119,20 +135,7 @@ def create_child_items_from_selection(
             result.harvest_scene.cloud_cover, 2
         )
 
-    # Drop any previous season links and visual assets: a rerun that no longer
-    # finds a scene for a season must not leave the old one behind.
-    parent_item.links = [
-        link
-        for link in parent_item.links
-        if link.rel not in ("ftw:planting", "ftw:harvest", "derived")
-    ]
-    for season in SEASONS:
-        parent_item.assets.pop(f"{season}_visual", None)
-
-    # Drop imagery assets from the scene being replaced; they describe the old
-    # selection's GeoTIFFs and are re-added when the new scenes are downloaded.
-    for key in IMAGERY_ASSET_KEYS:
-        parent_item.assets.pop(key, None)
+    _drop_previous_selection(parent_item)
 
     # Create each season's child item, then link and mirror it onto the parent.
     # The parent is written in a finally: the FTW selection properties are already
@@ -156,11 +159,96 @@ def create_child_items_from_selection(
         write_item(parent_item, parent_path)
 
 
+def _drop_previous_selection(parent_item: pystac.Item) -> None:
+    """Remove the slot links, visual assets and downloaded-imagery assets of a prior selection.
+
+    A rerun that no longer finds a scene for a slot must not leave the old one behind,
+    and the image assets describe the old selection's GeoTIFFs.
+    """
+    parent_item.links = [
+        link
+        for link in parent_item.links
+        if link.rel not in IMAGERY_LINK_RELS and link.rel != "derived"
+    ]
+    for slot in IMAGERY_SLOTS:
+        parent_item.assets.pop(f"{slot}_visual", None)
+    for key in IMAGERY_ASSET_KEYS:
+        parent_item.assets.pop(key, None)
+
+
+def create_mosaic_child_items(
+    chip_dir: Path, parent_item: pystac.Item, result: MosaicSelectionResult
+) -> None:
+    """Write the four quarterly mosaic child items and record the selection on the parent."""
+    parent_path = chip_dir / f"{parent_item.id}.json"
+    if parent_item.get_self_href() is None:
+        parent_item.set_self_href(str(parent_path))
+
+    for key in IMAGERY_PROPERTIES:
+        parent_item.properties.pop(key, None)
+    quarters = [result.quarters[slot] for slot in sorted(result.quarters)]
+    parent_item.properties.update(
+        {
+            "ftw:imagery_mode": "mosaics",
+            "ftw:requested_year": result.requested_year,
+            "ftw:imagery_year": result.imagery_year,
+            "start_datetime": quarters[0].item.properties["start_datetime"],
+            "end_datetime": quarters[-1].item.properties["end_datetime"],
+        }
+    )
+    _drop_previous_selection(parent_item)
+
+    try:
+        for mosaic in quarters:
+            child_item = _create_mosaic_child_item(chip_dir, parent_item, mosaic)
+            attach_season_to_parent(parent_item, child_item, mosaic.quarter, chip_dir=chip_dir)
+    finally:
+        write_item(parent_item, parent_path)
+
+
+def _create_mosaic_child_item(
+    chip_dir: Path, parent_item: pystac.Item, mosaic: SelectedMosaic
+) -> pystac.Item:
+    child_id = child_item_id(parent_item.id, mosaic.quarter)
+    child_path = chip_dir / f"{child_id}.json"
+    tile = mosaic.item
+    child_item = pystac.Item(
+        id=child_id,
+        geometry=parent_item.geometry,
+        bbox=parent_item.bbox,
+        datetime=None,
+        start_datetime=tile.common_metadata.start_datetime,
+        end_datetime=tile.common_metadata.end_datetime,
+        properties={
+            "ftw:season": mosaic.quarter,
+            "ftw:source": MOSAIC_SOURCE,
+            "ftw:imagery_year": mosaic.year,
+            "ftw:mosaic_tile": tile.properties.get("ftw:mosaic_tile"),
+        },
+    )
+    child_item.set_self_href(str(child_path))
+    for band, asset in tile.assets.items():
+        child_item.assets[band] = asset.clone()
+
+    child_item.add_link(
+        pystac.Link(
+            rel="ftw:parent_chip",
+            target=f"./{parent_item.id}.json",
+            media_type="application/json",
+        )
+    )
+
+    _copy_hierarchical_links(parent_item, child_item)
+    _add_portolan_schema(child_item)
+    write_item(child_item, child_path)
+    return child_item
+
+
 def _create_season_child_item(
     chip_dir: Path,
     parent_item: pystac.Item,
     scene: SelectedScene,
-    season: Literal["planting", "harvest"],
+    season: str,
     year: int,
 ) -> pystac.Item:
     """Create a child STAC item for a season (planting or harvest).
@@ -271,7 +359,7 @@ def _scene_id(child_item: pystac.Item) -> str | None:
 def _attach_visual_asset(
     parent_item: pystac.Item,
     child_item: pystac.Item,
-    season: Literal["planting", "harvest"],
+    season: str,
 ) -> None:
     """Mirror the child's true-colour scene COG onto the parent as ``<season>_visual``.
 
@@ -320,7 +408,7 @@ def _band_list_from(asset: pystac.Asset, fallback_title: str | None) -> str | No
 def _attach_local_image_asset(
     parent_item: pystac.Item,
     child_item: pystac.Item,
-    season: Literal["planting", "harvest"],
+    season: str,
     chip_dir: Path,
     *,
     checksums: bool = False,
@@ -341,7 +429,7 @@ def _attach_local_image_asset(
     asset = pystac.Asset(
         href=f"./{filename}",
         media_type=MEDIA_TYPE_COG,
-        title=f"{season.capitalize()} season imagery",
+        title=f"{slot_title(season)} imagery",
         roles=["data"],
     )
     parent_item.add_asset(f"{season}_image", asset)
@@ -350,13 +438,13 @@ def _attach_local_image_asset(
 
     band_list = _band_list_from(asset, image.title)
     if band_list:
-        asset.title = f"{season.capitalize()} season imagery ({band_list})"
+        asset.title = f"{slot_title(season)} imagery ({band_list})"
 
 
 def attach_season_to_parent(
     parent_item: pystac.Item,
     child_item: pystac.Item,
-    season: Literal["planting", "harvest"],
+    season: str,
     chip_dir: Path | None = None,
     *,
     checksums: bool = False,
@@ -387,7 +475,7 @@ def attach_season_to_parent(
             rel=f"ftw:{season}",
             target=f"./{child_item.id}.json",
             media_type="application/json",
-            title=f"{season.capitalize()} season Sentinel-2 imagery",
+            title=f"{slot_title(season)} Sentinel-2 imagery",
         )
     )
 
@@ -404,15 +492,14 @@ def attach_season_to_parent(
 #: its next STAC rerun must keep finding it, or the rerun silently drops the
 #: thumbnail asset from every item. Nothing writes a ``.jpg`` preview any more --
 #: these entries only read what is already there.
-_THUMBNAIL_CANDIDATES = (
-    (f"_overlay{PREVIEW_SUFFIX}", PREVIEW_MEDIA_TYPE, "Chip preview with field overlay"),
-    (
-        f"_planting_image_s2{PREVIEW_SUFFIX}",
-        PREVIEW_MEDIA_TYPE,
-        "Chip preview (planting season)",
-    ),
-    ("_overlay.jpg", LEGACY_PREVIEW_MEDIA_TYPE, "Chip preview with field overlay"),
-    ("_planting_image_s2.jpg", LEGACY_PREVIEW_MEDIA_TYPE, "Chip preview (planting season)"),
+_THUMBNAIL_CANDIDATES = tuple(
+    (f"{stem}{ext}", preview_media_type(ext), title)
+    for ext in PREVIEW_EXTENSIONS
+    for stem, title in (
+        ("_overlay", "Chip preview with field overlay"),
+        ("_planting_image_s2", "Chip preview (planting season)"),
+        (f"_{MOSAIC_THUMBNAIL_SLOT}_image_s2", f"Chip preview ({MOSAIC_THUMBNAIL_SLOT})"),
+    )
 )
 
 
@@ -469,7 +556,7 @@ def attach_existing_seasons(
         The seasons that were re-attached, in order.
     """
     attached: list[str] = []
-    for season in SEASONS:
+    for season in IMAGERY_SLOTS:
         child_path = chip_dir / f"{parent_item.id}_{season}_s2.json"
         if not child_path.exists():
             continue

@@ -8,14 +8,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
-import geopandas as gpd  # noqa: TC002 - used at runtime for GeoDataFrame methods
-import geoparquet_io as gpio
 
 from ftw_dataset_tools.api.fs import create_temp_file, finalize_temp_file
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    import geopandas as gpd
     import pyproj
 
 
@@ -96,6 +95,8 @@ def write_geoparquet(
     # the temp file is a sibling of the target so the rename stays on one
     # filesystem.
     if not has_bbox_column(out_path):
+        import geoparquet_io as gpio
+
         tmp_path = None
         try:
             tmp_path = create_temp_file(out_path, suffix=".parquet")
@@ -471,6 +472,8 @@ def reproject(
     def log(msg: str) -> None:
         if on_progress:
             on_progress(msg)
+
+    import geoparquet_io as gpio
 
     log("Loading and reprojecting data...")
 

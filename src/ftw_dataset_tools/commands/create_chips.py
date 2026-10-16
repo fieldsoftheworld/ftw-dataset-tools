@@ -95,7 +95,10 @@ from ftw_dataset_tools.commands.options import KM_SIZE, KM_SIZE_HELP
     type=click.IntRange(min=0),
     default=field_stats.DEFAULT_BORDER_GAP_CHIPS,
     show_default=True,
-    help="How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.",
+    help=(
+        "How wide an unlabelled gap must be, in chips, before it counts as a cluster edge. "
+        "Below 2, UTM zone seams emptied by --min-chip-area count as edges."
+    ),
 )
 @click.option(
     "--batch-size",

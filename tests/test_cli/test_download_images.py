@@ -206,7 +206,7 @@ class TestDownloadImagesWorkers:
             fake_download,
         )
         monkeypatch.setattr(
-            "ftw_dataset_tools.commands.download_images.process_downloaded_scene",
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
             lambda **_kwargs: update_threads.append(threading.current_thread().name),
         )
 
@@ -231,7 +231,7 @@ class TestDownloadImagesWorkers:
             fake_download,
         )
         monkeypatch.setattr(
-            "ftw_dataset_tools.commands.download_images.process_downloaded_scene",
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
             lambda **_kwargs: None,
         )
 
@@ -258,7 +258,7 @@ class TestDownloadImagesWorkers:
             lambda **_kwargs: MagicMock(success=True, error=None),
         )
         monkeypatch.setattr(
-            "ftw_dataset_tools.commands.download_images.process_downloaded_scene",
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
             lambda **_kwargs: None,
         )
 
@@ -267,6 +267,63 @@ class TestDownloadImagesWorkers:
         assert result.exit_code == 0, result.output
         assert "Downloaded: 1" in result.output
         assert "Skipped: 1" in result.output
+
+
+class TestDownloadImagesOutput:
+    """What the command prints and reports around the shared workflow."""
+
+    def test_prints_grid_lines_only(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+
+        def fake_download(*, on_progress: object, **_kwargs: object) -> MagicMock:
+            on_progress("Grid: EPSG:32633 2x2")  # type: ignore[operator]
+            on_progress("Reading red band")  # type: ignore[operator]
+            return MagicMock(success=True, error=None)
+
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            fake_download,
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
+            lambda **_kwargs: None,
+        )
+
+        result = CliRunner().invoke(cli, ["download-images", str(dataset_dir)])
+
+        assert result.exit_code == 0, result.output
+        assert "Grid: EPSG:32633 2x2" in result.output
+        assert "Reading red band" not in result.output
+
+    def test_empty_catalog_fails(self, tmp_path: Path) -> None:
+        dataset_dir = _write_catalog(tmp_path, [])
+
+        result = CliRunner().invoke(cli, ["download-images", str(dataset_dir)])
+
+        assert result.exit_code == 1
+        assert "No S2 child items found" in result.output
+
+    def test_writes_report(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+        report_path = tmp_path / "report.json"
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            lambda **_kwargs: MagicMock(success=True, error=None),
+        )
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
+            lambda **_kwargs: None,
+        )
+
+        result = CliRunner().invoke(
+            cli, ["download-images", str(dataset_dir), "--output-report", str(report_path)]
+        )
+
+        assert result.exit_code == 0, result.output
+        report = json.loads(report_path.read_text())
+        assert report["total_processed"] == 2
+        assert report["successful"] == 2
+        assert report["failed"] == []
 
 
 class TestDownloadImagesResumeDefault:
@@ -339,7 +396,7 @@ class TestDownloadImagesResumeDefault:
             fake_download,
         )
         monkeypatch.setattr(
-            "ftw_dataset_tools.commands.download_images.process_downloaded_scene",
+            "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene",
             lambda **_kwargs: None,
         )
 

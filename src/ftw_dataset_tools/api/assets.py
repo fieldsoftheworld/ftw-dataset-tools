@@ -74,8 +74,7 @@ MASK_CLASSES: dict[str, list[tuple[int, str, str]]] = {
 # Mask kinds that are continuous or id-valued: described, never classified.
 MASK_DESCRIPTIONS: dict[str, str] = {
     "instance": (
-        "Instance mask: the background value (0, or 3 for presence-only labels) marks "
-        "non-field pixels; other values are per-field instance ids"
+        "Instance mask: 0 marks non-field pixels; other values are per-field instance ids"
     ),
     "decode_distance": (
         "DECODE normalized Euclidean distance to the nearest field boundary in [0, 1]; "
@@ -188,6 +187,8 @@ def _build_raster_bands(path: Path) -> list[RasterBand]:
         resolution = _spatial_resolution(src.transform, src.crs)
         descriptions = list(src.descriptions)
         tags = [src.tags(i) for i in range(1, src.count + 1)]
+        scales = list(src.scales)
+        offsets = list(src.offsets)
 
     bands: list[RasterBand] = []
     for index, dtype in enumerate(dtypes, start=1):
@@ -201,11 +202,16 @@ def _build_raster_bands(path: Path) -> list[RasterBand]:
                 stddev=stats.stddev,
                 valid_percent=stats.valid_percent,
             )
+        # Scale/offset only when the file declares a non-identity one (mosaic imagery).
+        scale, offset = scales[index - 1], offsets[index - 1]
+        has_scaling = (scale, offset) != (1.0, 0.0)
         band = RasterBand.create(
             nodata=_band_nodata(nodatas[index - 1]),
             data_type=DataType(dtype),
             spatial_resolution=resolution,
             statistics=statistics,
+            scale=scale if has_scaling else None,
+            offset=offset if has_scaling else None,
         )
         description = descriptions[index - 1]
         if description:

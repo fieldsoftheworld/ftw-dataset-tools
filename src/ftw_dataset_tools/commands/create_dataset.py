@@ -17,16 +17,42 @@ from ftw_dataset_tools.api import (
     scale,
     splits,
 )
+from ftw_dataset_tools.api import land_cover as land_cover_api
 from ftw_dataset_tools.api.assets import MaskReadError
 from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID_MASK_TYPES
 from ftw_dataset_tools.api.imagery import (
     download_imagery_for_catalog,
     select_imagery_for_catalog,
 )
+from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
 from ftw_dataset_tools.api.pipeline import docs_summary_line
-from ftw_dataset_tools.api.stac import detect_datetime_column, get_year_from_datetime_column
+from ftw_dataset_tools.api.stac import resolve_year
+from ftw_dataset_tools.commands.imagery_mode import (
+    imagery_mode_option,
+    reject_scene_only_options,
+    resolve_mosaic_year,
+)
 from ftw_dataset_tools.commands.options import KM_SIZE, KM_SIZE_HELP
+
+# Options that only mean something for --imagery-mode scenes.
+_SCENE_ONLY_OPTIONS = (
+    "cloud_cover_chip",
+    "buffer_days",
+    "num_buffer_expansions",
+    "buffer_expansion_size",
+    "search_backend",
+)
+
+
+def _selection_year(fields_file: Path, year: int | None, mosaic_year: int | None) -> int | None:
+    """The mosaic year in mosaic mode, else --year or the fields' determination year."""
+    if mosaic_year is not None:
+        return mosaic_year
+    effective_year = resolve_year(fields_file, year)
+    if year is None and effective_year is not None:
+        click.echo(f"  Year: {effective_year} (from determination_datetime)")
+    return effective_year
 
 
 @click.command("create-dataset")
@@ -68,9 +94,9 @@ from ftw_dataset_tools.commands.options import KM_SIZE, KM_SIZE_HELP
 @click.option(
     "--min-coverage",
     type=float,
-    default=0.01,
+    default=field_stats.DEFAULT_MIN_COVERAGE,
     show_default=True,
-    help="Minimum coverage percentage to include grids.",
+    help="Minimum coverage percentage (0-100) to include grids.",
 )
 @click.option(
     "--km-size",
@@ -138,6 +164,7 @@ from ftw_dataset_tools.commands.options import KM_SIZE, KM_SIZE_HELP
     default=False,
     help="Download images after selection.",
 )
+@imagery_mode_option
 @click.option(
     "--cloud-cover-chip",
     type=click.FloatRange(0.0, 100.0),
@@ -199,7 +226,7 @@ from ftw_dataset_tools.commands.options import KM_SIZE, KM_SIZE_HELP
     "--presence-only",
     is_flag=True,
     default=False,
-    help="Indicates labels are presence-only; background class value will be 3 instead of 0.",
+    help="Indicates labels are presence-only; semantic mask background will be 3 instead of 0.",
 )
 @click.option(
     "--drop-border-chips",
@@ -212,7 +239,20 @@ from ftw_dataset_tools.commands.options import KM_SIZE, KM_SIZE_HELP
     type=click.IntRange(min=0),
     default=chip_borders.DEFAULT_BORDER_GAP_CHIPS,
     show_default=True,
-    help="How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.",
+    help=(
+        "How wide an unlabelled gap must be, in chips, before it counts as a cluster edge. "
+        "Below 2, UTM zone seams count as edges."
+    ),
+)
+@click.option(
+    "--land-cover",
+    is_flag=True,
+    default=False,
+    help=(
+        "Add per-chip land cover from the Impact Observatory annual maps (2017-2023; the "
+        "nearest year is used and flagged when the dataset year has no map). Reads remote "
+        "rasters from Planetary Computer."
+    ),
 )
 @click.option(
     "--scale-percent",
@@ -246,6 +286,7 @@ from ftw_dataset_tools.commands.options import KM_SIZE, KM_SIZE_HELP
     default=False,
     help="Add file:checksum (multihash sha256) to every STAC asset. Slow on large datasets.",
 )
+@click.option("--crop-column", help="Source crop column to save alongside instance masks.")
 def create_dataset_cmd(
     fields_file: str,
     output_dir: str | None,
@@ -262,6 +303,7 @@ def create_dataset_cmd(
     year: int | None,
     skip_images: bool,
     download_images: bool,
+    imagery_mode: str,
     cloud_cover_chip: float,
     nodata_max: float,
     buffer_days: int,
@@ -270,10 +312,12 @@ def create_dataset_cmd(
     force_image_selection: bool,
     mask_types: str,
     presence_only: bool,
+    crop_column: str | None,
     drop_border_chips: bool,
     border_gap_chips: int,
     scale_percent: float,
     scale_min_blocks: int,
+    land_cover: bool,
     class_filter: str | None,
     checksums: bool,
 ) -> None:
@@ -390,6 +434,12 @@ def create_dataset_cmd(
         # Image selection (by default enabled, unless --skip-images is set)
         should_select_images = not skip_images or download_images
 
+        # Mosaic checks run before the masks are built, so a bad flag fails fast.
+        mosaic_year = None
+        if should_select_images and imagery_mode == "mosaics":
+            reject_scene_only_options(click.get_current_context(), _SCENE_ONLY_OPTIONS)
+            mosaic_year = resolve_mosaic_year(year)
+
         def select_and_download(catalog_dir: Path) -> None:
             """Select (and optionally download) imagery for the written collection.
 
@@ -398,14 +448,7 @@ def create_dataset_cmd(
             README and AGENTS.md the docs stage writes then describe a collection
             that already has its imagery.
             """
-            # Try to extract year from determination_datetime if not provided
-            effective_year = year
-            if effective_year is None:
-                datetime_col = detect_datetime_column(fields_file)
-                if datetime_col:
-                    effective_year = get_year_from_datetime_column(fields_file, datetime_col)
-                    if effective_year:
-                        click.echo(f"  Year: {effective_year} (from {datetime_col})")
+            effective_year = _selection_year(fields_file, year, mosaic_year)
 
             if effective_year is None:
                 raise click.ClickException(
@@ -422,18 +465,24 @@ def create_dataset_cmd(
             # generation carries those links across a rebuild, so re-running
             # create-dataset resumes instead of starting over unless
             # --force-image-selection is passed.
-            selection = select_imagery_for_catalog(
-                catalog_dir=catalog_dir,
-                year=effective_year,
-                cloud_cover_chip=cloud_cover_chip,
-                nodata_max=nodata_max,
-                buffer_days=buffer_days,
-                num_buffer_expansions=num_buffer_expansions,
-                buffer_expansion_size=buffer_expansion_size,
-                force=force_image_selection,
-                workers=image_workers,
-                search_backend=search_backend,
-            )
+            try:
+                selection = select_imagery_for_catalog(
+                    catalog_dir=catalog_dir,
+                    year=effective_year,
+                    cloud_cover_chip=cloud_cover_chip,
+                    nodata_max=nodata_max,
+                    buffer_days=buffer_days,
+                    num_buffer_expansions=num_buffer_expansions,
+                    buffer_expansion_size=buffer_expansion_size,
+                    force=force_image_selection,
+                    workers=image_workers,
+                    search_backend=search_backend,
+                    imagery_mode=imagery_mode,
+                )
+            except SelectionConflictError as err:
+                raise click.ClickException(
+                    f"{err} Pass --force-image-selection to replace it, or use a new output dir."
+                ) from err
 
             click.echo(f"  Selected: {selection.successful}")
             click.echo(f"  Skipped: {selection.skipped}")
@@ -478,8 +527,10 @@ def create_dataset_cmd(
             year=year,
             mask_types=mask_types_list,
             presence_only=presence_only,
+            crop_column=crop_column,
             drop_border_chips=drop_border_chips,
             border_gap_chips=border_gap_chips,
+            land_cover=land_cover,
             class_filter=class_filter,
             checksums=checksums,
             scale_percent=scale_percent,
@@ -507,6 +558,7 @@ def create_dataset_cmd(
             click.echo(f"  Grid cells: {result.chips_result.total_cells:,}")
             click.echo(f"  Cells with coverage: {result.chips_result.cells_with_coverage:,}")
             click.echo(f"  {crop_stats.crop_stats_summary(result.crop_stats_result)}")
+            click.echo(f"  {land_cover_api.land_cover_summary(result.land_cover_result)}")
 
         if result.splits_result:
             click.echo(
