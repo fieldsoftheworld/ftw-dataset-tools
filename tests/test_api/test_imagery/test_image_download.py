@@ -734,3 +734,65 @@ class TestProcessDownloadedSceneParentFailure:
         assert result.failed == 1
         assert result.failed_details[0]["item"] == "chip_planting_s2"
         assert "parent item" in result.failed_details[0]["error"]
+
+    def test_child_item_keeps_its_band_refs_when_the_parent_fails(self, tmp_path: Path) -> None:
+        import pystac
+        import pytest
+
+        from ftw_dataset_tools.api.imagery.image_download import process_downloaded_scene
+        from ftw_dataset_tools.api.stac_items import STACSaveError, write_item
+
+        _parent_path, child_path, image_path = self._staged_chip(tmp_path)
+        staged = pystac.Item.from_file(str(child_path))
+        staged.add_asset("red", pystac.Asset(href="https://example.com/B04.tif"))
+        write_item(staged, child_path)
+
+        with (
+            patch(
+                "ftw_dataset_tools.api.imagery.image_download.update_parent_item",
+                side_effect=STACSaveError("destination is read-only"),
+            ),
+            pytest.raises(STACSaveError),
+        ):
+            process_downloaded_scene(
+                item=pystac.Item.from_file(str(child_path)),
+                item_path=child_path,
+                output_path=image_path,
+                output_filename=image_path.name,
+                band_list=["red", "green", "blue", "nir"],
+                season="planting",
+                base_id="chip",
+                generate_thumbnails=False,
+            )
+
+        on_disk = pystac.Item.from_file(str(child_path))
+        assert "image" not in on_disk.assets
+        assert on_disk.assets["red"].href == "https://example.com/B04.tif"
+
+    def test_a_scene_whose_parent_failed_is_retried_on_resume(self, tmp_path: Path) -> None:
+        import stat
+
+        import pystac
+
+        from ftw_dataset_tools.api.imagery.download_workflow import download_imagery_for_catalog
+
+        parent_path, child_path, _image_path = self._staged_chip(tmp_path)
+
+        with patch(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene"
+        ) as mock_download:
+            mock_download.return_value = MagicMock(success=True)
+
+            parent_path.chmod(stat.S_IRUSR)
+            try:
+                first = download_imagery_for_catalog(catalog_dir=tmp_path, show_progress_bar=False)
+            finally:
+                parent_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+            second = download_imagery_for_catalog(catalog_dir=tmp_path, show_progress_bar=False)
+
+        assert first.failed == 1
+        assert second.skipped == 0
+        assert second.successful == 1
+        assert "image" in pystac.Item.from_file(str(child_path)).assets
+        assert "planting_image" in pystac.Item.from_file(str(parent_path)).assets

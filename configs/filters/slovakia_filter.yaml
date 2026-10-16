@@ -8,14 +8,16 @@
 # Excluded (background): permanent grassland; and within arable land - fallow (incl. honey-plant
 # fallow), biostrips, grassed-over arable land, grasses / herbaceous fodder, phacelia, buffer
 # zones & linear landscape features, open and under-glass/foil ornamental flowers, and vegetables
-# grown under glass/foil (greenhouse); vineyards; orchards, fruit, berries & nuts; and poplar,
-# willow, forest trees, woody nurseries & other woody permanent crops.
+# grown under glass/foil (greenhouse); and non-cropped vineyard handling areas.
 #
 # Notable inclusions: all cereals, maize (incl. silage/green/seed), sorghum, millet, buckwheat,
 # oilseeds (rapeseed, sunflower, poppy, oilseed flax/radish, safflower, mustard), hemp, tobacco,
 # soy, legumes & pulses, fodder legumes (clover, lucerne, sainfoin, vetch, lupine, legume mixes),
 # potatoes, sugar/fodder beet, all open-field vegetables (incl. melon/watermelon), medicinal &
-# aromatic herbs, strawberries and hops.
+# aromatic herbs, strawberries and hops; and permanent & tree crops: vineyards (incl. under
+# restructuring), orchards (incl. mixed landscape orchards), fruit, berries & nuts, woody
+# nurseries, short-rotation woody crops (poplar, willow & other trees) and herbaceous permanent
+# crops.
 
 column: ["crop:name", "crop_name"]
 
@@ -179,31 +181,8 @@ include:
   # Hops & strawberries
   - "Jahody"  # Strawberries
   - "Chmeľ obyčajný"  # Common hops
-
-exclude:
-  # Permanent grassland
-  - "Trvalý trávny porast"  # Permanent grassland
-  # Fallow, biostrips, grassed arable, grasses, cover & buffer/landscape features
-  - "Pôda ležiaca úhorom s porastom"  # Fallow land with vegetation
-  - "Trávy alebo iné bylinné krmoviny"  # Grasses or other herbaceous fodder
-  - "Pôda ležiaca úhorom pre medonosné plodiny"  # Fallow land for honey plants
-  - "Biopás"  # Biostrip
-  - "Biopás pre medonosné plodiny"  # Biostrip for honey plants
-  - "Pôda ležiaca úhorom"  # Fallow land
-  - "Biopás tvorený úhorom s porastom"  # Biostrip consisting of fallow with vegetation
-  - "Biopás kosený po 31. júli"  # Biostrip mown after July 31
-  - "Facélia vratičolistá"  # Phacelia wobbly-leaved
-  - "Zatrávnená orná pôda v CHÚ (ekoschéma)"  # Grassed arable land in protected area (eco-scheme)
-  - "Líniový vegetačný prvok"  # Linear vegetation feature
-  - "Nárazníková zóna a medza"  # Buffer zone and balk
-  - "Zatrávnená orná pôda (neprojektové opatrenia)"  # Grassed arable land (non-project measures)
-  # Greenhouse & ornamental (under glass/foil, open ornamentals)
-  - "Kvety a okrasné rastliny voľne pestované"  # Flowers and ornamental plants in the wild
-  - "Zelenina a iné záhradné plodiny pod sklom alebo fóliou"  # Vegetables and other horticultural crops under glass or foil
-  - "Kvety a okrasné rastliny pod sklom alebo fóliou"  # Flowers and ornamental plants under glass or foil
   # Vineyards
   - "Vinohrady"  # Vineyard
-  - "Ostatná manipulačná plocha"  # Other handling area
   - "Vinohrad v reštrukturalizácii"  # Vineyard under restructuring
   # Orchards, fruit, berries & nuts
   - "Ovocné sady"  # Fruit sets
@@ -237,7 +216,7 @@ exclude:
   - "Mišpuľa"  # Loquat
   - "Nektárinka"  # Nectarine
   - "Egreš obyčajný"  # Common gooseberry
-  # Poplar, willow, forest trees, nurseries & woody permanent crops
+  # Nurseries, short-rotation woody crops (poplar, willow & other trees) & other permanent crops
   - "Škôlky s drevnatými rastlinami"  # Nurseries with woody plants
   - "Bylinné trvalé plodiny"  # Herbal permanent crops
   - "Vŕba biela"  # White willow
@@ -252,3 +231,27 @@ exclude:
   - "Breza previsnutá"  # Birch overhanging
   - "Jelša sivá"  # Gray alder
   - "Jaseň štíhly"  # Slender ash tree
+
+exclude:
+  # Permanent grassland
+  - "Trvalý trávny porast"  # Permanent grassland
+  # Fallow, biostrips, grassed arable, grasses, cover & buffer/landscape features
+  - "Pôda ležiaca úhorom s porastom"  # Fallow land with vegetation
+  - "Trávy alebo iné bylinné krmoviny"  # Grasses or other herbaceous fodder
+  - "Pôda ležiaca úhorom pre medonosné plodiny"  # Fallow land for honey plants
+  - "Biopás"  # Biostrip
+  - "Biopás pre medonosné plodiny"  # Biostrip for honey plants
+  - "Pôda ležiaca úhorom"  # Fallow land
+  - "Biopás tvorený úhorom s porastom"  # Biostrip consisting of fallow with vegetation
+  - "Biopás kosený po 31. júli"  # Biostrip mown after July 31
+  - "Facélia vratičolistá"  # Phacelia wobbly-leaved
+  - "Zatrávnená orná pôda v CHÚ (ekoschéma)"  # Grassed arable land in protected area (eco-scheme)
+  - "Líniový vegetačný prvok"  # Linear vegetation feature
+  - "Nárazníková zóna a medza"  # Buffer zone and balk
+  - "Zatrávnená orná pôda (neprojektové opatrenia)"  # Grassed arable land (non-project measures)
+  # Greenhouse & ornamental (under glass/foil, open ornamentals)
+  - "Kvety a okrasné rastliny voľne pestované"  # Flowers and ornamental plants in the wild
+  - "Zelenina a iné záhradné plodiny pod sklom alebo fóliou"  # Vegetables and other horticultural crops under glass or foil
+  - "Kvety a okrasné rastliny pod sklom alebo fóliou"  # Flowers and ornamental plants under glass or foil
+  # Vineyard handling areas (non-cropped)
+  - "Ostatná manipulačná plocha"  # Other handling area

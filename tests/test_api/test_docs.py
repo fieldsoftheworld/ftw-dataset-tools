@@ -497,6 +497,26 @@ class TestImageryStats:
 
         assert imagery_stats(tmp_path) is None
 
+    def test_mosaic_quarters_are_described_as_mosaics(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import _imagery_block, imagery_stats
+
+        chip_dir = tmp_path / "chips" / "33UXP" / "ftw-33UXP0001"
+        chip_dir.mkdir(parents=True)
+        for quarter in ("q1", "q2", "q3", "q4"):
+            (chip_dir / f"ftw-33UXP0001_{quarter}_s2.json").write_text(
+                json.dumps(
+                    {"id": f"ftw-33UXP0001_{quarter}_s2", "properties": {"ftw:season": quarter}}
+                )
+            )
+
+        stats = imagery_stats(tmp_path)
+        text = _imagery_block({"imagery": stats})
+
+        assert stats is not None
+        assert set(stats) >= {"q1", "q4"}
+        assert text.startswith("1 chips have Sentinel-2 quarterly cloudless mosaics")
+        assert "planting" not in text
+
 
 class TestRegisterDocsAssetsPruning:
     """A rerun that produces less must leave the collection describing only what exists."""

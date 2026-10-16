@@ -23,6 +23,7 @@ from ftw_dataset_tools import __version__
 from ftw_dataset_tools.api import field_stats, splits
 from ftw_dataset_tools.api.chip_borders import DEFAULT_BORDER_GAP_CHIPS
 from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
+from ftw_dataset_tools.api.imagery.slots import DEFAULT_IMAGERY_MODE, IMAGERY_MODES
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -74,6 +75,21 @@ DEFAULT_IMAGERY_WORKERS = 4
 # "earth-search" queries the Earth Search STAC API, which rate-bans
 # aggressive clients, so its worker default stays low.
 SEARCH_BACKENDS = ("parquet", "earth-search")
+
+# select_images keys that only mean something for imagery_mode "scenes".
+SCENE_ONLY_SELECT_KEYS = (
+    "cloud_cover_chip",
+    "buffer_days",
+    "num_buffer_expansions",
+    "buffer_expansion_size",
+    "search_backend",
+)
+
+MOSAIC_PREVIEW_UNSUPPORTED = (
+    "stages.download_images.mode 'preview' is not available with imagery_mode 'mosaics'. "
+    "This is expected: preview mode draws from each scene's ready-made true-colour image, "
+    "which mosaics do not have. Use mode 'clip'."
+)
 DEFAULT_PARQUET_WORKERS = 16
 
 
@@ -251,7 +267,7 @@ class ClassFilter:
 class ChipsConfig:
     """Settings for the chips stage (field coverage statistics)."""
 
-    min_coverage: float = 0.01
+    min_coverage: float = field_stats.DEFAULT_MIN_COVERAGE
     drop_border_chips: bool = False
     # How wide an unlabelled gap must be, in chips, before it counts as a cluster edge.
     border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS
@@ -299,6 +315,8 @@ class MasksConfig:
     class_filter: str | None = None
     # When true, cells whose mask file already exists (non-empty) are not recreated.
     skip_existing: bool = False
+    # Source crop column for instance labels.
+    crop_column: str | None = None
 
 
 @dataclass
@@ -308,6 +326,8 @@ class StacConfig:
     # Compute file:checksum (multihash sha256) for every asset. Optional in
     # Portolan and slow on tens of thousands of COGs, so off by default.
     checksums: bool = False
+    # Date chip items by their crop calendar season instead of the whole year.
+    crop_calendar: bool = True
 
 
 @dataclass
@@ -432,6 +452,8 @@ class SelectImagesConfig:
     """Settings for the imagery selection stage."""
 
     enabled: bool = True
+    # "scenes" (planting/harvest, crop calendar) or "mosaics" (Q1-Q4 of the top-level year).
+    imagery_mode: str = DEFAULT_IMAGERY_MODE
     cloud_cover_chip: float = 2.0
     nodata_max: float = 0.0
     buffer_days: int = 14
@@ -582,6 +604,7 @@ class DatasetConfig:
         drop_border_chips: bool,
         border_gap_chips: int = DEFAULT_BORDER_GAP_CHIPS,
         land_cover: bool = False,
+        crop_column: str | None = None,
     ) -> DatasetConfig:
         """Build a config from ``create_dataset`` keyword arguments.
 
@@ -610,6 +633,7 @@ class DatasetConfig:
                     resolution=resolution,
                     workers=num_workers,
                     presence_only=presence_only,
+                    crop_column=crop_column,
                 ),
                 select_images=SelectImagesConfig(enabled=False),
                 download_images=DownloadImagesConfig(enabled=False),
@@ -644,29 +668,7 @@ class DatasetConfig:
             raise ConfigError(f"Invalid split_percents: {err}") from err
         self.stages.splits.split_percents = resolved
 
-        for mask_type in self.stages.masks.mask_types:
-            if mask_type not in VALID_MASK_TYPES:
-                raise ConfigError(
-                    f"Invalid mask type '{mask_type}'. "
-                    f"Must be one of: {', '.join(VALID_MASK_TYPES)}."
-                )
-        if not self.stages.masks.mask_types:
-            raise ConfigError("masks.mask_types must list at least one mask type.")
-
-        # The DECODE layers are derived from the 2-class mask, which is also the
-        # field-extent target of the DECODE multi-task set (see api/decode.py).
-        # Requesting them without it yields an incomplete label set, so require it
-        # rather than silently writing a mask the caller did not ask for.
-        requested = set(self.stages.masks.mask_types)
-        derived = requested.intersection(DERIVED_MASK_TYPES)
-        if derived and DERIVED_MASK_SOURCE not in requested:
-            fixed = [DERIVED_MASK_SOURCE, *self.stages.masks.mask_types]
-            raise ConfigError(
-                f"Mask type(s) {', '.join(sorted(derived))} are derived from "
-                f"'{DERIVED_MASK_SOURCE}', which is also the DECODE field-extent "
-                f"target. Add '{DERIVED_MASK_SOURCE}' to masks.mask_types, i.e. "
-                f"mask_types: [{', '.join(fixed)}]"
-            )
+        self._validate_masks()
 
         if not isinstance(self.stages.chips.crop_stats, bool):
             raise ConfigError("stages.chips.crop_stats must be true or false")
@@ -694,9 +696,6 @@ class DatasetConfig:
         if not isinstance(km_size, int | float) or isinstance(km_size, bool) or km_size <= 0:
             raise ConfigError(f"stages.chips.km_size must be a positive number (got {km_size!r})")
 
-        if not isinstance(self.stages.masks.skip_existing, bool):
-            raise ConfigError("stages.masks.skip_existing must be true or false")
-
         if not isinstance(self.stages.download_images.resume, bool):
             raise ConfigError("stages.download_images.resume must be true or false")
 
@@ -715,6 +714,8 @@ class DatasetConfig:
                 f"stages.download_images.mode must be one of {list(DOWNLOAD_MODES)} (got {mode!r})"
             )
 
+        self._validate_imagery_mode()
+
         pmtiles = self.stages.docs.pmtiles
         if not isinstance(pmtiles, bool) and pmtiles != PMTILES_AUTO:
             raise ConfigError(
@@ -724,6 +725,63 @@ class DatasetConfig:
 
         if self.metadata is not None:
             self.metadata.validate()
+
+    def _validate_masks(self) -> None:
+        for mask_type in self.stages.masks.mask_types:
+            if mask_type not in VALID_MASK_TYPES:
+                raise ConfigError(
+                    f"Invalid mask type '{mask_type}'. "
+                    f"Must be one of: {', '.join(VALID_MASK_TYPES)}."
+                )
+        if not self.stages.masks.mask_types:
+            raise ConfigError("masks.mask_types must list at least one mask type.")
+
+        # The DECODE layers are derived from the 2-class mask, which is also the
+        # field-extent target of the DECODE multi-task set (see api/decode.py).
+        # Requesting them without it yields an incomplete label set, so require it
+        # rather than silently writing a mask the caller did not ask for.
+        requested = set(self.stages.masks.mask_types)
+        derived = requested.intersection(DERIVED_MASK_TYPES)
+        if derived and DERIVED_MASK_SOURCE not in requested:
+            fixed = [DERIVED_MASK_SOURCE, *self.stages.masks.mask_types]
+            raise ConfigError(
+                f"Mask type(s) {', '.join(sorted(derived))} are derived from "
+                f"'{DERIVED_MASK_SOURCE}', which is also the DECODE field-extent "
+                f"target. Add '{DERIVED_MASK_SOURCE}' to masks.mask_types, i.e. "
+                f"mask_types: [{', '.join(fixed)}]"
+            )
+
+        if not isinstance(self.stages.masks.skip_existing, bool):
+            raise ConfigError("stages.masks.skip_existing must be true or false")
+
+        crop_column = self.stages.masks.crop_column
+        if crop_column is not None and (
+            not isinstance(crop_column, str)
+            or not crop_column.strip()
+            or "instance" not in self.stages.masks.mask_types
+        ):
+            raise ConfigError(
+                "stages.masks.crop_column requires a column name and mask_types: [instance]"
+            )
+
+    def _validate_imagery_mode(self) -> None:
+        select = self.stages.select_images
+        if select.imagery_mode not in IMAGERY_MODES:
+            raise ConfigError(
+                f"stages.select_images.imagery_mode must be one of {list(IMAGERY_MODES)} "
+                f"(got {select.imagery_mode!r})"
+            )
+        if select.imagery_mode != "mosaics":
+            return
+        defaults = SelectImagesConfig()
+        for key in SCENE_ONLY_SELECT_KEYS:
+            if getattr(select, key) != getattr(defaults, key):
+                raise ConfigError(
+                    f"stages.select_images.{key} only applies to imagery_mode 'scenes'; "
+                    "remove it for mosaics."
+                )
+        if self.stages.download_images.mode == DOWNLOAD_MODE_PREVIEW:
+            raise ConfigError(MOSAIC_PREVIEW_UNSUPPORTED)
 
     # ---- provenance -----------------------------------------------------
 

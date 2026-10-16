@@ -172,7 +172,7 @@ class TestCreateDatasetSignature:
         sig = inspect.signature(create_dataset)
 
         assert sig.parameters["output_dir"].default == "./dataset"
-        assert sig.parameters["min_coverage"].default == 0.01
+        assert sig.parameters["min_coverage"].default == 1.0
         assert sig.parameters["resolution"].default == 10.0
         assert sig.parameters["skip_reproject"].default is False
 

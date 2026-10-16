@@ -753,3 +753,30 @@ class TestMaskStatisticsMarkdown:
 
         # But histogram image should not be included
         assert "![Field Coverage](figures/field_coverage.png)" not in content
+
+
+class TestHistograms:
+    """Tests for the histogram figures."""
+
+    def test_creates_value_histogram(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.dataset_summary import _create_histogram
+
+        output = tmp_path / "coverage.png"
+        messages: list[str] = []
+        _create_histogram([10.0, 50.0, 90.0], "Coverage (%)", output, messages.append)
+
+        assert output.stat().st_size > 0
+        assert "  Saved: coverage.png" in messages
+
+    def test_creates_date_histogram(self, tmp_path: Path) -> None:
+        from datetime import datetime
+
+        from ftw_dataset_tools.api.dataset_summary import _create_date_histogram
+
+        output = tmp_path / "dates.png"
+        messages: list[str] = []
+        dates = [datetime(2023, 4, 1), datetime(2023, 5, 15), datetime(2023, 9, 1)]
+        _create_date_histogram(dates, "Planting", output, messages.append)
+
+        assert output.stat().st_size > 0
+        assert "  Saved: dates.png" in messages

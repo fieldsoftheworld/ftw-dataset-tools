@@ -1,10 +1,12 @@
 # Class filter used for Belgium (Flanders) field boundaries.
 # Excluded classes are those that are not considered agricultural fields, e.g. forest, ecological protection areas.
-# Notable exclusions: grassland, pasture, meadows, orchards, fruit & nut trees, vineyards, grasses and
-# grass/cover mixtures, flowers and ornamental plants, greenhouse / "protected cultivation", mushrooms,
-# fallow / derelict land, and non-agricultural areas (buildings, water, infrastructure).
+# Notable exclusions: grassland, pasture, meadows, grasses and grass/cover mixtures, flowers and
+# non-woody ornamental plants, greenhouse / "protected cultivation", mushrooms, fallow / derelict land,
+# afforestation & forest, tree rows/groups, and non-agricultural areas (buildings, water, infrastructure).
 # Notable inclusions: cereals, maize, legumes, oilseeds, potatoes, sugar & fodder beet, field vegetables,
-# medicinal plants/herbs, flax, hemp, hops, clover, alfalfa, strawberries.
+# medicinal plants/herbs, flax, hemp, hops, clover, alfalfa, strawberries, and permanent & tree crops
+# (orchards incl. standard-tree meadow orchards, fruit & nut trees, berries, vineyards, tree & woody
+# ornamental nurseries, short-rotation coppice, Christmas trees).
 # Covers crop codes across be_vlg years 2018-2025. Codes from EuroCrops be_vlg_2021.csv plus data-only additions:
 # https://raw.githubusercontent.com/maja601/EuroCrops/refs/heads/main/csvs/country_mappings/be_vlg_2021.csv
 
@@ -216,6 +218,8 @@ include:
   - 9548  # Green celery - fresh
   - 9550  # Black radish - fresh
   - 9551  # Celery - fresh
+  - 9552  # Tomatoes - fresh
+  - 9553  # Bell pepper - fresh
   - 9556  # Pumpkins - fresh
   - 9557  # Other alternative lettuce varieties - fresh
   - 9561  # Chicory root
@@ -230,6 +234,45 @@ include:
   - 9812  # Chicory (coffee substitute)
   - 9821  # Tobacco
   - 9822  # Hop
+  # Permanent and tree crops
+  - 602  # Cultivation material vines
+  - 883  # Afforestation (short rotation)
+  - 886  # Non-subsidizable short-rotation coppice
+  - 962  # Christmas trees
+  - 963  # vine plantations
+  - 9201  # hazelnuts
+  - 9202  # walnuts
+  - 9560  # Tree cultivation - forest and hedge plants
+  - 9581  # avenue trees
+  - 9582  # Roses
+  - 9583  # Flowering Shrubs
+  - 9584  # Hardy ornamental plants
+  - 9589  # Non-flowering shrubs
+  - 9590  # Solitary Trees
+  - 9602  # Tree cultivation - fruit cultivation
+  - 9603  # Tree nursery - ornamental
+  - 9604  # Tree nursery - other
+  - 9710  # Perennial fruit crops (apple)
+  - 9711  # Perennial fruit crops (pear)
+  - 9713  # Perennial fruit crops (plum)
+  - 9714  # Other perennial fruit crops
+  - 9715  # Grapes
+  - 9716  # Vines
+  - 9717  # raspberries
+  - 9718  # Redcurrant
+  - 9719  # gooseberries
+  - 9720  # Blackcurrants
+  - 9721  # blackberries
+  - 9722  # Blueberries
+  - 9723  # Other berries
+  - 9725  # Perennial fruit crops (sweet cherry
+  - 9726  # Perennial fruit crops (sweet cherry standard)
+  - 9727  # Perennial fruit crops (sour cherry)
+  - 9728  # Perennial fruit crops (peach)
+  - 9729  # kiwi berry
+  - 9730  # Perennial fruit crops standard (apple)
+  - 9731  # Perennial fruit crops standard (pear)
+  - 9827  # Pasture with harvestable standard trees (> 100 trees/ha)
 
 exclude:
   - 1  # Main buildings
@@ -257,38 +300,28 @@ exclude:
   - 98  # Fauna mixture
   - 100  # Unsown arable land (data-only)
   - 601  # Seed grasses
-  - 602  # Cultivation material vines
   - 635  # Cover mix: mostly Japanese oats, no legumes
   - 638  # Festulolium
   - 647  # Other non-flowery green cover plants
   - 659  # Mixture of non-leguminous green cover crops (data-only)
   - 662  # Cover mix: fodder radish + yellow mustard
   - 745  # Mixture of grass and leguminous plants (other than grass clover or grass alfalfa)
-  - 883  # Afforestation (short rotation)
   - 884  # miscanthus
-  - 886  # Non-subsidizable short-rotation coppice
   - 894  # Afforestation with contract for 2008
   - 895  # Group trees
   - 897  # Forest
   - 898  # permaculture
   - 954  # Other non-woody ornamental plants
   - 955  # Grass Turf
-  - 962  # Christmas trees
-  - 963  # vine plantations
   - 972  # Other annual fruit crops
   - 8910  # Afforestation deciduous trees-ecological
   - 8911  # Afforestation of deciduous trees-economical
   - 8912  # Afforestation of conifers
   - 8915  # Poplar afforestation
-  - 9201  # hazelnuts
-  - 9202  # walnuts
   - 9536  # Mushrooms (shed)
   - 9547  # pot chrysanthemums
-  - 9552  # Tomatoes - fresh
-  - 9553  # Bell pepper - fresh
   - 9554  # Cucumbers - fresh
   - 9555  # Eggplants - fresh
-  - 9560  # Tree cultivation - forest and hedge plants
   - 9565  # Young plants for floriculture
   - 9566  # Seeds for floriculture
   - 9570  # Azalea
@@ -301,40 +334,10 @@ exclude:
   - 9577  # Cut flowers other than roses < 5 years
   - 9578  # Bedding and balcony plants
   - 9580  # Perennials
-  - 9581  # avenue trees
-  - 9582  # Roses
-  - 9583  # Flowering Shrubs
-  - 9584  # Hardy ornamental plants
   - 9585  # Cut plants >= 5 years
   - 9587  # Cut flowers other than roses >= 5 years
-  - 9589  # Non-flowering shrubs
-  - 9590  # Solitary Trees
-  - 9602  # Tree cultivation - fruit cultivation
-  - 9603  # Tree nursery - ornamental
-  - 9604  # Tree nursery - other
-  - 9710  # Perennial fruit crops (apple)
-  - 9711  # Perennial fruit crops (pear)
-  - 9713  # Perennial fruit crops (plum)
-  - 9714  # Other perennial fruit crops
-  - 9715  # Grapes
-  - 9716  # Vines
-  - 9717  # raspberries
-  - 9718  # Redcurrant
-  - 9719  # gooseberries
-  - 9720  # Blackcurrants
-  - 9721  # blackberries
-  - 9722  # Blueberries
-  - 9723  # Other berries
-  - 9725  # Perennial fruit crops (sweet cherry
-  - 9726  # Perennial fruit crops (sweet cherry standard)
-  - 9727  # Perennial fruit crops (sour cherry)
-  - 9728  # Perennial fruit crops (peach)
-  - 9729  # kiwi berry
-  - 9730  # Perennial fruit crops standard (apple)
-  - 9731  # Perennial fruit crops standard (pear)
   - 9823  # Pasture with non-harvestable trees (> 100 trees per ha)
   - 9825  # Heath in nature management
-  - 9827  # Pasture with harvestable standard trees (> 100 trees/ha)
   - 9828  # Natural grassland with minimum activity
   - 9829  # Natural grassland with no minimum activity
   - 9831  # Flower mixture

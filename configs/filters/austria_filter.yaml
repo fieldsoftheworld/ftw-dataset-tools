@@ -1,7 +1,7 @@
 # Class filter used for Austria field boundaries.
 # Excluded classes are those that are not considered agricultural fields, e.g. forest, ecological protection areas.
-# Notable exclusions: grassland, pasture, orchards, fruit trees, vineyards, grasses, flowers and ornamental plants, anything in the greenhouse, "protected cultivation".
-# Notable inclusions: alfalfa, clover, berries, medicinal plants/herbs.
+# Notable exclusions: grassland, pasture, grasses, flowers and ornamental plants, anything in the greenhouse, "protected cultivation", orchard/vineyard soil-recovery (Bodengesundung).
+# Notable inclusions: alfalfa, clover, berries, medicinal plants/herbs, permanent and tree crops (orchards, fruit and nut trees, vineyards, vine nurseries, hops, tree nurseries, energy wood).
 # Codes from https://raw.githubusercontent.com/maja601/EuroCrops/refs/heads/main/csvs/country_mappings/at_2021.csv
 
 column: ["crop:code", "crop_code"]
@@ -172,6 +172,34 @@ include:
   - 777  # GRÜNSCHNITTROGGEN / SENF
   - 821  # HOPFEN
   - 832  # HOLUNDER
+  # Permanent and tree crops
+  - 772  # GINKGO
+  - 809  # ANDERES OBST
+  - 810  # SONSTIGE SPEZIALKULTURFLÄCHEN
+  - 812  # KIRSCHEN
+  - 813  # MARILLEN
+  - 814  # PFIRSICHE
+  - 817  # TAFELÄPFEL
+  - 818  # TAFELBIRNEN
+  - 819  # WEICHSELN
+  - 820  # ZWETSCHKEN
+  - 828  # QUITTEN
+  - 829  # NEKTARINEN
+  - 830  # PFLAUMEN
+  - 831  # STRAUCHBEEREN
+  - 842  # SCHALENFRÜCHTE (WALNÜSSE, HASELNÜSSE, ...)
+  - 844  # EDELKASTANIEN
+  - 854  # WALNÜSSE
+  - 855  # HASELNÜSSE UND ANDERE SCHALENFRÜCHTE
+  - 860  # EINJÄHRIGE BAUMSCHULEN
+  - 861  # MEHRJÄHRIGE BAUMSCHULEN
+  - 862  # REBSCHULEN
+  - 863  # ENERGIEHOLZ OHNE ROBINIE
+  - 864  # ENERGIEHOLZ ROBINIE
+  - 865  # ANDERE DAUERKULTUREN
+  - 901  # WEIN
+  - 906  # SCHNITTWEINGARTEN
+  - 907  # SONSTIGE WEINFLÄCHEN
 
 exclude:
   - "000"  # NICHT DEFINIERT
@@ -213,29 +241,13 @@ exclude:
   - 723  # SONSTIGE HUTWEIDEFLÄCHEN
   - 767  # ROLLRASEN
   - 771  # GRÜNBRACHE
-  - 772  # GINKGO
   - 773  # BIENENTRACHTBRACHE
   - 806  # OBST/HOPFEN BODENGESUNDUNG
-  - 809  # ANDERES OBST
-  - 810  # SONSTIGE SPEZIALKULTURFLÄCHEN
-  - 812  # KIRSCHEN
-  - 813  # MARILLEN
-  - 814  # PFIRSICHE
-  - 817  # TAFELÄPFEL
-  - 818  # TAFELBIRNEN
-  - 819  # WEICHSELN
-  - 820  # ZWETSCHKEN
-  - 828  # QUITTEN
-  - 829  # NEKTARINEN
-  - 830  # PFLAUMEN
-  - 831  # STRAUCHBEEREN
   - 837  # BLUMEN UND ZIERPFLANZEN IM GEWÄCHSHAUS
   - 838  # BLUMEN UND ZIERPFLANZEN IM FOLIENTUNNEL
   - 839  # GEMÜSE IM GEWÄCHSHAUS
   - 840  # GEMÜSE IM FOLIENTUNNEL
-  - 842  # SCHALENFRÜCHTE (WALNÜSSE, HASELNÜSSE, ...)
   - 843  # SONSTIGE FLÄCHEN: GESCHÜTZTER ANBAU
-  - 844  # EDELKASTANIEN
   - 845  # SONSTIGE KULTUREN IM GEWÄCHSHAUS
   - 846  # SONSTIGE KULTUREN IM FOLIENTUNNEL
   - 847  # HEILPFLANZEN IM GEWÄCHSHAUS  (not in 2020 data)
@@ -244,18 +256,7 @@ exclude:
   - 850  # GEWÜRZPFLANZEN IM FOLIENTUNNEL
   - 851  # OBST IM GEWÄCHSHAUS
   - 852  # OBST IM FOLIENTUNNEL
-  - 854  # WALNÜSSE
-  - 855  # HASELNÜSSE UND ANDERE SCHALENFRÜCHTE
-  - 860  # EINJÄHRIGE BAUMSCHULEN
-  - 861  # MEHRJÄHRIGE BAUMSCHULEN
-  - 862  # REBSCHULEN
-  - 863  # ENERGIEHOLZ OHNE ROBINIE
-  - 864  # ENERGIEHOLZ ROBINIE
-  - 865  # ANDERE DAUERKULTUREN
-  - 901  # WEIN
   - 902  # WEIN BODENGESUNDUNG
-  - 906  # SCHNITTWEINGARTEN
-  - 907  # SONSTIGE WEINFLÄCHEN
   - 920  # NATURSCHUTZFACHLICH WERTVOLLE PFLEGEFLÄCHE
   - 959  # 20 JÄHRIGE STILLLEGUNG
   - 960  # WALDUMWELTMASSNAHMEN

@@ -8,7 +8,7 @@ and the `create-dataset` pipeline to ensure identical behavior.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import pystac
 from tqdm import tqdm
@@ -24,7 +24,9 @@ from ftw_dataset_tools.api.imagery.parallel import (
     run_in_parallel,
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
+from ftw_dataset_tools.api.imagery.slots import image_filename, parse_child_id
 from ftw_dataset_tools.api.imagery.thumbnails import has_rgb_bands
+from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -60,10 +62,9 @@ def find_s2_child_items(
     catalog_dir: Path,
     unreadable: list[dict] | None = None,
 ) -> list[tuple[pystac.Item, Path]]:
-    """Find all S2 child items (planting/harvest) in a catalog directory.
+    """Find all S2 child items (one per imagery slot) in a catalog directory.
 
-    Searches subdirectories for STAC item JSON files that end with
-    _planting_s2 or _harvest_s2.
+    Searches subdirectories for STAC item JSON files named ``{chip}_{slot}_s2``.
 
     Args:
         catalog_dir: Path to the collection directory (holding collection.json),
@@ -88,8 +89,7 @@ def find_s2_child_items(
                 if unreadable is not None:
                     unreadable.append({"item": json_file.stem, "error": f"Unreadable item: {e}"})
                 continue
-            # Only include child items (they have _planting_s2 or _harvest_s2 suffix)
-            if item.id.endswith("_planting_s2") or item.id.endswith("_harvest_s2"):
+            if parse_child_id(item.id) is not None:
                 child_items.append((item, json_file))
 
     return child_items
@@ -104,11 +104,13 @@ def download_imagery_for_catalog(
     on_progress: Callable[[int, int], None] | None = None,
     show_progress_bar: bool = True,
     workers: int = DEFAULT_WORKERS,
+    keep_remote_refs: bool = False,
+    on_log: Callable[[str], None] | None = None,
 ) -> DownloadWorkflowResult:
     """Download imagery for all S2 child items in a catalog.
 
-    This is the core orchestration function used by both `download-images` command
-    and `create-dataset` pipeline.
+    This is the core orchestration function used by the `download-images` and
+    `create-dataset` commands and the `ftwd run` pipeline.
 
     Scenes are fetched on a thread pool; the STAC writes that follow each download
     stay on the calling thread, since the two child items of one chip update the
@@ -127,6 +129,10 @@ def download_imagery_for_catalog(
         on_progress: Optional callback (current, total) for progress updates
         show_progress_bar: If True, show tqdm progress bar
         workers: Number of scenes to download concurrently
+        keep_remote_refs: Keep the remote band assets and add the local file as a
+            `clipped` asset, instead of replacing them with a local `image`
+        on_log: Optional callback receiving each download's log lines, one scene
+            at a time on the calling thread
 
     Returns:
         DownloadWorkflowResult with success/skipped/failed counts and details
@@ -175,11 +181,15 @@ def download_imagery_for_catalog(
             return download_task_scene(task, bands=band_list, resolution=resolution)
 
         def apply(outcome: ParallelOutcome[DownloadTask, DownloadResult]) -> None:
+            if on_log:
+                for message in outcome.task.logs:
+                    on_log(message)
             _record_download(
                 outcome,
                 result=result,
                 band_list=band_list,
                 generate_thumbnails=can_generate_thumbnail,
+                keep_remote_refs=keep_remote_refs,
             )
             advance()
 
@@ -203,7 +213,7 @@ class DownloadTask:
     item: pystac.Item
     item_path: Path
     bbox: tuple[float, ...]
-    season: Literal["planting", "harvest"]
+    season: str
     base_id: str
     output_filename: str
     output_path: Path
@@ -227,12 +237,12 @@ def skip_download_reason(item: pystac.Item, item_path: Path, *, resume: bool) ->
 
 
 def build_download_task(item: pystac.Item, item_path: Path) -> DownloadTask:
-    """Derive the season and output paths for one child item."""
-    season: Literal["planting", "harvest"] = (
-        "planting" if item.id.endswith("_planting_s2") else "harvest"
-    )
-    base_id = item.id.replace("_planting_s2", "").replace("_harvest_s2", "")
-    output_filename = f"{base_id}_{season}_image_s2.tif"
+    """Derive the slot and output paths for one child item."""
+    parsed = parse_child_id(item.id)
+    if parsed is None:
+        raise ValueError(f"Not an imagery child item: {item.id}")
+    base_id, season = parsed
+    output_filename = image_filename(base_id, season)
 
     return DownloadTask(
         item=item,
@@ -277,6 +287,7 @@ def _record_download(
     result: DownloadWorkflowResult,
     band_list: list[str],
     generate_thumbnails: bool,
+    keep_remote_refs: bool = False,
 ) -> None:
     """Update the STAC items for one finished download (calling thread only).
 
@@ -298,19 +309,35 @@ def _record_download(
         return
 
     try:
-        process_downloaded_scene(
-            item=task.item,
-            item_path=task.item_path,
-            output_path=task.output_path,
-            output_filename=task.output_filename,
-            band_list=band_list,
-            season=task.season,
-            base_id=task.base_id,
-            generate_thumbnails=generate_thumbnails,
-        )
+        if keep_remote_refs:
+            _add_clipped_asset(task, band_list)
+        else:
+            process_downloaded_scene(
+                item=task.item,
+                item_path=task.item_path,
+                output_path=task.output_path,
+                output_filename=task.output_filename,
+                band_list=band_list,
+                season=task.season,
+                base_id=task.base_id,
+                generate_thumbnails=generate_thumbnails,
+            )
     except Exception as err:  # reported per item, like a failed download
         result.failed += 1
         result.failed_details.append({"item": task.item.id, "error": str(err)})
         return
 
     result.successful += 1
+
+
+def _add_clipped_asset(task: DownloadTask, band_list: list[str]) -> None:
+    """Add the local file as a `clipped` asset, keeping the remote band refs."""
+    task.item.assets["clipped"] = pystac.Asset(
+        href=f"./{task.output_filename}",
+        media_type="image/tiff; application=geotiff; profile=cloud-optimized",
+        title=f"Clipped {len(band_list)}-band image ({','.join(band_list)})",
+        roles=["data"],
+    )
+    # Not save_object: it resolves the catalog root, which a staged item's
+    # published root href cannot reach.
+    write_item(task.item, task.item_path)
