@@ -38,12 +38,11 @@ def convert_previews(catalog_dir: str, dry_run: bool, workers: int, verbose: boo
 
     Each preview is re-rendered from the imagery it was made from -- the chip's
     local clipped GeoTIFF when there is one, otherwise its remote scene -- so the
-    result is compressed once rather than re-encoded from an already-lossy JPEG.
+    old JPEG is not transcoded. Overlay composition re-encodes its WebP base.
     The chip item and its season children are repointed at the WebP, and only then
     is the superseded .jpg removed.
 
-    Chips that already have only WebP previews are skipped, so the command is safe
-    to re-run and resumes cleanly after an interruption.
+    Converted chips are skipped; reruns retry remaining JPEGs.
 
     \b
     CATALOG_DIR: Path to the collection directory (holding collection.json)
@@ -67,8 +66,8 @@ def convert_previews(catalog_dir: str, dry_run: bool, workers: int, verbose: boo
     if dry_run:
         click.echo(
             f"Would convert {result.chips_converted} chips "
-            f"({result.previews_written} previews, {result.legacy_removed} JPEGs removed), "
-            f"{result.skipped} skipped."
+            f"({result.previews_written} previews, {result.legacy_removed} JPEGs removed); "
+            f"{result.skipped} skipped, {result.failed} failed."
         )
     else:
         click.echo(conversion_summary_line(result))

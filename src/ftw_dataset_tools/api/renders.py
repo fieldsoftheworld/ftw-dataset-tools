@@ -67,9 +67,9 @@ _CATEGORICAL = frozenset({"semantic_2class", "semantic_3class", "decode_boundary
 _DEFAULT_BACKGROUND = 0
 
 #: Mask kinds whose background pixel is the dataset's ``background_class_value``
-#: (3 for presence-only labels). The DECODE layers always fold their background
-#: into 0 -- see ``assets.MASK_CLASSES`` and ``api.decode`` -- so they are absent.
-_DATASET_BACKGROUND_KINDS = frozenset({"semantic_2class", "semantic_3class", "instance"})
+#: (3 for presence-only labels). The DECODE layers and the instance mask always
+#: use 0 -- see ``assets.MASK_CLASSES`` and ``api.decode`` -- so they are absent.
+_DATASET_BACKGROUND_KINDS = frozenset({"semantic_2class", "semantic_3class"})
 
 #: Ramp for the continuous rasters; a built-in of the render extension.
 _CONTINUOUS_COLORMAP = "viridis"
@@ -148,9 +148,7 @@ def _instance_rescale(band: dict) -> list[list[float]]:
 
     Instance ids are global rather than per-chip, so a chip whose ids all sit in
     the millions needs its own minimum, not zero, as the low end of the ramp. The
-    background is excluded when the mask's statistics are computed, whether or not
-    the band declares it as nodata: a presence-only mask leaves the band's nodata
-    unset, because its background value can collide with a real instance id.
+    background, always 0, is the band's nodata and so is excluded from the statistics.
     """
     statistics = band.get("statistics") or {}
     minimum = statistics.get("minimum")
@@ -366,7 +364,7 @@ def build_item_renders(item: pystac.Item, background_value: int = _DEFAULT_BACKG
     Args:
         item: Chip item whose label and imagery assets have already been added and
             decorated with ``raster:bands``.
-        background_value: Pixel value the class-valued masks use for background
+        background_value: Pixel value the semantic masks use for background
             (3 for presence-only labels).
 
     Returns:
@@ -392,7 +390,7 @@ def build_collection_renders(background_value: int = _DEFAULT_BACKGROUND) -> dic
     ``rescale`` entirely; the item's own render carries the real stretch.
 
     Args:
-        background_value: Pixel value the class-valued masks use for background.
+        background_value: Pixel value the semantic masks use for background.
     """
     return {
         asset_key: _render_for(render_key, asset_key, None, background_value)

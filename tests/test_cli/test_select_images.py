@@ -297,8 +297,92 @@ class TestSelectImagesCropCalendarWarmup:
         result = CliRunner().invoke(cli, ["select-images", str(dataset_dir), "--year", "2024"])
 
         assert result.exit_code == 0, result.output
-        assert "No chips need processing" in result.output
+        assert "Other skipped: 1" in result.output
         crop_calendar_warmup.assert_not_called()
+
+
+def _no_scenes(*, chip_id: str, bbox, year: int, **_kwargs):
+    from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
+    from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
+
+    return SceneSelectionResult(
+        chip_id=chip_id,
+        bbox=bbox,
+        year=year,
+        crop_calendar=CropCalendarDates(planting_day=1, harvest_day=180),
+        skipped_reason="No cloud-free scenes",
+    )
+
+
+class TestSelectImagesSharedWorkflow:
+    """select-images runs through select_imagery_for_catalog."""
+
+    def _dataset(self, tmp_path: Path, item_id: str = "ftw-item1_2023") -> tuple[Path, Path]:
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        _write_minimal_collection(dataset_dir / "collection.json")
+        item_path = _write_chip_item(dataset_dir / "chips" / "33UXP" / item_id, item_id)
+        return dataset_dir, item_path
+
+    def _record_years(self, monkeypatch) -> dict[str, int]:
+        from ftw_dataset_tools.api.imagery import selection_workflow
+
+        years: dict[str, int] = {}
+
+        def fake_select(*, chip_id: str, year: int, **kwargs):
+            years[chip_id] = year
+            return _no_scenes(chip_id=chip_id, year=year, **kwargs)
+
+        monkeypatch.setattr(selection_workflow, "select_scenes_for_chip", fake_select)
+        return years
+
+    def test_year_is_taken_from_chip_id(self, tmp_path: Path, monkeypatch) -> None:
+        dataset_dir, _ = self._dataset(tmp_path)
+        years = self._record_years(monkeypatch)
+
+        result = CliRunner().invoke(cli, ["select-images", str(dataset_dir)])
+
+        assert result.exit_code == 0, result.output
+        assert years == {"ftw-item1_2023": 2023}
+        assert "No cloud-free scenes: 1" in result.output
+
+    def test_single_chip_mode_selects_that_chip(self, tmp_path: Path, monkeypatch) -> None:
+        _, item_path = self._dataset(tmp_path)
+        years = self._record_years(monkeypatch)
+
+        result = CliRunner().invoke(cli, ["select-images", str(item_path), "--year", "2024"])
+
+        assert result.exit_code == 0, result.output
+        assert years == {"ftw-item1_2023": 2024}
+
+    def test_on_missing_fail_exits_with_message(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api.imagery import selection_workflow
+
+        dataset_dir, _ = self._dataset(tmp_path)
+        monkeypatch.setattr(selection_workflow, "select_scenes_for_chip", _no_scenes)
+
+        result = CliRunner().invoke(
+            cli, ["select-images", str(dataset_dir), "--on-missing", "fail"]
+        )
+
+        assert result.exit_code == 1
+        assert "No cloud-free scenes for ftw-item1_2023" in result.output
+
+    def test_writes_report(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api.imagery import selection_workflow
+
+        dataset_dir, _ = self._dataset(tmp_path)
+        monkeypatch.setattr(selection_workflow, "select_scenes_for_chip", _no_scenes)
+        report_path = tmp_path / "report.json"
+
+        result = CliRunner().invoke(
+            cli, ["select-images", str(dataset_dir), "--output-report", str(report_path)]
+        )
+
+        assert result.exit_code == 0, result.output
+        report = json.loads(report_path.read_text())
+        assert report["successful"] == 0
+        assert report["skipped"][0]["reason"] == "No cloud-free scenes"
 
 
 class TestSearchBackendOption:
@@ -332,11 +416,11 @@ class TestSearchBackendOption:
                 work(job)
 
         monkeypatch.setattr(
-            "ftw_dataset_tools.commands.select_images.run_chip_selection",
+            "ftw_dataset_tools.api.imagery.selection_workflow.run_chip_selection",
             fake_run_chip_selection,
         )
         monkeypatch.setattr(
-            "ftw_dataset_tools.commands.select_images.run_in_parallel",
+            "ftw_dataset_tools.api.imagery.selection_workflow.run_in_parallel",
             fake_run_in_parallel,
         )
 

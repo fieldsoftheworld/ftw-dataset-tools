@@ -141,8 +141,8 @@ The `create-dataset` command is a pipeline that combines multiple standalone ope
 
 | Standalone Command | `create-dataset` Function | Shared `api/` function |
 |--------------------|---------------------------|------------------------|
-| `download-images`  | calls `download_imagery_for_catalog()` | `download_imagery_for_catalog()` (also used by `ftwd run`); `download-images` keeps its own loop for `--keep-remote-refs` but shares `build_download_task()` / `download_task_scene()` / `run_in_parallel()` |
-| `select-images`    | calls `select_imagery_for_catalog()` | `select-images` keeps its own loop (per-chip years) but shares `run_chip_selection()` / `create_child_items_from_selection()` / `has_existing_scenes()` / `run_in_parallel()` |
+| `download-images`  | calls `download_imagery_for_catalog()` | `download_imagery_for_catalog()` (also used by `ftwd run`) |
+| `select-images`    | calls `select_imagery_for_catalog()` | `select_imagery_for_catalog()` (also used by `ftwd run`) |
 
 **IMPORTANT:** When adding or modifying functionality in these commands:
 

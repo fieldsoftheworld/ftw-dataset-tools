@@ -51,8 +51,43 @@ def boundaries_with_datetime(tmp_path: Path) -> Path:
     return path
 
 
+@pytest.fixture
+def boundaries_with_null_datetime(boundaries_with_datetime: Path, tmp_path: Path) -> Path:
+    """Boundary polygons whose determination_datetime column is entirely NULL."""
+    gdf = gpd.read_parquet(boundaries_with_datetime)
+    gdf["determination_datetime"] = gdf["determination_datetime"].astype("datetime64[ns]")
+    gdf.loc[:, "determination_datetime"] = None
+    path = tmp_path / "boundaries_null_datetime.parquet"
+    gdf.to_parquet(path)
+    return path
+
+
+def _create_masks_args(
+    chips: Path, boundaries: Path, lines: Path, output_dir: Path, *extra: str
+) -> list[str]:
+    return [
+        "create-masks",
+        str(chips),
+        str(boundaries),
+        str(lines),
+        "--output-dir",
+        str(output_dir),
+        "--field-dataset",
+        "test",
+        "--mask-type",
+        "semantic_2_class",
+        "--min-coverage",
+        "0.0",
+        *extra,
+    ]
+
+
 class TestCreateMasksCommand:
     """Tests for create-masks command."""
+
+    def test_min_coverage_defaults_to_one_percent(self) -> None:
+        params = {p.name: p for p in cli.commands["create-masks"].params}
+        assert params["min_coverage"].default == 1.0
 
     def test_help(self) -> None:
         """Test --help works."""
@@ -399,3 +434,43 @@ class TestCreateMasksCommand:
         assert (chip_dir / "grid_001_2021.json").exists()
         # The year-less layout the pipeline never writes must not appear.
         assert not (output_dir / "chips" / "other" / "grid_001").exists()
+
+    def test_all_null_datetime_column_fails_fast(
+        self,
+        sample_chips_with_coverage: Path,
+        boundaries_with_null_datetime: Path,
+        sample_boundary_lines_geoparquet: Path,
+        tmp_path: Path,
+    ) -> None:
+        output_dir = tmp_path / "masks"
+        args = _create_masks_args(
+            sample_chips_with_coverage,
+            boundaries_with_null_datetime,
+            sample_boundary_lines_geoparquet,
+            output_dir,
+        )
+        result = CliRunner().invoke(cli, args)
+        assert result.exit_code != 0
+        assert "no usable values" in result.output
+        assert not list(output_dir.rglob("*.tif"))
+
+    def test_all_null_datetime_column_with_year_succeeds(
+        self,
+        sample_chips_with_coverage: Path,
+        boundaries_with_null_datetime: Path,
+        sample_boundary_lines_geoparquet: Path,
+        tmp_path: Path,
+    ) -> None:
+        output_dir = tmp_path / "masks"
+        args = _create_masks_args(
+            sample_chips_with_coverage,
+            boundaries_with_null_datetime,
+            sample_boundary_lines_geoparquet,
+            output_dir,
+            "--year",
+            "2024",
+        )
+        result = CliRunner().invoke(cli, args)
+        assert result.exit_code == 0, result.output
+        assert (output_dir / "collection.json").exists()
+        assert (output_dir / "chips" / "other" / "grid_001_2024").exists()

@@ -16,9 +16,8 @@ from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
 from ftw_dataset_tools.api.imagery.catalog_ops import IMAGERY_ASSET_KEYS
 from ftw_dataset_tools.api.imagery.settings import CHILD_ITEM_BANDS
 from ftw_dataset_tools.api.imagery.thumbnails import (
-    LEGACY_PREVIEW_MEDIA_TYPE,
-    PREVIEW_MEDIA_TYPE,
-    PREVIEW_SUFFIX,
+    PREVIEW_EXTENSIONS,
+    preview_media_type,
 )
 from ftw_dataset_tools.api.stac import MEDIA_TYPE_COG, _add_portolan_schema
 from ftw_dataset_tools.api.stac_items import write_item
@@ -404,15 +403,13 @@ def attach_season_to_parent(
 #: its next STAC rerun must keep finding it, or the rerun silently drops the
 #: thumbnail asset from every item. Nothing writes a ``.jpg`` preview any more --
 #: these entries only read what is already there.
-_THUMBNAIL_CANDIDATES = (
-    (f"_overlay{PREVIEW_SUFFIX}", PREVIEW_MEDIA_TYPE, "Chip preview with field overlay"),
-    (
-        f"_planting_image_s2{PREVIEW_SUFFIX}",
-        PREVIEW_MEDIA_TYPE,
-        "Chip preview (planting season)",
-    ),
-    ("_overlay.jpg", LEGACY_PREVIEW_MEDIA_TYPE, "Chip preview with field overlay"),
-    ("_planting_image_s2.jpg", LEGACY_PREVIEW_MEDIA_TYPE, "Chip preview (planting season)"),
+_THUMBNAIL_CANDIDATES = tuple(
+    (f"{stem}{ext}", preview_media_type(ext), title)
+    for ext in PREVIEW_EXTENSIONS
+    for stem, title in (
+        ("_overlay", "Chip preview with field overlay"),
+        ("_planting_image_s2", "Chip preview (planting season)"),
+    )
 )
 
 
