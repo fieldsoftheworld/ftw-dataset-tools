@@ -535,6 +535,12 @@ For reprojecting GeoParquet files to a different CRS, use [geoparquet-io](https:
 gpio reproject input.parquet -o output.parquet --target-crs EPSG:4326
 ```
 
+## PlanetScope imagery
+
+Use `ftwd planet-scenes` to search, activate, and crop PlanetScope SR and UDM2
+for fiboa or other GeoParquet polygons, with resumable stages and CLI options. See the
+[PlanetScope download guide](docs/planet-scenes.md).
+
 ## Development
 
 ```bash
