@@ -24,7 +24,7 @@ def quality(path: Path, geometry: dict, min_clear: float = 0.95) -> dict:
             raise ValueError("Expected an eight-band uint8 UDM2 raster")
         data = source.read()
         inside = aoi_mask(geometry, source.crs, source.transform, source.height, source.width)
-        # Do not use read_masks(): a nodata=0 source incorrectly masks valid class zeros.
+
     total = int(inside.sum())
     if not total:
         raise ValueError("AOI contains no pixel centers")

@@ -26,11 +26,11 @@ def validate_dates(row: dict) -> None:
         raise ValueError(f"Require start <= target_date < end for {row['id']}")
 
 
-def _area(geometry: object) -> float:
+def geodesic_area(geometry: object) -> float:
     if geometry.is_empty:
         return 0.0
     if geometry.geom_type in {"GeometryCollection", "MultiPolygon"}:
-        return sum(_area(part) for part in geometry.geoms)
+        return sum(geodesic_area(part) for part in geometry.geoms)
     if geometry.geom_type != "Polygon":
         return 0.0
     return abs(Geod(ellps="WGS84").geometry_area_perimeter(orient(geometry))[0])
@@ -58,13 +58,13 @@ def search_candidates(
         json={"item_types": ["PSScene"], "filter": {"type": "AndFilter", "config": filters}},
     )
     polygon = shape(row["geometry"])
-    total_area = _area(polygon)
+    total_area = geodesic_area(polygon)
     target = utc(row["target_date"])
     candidates = {}
     visited = set()
     while True:
         for item in page["features"]:
-            coverage = _area(polygon.intersection(shape(item["geometry"]))) / total_area
+            coverage = geodesic_area(polygon.intersection(shape(item["geometry"]))) / total_area
             if coverage < min_coverage:
                 continue
             props = item["properties"]

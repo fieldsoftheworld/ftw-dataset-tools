@@ -1,6 +1,7 @@
 """Offline pipeline tests with real raster crops and mocked Planet HTTP responses."""
 
 import json
+from datetime import date
 
 import httpx
 import numpy as np
@@ -18,6 +19,7 @@ from ftw_dataset_tools.api.planet.scenes import ASSETS, asset_url, search_candid
 from ftw_dataset_tools.api.planet.state import latest
 from ftw_dataset_tools.api.planet.udm import quality
 from ftw_dataset_tools.cli import cli
+from tests.test_api.test_planet_inputs import write_fields
 
 
 @pytest.fixture
@@ -163,13 +165,26 @@ def test_cli_pipeline_and_resume(tmp_path, monkeypatch, aoi, rasters):
         "PlanetClient",
         lambda: PlanetClient("secret", transport=httpx.MockTransport(handle)),
     )
-    path = tmp_path / "aois.jsonl"
-    path.write_text(json.dumps(aoi) + "\n")
+    path = tmp_path / "fields.parquet"
+    write_fields(
+        path,
+        [{"field_id": aoi["id"], "geometry": aoi["geometry"], "survey_date": date(2024, 1, 15)}],
+        crs="EPSG:3857",
+        geometry_column="boundary",
+    )
     workdir = tmp_path / "run"
     runner = CliRunner()
-    for arguments in (["search", str(path)], ["activate"], ["extract"], ["quality"]):
+    for arguments in (
+        ["search", str(path), "--id-column", "field_id", "--date-column", "survey_date"],
+        ["activate"],
+        ["extract"],
+        ["quality"],
+    ):
         result = runner.invoke(cli, ["planet-scenes", *arguments, "--work-dir", str(workdir)])
         assert result.exit_code == 0, result.output
+    before_search = len(calls)
+    assert workflow.search(path, workdir, id_column="field_id", date_column="survey_date") == 0
+    assert len(calls) == before_search
     assert latest(workdir / "quality.jsonl")[aoi["id"]]["usable"]
     output = output_path(workdir, aoi["id"], ASSETS[0])
     with rasterio.open(output) as source:
@@ -180,14 +195,14 @@ def test_cli_pipeline_and_resume(tmp_path, monkeypatch, aoi, rasters):
     before = len(calls)
     assert workflow.extract(workdir) == 0
     assert len(calls) == before
-    # Delete only UDM2: SR remains untouched, even though the scene journal says ok.
+
     timestamp = output.stat().st_mtime_ns
     output_path(workdir, aoi["id"], ASSETS[1]).unlink()
     assert workflow.extract(workdir) == 0
     assert output.stat().st_mtime_ns == timestamp
     assert len(calls) == before + 1
     workflow.select_alternate(workdir, aoi["id"], 1)
-    assert workflow.report_quality(workdir) == 1  # stale companion cannot be scored
+    assert workflow.report_quality(workdir) == 1
     assert workflow.extract(workdir) == 0
     with rasterio.open(output) as source:
         assert source.tags()["planet_item_id"] == "scene2"
@@ -219,8 +234,8 @@ def test_udm_zero_class_values_blackfill_and_polygon_denominator(tmp_path):
     data = np.zeros((8, 2, 2), dtype="uint8")
     data[0] = 1
     data[6] = 100
-    data[7, 0, 0] = 1  # blackfill, even if the clear band has a stale 1
-    data[7, 1, 1] = 4  # anomalous blue pixel, observed but unusable
+    data[7, 0, 0] = 1
+    data[7, 1, 1] = 4
     write_raster(path, data, {"crs": "EPSG:4326", "transform": from_origin(0, 2, 1, 1)}, "test")
     result = quality(path, mapping(box(0, 0, 2, 2)))
     assert result["clear"] == 0.75

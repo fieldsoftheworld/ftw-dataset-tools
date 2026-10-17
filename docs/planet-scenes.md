@@ -1,158 +1,109 @@
-# PlanetScope SR and UDM2 downloads
+# PlanetScope downloads
 
-`ftwd planet-scenes` turns dated AOIs into four-band PlanetScope surface
-reflectance crops and eight-band UDM2 companions. Search, activation, extraction,
-and quality reporting run independently, locally or as SLURM array jobs. Python
-functions live in `ftw_dataset_tools.api.planet`; the CLI wraps those functions.
+`ftwd planet-scenes` downloads four-band surface reflectance and eight-band
+UDM2 crops for polygons from fiboa/other GeoParquet files or JSONL. Each stage
+is also a Python function in `ftw_dataset_tools.api.planet.scene_workflow`.
 
-## Install and authenticate
+## Run
 
 ```bash
 uv sync --locked --dev
 export PL_API_KEY='your Planet API key'
-uv run ftwd planet-scenes --help
+
+uv run ftwd planet-scenes search fields.parquet --work-dir downloads/scenes \
+    --start 2024-06-01 --end 2024-07-01 --target-date 2024-06-15
+uv run ftwd planet-scenes activate --work-dir downloads/scenes
+uv run ftwd planet-scenes extract --work-dir downloads/scenes --workers 4
+uv run ftwd planet-scenes quality --work-dir downloads/scenes
 ```
 
-`PLANET_API_KEY` is also accepted. Supply credentials through your shell or
-cluster secret mechanism. No hardcoded account, partition, filesystem path, or
-credentials are required. The account needs access to PSScene
-`ortho_analytic_4b_sr` and `ortho_udm2`. Activation and access to imagery remain
-subject to Planet permissions and quota.
+Activation is optional; extraction activates assets when needed. Both
+`PL_API_KEY` and `PLANET_API_KEY` are accepted. The account needs download
+access to `ortho_analytic_4b_sr` and `ortho_udm2`; Planet permissions and quota
+apply. Download URLs stay in memory rather than being saved in journals.
 
-## Input
+## Polygon and date options
 
-Use UTF-8 JSONL with one object per AOI/time window:
+GeoParquet geometry is read as WKB using its declared CRS and transformed to
+WGS84 for search. The primary geometry column is detected automatically.
+
+| Argument | Use |
+| --- | --- |
+| `--id-column` | Polygon identifier; defaults to `id` |
+| `--geometry-column` | Override the primary geometry column |
+| `--input-crs` | Override the input CRS; required if explicitly unknown |
+| `--limit` | Process only the first N polygons for a small trial |
+| `--date-column` | Per-polygon target date; defaults to fiboa's `determination_datetime` |
+| `--target-date` | Override the target for all polygons |
+| `--start`, `--end` | Override the search interval for all polygons |
+| `--search-days` | Days on each side of the target when bounds are absent; default 30 |
+| `--max-cloud` | Scene cloud fraction ceiling; default 0.1 |
+| `--min-coverage` | Minimum fraction of polygon covered by the scene; default 0.99 |
+| `--max-candidates` | Number of ranked alternatives to retain; default 10 |
+
+A row's `target_date`, `start`, and `end` columns can also supply dates. CLI
+values take precedence. Without a target, an explicit start/end pair uses its
+midpoint. Intervals are `[start, end)`; naive dates mean UTC, and explicit
+UTC offsets are preserved correctly. No seasonal windows or countries are
+hardcoded. JSONL accepts the same attributes plus GeoJSON `geometry`:
 
 ```json
-{"id":"example_a","geometry":{"type":"Polygon","coordinates":[[[-90.01,38.60],[-90.00,38.60],[-90.00,38.61],[-90.01,38.61],[-90.01,38.60]]]},"start":"2024-06-01","end":"2024-07-01","target_date":"2024-06-15"}
+{"id":"parcel-1","geometry":{"type":"Polygon","coordinates":[[[-90.01,38.60],[-90.00,38.60],[-90.00,38.61],[-90.01,38.61],[-90.01,38.60]]]},"target_date":"2024-06-15"}
 ```
 
-Geometry is an EPSG:4326 Polygon or MultiPolygon; split antimeridian-crossing
-AOIs first. IDs are unique, start with a letter/digit, and use only letters,
-digits, `.`, `_`, and `-`. Give each seasonal window its own ID. The interval is
-`start <= acquisition < end`; the target must fall inside it. Naive dates mean
-UTC; timezone offsets are normalized. Bounds are never expanded automatically.
-
-For existing FTW country indexes:
-
-```bash
-uv run ftwd planet-scenes manifest data/ftw aois.jsonl
-```
-
-The converter reads `COUNTRY/index.jsonl` containing `id`, `geometry_4326`,
-`win_a_date`, `win_b_date`, and `[start, end]` in `win_a_range`/`win_b_range`.
-Check the source index's end-date convention against the half-open interval
-above. Output IDs include country and window. The converter refuses to
-overwrite a manifest. For other catalogs, export those six manifest fields
-directly; these commands do not alter STAC items or the Sentinel-2 workflow.
-
-## Local workflow
-
-```bash
-uv run ftwd planet-scenes search aois.jsonl --work-dir runs/scenes --workers 4
-uv run ftwd planet-scenes activate --work-dir runs/scenes --workers 4
-uv run ftwd planet-scenes extract --work-dir runs/scenes --workers 4
-uv run ftwd planet-scenes quality --work-dir runs/scenes
-```
-
-Search uses standard-quality scenes, a scene cloud ceiling of 0.1 and AOI
-coverage of at least 0.99. It follows pagination and ranks by time distance,
-cloud fraction, then scene ID. Up to ten candidates are retained. Tune with
-`--max-cloud`, `--min-coverage`, and `--max-candidates`.
-
-`activate` is an optional prewarming stage. SR and UDM2 are independent tasks,
-deduplicated by scene/asset, with bounded polling (`--activation-timeout`,
-default 3600 seconds per activation). `extract` can activate assets itself.
-It groups all AOIs sharing a scene, opens each asset once, and reads only the
-required windows. URLs are obtained afresh, kept in memory, and refreshed once
-if a read fails. Request retries are bounded and cover HTTP 429/5xx and transport
-errors; access errors fail immediately.
+IDs must be unique and non-null. IDs containing filename-unsafe characters
+receive stable hashed output names; `inputs.json` retains their `source_id`.
+Invalid polygons are rejected. Split antimeridian-crossing polygons first.
 
 ## Outputs and recovery
 
-```text
-runs/scenes/
-  inputs.json                   # frozen manifest
-  search/config.json            # frozen search settings and shard count
-  search/shard-00000.jsonl       # candidates and empty/failed searches
-  activate/shard-00000.jsonl     # activation status, no signed URLs
-  extract/shard-00000.jsonl      # scene status and pending AOI/assets
-  selections.jsonl              # optional alternate ranks
-  quality.jsonl                 # append-only current quality observations
-  images/ID_sr.tif
-  images/ID_udm2.tif
-```
+Search follows all result pages, ranks candidates by date distance and cloud
+fraction, and saves alternatives in `search/shard-*.jsonl`. Extraction groups
+polygons by scene and opens each asset once for range reads. Outputs are
+`images/ID_sr.tif` and `images/ID_udm2.tif`, cropped to the polygon's bounding
+box on each asset's native grid. No label-grid reprojection is applied.
 
-Crops preserve each source's native CRS, pixel grid, bands, and data type.
-They cover the AOI bounding box; they are not warped to a label grid. The SR
-and UDM2 source grids should be checked before pixelwise use. Pixels beyond
-the UDM2 scene edge are marked as blackfill. Each output records its source
-scene/asset and input signature. Atomic writes preserve old outputs if an
-attempt fails; old outputs with a different signature are not current data.
+Rerun the same command after interruption. Failed/empty searches retry;
+missing or corrupt SR and UDM2 crops are repaired independently. Activation
+polling is bounded by `--activation-timeout` (3600 seconds by default). HTTP
+429/5xx and transport errors retry with bounded backoff. Failed raster reads
+retry once with a refreshed URL. Atomic writes preserve earlier files, and
+input signatures prevent those files from being mistaken for current outputs.
+Changed polygons, dates, or search settings require a new work directory.
 
-Rerun a failed stage with the same arguments. Completed searches are reused;
-failed and empty searches retry. An empty search is a recorded outcome, not a
-network error. Finish all search shards before activation/extraction. Repeated
-extracts validate files, not just progress records: missing/corrupt SR or UDM2
-is repaired independently. Changed input geometry, dates, or search settings
-require a new work directory. Worker counts may change. Keep a single writer
-per stage/shard and run stages in order. Never run two extracts of the same
-shard simultaneously or edit selections while extraction is running.
-
-Read journals with `ftw_dataset_tools.api.planet.state.latest(path)` (last row
-per `id` wins), or `collect(directory)` for all shard journals. Failed jobs
-produce a nonzero exit code, with credential-safe error class names. Inspect
-the job ID and retry stage when diagnosing a failure. A torn final journal
-line can be recovered; malformed input and interior corruption fail explicitly.
-
-Quality fractions use AOI pixel centers, including polygon holes and blackfill
-in the denominator. Band 8 is decoded as a bit field: bit 0 is blackfill, and
-any nonzero value is unusable. Confidence averages only observed pixels.
+Quality is written to `quality.jsonl`. Fractions use polygon pixel centers,
+including blackfill in the denominator; confidence averages observed pixels.
+UDM2's bit-encoded unusable band is handled separately from its class bands.
 `usable` requires clear fraction >= `--min-clear` (default 0.95) and unusable
-fraction <= its complement. UDM2.1's retained heavy-haze band may be all zero.
-A quality failure does not delete data or automatically change a selected scene.
-
-For a cloudy patch, inspect its cached candidate list and choose an alternate:
+fraction <= its complement. UDM2.1's heavy-haze band remains present but is zero.
+To replace a cloudy selection with a cached alternative:
 
 ```bash
-uv run ftwd planet-scenes select example_a --rank 1 --work-dir runs/scenes
-uv run ftwd planet-scenes extract --work-dir runs/scenes
-uv run ftwd planet-scenes quality --work-dir runs/scenes
+uv run ftwd planet-scenes select parcel-1 --rank 1 --work-dir downloads/scenes
+uv run ftwd planet-scenes extract --work-dir downloads/scenes
+uv run ftwd planet-scenes quality --work-dir downloads/scenes
 ```
 
-Ranks are zero-based. Changing the selection replaces both companions on the
-next successful extract; stale UDM2 is rejected by the quality stage until then.
-Rerun quality after each recovery. Retain `inputs.json`, search results,
-selections, and quality records alongside the imagery for provenance.
+Ranks are zero-based. Both companions are replaced after selection changes.
+Quality refuses to score a stale companion. Journals are append-only; read
+current records with `state.latest(path)` or `state.collect(directory)`.
+Failures return a nonzero exit code and record error types without signed URLs.
+An empty search is recorded separately from a request failure.
 
-## SLURM
+## Parallel work
 
-Install the environment once on a filesystem visible to compute nodes. Set
-your scheduler account/partition at submission time. From the repository root:
+`--workers` controls local threads. Search, activation, and extraction also
+accept `--shard-id` and `--num-shards`, for use with any job runner. Search
+shards by polygon ID; activation/extraction shard by scene ID using stable
+hashes. Finish every shard of a stage before starting the next. Keep one
+writer per shard, retain the shard count when retrying, and do not change
+selections during extraction. Quality runs in one process. Combined API load
+is the number of active jobs times workers.
 
-```bash
-mkdir -p logs
-export MANIFEST="$PWD/aois.jsonl" WORK_DIR="$PWD/runs/scenes" NUM_SHARDS=8 WORKERS=4
-search_job=$(sbatch --parsable --array=0-7 examples/planet-scenes/stage.sbatch search)
-activate_job=$(sbatch --parsable --array=0-7 --dependency=afterok:$search_job examples/planet-scenes/stage.sbatch activate)
-extract_job=$(sbatch --parsable --array=0-7 --dependency=afterok:$activate_job examples/planet-scenes/stage.sbatch extract)
-sbatch --dependency=afterok:$extract_job examples/planet-scenes/stage.sbatch quality
-```
+Offline tests run the CLI from projected GeoParquet through real raster crops
+and UDM2 quality, with mocked Planet responses. Live account access, quota,
+and throughput require a small authorized download before scaling up.
 
-Search shards by AOI ID; activation/extraction shard by scene ID using SHA-256,
-so Python hash randomization cannot duplicate or omit scenes. Use the same
-shard count when rerunning a stage. Quality uses one process. The template
-uses the already-installed `.venv/bin/ftwd`; adjust `FTWD` if needed. Total API
-load is array concurrency times workers: start conservatively, limit concurrent
-array tasks with `%N`, and reduce workers if rate limited.
-
-## Validation and references
-
-Offline tests exercise paginated search, deadline/refresh behavior, real raster
-crops, companion recovery, scene grouping, changed selections, and UDM2 masks.
-They do not prove account access, quota, or cluster throughput. Before a large
-run, use a single authorized AOI and inspect SR/UDM2 pixels and quality output.
-
-See Planet's [Data API search](https://docs.planet.com/develop/apis/data/item-search/),
-[asset activation](https://docs.planet.com/develop/apis/data/items/), and
+References: [Data API search](https://docs.planet.com/develop/apis/data/item-search/),
+[activation](https://docs.planet.com/develop/apis/data/items/),
 [UDM band definitions](https://docs.planet.com/data/imagery/udm/).

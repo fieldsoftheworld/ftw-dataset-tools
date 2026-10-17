@@ -8,8 +8,6 @@ from collections.abc import Callable
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from shapely.geometry import shape
-
 from ftw_dataset_tools.api.imagery.parallel import ParallelOutcome, run_in_parallel
 from ftw_dataset_tools.api.logging_config import get_logger
 
@@ -45,30 +43,6 @@ def read_jsonl(path: Path, *, journal: bool = False) -> list[dict]:
     return rows
 
 
-def manifest(path: Path) -> list[dict]:
-    """Read unique AOIs with explicit WGS84 Polygon/MultiPolygon geometry."""
-    rows = read_jsonl(path)
-    seen = set()
-    for row in rows:
-        identifier = safe_id(row["id"])
-        if identifier in seen:
-            raise ValueError(f"Duplicate AOI id: {identifier}")
-        seen.add(identifier)
-        geometry = shape(row["geometry"])
-        if geometry.geom_type not in {"Polygon", "MultiPolygon"} or not geometry.is_valid:
-            raise ValueError(f"Invalid polygon: {identifier}")
-        if geometry.is_empty or geometry.area <= 0:
-            raise ValueError(f"Empty polygon: {identifier}")
-        west, south, east, north = geometry.bounds
-        if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
-            raise ValueError(f"Expected WGS84 coordinates: {identifier}")
-        if east - west > 180:
-            raise ValueError(f"Split antimeridian-crossing AOIs before downloading: {identifier}")
-    if not rows:
-        raise ValueError("The manifest contains no AOIs")
-    return rows
-
-
 def digest(value: object) -> str:
     """Stable content identity for configuration and output provenance."""
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -93,7 +67,7 @@ def bind_config(path: Path, config: dict) -> None:
         try:
             os.link(temporary, path)
         except FileExistsError:
-            if json.loads(path.read_text()) != config:
+            if digest(json.loads(path.read_text())) != digest(config):
                 raise ValueError(f"Settings changed for {path}; use a new work directory") from None
     finally:
         temporary.unlink(missing_ok=True)
@@ -122,7 +96,7 @@ def run_tasks(tasks: list[dict], work: Callable[[dict], dict], journal: Path, wo
         raise ValueError("workers must be between 1 and 32")
     existing = read_jsonl(journal, journal=True)
     journal.parent.mkdir(parents=True, exist_ok=True)
-    # Repair an interrupted tail before appending, so it cannot swallow the next record.
+
     if journal.exists() and not journal.read_bytes().endswith(b"\n"):
         journal.write_text("".join(json.dumps(row) + "\n" for row in existing))
     failures = 0

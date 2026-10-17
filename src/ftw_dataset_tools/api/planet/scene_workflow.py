@@ -2,27 +2,66 @@
 
 import json
 from collections import defaultdict
+from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 from ftw_dataset_tools.api.planet.http import PlanetClient
+from ftw_dataset_tools.api.planet.inputs import read_aois
 from ftw_dataset_tools.api.planet.scene_extract import extract_group, output_path, signature
-from ftw_dataset_tools.api.planet.scenes import ASSETS, asset_url, search_candidates, validate_dates
+from ftw_dataset_tools.api.planet.scenes import (
+    ASSETS,
+    asset_url,
+    search_candidates,
+    utc,
+    validate_dates,
+)
 from ftw_dataset_tools.api.planet.state import (
     bind_config,
     collect,
     in_shard,
     latest,
-    manifest,
-    read_jsonl,
     run_tasks,
     safe_id,
 )
 from ftw_dataset_tools.api.planet.udm import quality
 
 
-def prepare(path: Path, workdir: Path) -> list[dict]:
-    rows = manifest(path)
+def prepare(
+    path: Path,
+    workdir: Path,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    target_date: str | None = None,
+    date_column: str = "determination_datetime",
+    search_days: int = 30,
+    **input_options: Any,
+) -> list[dict]:
+    """Normalize polygon dates and freeze the effective input for resumable runs."""
+    if search_days < 1:
+        raise ValueError("search_days must be positive")
+    rows = read_aois(path, extra_columns=(date_column,), **input_options)
     for row in rows:
+        target = target_date or row.get("target_date") or row.get(date_column)
+        first, last = start or row.get("start"), end or row.get("end")
+        if target is None:
+            if not first or not last:
+                raise ValueError(
+                    f"Supply --target-date, {date_column}, or both --start/--end for {row['source_id']}"
+                )
+            target = (utc(first) + (utc(last) - utc(first)) / 2).isoformat()
+        row["target_date"] = utc(target).isoformat()
+        row["start"] = (
+            utc(first).isoformat()
+            if first
+            else (utc(target) - timedelta(days=search_days)).isoformat()
+        )
+        row["end"] = (
+            utc(last).isoformat()
+            if last
+            else (utc(target) + timedelta(days=search_days)).isoformat()
+        )
         validate_dates(row)
     bind_config(workdir / "inputs.json", {"manifest": rows})
     return rows
@@ -38,11 +77,12 @@ def search(
     max_cloud: float = 0.1,
     min_coverage: float = 0.99,
     max_candidates: int = 10,
+    **input_options: Any,
 ) -> int:
     """Persist ranked candidates. Failures and empty searches are retried on rerun."""
     if not 0 <= max_cloud <= 1 or not 0 < min_coverage <= 1 or max_candidates < 1:
         raise ValueError("Invalid search thresholds or candidate count")
-    rows = prepare(path, workdir)
+    rows = prepare(path, workdir, **input_options)
     bind_config(
         workdir / "search" / "config.json",
         {
@@ -172,26 +212,3 @@ def select_alternate(workdir: Path, identifier: str, rank: int) -> None:
         workdir / "selections.jsonl",
         1,
     )
-
-
-def from_ftw_indexes(root: Path, destination: Path) -> None:
-    """Convert country/index.jsonl seasonal rows to the portable download manifest."""
-    rows = []
-    for path in sorted(root.glob("*/index.jsonl")):
-        country = safe_id(path.parent.name)
-        for patch in read_jsonl(path):
-            for window in ("a", "b"):
-                rows.append(
-                    {
-                        "id": f"{country}_{safe_id(str(patch['id']))}_{window}",
-                        "geometry": patch["geometry_4326"],
-                        "target_date": patch[f"win_{window}_date"],
-                        "start": patch[f"win_{window}_range"][0],
-                        "end": patch[f"win_{window}_range"][1],
-                    }
-                )
-    if not rows:
-        raise ValueError("No country/index.jsonl rows found")
-    # Do not silently replace a colleague's edited manifest.
-    with destination.open("x") as stream:
-        stream.writelines(json.dumps(row) + "\n" for row in rows)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import rasterio
 
-from ftw_dataset_tools.api.planet.http import PlanetClient
+from ftw_dataset_tools.api.planet.http import PlanetClient, PlanetError
 from ftw_dataset_tools.api.planet.raster import (
     COG_OPTIONS,
     crop_window,
@@ -25,7 +25,7 @@ def output_path(workdir: Path, identifier: str, asset: str) -> Path:
     return workdir / "images" / f"{identifier}_{suffix}.tif"
 
 
-def _crop(
+def crop_scene(
     source: rasterio.io.DatasetReader, row: dict, path: Path, item_id: str, asset: str
 ) -> None:
     expected_bands = 4 if asset == ASSETS[0] else 8
@@ -34,7 +34,6 @@ def _crop(
     window = crop_window(source, row["geometry"])
     data = source.read(window=window, boundless=True, fill_value=0)
     if asset == ASSETS[1]:
-        # Rasterio's per-band nodata masks are inappropriate for binary class bands.
         height, width = data.shape[1:]
         import numpy as np
 
@@ -83,13 +82,13 @@ def extract_group(
                 with rasterio.Env(**COG_OPTIONS), rasterio.open(url) as source:
                     for row in todo:
                         try:
-                            _crop(
+                            crop_scene(
                                 source, row, output_path(workdir, row["id"], asset), item_id, asset
                             )
                         except (OSError, ValueError, rasterio.errors.RasterioError):
                             remaining.append(row)
                 todo = remaining
-            except Exception:  # leave this asset pending; the companion can still succeed
+            except (PlanetError, OSError, ValueError, rasterio.errors.RasterioError):
                 pass
         failed.extend({"id": row["id"], "asset": asset} for row in todo)
     return {"id": item_id, "status": "failed" if failed else "ok", "pending": failed}

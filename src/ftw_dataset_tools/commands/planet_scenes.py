@@ -5,7 +5,7 @@ from typing import Any
 
 import click
 
-from ftw_dataset_tools.commands.planet_common import invoke, runtime_options
+from ftw_dataset_tools.commands.planet_common import input_options, invoke, runtime_options
 
 
 @click.group()
@@ -13,27 +13,29 @@ def planet_scenes() -> None:
     """Search, activate, crop and quality-check PlanetScope SR + UDM2."""
 
 
-@planet_scenes.command("manifest")
-@click.argument("ftw_root", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.argument("output", type=click.Path(path_type=Path))
-def build_manifest(ftw_root: Path, output: Path) -> None:
-    """Convert FTW country/index.jsonl files to an AOI manifest."""
-    from ftw_dataset_tools.api.planet import scene_workflow as workflow
-
-    invoke(workflow.from_ftw_indexes, ftw_root, output)
-
-
 @planet_scenes.command()
-@click.argument("manifest", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument("input_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @runtime_options
+@input_options
+@click.option("--start", help="Inclusive acquisition start, overriding row dates.")
+@click.option("--end", help="Exclusive acquisition end, overriding row dates.")
+@click.option("--target-date", help="Preferred acquisition date for all polygons.")
+@click.option("--date-column", default="determination_datetime", show_default=True)
+@click.option(
+    "--search-days",
+    type=click.IntRange(1),
+    default=30,
+    show_default=True,
+    help="Days either side of target when start/end are absent.",
+)
 @click.option("--max-cloud", type=click.FloatRange(0, 1), default=0.1, show_default=True)
 @click.option("--min-coverage", type=click.FloatRange(0, 1, min_open=True), default=0.99)
 @click.option("--max-candidates", type=click.IntRange(1), default=10)
-def search(manifest: Path, work_dir: Path, **kwargs: Any) -> None:
-    """Cache ranked scenes for each AOI; search interval is [start, end)."""
+def search(input_path: Path, work_dir: Path, **kwargs: Any) -> None:
+    """Find scenes for GeoParquet or JSONL polygons."""
     from ftw_dataset_tools.api.planet import scene_workflow as workflow
 
-    invoke(workflow.search, manifest, work_dir, **kwargs)
+    invoke(workflow.search, input_path, work_dir, **kwargs)
 
 
 @planet_scenes.command()
