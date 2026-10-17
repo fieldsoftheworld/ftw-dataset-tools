@@ -20,10 +20,10 @@ COMMAND_MODULES = (
     "create_splits",
     "create_subset",
     "download_images",
+    "planet_basemaps",
     "export_coco",
     "get_grid",
     "inspect_fields",
-    "planet_basemaps",
     "run",
     "select_images",
 )
