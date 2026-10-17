@@ -569,9 +569,9 @@ to be updated`. Staging only `pyproject.toml` fails the same way even after runn
 ## Planet Basemaps imagery
 
 Use `ftwd planet-basemaps` to plan and cache mosaic quads, then assemble ordered
-seasonal stacks on their native grid. See the
+seasonal stacks for fiboa or other GeoParquet polygons on their native grid. See the
 [Planet Basemaps download guide](docs/planet-basemaps.md) for inputs, recovery,
-and SLURM examples.
+and parallel processing options.
 
 ## License
 

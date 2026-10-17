@@ -18,7 +18,7 @@ from ftw_dataset_tools.api.planet.raster import (
 from ftw_dataset_tools.api.planet.state import digest
 
 
-def _grid(path: Path, geometry: dict) -> dict:
+def patch_grid(path: Path, geometry: dict) -> dict:
     with rasterio.open(path) as source:
         window = crop_window(source, geometry)
         return {
@@ -30,7 +30,7 @@ def _grid(path: Path, geometry: dict) -> dict:
         }
 
 
-def _read_quad(
+def read_quad(
     source: rasterio.io.DatasetReader, grid: dict, bands: tuple[int, ...]
 ) -> tuple[np.ndarray, np.ndarray]:
     """Read a native window, rejecting grids that would require implicit resampling."""
@@ -71,7 +71,7 @@ def crop_mosaic(
     filled = np.zeros((grid["height"], grid["width"]), dtype=bool)
     for path in paths:
         with rasterio.open(path) as source:
-            data, valid = _read_quad(source, grid, bands)
+            data, valid = read_quad(source, grid, bands)
         use = valid & ~filled
         result[:, use] = data[:, use]
         filled |= valid
@@ -97,7 +97,7 @@ def assemble_patch(workdir: Path, task: dict, bands: tuple[int, ...]) -> dict:
     paths_by_mosaic = [
         [quad_path(workdir, row["mosaic_id"], qid) for qid in row["quad_ids"]] for row in plans
     ]
-    grid = _grid(paths_by_mosaic[0][0], task["geometry"])
+    grid = patch_grid(paths_by_mosaic[0][0], task["geometry"])
     if grid["height"] * grid["width"] * len(bands) * len(plans) > 100_000_000:
         raise ValueError("Stack exceeds 100 million samples; split the AOI or mosaic list")
     inside = aoi_mask(

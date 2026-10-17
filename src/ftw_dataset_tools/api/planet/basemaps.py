@@ -57,7 +57,6 @@ def download_quad(client: PlanetClient, workdir: Path, task: dict) -> dict:
     try:
         validate_raster(path)
     except (OSError, ValueError):
-        # /full resolves a fresh signed URL on every attempt. No expiring links in plans.
         url = f"{BASE_URL}/{safe_id(task['mosaic_id'])}/quads/{safe_id(task['quad_id'])}/full"
         client.download(url, path, validate_raster)
     return {"id": task["id"], "status": "ok"}

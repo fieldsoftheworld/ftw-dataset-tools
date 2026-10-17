@@ -5,7 +5,7 @@ from typing import Any
 
 import click
 
-from ftw_dataset_tools.commands.planet_common import invoke, runtime_options
+from ftw_dataset_tools.commands.planet_common import input_options, invoke, runtime_options
 
 
 @click.group()
@@ -14,16 +14,17 @@ def planet_basemaps() -> None:
 
 
 @planet_basemaps.command()
-@click.argument("manifest", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument("input_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @runtime_options
+@input_options
 @click.option(
     "--mosaic", "mosaics", multiple=True, help="Exact mosaic name; repeat in stack order."
 )
-def plan(manifest: Path, work_dir: Path, **kwargs: Any) -> None:
-    """Plan actual quad availability for every AOI and requested mosaic."""
+def plan(input_path: Path, work_dir: Path, **kwargs: Any) -> None:
+    """Find mosaic quads for GeoParquet or JSONL polygons."""
     from ftw_dataset_tools.api.planet import basemap_workflow as workflow
 
-    invoke(workflow.plan, manifest, work_dir, **kwargs)
+    invoke(workflow.plan, input_path, work_dir, **kwargs)
 
 
 @planet_basemaps.command()

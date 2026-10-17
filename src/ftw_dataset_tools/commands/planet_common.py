@@ -8,7 +8,7 @@ import click
 
 
 def runtime_options(function: Callable[..., Any]) -> Callable[..., Any]:
-    """Common stage options, independent of any cluster's SLURM configuration."""
+    """Worker and shard options shared by download stages."""
     options = [
         click.option("--work-dir", type=click.Path(path_type=Path), required=True),
         click.option("--workers", type=click.IntRange(1, 32), default=4, show_default=True),
@@ -32,3 +32,16 @@ def invoke(function: Callable[..., int | None], *args: Any, **kwargs: Any) -> No
         raise click.ClickException(str(error)) from None
     if failures:
         raise click.ClickException(f"{failures} jobs failed; inspect the stage journal and rerun")
+
+
+def input_options(function: Callable[..., Any]) -> Callable[..., Any]:
+    """Polygon input columns, CRS override, and optional sample size."""
+    options = [
+        click.option("--id-column", default="id", show_default=True),
+        click.option("--geometry-column", help="Defaults to the GeoParquet primary geometry."),
+        click.option("--input-crs", help="Override the input CRS, e.g. EPSG:3857."),
+        click.option("--limit", type=click.IntRange(1), help="Use only the first N polygons."),
+    ]
+    for option in reversed(options):
+        function = option(function)
+    return function

@@ -20,7 +20,7 @@ COG_OPTIONS = {
     "GDAL_HTTP_TIMEOUT": 120,
     "GDAL_HTTP_MAX_RETRY": 3,
     "GDAL_HTTP_RETRY_DELAY": 2,
-    "GDAL_CACHEMAX": 64 * 1024 * 1024,  # rasterio accepts bytes, not GDAL's CLI MB syntax
+    "GDAL_CACHEMAX": 64 * 1024 * 1024,
 }
 
 
@@ -49,10 +49,10 @@ def crop_window(source: rasterio.io.DatasetReader, geometry: dict) -> Window:
     """Cover the complete AOI bbox on the source grid, including scene-edge padding."""
     projected = transform_geom("EPSG:4326", source.crs, geometry)
     window = from_bounds(*shape(projected).bounds, transform=source.transform)
-    left, top = math.floor(window.col_off), math.floor(window.row_off)
+    left, top = math.floor(window.col_off + 1e-7), math.floor(window.row_off + 1e-7)
     right, bottom = (
-        math.ceil(window.col_off + window.width),
-        math.ceil(window.row_off + window.height),
+        math.ceil(window.col_off + window.width - 1e-7),
+        math.ceil(window.row_off + window.height - 1e-7),
     )
     if (right - left) * (bottom - top) > 16_777_216:
         raise ValueError("AOI exceeds 16 million pixels; split it before downloading")

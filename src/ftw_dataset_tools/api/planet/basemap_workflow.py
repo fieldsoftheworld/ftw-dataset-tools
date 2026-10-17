@@ -2,17 +2,18 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 from ftw_dataset_tools.api.planet.basemap_raster import assemble_patch
 from ftw_dataset_tools.api.planet.basemaps import download_quad, list_quads, resolve_mosaic
 from ftw_dataset_tools.api.planet.http import PlanetClient
+from ftw_dataset_tools.api.planet.inputs import read_aois
 from ftw_dataset_tools.api.planet.state import (
     bind_config,
     collect,
     digest,
     in_shard,
     latest,
-    manifest,
     run_tasks,
     safe_id,
 )
@@ -30,9 +31,10 @@ def plan(
     workers: int = 4,
     shard_id: int = 0,
     num_shards: int = 1,
+    **input_options: Any,
 ) -> int:
     """List quads for each requested AOI/period; retain only IDs, not signed URLs."""
-    rows = manifest(path)
+    rows = read_aois(path, **input_options)
     for row in rows:
         row["mosaics"] = list(mosaics) or row.get("mosaics", [])
         if not row["mosaics"] or len(set(row["mosaics"])) != len(row["mosaics"]):
@@ -72,7 +74,7 @@ def plan(
 
 def download(workdir: Path, *, workers: int = 4, shard_id: int = 0, num_shards: int = 1) -> int:
     """Download each unique (mosaic, quad) once, across AOIs and array tasks."""
-    # Ensure plan has completed for all AOIs before starting shared-cache jobs.
+
     assembly_tasks(workdir)
     targets = {}
     for row in collect(workdir / "plan").values():

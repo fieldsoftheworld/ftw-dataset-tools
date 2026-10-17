@@ -23,12 +23,13 @@ from ftw_dataset_tools.api.planet.http import PlanetClient, PlanetError
 from ftw_dataset_tools.api.planet.raster import write_raster
 from ftw_dataset_tools.api.planet.state import collect
 from ftw_dataset_tools.cli import cli
+from tests.test_api.test_planet_inputs import write_fields
 
 
 def make_quad(path, left=0, value=10, resolution=0.1):
     data = np.full((4, 10, 10), value, dtype="uint8")
     data[3] = 255
-    data[:3, 0, 0] = 0  # valid black RGB, distinguished from fill by alpha
+    data[:3, 0, 0] = 0
     write_raster(
         path,
         data,
@@ -121,10 +122,8 @@ def test_cli_full_pipeline_shared_cache_stack_order_and_resume(tmp_path, monkeyp
         lambda: PlanetClient("test", transport=httpx.MockTransport(handle)),
     )
     geometry = mapping(box(0, 0, 2, 1))
-    path = tmp_path / "manifest.jsonl"
-    path.write_text(
-        "".join(json.dumps({"id": name, "geometry": geometry}) + "\n" for name in ("a", "b"))
-    )
+    path = tmp_path / "fields.parquet"
+    write_fields(path, [{"id": name, "geometry": geometry} for name in ("a", "b")], crs="EPSG:3857")
     workdir = tmp_path / "run"
     runner = CliRunner()
     args = [
@@ -143,9 +142,7 @@ def test_cli_full_pipeline_shared_cache_stack_order_and_resume(tmp_path, monkeyp
     for stage in ("download", "assemble"):
         result = runner.invoke(cli, ["planet-basemaps", stage, "--work-dir", str(workdir)])
         assert result.exit_code == 0, result.output
-    assert (
-        len([call for call in calls if call.endswith("/full")]) == 4
-    )  # not eight AOI/period copies
+    assert len([call for call in calls if call.endswith("/full")]) == 4
     output = workdir / "images" / "a.tif"
     with rasterio.open(output) as source:
         assert source.shape == (10, 20)
@@ -155,7 +152,7 @@ def test_cli_full_pipeline_shared_cache_stack_order_and_resume(tmp_path, monkeyp
         assert source.read(1)[5, 5] == 10
         assert source.read(1)[5, 15] == 20
         assert source.read(1)[0, 0] == 0
-        assert source.dataset_mask()[0, 0] == 255  # zero is a valid color
+        assert source.dataset_mask()[0, 0] == 255
     before = len(calls)
     timestamp = output.stat().st_mtime_ns
     assert workflow.download(workdir) == 0
