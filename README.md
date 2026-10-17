@@ -566,6 +566,13 @@ change without a matching `uv.lock` fails with `error: The lockfile at uv.lock n
 to be updated`. Staging only `pyproject.toml` fails the same way even after running
 `uv lock`, because pre-commit stashes the unstaged lockfile before running the hook.
 
+## Planet Basemaps imagery
+
+Use `ftwd planet-basemaps` to plan and cache mosaic quads, then assemble ordered
+seasonal stacks on their native grid. See the
+[Planet Basemaps download guide](docs/planet-basemaps.md) for inputs, recovery,
+and SLURM examples.
+
 ## License
 
 Apache-2.0

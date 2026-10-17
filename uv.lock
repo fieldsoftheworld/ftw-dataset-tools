@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.12'",
@@ -789,6 +789,7 @@ dependencies = [
     { name = "duckdb" },
     { name = "geopandas" },
     { name = "geoparquet-io" },
+    { name = "httpx" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pillow" },
@@ -828,6 +829,7 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.4.1" },
     { name = "geopandas", specifier = ">=1.0.0" },
     { name = "geoparquet-io", specifier = ">=0.9.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "matplotlib", specifier = ">=3.7.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pillow", specifier = ">=10.0.0" },

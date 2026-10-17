@@ -23,6 +23,7 @@ COMMAND_MODULES = (
     "export_coco",
     "get_grid",
     "inspect_fields",
+    "planet_basemaps",
     "run",
     "select_images",
 )
