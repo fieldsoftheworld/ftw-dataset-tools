@@ -632,7 +632,7 @@ class TestSearchBackendThreading:
 
         assert mock_select.call_args.kwargs["search_backend"] == "earth-search"
 
-    def test_select_imagery_for_catalog_forwards_backend(
+    def test_select_mode_forwards_backend(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         catalog = _write_chip_catalog(tmp_path, ["chip_000"])
