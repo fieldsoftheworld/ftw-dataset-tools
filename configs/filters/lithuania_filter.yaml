@@ -5,7 +5,9 @@
 # the scheme: lt (2024 & 2025) and ec_lt (2021, EuroCrops); 27 distinct category strings.
 # NOTE: the source strings carry a character-encoding quirk (e.g. þ=ž, ð=š, ë=ė, û=ū); values
 # below are reproduced byte-for-byte so they match the data. Some year editions differ only by
-# a space (e.g. "iki 5m." vs "iki 5 m."); both spellings are listed.
+# a space (e.g. "iki 5m." vs "iki 5 m."); both spellings are listed. The ec_lt 2021 edition uses
+# correct Lithuanian characters (e.g. "Žieminiai javai"); those spellings are listed too. ec_lt
+# 2021 holds only 9 crop categories (no grassland/fallow), so all its parcels are field.
 #
 # Excluded (background): pastures & meadows, perennial grasses, fallow, landscape elements,
 # ditches, non-supported areas, woods, and wetlands (the 'Ðlapynës' category, mislabelled
@@ -32,6 +34,12 @@ include:
   - "Aromatiniai augalai"  # Aromatic plants
   - "Pluoðtinës kanapës"  # Fiber hemp
   - "Linai"  # Linen
+  # ec_lt 2021 spells the same categories with correct Lithuanian characters
+  - "Žieminiai javai"  # Winter cereals
+  - "Ankštiniai javai"  # Grain legumes
+  - "Avižos"  # Oats
+  - "Daržovės"  # Vegetables
+  - "Kukurūzai"  # Corn
   # Permanent and tree crops
   - "Sodai"  # Orchards
   - "Uogynai"  # Berries

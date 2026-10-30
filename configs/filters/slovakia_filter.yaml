@@ -1,23 +1,27 @@
 # Class filter used for Slovakia (SK) field boundaries.
 # Keyed on crop:name (the Slovak crop label); the sk dataset has no crop:code. English HCAT
-# names are shown as comments. Covers sk year 2026 (the only published edition); 217 distinct
-# crop names (NULL crop:name is treated as background). The crop_group column groups parcels as
+# names are shown as comments. Covers sk years 2018-2026; 317 distinct crop names across those
+# editions (names vary by year, e.g. "Pšenica ozimná" (2018-2022) vs "Pšenica letná ozimná";
+# NULL crop:name is treated as background). The crop_group column groups parcels as
 # arable land (Orná pôda), permanent grassland, vineyard, orchard/small fruit, permanent (woody)
-# crops and hop gardens.
+# crops and hop gardens. The 2018-2023 editions also split permanent grassland into habitat
+# types A-G, all background.
 #
 # Excluded (background): permanent grassland; and within arable land - fallow (incl. honey-plant
-# fallow), biostrips, grassed-over arable land, grasses / herbaceous fodder, phacelia, buffer
-# zones & linear landscape features, open and under-glass/foil ornamental flowers, and vegetables
-# grown under glass/foil (greenhouse); and non-cropped vineyard handling areas.
+# fallow and "fallow with production"), biostrips, biodiversity islands, grassed-over and
+# afforested arable land, grasses / herbaceous fodder, phacelia, buffer zones & linear landscape
+# features, open and under-glass/foil ornamental flowers (incl. nasturtium), vegetables grown
+# under glass/foil (greenhouse), the energy crop Sida hermaphrodita (Virginia mallow, as in
+# de-bb-nds-nrw); and non-cropped vineyard handling areas.
 #
 # Notable inclusions: all cereals, maize (incl. silage/green/seed), sorghum, millet, buckwheat,
 # oilseeds (rapeseed, sunflower, poppy, oilseed flax/radish, safflower, mustard), hemp, tobacco,
-# soy, legumes & pulses, fodder legumes (clover, lucerne, sainfoin, vetch, lupine, legume mixes),
-# potatoes, sugar/fodder beet, all open-field vegetables (incl. melon/watermelon), medicinal &
-# aromatic herbs, strawberries and hops; and permanent & tree crops: vineyards (incl. under
-# restructuring), orchards (incl. mixed landscape orchards), fruit, berries & nuts, woody
-# nurseries, short-rotation woody crops (poplar, willow & other trees) and herbaceous permanent
-# crops.
+# soy, legumes & pulses, the generic 2018-2022 "mixed crop" (Zmiešaná plodina), fodder legumes
+# (clover, lucerne, sainfoin, vetch, lupine, legume mixes), potatoes, sugar/fodder beet, all
+# open-field vegetables (incl. melon/watermelon), medicinal & aromatic herbs, strawberries and
+# hops; and permanent & tree crops: vineyards (incl. under restructuring and with flavescence
+# dorée), orchards (incl. mixed landscape orchards), fruit, berries & nuts, woody nurseries,
+# short-rotation woody crops (poplar, willow & other trees) and herbaceous permanent crops.
 
 column: ["crop:name", "crop_name"]
 
@@ -53,6 +57,15 @@ include:
   - "Raž trváca"  # Perennial rye
   - "Kukurica osivová s podsevom"  # Seed maize with undersowing
   - "Kukurica na zeleno s podsevom"  # Corn on the green with undersowing
+  - "Pšenica ozimná"  # Winter wheat
+  - "Pšenica jarná"  # Spring wheat
+  - "Pšenica tvrdá"  # Durum wheat
+  - "Tritikale ozimné"  # Winter triticale
+  - "Tritikale jarné"  # Spring triticale
+  - "Kukurica cukrová s podsevom"  # Sweet maize undersown
+  - "Kukurica pukancová s podsevom"  # Popcorn maize undersown
+  - "Láskavec"  # Amaranth
+  - "Zmiešaná plodina"  # Mixed crop
   # Oilseeds, fibre & industrial crops
   - "Kapusta repková pravá - ozimná"  # Rapeseed - winter
   - "Slnečnica ročná"  # Annual sunflower
@@ -70,6 +83,7 @@ include:
   - "Reďkev siata čierna"  # Black seed radish
   - "Reďkev siata pravá (reďkovka)"  # Radish sown (radish)
   - "Tabak Virginia"  # Tobacco Virginia
+  - "Ľan siaty priadny"  # Fibre flax
   # Legumes, pulses & fodder legumes
   - "Lucerna siata"  # Lucerne seed
   - "Sója fazuľová"  # Soy beans
@@ -100,6 +114,18 @@ include:
   - "Ďatelina perzská"  # Persian clover
   - "Ďatelina purpurová pre ekoschému"  # Purple clover for eco-scheme
   - "Hrachor siaty"  # Peas
+  - "Cícer"  # Chickpea
+  - "Fazuľa obyčajná"  # Common bean
+  - "Fazuľa mesiacovitá"  # Lima bean
+  - "Fazuľa ostrolistá"  # Tepary bean
+  - "Fazuľa šarlátová"  # Runner bean
+  - "Jastrabina východná"  # Eastern galega
+  - "Komonica biela"  # White melilot
+  - "Komonica lekárska"  # Ribbed melilot
+  - "Ďatelina alexandrijská"  # Alexandrian clover
+  - "Vtákonoha siata"  # Serradella
+  - "Senovka grécka"  # Fenugreek
+  - "Slez kŕmny"  # Fodder mallow
   # Potatoes, beet & root crops
   - "Zemiaky konzumné (neskoré)"  # Potatoes for consumption (late)
   - "Repa cukrová"  # Sugar beet
@@ -120,6 +146,12 @@ include:
   - "Kapusta repková kvaková (kvaka)"  # Swede (rutabaga)
   - "Slnečnica hľuznatá"  # Jerusalem artichoke
   - "Artičoka"  # Artichoke
+  - "Zemiaky"  # Potatoes
+  - "Zemiaky konzumné"  # Ware potatoes
+  - "Povojník batátový"  # Sweet potato
+  - "Povojník batátový (batát)"  # Sweet potato
+  - "Povojník purpurový (batát)"  # Sweet potato
+  - "Repa obyčajná cviklová (cvikla)"  # Beetroot
   # Vegetables (open field)
   - "Zelenina a iné záhradné plodiny voľne pestované"  # Vegetables and other horticultural crops
   - "Zmiešaná zelenina"  # Mixed vegetables
@@ -155,6 +187,42 @@ include:
   - "Kapusta hlávková s podsevom"  # Head cabbage with undersowing
   - "Čakanka obyčajná šalátová"  # Chicory (salad)
   - "Pór pestovaný (zimný)"  # Leek grown (winter)
+  - "Poľná zelenina"  # Field vegetables
+  - "Baklažán"  # Aubergine
+  - "Brokolica"  # Broccoli
+  - "Cesnak"  # Garlic
+  - "Chren dedinský"  # Horseradish
+  - "Cibuľa"  # Onion
+  - "Dyňa"  # Watermelon
+  - "Melóny"  # Melons
+  - "Kaleráb"  # Kohlrabi
+  - "Kapusta"  # Cabbage
+  - "Kapusta pekinská"  # Chinese cabbage
+  - "Kapusta čínska"  # Chinese cabbage
+  - "Kapusta sitinová"  # Brown mustard (Brassica juncea)
+  - "Kel"  # Savoy cabbage
+  - "Kel hlávkový s podsevom"  # Savoy cabbage undersown
+  - "Mrkva"  # Carrot
+  - "Paprika"  # Pepper
+  - "Paprika ročná"  # Sweet pepper
+  - "Patizón"  # Pattypan squash
+  - "Tekvica"  # Pumpkin
+  - "Paštrnák"  # Parsnip
+  - "Petržlen"  # Parsley
+  - "Petržlen vňaťový kučeravý"  # Curly leaf parsley
+  - "Pór"  # Leek
+  - "Pór pestovaný (jarný)"  # Leek (spring)
+  - "Rajčiaky"  # Tomato
+  - "Repa obyčajná (mangold)"  # Chard
+  - "Reďkev"  # Radish
+  - "Reďkev siata (čierna a reďkovka)"  # Radish (black and small)
+  - "Reďkovka"  # Small radish
+  - "Zeler"  # Celery
+  - "Zeler voňavý stonkový"  # Stalk celery
+  - "Čakanka obyčajná"  # Chicory
+  - "Šalát"  # Lettuce
+  - "Špenát"  # Spinach
+  - "Štiavec"  # Sorrel
   # Herbs, medicinal & aromatic plants
   - "Ostropestrec mariánsky"  # Marian thistle
   - "Liečivé rastliny"  # Medicinal plants
@@ -178,12 +246,23 @@ include:
   - "Koreninové rastliny (ostatné)"  # Spices (other)
   - "Echinacea purpurová"  # Purple coneflower
   - "Rebríček kopcový"  # Mountain yarrow
+  - "Bazalka pravá"  # Basil
+  - "Bedrovník anízový"  # Anise
+  - "Borák lekársky"  # Borage
+  - "Koriander siaty"  # Coriander
+  - "Ligurček lekársky"  # Lovage
+  - "Medovka"  # Lemon balm
+  - "Mäta"  # Mint
+  - "Slez maurský"  # Moorish mallow
+  - "Yzop lekársky"  # Hyssop
+  - "Šalvia"  # Sage
   # Hops & strawberries
   - "Jahody"  # Strawberries
   - "Chmeľ obyčajný"  # Common hops
   # Vineyards
   - "Vinohrady"  # Vineyard
   - "Vinohrad v reštrukturalizácii"  # Vineyard under restructuring
+  - "Vinohrad so zlatým žltnutím"  # Vineyard with flavescence dorée
   # Orchards, fruit, berries & nuts
   - "Ovocné sady"  # Fruit sets
   - "Jabloň domáca"  # Domestic apple tree
@@ -216,6 +295,11 @@ include:
   - "Mišpuľa"  # Loquat
   - "Nektárinka"  # Nectarine
   - "Egreš obyčajný"  # Common gooseberry
+  - "Jarabina oskorušová"  # Service tree
+  - "Jarabina čierna"  # Black chokeberry
+  - "Slivka čerešňoplodá (myrobalán)"  # Cherry plum
+  - "Zemolez"  # Honeysuckle (haskap berry)
+  - "Čučoriedka"  # Blueberry
   # Nurseries, short-rotation woody crops (poplar, willow & other trees) & other permanent crops
   - "Škôlky s drevnatými rastlinami"  # Nurseries with woody plants
   - "Bylinné trvalé plodiny"  # Herbal permanent crops
@@ -231,10 +315,21 @@ include:
   - "Breza previsnutá"  # Birch overhanging
   - "Jelša sivá"  # Gray alder
   - "Jaseň štíhly"  # Slender ash tree
+  - "Topoľ chlpatoplodý"  # Poplar (Populus trichocarpa)
+  - "Topoľ robusta"  # Populus robusta
+  - "Topoľ simonov"  # Simon's poplar
+  - "Vŕba rakytová"  # Goat willow
 
 exclude:
   # Permanent grassland
   - "Trvalý trávny porast"  # Permanent grassland
+  - "Teplomilné a suchomilné trvalé trávne porasty (typ A)"  # Thermophilic and drought-tolerant permanent grassland (type A)
+  - "Mezofilné trvalé trávne porasty (typ B)"  # Mesophilic permanent grassland (type B)
+  - "Horské kosné lúky (typ C)"  # Mountain mowing meadows (type C)
+  - "Vlhkomilné porasty nižších polôh (typ D)"  # Moisture-loving grassland of lower altitudes (type D)
+  - "Nížinné aluviálne porasty (typ E)"  # Lowland alluvial grassland (type E)
+  - "Vlhkomilné porasty vyšších polôh, slatinné a bezkolencové lúky (typ F)"  # Moist grassland of higher altitudes, fen and moor-grass meadows (type F)
+  - "Vysokohorské trávne porasty (typ G)"  # Alpine grassland (type G)
   # Fallow, biostrips, grassed arable, grasses, cover & buffer/landscape features
   - "Pôda ležiaca úhorom s porastom"  # Fallow land with vegetation
   - "Trávy alebo iné bylinné krmoviny"  # Grasses or other herbaceous fodder
@@ -249,9 +344,19 @@ exclude:
   - "Líniový vegetačný prvok"  # Linear vegetation feature
   - "Nárazníková zóna a medza"  # Buffer zone and balk
   - "Zatrávnená orná pôda (neprojektové opatrenia)"  # Grassed arable land (non-project measures)
+  - "Pôda ležiaca úhorom s produkciou bez hnojenia"  # Fallow land with production, without fertilisation
+  - "Pôda ležiaca úhorom s produkciou s hnojením"  # Fallow land with production, with fertilisation
+  - "Biopás pre medonosné plodiny kosený po 31. júli"  # Biostrip for honey plants mown after July 31
+  - "Ostrov biodiverzity"  # Biodiversity island
+  - "Ostrov biodiverzity medonosný"  # Melliferous biodiversity island
+  - "Trávy a iné rastlinné krmivá"  # Grasses and other plant fodder
+  - "Zalesnená orná pôda"  # Afforested arable land
   # Greenhouse & ornamental (under glass/foil, open ornamentals)
   - "Kvety a okrasné rastliny voľne pestované"  # Flowers and ornamental plants in the wild
   - "Zelenina a iné záhradné plodiny pod sklom alebo fóliou"  # Vegetables and other horticultural crops under glass or foil
   - "Kvety a okrasné rastliny pod sklom alebo fóliou"  # Flowers and ornamental plants under glass or foil
+  - "Kapucínka väčšia"  # Garden nasturtium (ornamental; as Kapuzinerkresse in de-bb-nds-nrw)
+  # Energy / biomass crops
+  - "Sida obojpohlavná"  # Virginia mallow (Sida hermaphrodita; as Virginiamalve in de-bb-nds-nrw)
   # Vineyard handling areas (non-cropped)
   - "Ostatná manipulačná plocha"  # Other handling area

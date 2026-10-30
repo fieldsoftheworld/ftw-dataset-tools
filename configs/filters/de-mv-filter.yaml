@@ -3,7 +3,8 @@
 # the crop:code from the harmonized ftw/harmonized-field-data de_mv dataset
 # (code list: fiboa.org/code/de/de_mv.csv). This is a land-use-level filter, not a crop-type
 # filter: arable land (AF) and orchards/permanent crops (DK) are field; permanent grassland,
-# afforestation, forest, riverside vegetation, special/Article-32 areas are background.
+# afforestation, forest, riverside vegetation (UV), special/Article-32 areas are background.
+# Covers de_mv year 2026.
 column: ["crop:code", "crop_code"]
 
 include:
@@ -17,6 +18,7 @@ exclude:
   - AGL     # Aufforstung auf GL (afforestation on grassland)
   - AÖD     # Aufforstung auf ÖD (afforestation on wasteland)
   - FO      # Forstfläche (forest land)
+  - UV      # Ufervegetation (riverside vegetation)
   - SO      # Sondernutzung (not used / special use)
   - WA      # Wald (forest)
   - AF-AFS  # Ackerfläche - Agroforststreifen (agroforestry strip on arable)

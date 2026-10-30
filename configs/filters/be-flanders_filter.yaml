@@ -7,7 +7,8 @@
 # medicinal plants/herbs, flax, hemp, hops, clover, alfalfa, strawberries, and permanent & tree crops
 # (orchards incl. standard-tree meadow orchards, fruit & nut trees, berries, vineyards, tree & woody
 # ornamental nurseries, short-rotation coppice, Christmas trees).
-# Covers crop codes across be_vlg years 2018-2025. Codes from EuroCrops be_vlg_2021.csv plus data-only additions:
+# Green-cover mixes grown as main crop (incl. 663, without grass) are background.
+# Covers crop codes across be_vlg years 2018-2026. Codes from EuroCrops be_vlg_2021.csv plus data-only additions:
 # https://raw.githubusercontent.com/maja601/EuroCrops/refs/heads/main/csvs/country_mappings/be_vlg_2021.csv
 
 column: ["crop_code", "crop:code"]
@@ -305,6 +306,7 @@ exclude:
   - 647  # Other non-flowery green cover plants
   - 659  # Mixture of non-leguminous green cover crops (data-only)
   - 662  # Cover mix: fodder radish + yellow mustard
+  - 663  # Mengsel van groenbedekkers zonder gras (als hoofdteelt) (green cover mix without grass, as main crop)
   - 745  # Mixture of grass and leguminous plants (other than grass clover or grass alfalfa)
   - 884  # miscanthus
   - 894  # Afforestation with contract for 2008

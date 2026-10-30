@@ -1,0 +1,17 @@
+# Class filter used for Japan (jp) field boundaries.
+# Japan's Fude Polygons (MAFF farmland parcel polygons, digitised from imagery) carry no crop type,
+# only the land category land_type_en (source column land_type): rice_field (田, paddy) or field
+# (畑, upland farmland). Both are farmland and count as field, so every parcel is field and the
+# mask separates farmland from non-farmland only. This is a land-use-level filter, not a
+# crop-type filter.
+# Judgment call: upland "field" (畑) also covers orchards/tea (樹園地) and managed pasture
+# (牧草地, mostly in Hokkaido), which cannot be separated in this data; pasture is therefore
+# rasterised as field here, unlike the grassland exclusions in the European filters.
+# Covers jp years 2021-2024.
+column: ["land_type_en"]
+
+include:
+  - rice_field  # 田 (paddy field)
+  - field  # 畑 (upland field, incl. orchards and pasture)
+
+exclude: []
