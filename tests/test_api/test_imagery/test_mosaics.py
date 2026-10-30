@@ -40,10 +40,10 @@ from ftw_dataset_tools.api.imagery.mosaic_selection import (
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 from ftw_dataset_tools.api.imagery.selection_workflow import (
     ChipSelectionJob,
+    _select_mode,
     find_chip_items,
     resolve_selection_conflicts,
     run_chip_selection,
-    select_imagery_for_catalog,
 )
 from ftw_dataset_tools.api.imagery.slots import (
     MOSAIC_SOURCE,
@@ -250,9 +250,11 @@ class TestMosaicChildItems:
         create_mosaic_child_items(path.parent, parent, _selection(year=2025, requested=2024))
 
         saved = pystac.Item.from_file(str(path))
-        assert saved.properties["ftw:imagery_mode"] == "mosaics"
-        assert saved.properties["ftw:requested_year"] == 2024
-        assert saved.properties["ftw:imagery_year"] == 2025
+        assert saved.properties["ftw:imagery_modes"] == ["mosaics"]
+        assert saved.properties["ftw:mosaic_requested_year"] == 2024
+        assert saved.properties["ftw:mosaic_year"] == 2025
+        assert "ftw:imagery_mode" not in saved.properties
+        assert "ftw:requested_year" not in saved.properties
         assert saved.properties["start_datetime"].startswith("2025-01-01")
         assert saved.properties["end_datetime"].startswith("2025-12-31")
         assert {link.rel for link in saved.links} >= {"ftw:q1", "ftw:q2", "ftw:q3", "ftw:q4"}
@@ -301,10 +303,8 @@ class TestSelectionConflicts:
         reason = selection_conflict(self._mosaic_chip(tmp_path), "mosaics", 2025)
         assert reason == "has mosaics for 2024"
 
-    def test_scenes_over_mosaics_conflicts(self, tmp_path: Path) -> None:
-        assert (
-            selection_conflict(self._mosaic_chip(tmp_path), "scenes", 2024) == "has mosaics imagery"
-        )
+    def test_scenes_over_mosaics_do_not_conflict(self, tmp_path: Path) -> None:
+        assert selection_conflict(self._mosaic_chip(tmp_path), "scenes", 2024) is None
 
     def test_unselected_chip_never_conflicts(self, tmp_path: Path) -> None:
         parent, _path = _chip(tmp_path)
@@ -313,11 +313,13 @@ class TestSelectionConflicts:
     def test_conflict_raises_without_force(self, tmp_path: Path) -> None:
         chip = self._mosaic_chip(tmp_path)
         with pytest.raises(SelectionConflictError, match="mosaics for 2024"):
-            resolve_selection_conflicts([chip], imagery_mode="mosaics", year=2025, force=False)
+            resolve_selection_conflicts([chip], imagery_modes="mosaics", year=2025, force=False)
 
     def test_force_clears_the_conflicting_chips(self, tmp_path: Path) -> None:
         chip = self._mosaic_chip(tmp_path)
-        cleared = resolve_selection_conflicts([chip], imagery_mode="mosaics", year=2025, force=True)
+        cleared = resolve_selection_conflicts(
+            [chip], imagery_modes="mosaics", year=2025, force=True
+        )
         assert cleared == 1
         assert not has_existing_scenes(chip)
 
@@ -587,6 +589,7 @@ class TestMosaicSelectionEdges:
     def test_catalog_selection_skips_the_crop_calendar(self, tmp_path: Path) -> None:
         _chip(tmp_path)
         with (
+            patch(f"{_SELECTION}.year_available", return_value=True),
             patch(
                 "ftw_dataset_tools.api.imagery.selection_workflow.select_mosaics_for_chip",
                 return_value=_selection(),
@@ -595,7 +598,7 @@ class TestMosaicSelectionEdges:
                 "ftw_dataset_tools.api.imagery.selection_workflow.ensure_crop_calendar_exists"
             ) as warm,
         ):
-            result = select_imagery_for_catalog(tmp_path, year=2024, imagery_mode="mosaics")
+            result = _select_mode(tmp_path, year=2024, imagery_mode="mosaics")
         assert result.successful == 1
         warm.assert_not_called()
 

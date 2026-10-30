@@ -31,7 +31,7 @@ from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
     from pathlib import Path
 
     from ftw_dataset_tools.api.imagery.image_download import DownloadResult
@@ -63,6 +63,7 @@ class DownloadWorkflowResult:
 def find_s2_child_items(
     catalog_dir: Path,
     unreadable: list[dict] | None = None,
+    slots: Iterable[str] | None = None,
 ) -> list[tuple[pystac.Item, Path]]:
     """Find all S2 child items (one per imagery slot) in a catalog directory.
 
@@ -76,15 +77,21 @@ def find_s2_child_items(
                     entries for item files that could not be parsed. An item that
                     cannot be read is otherwise invisible: it is not downloaded and
                     is counted nowhere, so pass this in to report it.
+        slots: Only these imagery slots; None finds every slot. Filtered by file
+               name, so an excluded slot's file is never read (or reported).
 
     Returns:
         List of (pystac.Item, item_path) tuples for each S2 child item found.
         Returns empty list if no items found.
     """
     child_items = []
+    wanted = None if slots is None else set(slots)
 
     for subdir in iter_chip_dirs(catalog_dir):
         for json_file in subdir.glob("*_s2.json"):
+            parsed = parse_child_id(json_file.stem)
+            if wanted is not None and (parsed is None or parsed[1] not in wanted):
+                continue
             try:
                 item = pystac.Item.from_file(str(json_file))
             except Exception as e:
@@ -107,6 +114,7 @@ def download_imagery_for_catalog(
     show_progress_bar: bool = True,
     workers: int = DEFAULT_WORKERS,
     keep_remote_refs: bool = False,
+    slots: Iterable[str] | None = None,
 ) -> DownloadWorkflowResult:
     """Download imagery for all S2 child items in a catalog.
 
@@ -132,6 +140,8 @@ def download_imagery_for_catalog(
         workers: Number of scenes to download concurrently
         keep_remote_refs: Keep the remote band assets and add the local file as a
             `clipped` asset, instead of replacing them with a local `image`
+        slots: Only download these imagery slots (e.g. ``MOSAIC_SLOTS``); None
+            downloads every selected slot
 
     Returns:
         DownloadWorkflowResult with success/skipped/failed counts and details
@@ -143,7 +153,7 @@ def download_imagery_for_catalog(
     # Find all child S2 items; items whose JSON cannot be read are reported as
     # failures rather than silently dropped from the run.
     unreadable: list[dict] = []
-    child_items = find_s2_child_items(catalog_dir, unreadable=unreadable)
+    child_items = find_s2_child_items(catalog_dir, unreadable=unreadable, slots=slots)
     result.failed += len(unreadable)
     result.failed_details.extend(unreadable)
 

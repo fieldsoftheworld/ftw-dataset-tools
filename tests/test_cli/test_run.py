@@ -449,9 +449,12 @@ class TestPrintSummaryImagery:
         return ctx
 
     def _selection(self, **kwargs):
-        from ftw_dataset_tools.api.imagery.selection_workflow import SelectionWorkflowResult
+        from ftw_dataset_tools.api.imagery.selection_workflow import (
+            MultiModeSelectionResult,
+            SelectionWorkflowResult,
+        )
 
-        return SelectionWorkflowResult(**kwargs)
+        return MultiModeSelectionResult(by_mode={"scenes": SelectionWorkflowResult(**kwargs)})
 
     def _download(self, **kwargs):
         from ftw_dataset_tools.api.imagery.download_workflow import DownloadWorkflowResult

@@ -22,7 +22,7 @@ from ftw_dataset_tools.api.imagery.catalog_ops import (
     has_existing_scenes,
     preserve_imagery_selection,
 )
-from ftw_dataset_tools.api.imagery.selection_workflow import select_imagery_for_catalog
+from ftw_dataset_tools.api.imagery.selection_workflow import _select_mode
 from ftw_dataset_tools.api.imagery.stac_child_items import create_child_items_from_selection
 from ftw_dataset_tools.api.masks import get_mgrs_square
 from ftw_dataset_tools.api.stac import generate_stac_catalog
@@ -344,7 +344,7 @@ class TestCatalogRegenerationResume:
 
         _generate(catalog_inputs)
 
-        result = select_imagery_for_catalog(
+        result = _select_mode(
             catalog_dir=catalog_inputs["output_dir"],
             year=YEAR,
         )

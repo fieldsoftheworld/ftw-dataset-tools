@@ -11,7 +11,6 @@ import pystac
 import pytest
 from click.testing import CliRunner
 
-from ftw_dataset_tools.api import pipeline
 from ftw_dataset_tools.api.config import ConfigError, DatasetConfig
 from ftw_dataset_tools.cli import cli
 
@@ -77,7 +76,12 @@ class TestSelectImagesMosaics:
         assert "--cloud-cover-chip" in result.output
         assert "only applies to --imagery-mode scenes" in result.output
 
-    def test_without_year_warns_and_uses_2025(self, tmp_path: Path) -> None:
+    def test_year_help_describes_the_per_chip_rule(self) -> None:
+        result = CliRunner().invoke(cli, ["select-images", "--help"])
+        assert "else its ID's year" in " ".join(result.output.split())
+        assert "default 2025" not in result.output
+
+    def test_without_year_uses_the_chip_year(self, tmp_path: Path) -> None:
         with (
             patch(_YEAR_AVAILABLE, return_value=True),
             patch(f"{_WORKFLOW}.run_chip_selection", return_value=_success()) as run,
@@ -87,9 +91,8 @@ class TestSelectImagesMosaics:
                 cli, ["select-images", str(_catalog(tmp_path)), "--imagery-mode", "mosaics"]
             )
         assert result.exit_code == 0, result.output
-        assert "no --year given; using 2025" in result.output
         job = run.call_args.args[0]
-        assert job.year == 2025  # not the chip id's 2024
+        assert job.year == 2024  # the chip id's year, as its scenes would use; not 2025
         assert run.call_args.kwargs["imagery_mode"] == "mosaics"
         warm.assert_not_called()
 
@@ -154,15 +157,100 @@ class TestSelectImagesMosaics:
         assert "Cleared imagery from a different run: 1" in result.output
         assert run.call_args.args[0].year == 2025
 
-    def test_scenes_over_mosaics_errors(self, tmp_path: Path) -> None:
+    def test_scenes_join_a_legacy_mosaics_chip(self, tmp_path: Path) -> None:
         catalog = _catalog(
             tmp_path,
             {"ftw:imagery_mode": "mosaics", "ftw:requested_year": 2024},
             links=("ftw:q1", "ftw:q2", "ftw:q3", "ftw:q4"),
         )
-        result = CliRunner().invoke(cli, ["select-images", str(catalog)])
-        assert result.exit_code == 1
-        assert "has mosaics imagery" in result.output
+        with (
+            patch(f"{_WORKFLOW}.run_chip_selection", return_value=_success()) as run,
+            patch(f"{_WORKFLOW}.ensure_crop_calendar_exists"),
+            patch(f"{_WORKFLOW}._build_scene_index", return_value=None),
+        ):
+            result = CliRunner().invoke(cli, ["select-images", str(catalog)])
+        assert result.exit_code == 0, result.output
+        assert run.call_args.kwargs["imagery_mode"] == "scenes"
+
+    def test_both_modes_run_scenes_then_mosaics(self, tmp_path: Path) -> None:
+        with (
+            patch(_YEAR_AVAILABLE, return_value=True),
+            patch(f"{_WORKFLOW}.run_chip_selection", return_value=_success()) as run,
+            patch(f"{_WORKFLOW}.ensure_crop_calendar_exists"),
+            patch(f"{_WORKFLOW}._build_scene_index", return_value=None),
+        ):
+            result = CliRunner().invoke(
+                cli,
+                [
+                    "select-images",
+                    str(_catalog(tmp_path)),
+                    "--imagery-mode",
+                    "mosaics",
+                    "--imagery-mode",
+                    "scenes",
+                    "--year",
+                    "2024",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert [c.kwargs["imagery_mode"] for c in run.call_args_list] == ["scenes", "mosaics"]
+        assert "Imagery selection (scenes): 1 ok" in result.output
+        assert "Scenes summary:" in result.output
+        assert "Mosaics summary:" in result.output
+
+    def test_both_modes_skip_mosaics_for_a_year_without_them(self, tmp_path: Path) -> None:
+        report = tmp_path / "report.json"  # outside chips/, so not read as a chip
+        with (
+            patch(_YEAR_AVAILABLE, return_value=False),
+            patch(f"{_WORKFLOW}.run_chip_selection", return_value=_success()) as run,
+            patch(f"{_WORKFLOW}.ensure_crop_calendar_exists"),
+            patch(f"{_WORKFLOW}._build_scene_index", return_value=None),
+        ):
+            result = CliRunner().invoke(
+                cli,
+                [
+                    "select-images",
+                    str(_catalog(tmp_path)),
+                    "--imagery-mode",
+                    "scenes",
+                    "--imagery-mode",
+                    "mosaics",
+                    "--year",
+                    "2023",
+                    "--output-report",
+                    str(report),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert [c.kwargs["imagery_mode"] for c in run.call_args_list] == ["scenes"]
+        assert "Imagery selection (mosaics): 0 ok, 1 skipped" in result.output
+        assert "No mosaics: 1" in result.output  # classified by code, not reason text
+        skipped = json.loads(report.read_text())["skipped"]
+        assert skipped[0]["mode"] == "mosaics"
+        assert skipped[0]["reason"].startswith("Mosaics for 2023 are not available")
+
+    def test_both_modes_allow_scene_options(self, tmp_path: Path) -> None:
+        with (
+            patch(_YEAR_AVAILABLE, return_value=True),
+            patch(f"{_WORKFLOW}.run_chip_selection", return_value=_success()) as run,
+            patch(f"{_WORKFLOW}.ensure_crop_calendar_exists"),
+            patch(f"{_WORKFLOW}._build_scene_index", return_value=None),
+        ):
+            result = CliRunner().invoke(
+                cli,
+                [
+                    "select-images",
+                    str(_catalog(tmp_path)),
+                    "--imagery-mode",
+                    "scenes",
+                    "--imagery-mode",
+                    "mosaics",
+                    "--cloud-cover-chip",
+                    "5",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert run.call_args_list[0].kwargs["cloud_cover_chip"] == 5.0
 
     def test_on_missing_fail_names_the_chip(self, tmp_path: Path) -> None:
         skipped = MagicMock(success=False, skipped_reason="No complete mosaic year (tried 2024)")
@@ -201,9 +289,41 @@ class TestSelectImagesMosaics:
         )
 
         assert result.exit_code == 0, result.output
-        assert "The imagery STAC items of 1 chips" in result.output
+        assert "The scenes and mosaics imagery STAC items of 1 chips" in result.output
         assert "STAC items deleted: 4" in result.output
         assert not list(chip_dir.glob("*_q*_s2.json"))
+
+    def test_clear_selections_respects_an_explicit_mode(self, tmp_path: Path) -> None:
+        slots = ("planting", "harvest", "q1", "q2", "q3", "q4")
+        catalog = _catalog(tmp_path, links=tuple(f"ftw:{slot}" for slot in slots))
+        chip_dir = catalog / "chips" / "32UNA" / "chip_001_2024"
+        for slot in slots:
+            (chip_dir / f"chip_001_2024_{slot}_s2.json").write_text("{}")
+
+        result = CliRunner().invoke(
+            cli,
+            ["select-images", str(catalog), "--clear-selections", "--imagery-mode", "mosaics"],
+            input="y\n",
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "The mosaics imagery STAC items of 1 chips" in result.output
+        assert not list(chip_dir.glob("*_q*_s2.json"))
+        assert (chip_dir / "chip_001_2024_planting_s2.json").exists()
+        saved = json.loads((chip_dir / "chip_001_2024.json").read_text())
+        assert {link["rel"] for link in saved["links"]} >= {"ftw:planting", "ftw:harvest"}
+
+    def test_summary_counts_chips_with_this_mode(self, tmp_path: Path) -> None:
+        # The chip holds mosaics only; the scenes summary must not count it.
+        catalog = _catalog(tmp_path, links=("ftw:q1", "ftw:q2", "ftw:q3", "ftw:q4"))
+        with (
+            patch(f"{_WORKFLOW}.run_chip_selection", return_value=_success()),
+            patch(f"{_WORKFLOW}.ensure_crop_calendar_exists"),
+            patch(f"{_WORKFLOW}._build_scene_index", return_value=None),
+        ):
+            result = CliRunner().invoke(cli, ["select-images", str(catalog)])
+        assert result.exit_code == 0, result.output
+        assert "Total with scenes: 0/1" in result.output
 
 
 class TestCreateDatasetMosaics:
@@ -260,36 +380,72 @@ class TestImageryModeConfig:
         return DatasetConfig.from_dict({"fields_file": "f.parquet", "stages": stages})
 
     def test_defaults_to_scenes(self) -> None:
-        assert DatasetConfig.from_dict({"fields_file": "f"}).stages.select_images.imagery_mode == (
-            "scenes"
-        )
+        config = DatasetConfig.from_dict({"fields_file": "f"})
+        assert config.stages.select_images.imagery_mode == ("scenes",)
+        assert config.config_dict()["stages"]["select_images"]["imagery_mode"] == "scenes"
 
     def test_mosaics_accepted(self) -> None:
-        assert self._config({"imagery_mode": "mosaics"}).stages.select_images.imagery_mode == (
-            "mosaics"
-        )
+        select = self._config({"imagery_mode": "mosaics"}).stages.select_images
+        assert select.imagery_mode == ("mosaics",)
+        assert select.imagery_modes == ("mosaics",)
+
+    def test_list_of_both_runs_scenes_first(self) -> None:
+        select = self._config({"imagery_mode": ["mosaics", "scenes"]}).stages.select_images
+        assert select.imagery_mode == ("scenes", "mosaics")
+
+    def test_single_item_list_is_one_mode(self) -> None:
+        config = self._config({"imagery_mode": ["mosaics"]})
+        assert config.stages.select_images.imagery_mode == ("mosaics",)
+        assert config.config_dict()["stages"]["select_images"]["imagery_mode"] == "mosaics"
+
+    def test_repeats_collapse(self) -> None:
+        select = self._config({"imagery_mode": ["scenes", "scenes"]}).stages.select_images
+        assert select.imagery_mode == ("scenes",)
+
+    def test_resolved_config_writes_both_as_a_list(self) -> None:
+        import yaml
+
+        config = self._config({"imagery_mode": ["scenes", "mosaics"]})
+        dumped = yaml.safe_dump(config.provenance_dict()["config"])
+        reloaded = yaml.safe_load(dumped)
+        assert reloaded["stages"]["select_images"]["imagery_mode"] == ["scenes", "mosaics"]
+        # The resolved section loads back to the same modes.
+        again = self._config(reloaded["stages"]["select_images"])
+        assert again.stages.select_images.imagery_mode == ("scenes", "mosaics")
 
     def test_unknown_mode_rejected(self) -> None:
         with pytest.raises(ConfigError, match="imagery_mode"):
             self._config({"imagery_mode": "monthly"})
 
+    def test_unknown_mode_in_list_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="'monthly'"):
+            self._config({"imagery_mode": ["scenes", "monthly"]})
+
+    @pytest.mark.parametrize("value", [[], 3, {"scenes": True}])
+    def test_malformed_value_rejected(self, value: object) -> None:
+        with pytest.raises(ConfigError, match=r"stages\.select_images\.imagery_mode"):
+            self._config({"imagery_mode": value})
+
     def test_scene_only_key_rejected_in_mosaic_mode(self) -> None:
         with pytest.raises(ConfigError, match="cloud_cover_chip only applies"):
             self._config({"imagery_mode": "mosaics", "cloud_cover_chip": 5.0})
+
+    def test_scene_only_key_allowed_with_both_modes(self) -> None:
+        config = self._config({"imagery_mode": ["scenes", "mosaics"], "cloud_cover_chip": 5.0})
+        assert config.stages.select_images.cloud_cover_chip == 5.0
 
     def test_preview_download_rejected_as_expected_for_mosaics(self) -> None:
         with pytest.raises(ConfigError, match="This is expected"):
             self._config({"imagery_mode": "mosaics"}, {"mode": "preview"})
 
+    def test_preview_download_allowed_with_both_modes(self) -> None:
+        config = self._config({"imagery_mode": ["scenes", "mosaics"]}, {"mode": "preview"})
+        assert config.stages.download_images.mode == "preview"
 
-class TestPipelineMosaicYear:
-    def test_configured_year_is_used(self, caplog: pytest.LogCaptureFixture) -> None:
-        assert pipeline.mosaic_year(2022) == 2022
-        assert not caplog.records
+    def test_example_config_loads(self) -> None:
+        from pathlib import Path
 
-    def test_missing_year_warns_and_falls_back(self, caplog: pytest.LogCaptureFixture) -> None:
-        assert pipeline.mosaic_year(None) == 2025
-        assert any(
-            r.levelname == "WARNING" and "no year given; using 2025" in r.message
-            for r in caplog.records
-        )
+        from ftw_dataset_tools.api.config import load_config
+
+        example = Path(__file__).parents[2] / "configs" / "examples" / "config.yaml"
+        assert load_config(example).stages.select_images.imagery_mode == ("scenes",)

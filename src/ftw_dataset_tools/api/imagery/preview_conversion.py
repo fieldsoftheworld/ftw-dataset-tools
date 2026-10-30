@@ -22,6 +22,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from ftw_dataset_tools.api.assets import add_file_info
+from ftw_dataset_tools.api.imagery.chip_preview import refresh_chip_preview
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, run_in_parallel
 from ftw_dataset_tools.api.imagery.preview_workflow import (
     PreviewTask,
@@ -29,7 +30,7 @@ from ftw_dataset_tools.api.imagery.preview_workflow import (
     render_preview,
 )
 from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
-from ftw_dataset_tools.api.imagery.stac_child_items import SEASONS, attach_thumbnail_to_parent
+from ftw_dataset_tools.api.imagery.stac_child_items import SEASONS
 from ftw_dataset_tools.api.imagery.thumbnails import (
     LEGACY_PREVIEW_SUFFIXES,
     PREVIEW_MEDIA_TYPE,
@@ -251,7 +252,7 @@ def commit_chip_conversion(plan: _ConversionPlan) -> int:
     chip_dir = item_path.parent
     thumbnail = item.assets.get("thumbnail")
     checksums = thumbnail is not None and "file:checksum" in thumbnail.extra_fields
-    attach_thumbnail_to_parent(item, chip_dir, checksums=checksums)
+    refresh_chip_preview(item, chip_dir, checksums=checksums)
     write_item(item, item_path)
     _repoint_child_items(plan)
 

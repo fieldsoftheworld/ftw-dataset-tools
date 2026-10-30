@@ -6,7 +6,7 @@ and leaving the clipping to the client - has no such file, so there is nothing t
 preview from. This module renders the same overlay preview by reading the chip's
 window straight out of the scene's true-colour COG instead.
 
-The output filename is the one ``attach_thumbnail_to_parent`` already looks for, so
+The output filenames are the ones ``chip_preview`` already looks for, so
 a preview written here is picked up by the STAC stage exactly like a downloaded
 one, with no separate asset wiring.
 """
@@ -20,9 +20,10 @@ from typing import TYPE_CHECKING
 import pystac
 from tqdm import tqdm
 
+from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, refresh_chip_preview
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, run_in_parallel
 from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
-from ftw_dataset_tools.api.imagery.stac_child_items import attach_thumbnail_to_parent
+from ftw_dataset_tools.api.imagery.slots import SCENE_SLOTS
 from ftw_dataset_tools.api.imagery.thumbnails import (
     PREVIEW_SUFFIX,
     REFERENCE_MASK_SUFFIX,
@@ -60,10 +61,14 @@ class PreviewTask:
     visual_href: str
     mask_path: Path
     output_path: Path
+    #: The season the scene is from, which the chip preview is then recorded as.
+    season: str
+    #: The scene's own preview, kept so the chip preview's source is visible on disk.
+    base_path: Path
 
 
-def _visual_href(chip_dir: Path, item_id: str) -> str | None:
-    """The true-colour scene href for this chip, preferring the planting season."""
+def _visual_href(chip_dir: Path, item_id: str) -> tuple[str, str] | None:
+    """``(season, href)`` of the true-colour scene for this chip, preferring planting."""
     for season in _PREVIEW_SEASONS:
         child_path = chip_dir / f"{item_id}_{season}_s2.json"
         if not child_path.exists():
@@ -80,7 +85,7 @@ def _visual_href(chip_dir: Path, item_id: str) -> str | None:
         # is accepted too, so a local mirror - or a test - can stand in for it; what
         # is rejected is a relative href, which is a locally written file, not a scene.
         if href and (href.startswith(("http://", "https://")) or Path(href).is_absolute()):
-            return href
+            return season, href
     return None
 
 
@@ -90,15 +95,18 @@ def build_preview_task(item: pystac.Item, item_path: Path) -> PreviewTask | str:
     mask_path = chip_dir / f"{item.id}{REFERENCE_MASK_SUFFIX}"
     if not mask_path.exists():
         return "No semantic mask to use as the preview grid"
-    href = _visual_href(chip_dir, item.id)
-    if href is None:
+    visual = _visual_href(chip_dir, item.id)
+    if visual is None:
         return "No remote true-colour scene selected"
+    season, href = visual
     return PreviewTask(
         item_id=item.id,
         item_path=item_path,
         visual_href=href,
         mask_path=mask_path,
         output_path=chip_dir / f"{item.id}_overlay{PREVIEW_SUFFIX}",
+        season=season,
+        base_path=chip_dir / f"{item.id}_{season}_image_s2{PREVIEW_SUFFIX}",
     )
 
 
@@ -108,6 +116,8 @@ def render_preview(task: PreviewTask) -> None:
     try:
         generate_scene_thumbnail(task.visual_href, task.mask_path, base_path)
         generate_overlay_thumbnail(base_path, task.mask_path, task.output_path)
+        # Kept as the season's own preview, which the chip preview can be redrawn from.
+        base_path.replace(task.base_path)
     finally:
         base_path.unlink(missing_ok=True)
 
@@ -170,7 +180,8 @@ def preview_imagery_for_catalog(
                 result.skipped_details.append({"chip": item.id, "reason": built})
                 advance()
                 continue
-            if resume and built.output_path.exists():
+            # Done once a scene draws the preview; one drawn from Q3 is replaced.
+            if resume and preview_slot(item, item_path.parent) in SCENE_SLOTS:
                 result.skipped += 1
                 result.skipped_details.append({"chip": item.id, "reason": "Already rendered"})
                 advance()
@@ -186,7 +197,7 @@ def preview_imagery_for_catalog(
                 return
             try:
                 parent = pystac.Item.from_file(str(task.item_path))
-                attach_thumbnail_to_parent(parent, task.item_path.parent)
+                refresh_chip_preview(parent, task.item_path.parent, task.season)
                 write_item(parent, task.item_path)
             except (OSError, pystac.STACError) as err:
                 # The preview is on disk; only the item update failed. Report it rather

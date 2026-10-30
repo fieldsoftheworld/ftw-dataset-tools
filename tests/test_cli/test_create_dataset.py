@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from unittest.mock import patch
 
 import click
 import geopandas as gpd
@@ -13,6 +14,7 @@ from click.testing import CliRunner, Result
 from shapely.geometry import box
 
 from ftw_dataset_tools.api.dataset import CreateDatasetResult
+from ftw_dataset_tools.api.imagery import selection_workflow
 from ftw_dataset_tools.api.imagery.download_workflow import DownloadWorkflowResult
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS
 from ftw_dataset_tools.api.imagery.selection_workflow import SelectionWorkflowResult
@@ -65,6 +67,7 @@ class TestCreateDatasetCommand:
             cli,
             [
                 "create-dataset",
+                "--skip-images",
                 str(sample_fields_geoparquet),
                 "--split-type",
                 "block3x3-hash",
@@ -94,6 +97,7 @@ class TestCreateDatasetCommand:
             cli,
             [
                 "create-dataset",
+                "--skip-images",
                 str(sample_fields_geoparquet),
                 "--split-type",
                 "block3x3",
@@ -117,7 +121,14 @@ class TestCreateDatasetCommand:
         monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
 
         CliRunner().invoke(
-            cli, ["create-dataset", str(sample_fields_geoparquet), "--split-type", "block3x3"]
+            cli,
+            [
+                "create-dataset",
+                "--skip-images",
+                str(sample_fields_geoparquet),
+                "--split-type",
+                "block3x3",
+            ],
         )
 
         assert captured["km_size"] == 2.0
@@ -202,6 +213,7 @@ class TestCreateDatasetMaskTypes:
             cli,
             [
                 "create-dataset",
+                "--skip-images",
                 str(sample_fields_geoparquet),
                 "--split-type",
                 "random-uniform",
@@ -229,6 +241,7 @@ class TestCreateDatasetMaskTypes:
             cli,
             [
                 "create-dataset",
+                "--skip-images",
                 str(sample_fields_geoparquet),
                 "--split-type",
                 "random-uniform",
@@ -268,7 +281,7 @@ class TestCreateDatasetMaskTypes:
 
 @dataclass
 class SelectionStub:
-    """Records calls to select_imagery_for_catalog and controls what it does."""
+    """Records calls to _select_mode and controls what it does."""
 
     calls: list[dict[str, Any]] = field(default_factory=list)
     result: SelectionWorkflowResult = field(
@@ -322,7 +335,7 @@ def stub_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SelectionS
         return stub.result
 
     monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
-    monkeypatch.setattr(create_dataset_module, "select_imagery_for_catalog", fake_select)
+    monkeypatch.setattr(selection_workflow, "_select_mode", fake_select)
     return stub
 
 
@@ -340,7 +353,7 @@ class TestCreateDatasetImageSelection:
     def test_uses_shared_selection_workflow(
         self, stub_pipeline: SelectionStub, sample_fields_geoparquet: Path, tmp_path: Path
     ) -> None:
-        """Selection is delegated to select_imagery_for_catalog with CLI options."""
+        """Selection is delegated to _select_mode with CLI options."""
         result = _invoke(sample_fields_geoparquet)
 
         assert result.exit_code == 0, result.output
@@ -417,8 +430,8 @@ class TestCreateDatasetImageSelection:
         result = _invoke(sample_fields_geoparquet)
 
         assert result.exit_code == 0, result.output
-        assert "Selected: 2" in result.output
-        assert "Skipped: 1" in result.output
+        assert "Imagery selection: 2 ok, 1 skipped, 0 failed" in result.output
+        assert "Scenes summary" not in result.output
         assert "Failed:" not in result.output
 
     def test_skip_images_does_not_select(
@@ -453,7 +466,7 @@ class TestCreateDatasetImageSelectionErrors:
         result = _invoke(sample_fields_geoparquet)
 
         assert result.exit_code == 0, result.output
-        assert "Failed: 2" in result.output
+        assert "Imagery selection: 1 ok, 0 skipped, 2 failed" in result.output
 
     def test_reports_empty_catalog(
         self, stub_pipeline: SelectionStub, sample_fields_geoparquet: Path
@@ -464,7 +477,7 @@ class TestCreateDatasetImageSelectionErrors:
         result = _invoke(sample_fields_geoparquet)
 
         assert result.exit_code == 0, result.output
-        assert "Selected: 0" in result.output
+        assert "Imagery selection: 0 ok, 0 skipped, 0 failed" in result.output
 
     def test_selection_value_error_exits_nonzero(
         self, stub_pipeline: SelectionStub, sample_fields_geoparquet: Path
@@ -808,3 +821,74 @@ class TestCreateDatasetMosaics:
         assert result.exit_code == 1
         assert "already hold imagery" in result.output
         assert "--force-image-selection" in result.output
+
+    def test_both_modes_select_scenes_then_mosaics(
+        self,
+        stub_pipeline: SelectionStub,
+        sample_fields_geoparquet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ftw_dataset_tools.api.imagery import mosaic_selection
+
+        monkeypatch.setattr(mosaic_selection, "year_available", lambda _year: True)
+        result = _invoke(
+            sample_fields_geoparquet,
+            "--imagery-mode",
+            "mosaics",
+            "--imagery-mode",
+            "scenes",
+            "--buffer-days",
+            "7",
+        )
+
+        assert result.exit_code == 0, result.output
+        assert [(c["imagery_mode"], c["year"]) for c in stub_pipeline.calls] == [
+            ("scenes", 2023),
+            ("mosaics", 2023),
+        ]
+        assert stub_pipeline.calls[0]["buffer_days"] == 7
+        assert "Imagery selection (scenes): 2 ok, 1 skipped, 0 failed" in result.output
+        assert "Imagery selection (mosaics): 2 ok, 1 skipped, 0 failed" in result.output
+
+    def test_both_modes_skip_mosaics_for_a_year_without_them(
+        self,
+        stub_pipeline: SelectionStub,
+        sample_fields_geoparquet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ftw_dataset_tools.api.imagery import mosaic_selection
+
+        monkeypatch.setattr(mosaic_selection, "year_available", lambda _year: False)
+        result = _invoke(
+            sample_fields_geoparquet, "--imagery-mode", "scenes", "--imagery-mode", "mosaics"
+        )
+
+        # Not an error: each chip of 2023 skips its mosaics (see selection_workflow).
+        assert result.exit_code == 0, result.output
+        assert [c["imagery_mode"] for c in stub_pipeline.calls] == ["scenes", "mosaics"]
+
+    def test_scenes_without_a_year_fail_before_any_work(
+        self, stub_pipeline: SelectionStub, sample_fields_geoparquet: Path
+    ) -> None:
+        with patch.object(create_dataset_module.dataset, "create_dataset") as create:
+            result = _invoke(sample_fields_geoparquet, year=None)
+
+        assert result.exit_code == 1
+        assert "--year is required for image selection" in result.output
+        create.assert_not_called()
+        assert stub_pipeline.calls == []
+
+    def test_mosaics_alone_for_a_year_without_them_fail_before_any_work(
+        self,
+        stub_pipeline: SelectionStub,
+        sample_fields_geoparquet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ftw_dataset_tools.api.imagery import mosaic_selection
+
+        monkeypatch.setattr(mosaic_selection, "year_available", lambda _year: False)
+        result = _invoke(sample_fields_geoparquet, "--imagery-mode", "mosaics")
+
+        assert result.exit_code == 2
+        assert "Mosaics for 2023 are not available" in result.output
+        assert stub_pipeline.calls == []

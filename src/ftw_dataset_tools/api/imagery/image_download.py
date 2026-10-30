@@ -15,6 +15,8 @@ from rasterio.vrt import WarpedVRT
 from rasterio.warp import Resampling
 
 from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
+from ftw_dataset_tools.api.imagery.catalog_ops import normalize_imagery_properties
+from ftw_dataset_tools.api.imagery.chip_preview import refresh_chip_preview, takes_preview
 from ftw_dataset_tools.api.imagery.settings import (
     BANDS_OF_INTEREST,
     CHILD_ITEM_BAND_ASSETS,
@@ -22,12 +24,11 @@ from ftw_dataset_tools.api.imagery.settings import (
     MOSAIC_SCALE,
     REFLECTANCE_BANDS,
 )
-from ftw_dataset_tools.api.imagery.slots import MOSAIC_SOURCE, THUMBNAIL_SLOTS, parse_image_stem
+from ftw_dataset_tools.api.imagery.slots import MOSAIC_SOURCE, parse_image_stem
 from ftw_dataset_tools.api.imagery.thumbnails import (
     PREVIEW_MEDIA_TYPE,
     PREVIEW_SUFFIX,
     ThumbnailError,
-    generate_overlay_thumbnail,
     generate_thumbnail,
     has_rgb_bands,
 )
@@ -519,8 +520,6 @@ class ProcessedSceneResult:
     """Result of processing a downloaded scene."""
 
     thumbnail_path: Path | None = None
-    overlay_path: Path | None = None
-    is_overlay: bool = False
 
 
 def process_downloaded_scene(
@@ -597,27 +596,10 @@ def process_downloaded_scene(
     if parent_item_path.exists():
         parent_item = pystac.Item.from_file(str(parent_item_path))
 
-        # Generate overlay thumbnail for the thumbnail slot if mask exists
-        thumb_for_parent = None
-        is_overlay = False
-
-        if result.thumbnail_path and season in THUMBNAIL_SLOTS:
-            # Look for semantic 3-class mask
-            mask_path = item_path.parent / f"{base_id}_semantic_3_class.tif"
-            if mask_path.exists():
-                try:
-                    overlay_filename = f"{base_id}_overlay{PREVIEW_SUFFIX}"
-                    overlay_path = item_path.parent / overlay_filename
-                    generate_overlay_thumbnail(result.thumbnail_path, mask_path, overlay_path)
-                    thumb_for_parent = overlay_filename
-                    is_overlay = True
-                    result.overlay_path = overlay_path
-                    result.is_overlay = True
-                except ThumbnailError:
-                    # Fallback to plain thumbnail
-                    thumb_for_parent = result.thumbnail_path.name
-            else:
-                thumb_for_parent = result.thumbnail_path.name
+        # Only the chip's preview slot draws the chip preview (see chip_preview).
+        if result.thumbnail_path and takes_preview(parent_item, item_path.parent, season):
+            refresh_chip_preview(parent_item, item_path.parent, season, redraw=True)
+        normalize_imagery_properties(parent_item)
 
         # A failure here used to be swallowed, so a read-only or full destination
         # left the chip without its season image while the run still reported the
@@ -629,8 +611,6 @@ def process_downloaded_scene(
             season=season,
             output_filename=output_filename,
             band_list=band_list,
-            thumbnail_filename=thumb_for_parent,
-            is_overlay=is_overlay,
         )
 
     # Save the child last so a parent failure leaves it re-downloadable on resume.

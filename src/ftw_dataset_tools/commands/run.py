@@ -9,6 +9,7 @@ import click
 from ftw_dataset_tools.api import assets, crop_stats, land_cover, masks, pipeline, source
 from ftw_dataset_tools.api import config as config_module
 from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
+from ftw_dataset_tools.api.imagery.summary import imagery_summary_line, selection_summary_lines
 
 
 def _on_mask_progress(current: int, total: int) -> None:
@@ -197,9 +198,10 @@ def _print_summary(ctx: pipeline.PipelineContext) -> None:
     if ctx.stac_result:
         click.echo(f"  STAC items: {ctx.stac_result.total_items:,}")
     if ctx.selection_result is not None:
-        click.echo(pipeline.imagery_summary_line("Imagery selection", ctx.selection_result))
+        for line in selection_summary_lines(ctx.selection_result):
+            click.echo(line)
     if ctx.download_result is not None:
-        click.echo(pipeline.imagery_summary_line("Imagery download", ctx.download_result))
+        click.echo(imagery_summary_line("Imagery download", ctx.download_result))
     if ctx.docs_result is not None:
         click.echo(pipeline.docs_summary_line(ctx.docs_result, ctx.config.stages.docs.pmtiles))
 

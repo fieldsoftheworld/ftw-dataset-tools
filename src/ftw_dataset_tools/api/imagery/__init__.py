@@ -39,7 +39,7 @@ __getattr__, __all__ = lazy_exports(
         "selection_workflow": (
             "SelectionWorkflowResult",
             "find_chip_items",
-            "select_imagery_for_catalog",
+            "select_imagery_modes_for_catalog",
         ),
         "settings": (
             "BANDS_OF_INTEREST",

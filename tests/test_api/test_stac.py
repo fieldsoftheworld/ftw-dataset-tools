@@ -1567,14 +1567,14 @@ class TestImageryReattachedOnStacRerun:
 def test_thumbnail_candidates_support_legacy_and_mixed_formats(tmp_path, suffixes):
     import pystac
 
-    from ftw_dataset_tools.api.imagery.stac_child_items import attach_thumbnail_to_parent
+    from ftw_dataset_tools.api.imagery.chip_preview import refresh_chip_preview
     from ftw_dataset_tools.api.stac import _build_item_assets
 
     item = pystac.Item("chip_a", None, None, datetime(2024, 1, 1, tzinfo=UTC), {})
     for suffix in suffixes:
         (tmp_path / f"chip_a{suffix}").write_bytes(b"preview")
 
-    attach_thumbnail_to_parent(item, tmp_path)
+    refresh_chip_preview(item, tmp_path)
 
     expected = next((s for s in suffixes if s.endswith(".webp")), suffixes[0])
     asset = item.assets["thumbnail"]

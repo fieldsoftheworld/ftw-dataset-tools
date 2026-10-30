@@ -8,12 +8,13 @@ __all__ = [
     "IMAGERY_SLOTS",
     "MOSAIC_SLOTS",
     "MOSAIC_SOURCE",
-    "MOSAIC_THUMBNAIL_SLOT",
     "SCENE_SLOTS",
     "SLOTS_BY_MODE",
     "THUMBNAIL_SLOTS",
+    "InvalidImageryModeError",
     "child_item_id",
     "image_filename",
+    "normalize_imagery_modes",
     "parse_child_id",
     "parse_image_stem",
     "slot_title",
@@ -30,10 +31,37 @@ SLOTS_BY_MODE = {"scenes": SCENE_SLOTS, "mosaics": MOSAIC_SLOTS}
 #: ``ftw:source`` of a quarterly mosaic child item.
 MOSAIC_SOURCE = "sentinel-2-mosaic"
 
-# Q3 is the main growing season across most of the northern-hemisphere cropland;
-# Q2 would be the alternative.
-MOSAIC_THUMBNAIL_SLOT = "q3"
-THUMBNAIL_SLOTS = ("planting", MOSAIC_THUMBNAIL_SLOT)
+#: Slots the chip preview can be drawn from, in preference order: a scene first, else
+#: Q3, the main growing season across most of the northern-hemisphere cropland.
+THUMBNAIL_SLOTS = ("planting", "harvest", "q3")
+
+
+class InvalidImageryModeError(ValueError):
+    """An imagery mode setting that is not a known mode, or a list of them."""
+
+
+def normalize_imagery_modes(value: str | list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    """One mode or several, as a tuple in canonical order (scenes before mosaics).
+
+    The order is the order the modes run in, not the order they were written: scenes
+    go first so that, on a chip holding both, the planting scene is the one the chip
+    preview is drawn from (see ``THUMBNAIL_SLOTS``). Repeats collapse.
+
+    Raises:
+        InvalidImageryModeError: For an empty list, a non-string entry or an unknown mode.
+    """
+    raw = [value] if isinstance(value, str) else value
+    if not isinstance(raw, list | tuple) or not raw:
+        raise InvalidImageryModeError(
+            f"imagery_mode must be one of {list(IMAGERY_MODES)} or a list of them (got {value!r})"
+        )
+    unknown = [mode for mode in raw if mode not in IMAGERY_MODES]
+    if unknown:
+        raise InvalidImageryModeError(
+            f"imagery_mode must be one of {list(IMAGERY_MODES)} or a list of them "
+            f"(got {unknown[0]!r})"
+        )
+    return tuple(mode for mode in IMAGERY_MODES if mode in raw)
 
 
 def child_item_id(chip_id: str, slot: str) -> str:

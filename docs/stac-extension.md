@@ -61,21 +61,50 @@ These properties are added to parent chip items after image selection:
 ### Quarterly Mosaic Mode
 
 With `--imagery-mode mosaics` (config `stages.select_images.imagery_mode: mosaics`) a chip
-gets four images, Q1-Q4 of one year, from the Sentinel-2 quarterly cloudless mosaics, in
-place of the planting and harvest scenes. The slots are `q1`..`q4`, so links are
-`ftw:q1`..`ftw:q4`, assets `q1_image`..`q4_image` and files `{item_id}_q1_s2.json` /
-`{item_id}_q1_image_s2.tif`. None of the crop-calendar or cloud properties above are written.
+gets four images, Q1-Q4 of one year, from the Sentinel-2 quarterly cloudless mosaics. The
+slots are `q1`..`q4`, so links are `ftw:q1`..`ftw:q4`, assets `q1_image`..`q4_image` and
+files `{item_id}_q1_s2.json` / `{item_id}_q1_image_s2.tif`. The crop-calendar and cloud
+properties above belong to scenes and are not written for mosaics.
 
 | Property | Item | Type | Description |
 |----------|------|------|-------------|
-| `ftw:imagery_mode` | parent | string | `mosaics` (absent means scenes) |
-| `ftw:requested_year` | parent | integer | Mosaic year the selection asked for |
-| `ftw:imagery_year` | parent, child | integer | Mosaic year used; differs when a nearby year was needed |
+| `ftw:mosaic_requested_year` | parent | integer | Mosaic year the selection asked for |
+| `ftw:mosaic_year` | parent | integer | Mosaic year used; differs when a nearby year was needed |
+| `ftw:imagery_year` | child | integer | Mosaic year of this quarter's image |
 | `ftw:season` | child | string | `q1`..`q4` |
 | `ftw:source` | child | string | `sentinel-2-mosaic` |
 | `ftw:mosaic_tile` | child | string | Mosaic tile id, e.g. `31UGR_0_0` |
 
 Child items carry `start_datetime`/`end_datetime` for the quarter instead of `datetime`.
+
+### Both Imagery Modes
+
+A chip can hold scenes and mosaics side by side (`--imagery-mode scenes --imagery-mode
+mosaics`, config `imagery_mode: [scenes, mosaics]`). Their slots, links, assets, files and
+properties do not overlap, so each mode's selection is recorded, replaced and cleared on
+its own; re-selecting one mode never touches the other.
+
+| Property | Item | Type | Description |
+|----------|------|------|-------------|
+| `ftw:imagery_modes` | parent | array of string | Modes whose selection is complete on the chip, in run order: `["scenes"]`, `["mosaics"]` or `["scenes", "mosaics"]`. Derived from the `ftw:<slot>` links |
+| `ftw:preview_slot` | parent `thumbnail` asset | string | Slot the chip preview was drawn from, e.g. `planting` or `q3` |
+
+The parent's `start_datetime`/`end_datetime` span every selected image of both modes. The
+chip preview (`thumbnail`) comes from a scene (planting, else harvest) when one has a
+preview, else from the Q3 mosaic; the slot that drew it is recorded as `ftw:preview_slot`.
+A thumbnail without that field predates it and counts as a scene's. Clearing the mode that
+drew the preview redraws it from the other mode.
+
+Without an explicit year each mode keeps the year its selection on the chip recorded
+(`ftw:calendar_year`, `ftw:mosaic_requested_year`), else uses the chip id's year. A chip
+with neither is skipped for scenes and gets 2025 mosaics. A selection recorded for a year
+other than an explicit one conflicts.
+
+Catalogs written before multi-mode support carry a scalar `ftw:imagery_mode` (`mosaics`;
+absent meant scenes) and the un-namespaced mosaic years `ftw:requested_year` /
+`ftw:imagery_year` on the parent. ftwd still reads them, and rewrites them to
+`ftw:imagery_modes`, `ftw:mosaic_requested_year` and `ftw:mosaic_year` whenever it writes
+the chip item again.
 Clipped mosaic images keep the source encoding: `int16`, nodata `-32768`, reflectance =
 value x 0.0001 with no offset, recorded as GDAL scale/offset and in `raster:bands`.
 

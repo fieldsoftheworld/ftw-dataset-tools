@@ -14,14 +14,13 @@ import pytest
 
 from ftw_dataset_tools.api.imagery.catalog_ops import has_existing_scenes
 from ftw_dataset_tools.api.imagery.selection_workflow import (
-    NO_YEAR_REASON,
     ChipSelectionJob,
     NoCloudFreeScenesError,
     SelectionWorkflowResult,
-    chip_year,
+    _select_mode,
     find_chip_items,
     run_chip_selection,
-    select_imagery_for_catalog,
+    selection_year,
 )
 
 if TYPE_CHECKING:
@@ -144,11 +143,11 @@ class TestHasExistingScenes:
 
 
 class TestSelectImageryForCatalog:
-    """Tests for select_imagery_for_catalog function."""
+    """Tests for _select_mode function."""
 
     def test_returns_empty_for_no_chips(self, mock_catalog_empty: Path) -> None:
         """Test returns empty result when no chips found."""
-        result = select_imagery_for_catalog(
+        result = _select_mode(
             catalog_dir=mock_catalog_empty,
             year=2024,
         )
@@ -179,7 +178,7 @@ class TestSelectImageryForCatalog:
         item_path = chip_dir / "chip_001.json"
         item_path.write_text(json.dumps(item_json))
 
-        result = select_imagery_for_catalog(
+        result = _select_mode(
             catalog_dir=tmp_path,
             year=2024,
         )
@@ -189,7 +188,7 @@ class TestSelectImageryForCatalog:
 
     def test_skips_existing_scenes(self, mock_catalog_with_existing_scenes: Path) -> None:
         """Test that chips with existing scenes are skipped by default."""
-        result = select_imagery_for_catalog(
+        result = _select_mode(
             catalog_dir=mock_catalog_with_existing_scenes,
             year=2024,
         )
@@ -213,7 +212,7 @@ class TestSelectImageryForCatalog:
         mock_progress.return_value.__enter__ = MagicMock()
         mock_progress.return_value.__exit__ = MagicMock()
 
-        result = select_imagery_for_catalog(
+        result = _select_mode(
             catalog_dir=mock_catalog_with_existing_scenes,
             year=2024,
             force=True,
@@ -239,7 +238,7 @@ class TestSelectImageryForCatalog:
         mock_progress.return_value.__enter__ = MagicMock()
         mock_progress.return_value.__exit__ = MagicMock()
 
-        result = select_imagery_for_catalog(
+        result = _select_mode(
             catalog_dir=mock_catalog_with_chips,
             year=2024,
         )
@@ -275,7 +274,7 @@ class TestSelectImageryForCatalog:
         mock_progress.return_value.__enter__ = MagicMock()
         mock_progress.return_value.__exit__ = MagicMock()
 
-        result = select_imagery_for_catalog(
+        result = _select_mode(
             catalog_dir=mock_catalog_with_chips,
             year=2024,
             on_missing="skip",
@@ -312,7 +311,7 @@ class TestSelectImageryForCatalog:
         mock_progress_class.return_value.__exit__.return_value = None
 
         with pytest.raises(ValueError, match="No cloud-free scenes"):
-            select_imagery_for_catalog(
+            _select_mode(
                 catalog_dir=mock_catalog_with_chips,
                 year=2024,
                 on_missing="fail",
@@ -343,7 +342,7 @@ class TestSelectImageryForCatalog:
         mock_progress.return_value.__enter__ = MagicMock()
         mock_progress.return_value.__exit__ = MagicMock()
 
-        result = select_imagery_for_catalog(
+        result = _select_mode(
             catalog_dir=mock_catalog_with_chips,
             year=2024,
             on_missing="skip",
@@ -365,7 +364,7 @@ class TestSelectImageryForCatalog:
         mock_progress.return_value.__enter__ = MagicMock()
         mock_progress.return_value.__exit__ = MagicMock()
 
-        result = select_imagery_for_catalog(
+        result = _select_mode(
             catalog_dir=mock_catalog_with_chips,
             year=2024,
             on_missing="skip",
@@ -390,7 +389,7 @@ class TestSelectImageryForCatalog:
         mock_progress_class.return_value.__exit__.return_value = None
 
         with pytest.raises(RuntimeError, match="STAC API error"):
-            select_imagery_for_catalog(
+            _select_mode(
                 catalog_dir=mock_catalog_with_chips,
                 year=2024,
                 on_missing="fail",
@@ -414,7 +413,7 @@ class TestSelectImageryForCatalog:
         mock_progress_class.return_value.__enter__ = MagicMock(return_value=mock_progress)
         mock_progress_class.return_value.__exit__ = MagicMock()
 
-        select_imagery_for_catalog(
+        _select_mode(
             catalog_dir=mock_catalog_with_chips,
             year=2024,
         )
@@ -439,7 +438,7 @@ class TestSelectImageryForCatalog:
         mock_progress.return_value.__enter__ = MagicMock()
         mock_progress.return_value.__exit__ = MagicMock()
 
-        select_imagery_for_catalog(
+        _select_mode(
             catalog_dir=mock_catalog_with_chips,
             year=2024,
             cloud_cover_chip=5.0,
@@ -474,7 +473,7 @@ class TestSelectImageryForCatalog:
         mock_progress.return_value.__enter__ = MagicMock()
         mock_progress.return_value.__exit__ = MagicMock()
 
-        select_imagery_for_catalog(
+        _select_mode(
             catalog_dir=mock_catalog_with_chips,
             year=2024,
             cloud_cover_chip=5.0,
@@ -532,7 +531,7 @@ class TestFailuresAreReported:
         mock_progress_class.return_value.__enter__.return_value = mock_progress
         mock_progress_class.return_value.__exit__.return_value = None
 
-        result = select_imagery_for_catalog(catalog_dir=mock_catalog_with_chips, year=2024)
+        result = _select_mode(catalog_dir=mock_catalog_with_chips, year=2024)
 
         mock_progress.report_failures.assert_called_once_with(result.failed_details)
         assert "does not resolve" in result.failed_details[0]["error"]
@@ -553,7 +552,7 @@ class TestFailuresAreReported:
         mock_progress_class.return_value.__enter__.return_value = mock_progress
         mock_progress_class.return_value.__exit__.return_value = None
 
-        select_imagery_for_catalog(catalog_dir=mock_catalog_with_chips, year=2024)
+        _select_mode(catalog_dir=mock_catalog_with_chips, year=2024)
 
         mock_progress.report_failures.assert_called_once_with([])
 
@@ -598,7 +597,7 @@ class TestUnreadableChipsAreReported:
         mock_progress_class.return_value.__enter__.return_value = mock_progress
         mock_progress_class.return_value.__exit__.return_value = None
 
-        result = select_imagery_for_catalog(catalog_dir=mock_catalog_with_invalid_json, year=2024)
+        result = _select_mode(catalog_dir=mock_catalog_with_invalid_json, year=2024)
 
         assert result.successful == 1
         assert result.failed == 1
@@ -652,9 +651,7 @@ class TestSearchBackendThreading:
             MagicMock(),
         )
 
-        select_imagery_for_catalog(
-            catalog_dir=catalog, year=2024, workers=1, search_backend="earth-search"
-        )
+        _select_mode(catalog_dir=catalog, year=2024, workers=1, search_backend="earth-search")
 
         assert seen["search_backend"] == "earth-search"
 
@@ -736,7 +733,7 @@ class TestParallelSelection:
             RecordingProgressBar,
         )
 
-        result = select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4)
+        result = _select_mode(catalog_dir=catalog, year=2024, workers=4)
 
         assert result.successful == 8
         assert result.skipped == 0
@@ -760,7 +757,7 @@ class TestParallelSelection:
             RecordingProgressBar,
         )
 
-        result = select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4)
+        result = _select_mode(catalog_dir=catalog, year=2024, workers=4)
 
         assert result.successful == 4
         for chip_id in chip_ids:
@@ -796,7 +793,7 @@ class TestParallelSelection:
             lambda **_kwargs: recorder,
         )
 
-        result = select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4)
+        result = _select_mode(catalog_dir=catalog, year=2024, workers=4)
 
         assert result.successful == 2
         assert result.failed == 1
@@ -833,7 +830,7 @@ class TestParallelSelection:
         )
 
         with pytest.raises(RuntimeError, match="STAC API error"):
-            select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4, on_missing="fail")
+            _select_mode(catalog_dir=catalog, year=2024, workers=4, on_missing="fail")
 
     def test_on_missing_fail_raises_for_missing_scenes(
         self,
@@ -862,7 +859,7 @@ class TestParallelSelection:
         )
 
         with pytest.raises(ValueError, match="No cloud-free scenes"):
-            select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4, on_missing="fail")
+            _select_mode(catalog_dir=catalog, year=2024, workers=4, on_missing="fail")
 
     def test_chip_log_lines_are_replayed_contiguously(
         self,
@@ -895,7 +892,7 @@ class TestParallelSelection:
             lambda **_kwargs: recorder,
         )
 
-        select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4)
+        _select_mode(catalog_dir=catalog, year=2024, workers=4)
 
         logs = [message.split("|")[0] for kind, message in recorder.calls if kind == "log"]
         assert len(logs) == 12
@@ -939,7 +936,7 @@ class TestCropCalendarWarmup:
             RecordingProgressBar,
         )
 
-        select_imagery_for_catalog(catalog_dir=catalog, year=2024, workers=4)
+        _select_mode(catalog_dir=catalog, year=2024, workers=4)
 
         assert events.count("warm") == 1
         assert events[0] == "warm"
@@ -950,7 +947,7 @@ class TestCropCalendarWarmup:
         """An empty catalog does not touch the network."""
         catalog = _write_chip_catalog(tmp_path, [])
 
-        select_imagery_for_catalog(catalog_dir=catalog, year=2024)
+        _select_mode(catalog_dir=catalog, year=2024)
 
         crop_calendar_warmup.assert_not_called()
 
@@ -966,27 +963,28 @@ def _chip(item_id: str, **kwargs: object) -> pystac.Item:
     )
 
 
-class TestChipYear:
-    """chip_year reads the id suffix first, then the item's temporal properties."""
+class TestSelectionYear:
+    """selection_year reads stable inputs only, per mode, never the rewritable dates."""
+
+    def test_explicit_year_wins(self) -> None:
+        item = _chip("chip_2024", properties={"ftw:calendar_year": 2022})
+        assert selection_year(item, "scenes", 2020) == 2020
+
+    def test_each_mode_reads_its_own_recorded_year(self) -> None:
+        both = {"ftw:mosaic_requested_year": 2024, "ftw:calendar_year": 2023}
+        assert selection_year(_chip("c_2022", properties=both), "scenes") == 2023
+        assert selection_year(_chip("c_2022", properties=both), "mosaics") == 2024
+        legacy = _chip("c_2022", properties={"ftw:requested_year": 2025})
+        assert selection_year(legacy, "mosaics") == 2025
+        assert selection_year(legacy, "scenes") == 2022
 
     def test_from_id_suffix(self) -> None:
-        assert chip_year(_chip("ftw-34UFF1628_2024")) == 2024
+        assert selection_year(_chip("ftw-34UFF1628_2024"), "scenes") == 2024
 
-    def test_from_start_datetime(self) -> None:
+    def test_without_a_year_scenes_get_none_and_mosaics_2025(self) -> None:
         item = _chip("chip", properties={"start_datetime": "2023-03-01T00:00:00Z"})
-        assert chip_year(item) == 2023
-
-    def test_bad_start_datetime_falls_back_to_datetime(self) -> None:
-        item = _chip("chip", properties={"start_datetime": "not-a-date"})
-        assert chip_year(item) == 2021
-
-    def test_none_without_any_date(self) -> None:
-        item = _chip(
-            "chip",
-            datetime=None,
-            properties={"start_datetime": "not-a-date", "end_datetime": "not-a-date"},
-        )
-        assert chip_year(item) is None
+        assert selection_year(item, "scenes") is None  # not the rewritable date
+        assert selection_year(item, "mosaics") == 2025
 
 
 class TestPerChipYearAndExplicitItems:
@@ -1027,13 +1025,14 @@ class TestPerChipYearAndExplicitItems:
             (undated, tmp_path / "undated.json"),
         ]
 
-        result = select_imagery_for_catalog(
-            catalog_dir=tmp_path, year=None, chip_items=chip_items, workers=1
-        )
+        result = _select_mode(catalog_dir=tmp_path, year=None, chip_items=chip_items, workers=1)
 
-        assert seen == {"a_2022": 2022, "b": 2021}
-        assert result.successful == 2
-        assert result.skipped_details == [{"chip": "undated", "reason": NO_YEAR_REASON}]
+        assert seen == {"a_2022": 2022}
+        assert result.successful == 1
+        assert [(d["chip"], d["code"]) for d in result.skipped_details] == [
+            ("b", "no_year"),
+            ("undated", "no_year"),
+        ]
 
     def test_chip_items_replace_discovery(
         self,
@@ -1058,9 +1057,7 @@ class TestPerChipYearAndExplicitItems:
         item_path = catalog / "chips" / "33UXP" / "chip_001" / "chip_001.json"
         item = pystac.Item.from_file(str(item_path))
 
-        result = select_imagery_for_catalog(
-            catalog_dir=catalog, year=2024, chip_items=[(item, item_path)]
-        )
+        result = _select_mode(catalog_dir=catalog, year=2024, chip_items=[(item, item_path)])
 
         assert result.successful == 1
         assert [(job.item.id, job.item_path) for job in jobs] == [("chip_001", item_path)]
@@ -1081,7 +1078,7 @@ class TestPerChipYearAndExplicitItems:
         )
 
         with pytest.raises(NoCloudFreeScenesError) as excinfo:
-            select_imagery_for_catalog(catalog_dir=catalog, year=2024, on_missing="fail")
+            _select_mode(catalog_dir=catalog, year=2024, on_missing="fail")
 
         assert excinfo.value.chip_id == "chip_000"
         assert "too cloudy" in str(excinfo.value)

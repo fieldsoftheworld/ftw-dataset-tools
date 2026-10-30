@@ -14,22 +14,21 @@ import pystac
 
 from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
 from ftw_dataset_tools.api.imagery.catalog_ops import (
-    IMAGERY_ASSET_KEYS,
-    IMAGERY_LINK_RELS,
-    IMAGERY_PROPERTIES,
+    PROPERTIES_BY_MODE,
+    has_mode_selection,
+    item_window,
+    normalize_imagery_properties,
+    set_temporal_extent,
 )
+from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, refresh_chip_preview
 from ftw_dataset_tools.api.imagery.settings import CHILD_ITEM_BANDS
 from ftw_dataset_tools.api.imagery.slots import (
     IMAGERY_SLOTS,
     MOSAIC_SOURCE,
-    MOSAIC_THUMBNAIL_SLOT,
     SCENE_SLOTS,
+    SLOTS_BY_MODE,
     child_item_id,
     slot_title,
-)
-from ftw_dataset_tools.api.imagery.thumbnails import (
-    PREVIEW_EXTENSIONS,
-    preview_media_type,
 )
 from ftw_dataset_tools.api.stac import MEDIA_TYPE_COG, _add_portolan_schema
 from ftw_dataset_tools.api.stac_items import write_item
@@ -44,7 +43,6 @@ if TYPE_CHECKING:
 __all__ = [
     "attach_existing_seasons",
     "attach_season_to_parent",
-    "attach_thumbnail_to_parent",
     "create_child_items_from_selection",
     "create_mosaic_child_items",
 ]
@@ -94,6 +92,10 @@ def create_child_items_from_selection(
     if parent_item.get_self_href() is None:
         parent_item.set_self_href(str(parent_path))
 
+    # Only the scene bookkeeping is replaced; a mosaic selection on the same chip stays.
+    for key in PROPERTIES_BY_MODE["scenes"]:
+        parent_item.properties.pop(key, None)
+
     # Update parent item with FTW properties
     parent_item.properties["ftw:calendar_year"] = year
     parent_item.properties["ftw:planting_day"] = result.crop_calendar.planting_day
@@ -111,20 +113,6 @@ def create_child_items_from_selection(
     parent_item.properties["ftw:harvest_buffer_used"] = result.harvest_buffer_used
     parent_item.properties["ftw:expansions_performed"] = result.expansions_performed
 
-    # Set temporal extent based on actual scene acquisition dates
-    # Collect available scene datetimes
-    scene_datetimes = []
-    if result.planting_scene and result.planting_scene.datetime:
-        scene_datetimes.append(result.planting_scene.datetime)
-    if result.harvest_scene and result.harvest_scene.datetime:
-        scene_datetimes.append(result.harvest_scene.datetime)
-
-    if scene_datetimes:
-        start_dt = min(scene_datetimes)
-        end_dt = max(scene_datetimes)
-        parent_item.properties["start_datetime"] = start_dt.isoformat()
-        parent_item.properties["end_datetime"] = end_dt.isoformat()
-
     # Add cloud cover from child scenes to parent
     if result.planting_scene:
         parent_item.properties["ftw:planting_cloud_cover"] = round(
@@ -135,13 +123,14 @@ def create_child_items_from_selection(
             result.harvest_scene.cloud_cover, 2
         )
 
-    _drop_previous_selection(parent_item)
+    _drop_previous_selection(parent_item, "scenes", chip_dir)
 
     # Create each season's child item, then link and mirror it onto the parent.
     # The parent is written in a finally: the FTW selection properties are already
     # set on it, and losing them because one season's child could not be written
     # would leave the chip looking unselected on the next run.
     scenes = {"planting": result.planting_scene, "harvest": result.harvest_scene}
+    children: dict[str, pystac.Item] = {}
     try:
         for season in SEASONS:
             scene = scenes[season]
@@ -154,56 +143,79 @@ def create_child_items_from_selection(
                 season=season,
                 year=year,
             )
+            children[season] = child_item
             attach_season_to_parent(parent_item, child_item, season, chip_dir=chip_dir)
     finally:
-        write_item(parent_item, parent_path)
+        _finish_parent(parent_item, parent_path, children, "scenes")
 
 
-def _drop_previous_selection(parent_item: pystac.Item) -> None:
-    """Remove the slot links, visual assets and downloaded-imagery assets of a prior selection.
+def _finish_parent(
+    parent_item: pystac.Item, parent_path: Path, children: dict[str, pystac.Item], mode: str
+) -> None:
+    """Span both modes' imagery in the temporal range, record the modes, and write.
+
+    The new children give this mode's range. The other mode's range is the parent's
+    existing one, which already spans it: nothing is re-read from disk.
+    """
+    windows = [w for child in children.values() if (w := item_window(child)) is not None]
+    other = "mosaics" if mode == "scenes" else "scenes"
+    if has_mode_selection(parent_item, other) and (kept := item_window(parent_item)):
+        windows.append(kept)
+    set_temporal_extent(parent_item, windows)
+    normalize_imagery_properties(parent_item)
+    write_item(parent_item, parent_path)
+
+
+def _drop_previous_selection(parent_item: pystac.Item, mode: str, chip_dir: Path) -> None:
+    """Remove one mode's slot links, visual assets and downloaded-imagery assets.
 
     A rerun that no longer finds a scene for a slot must not leave the old one behind,
-    and the image assets describe the old selection's GeoTIFFs.
+    and the image assets describe the old selection's GeoTIFFs. The other mode's
+    selection on the same chip is left alone, and so is the chip preview unless one
+    of this mode's slots drew it.
     """
+    slots = SLOTS_BY_MODE[mode]
+    rels = {f"ftw:{slot}" for slot in slots}
     parent_item.links = [
-        link
-        for link in parent_item.links
-        if link.rel not in IMAGERY_LINK_RELS and link.rel != "derived"
+        link for link in parent_item.links if link.rel not in rels and link.rel != "derived"
     ]
-    for slot in IMAGERY_SLOTS:
+    for slot in slots:
         parent_item.assets.pop(f"{slot}_visual", None)
-    for key in IMAGERY_ASSET_KEYS:
-        parent_item.assets.pop(key, None)
+        parent_item.assets.pop(f"{slot}_image", None)
+    if preview_slot(parent_item, chip_dir) in slots:
+        parent_item.assets.pop("thumbnail", None)
 
 
 def create_mosaic_child_items(
     chip_dir: Path, parent_item: pystac.Item, result: MosaicSelectionResult
 ) -> None:
-    """Write the four quarterly mosaic child items and record the selection on the parent."""
+    """Write the four quarterly mosaic child items and record the selection on the parent.
+
+    Only the mosaic bookkeeping is replaced; a scene selection on the same chip stays.
+    """
     parent_path = chip_dir / f"{parent_item.id}.json"
     if parent_item.get_self_href() is None:
         parent_item.set_self_href(str(parent_path))
 
-    for key in IMAGERY_PROPERTIES:
+    for key in PROPERTIES_BY_MODE["mosaics"]:
         parent_item.properties.pop(key, None)
     quarters = [result.quarters[slot] for slot in sorted(result.quarters)]
     parent_item.properties.update(
         {
-            "ftw:imagery_mode": "mosaics",
-            "ftw:requested_year": result.requested_year,
-            "ftw:imagery_year": result.imagery_year,
-            "start_datetime": quarters[0].item.properties["start_datetime"],
-            "end_datetime": quarters[-1].item.properties["end_datetime"],
+            "ftw:mosaic_requested_year": result.requested_year,
+            "ftw:mosaic_year": result.imagery_year,
         }
     )
-    _drop_previous_selection(parent_item)
+    _drop_previous_selection(parent_item, "mosaics", chip_dir)
 
+    children: dict[str, pystac.Item] = {}
     try:
         for mosaic in quarters:
             child_item = _create_mosaic_child_item(chip_dir, parent_item, mosaic)
+            children[mosaic.quarter] = child_item
             attach_season_to_parent(parent_item, child_item, mosaic.quarter, chip_dir=chip_dir)
     finally:
-        write_item(parent_item, parent_path)
+        _finish_parent(parent_item, parent_path, children, "mosaics")
 
 
 def _create_mosaic_child_item(
@@ -483,55 +495,6 @@ def attach_season_to_parent(
     _attach_local_image_asset(parent_item, child_item, season, chip_dir, checksums=checksums)
 
 
-#: Chip preview candidates, in the order ``image_download`` itself prefers them:
-#: the mask overlay when it could be drawn, otherwise the plain planting preview.
-#: Each entry is (filename suffix, media type, asset title).
-#:
-#: Previews are written as WebP, but the ``.jpg`` entries stay on as a fallback
-#: *after* them: a catalog built before that switch still has ``.jpg`` on disk, and
-#: its next STAC rerun must keep finding it, or the rerun silently drops the
-#: thumbnail asset from every item. Nothing writes a ``.jpg`` preview any more --
-#: these entries only read what is already there.
-_THUMBNAIL_CANDIDATES = tuple(
-    (f"{stem}{ext}", preview_media_type(ext), title)
-    for ext in PREVIEW_EXTENSIONS
-    for stem, title in (
-        ("_overlay", "Chip preview with field overlay"),
-        ("_planting_image_s2", "Chip preview (planting season)"),
-        (f"_{MOSAIC_THUMBNAIL_SLOT}_image_s2", f"Chip preview ({MOSAIC_THUMBNAIL_SLOT})"),
-    )
-)
-
-
-def attach_thumbnail_to_parent(
-    parent_item: pystac.Item, chip_dir: Path, *, checksums: bool = False
-) -> None:
-    """Re-add the chip's preview asset from whichever thumbnail file is on disk.
-
-    The preview is written by the download stage and is not referenced from the
-    season children, so a rebuilt chip item would otherwise lose it.
-
-    Args:
-        parent_item: Chip item to update in place
-        chip_dir: Directory holding the chip's files
-        checksums: Also compute ``file:checksum`` for the thumbnail
-    """
-    for suffix, media_type, title in _THUMBNAIL_CANDIDATES:
-        filename = f"{parent_item.id}{suffix}"
-        path = chip_dir / filename
-        if not path.exists():
-            continue
-        asset = pystac.Asset(
-            href=f"./{filename}",
-            media_type=media_type,
-            title=title,
-            roles=["thumbnail"],
-        )
-        parent_item.add_asset("thumbnail", asset)
-        add_file_info(asset, path, checksum=checksums)
-        return
-
-
 def attach_existing_seasons(
     parent_item: pystac.Item, chip_dir: Path, *, checksums: bool = False
 ) -> list[str]:
@@ -568,5 +531,5 @@ def attach_existing_seasons(
             parent_item, child_item, season, chip_dir=chip_dir, checksums=checksums
         )
         attached.append(season)
-    attach_thumbnail_to_parent(parent_item, chip_dir, checksums=checksums)
+    refresh_chip_preview(parent_item, chip_dir, checksums=checksums)
     return attached
