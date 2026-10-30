@@ -328,7 +328,12 @@ def imagery_stats(
     records = records or _child_records_from_json(output_dir)
     if not records:
         return None
-    stats: dict = {"chips_with_imagery": len({r["parent"] for r in records})}
+    stats: dict = {
+        "chips_with_imagery": len({r["parent"] for r in records}),
+        # A chip can hold either mode or both, so each mode is counted on its own.
+        "chips_with_scenes": len({r["parent"] for r in records if r["season"] in SEASONS}),
+        "chips_with_mosaics": len({r["parent"] for r in records if r["season"] in MOSAIC_QUARTERS}),
+    }
     for season in (*SEASONS, *MOSAIC_QUARTERS):
         summary = _season_summary(records, season)
         if summary:
@@ -570,21 +575,18 @@ def _imagery_block(stats: dict) -> str:
     imagery = stats["imagery"]
     if not imagery:
         return ""
-    chips = f"{imagery['chips_with_imagery']:,} chips"
-    scenes = "one in the planting window and one in the harvest window of the crop calendar"
-    quarters = "one for each quarter (Q1-Q4) of a single year"
-    has_mosaics = any(imagery.get(q) for q in MOSAIC_QUARTERS)
-    has_scenes = any(imagery.get(s) for s in SEASONS)
-    if has_mosaics and not has_scenes:
-        return f"{chips} have Sentinel-2 quarterly cloudless mosaics selected for them, {quarters}."
-    if has_mosaics:
-        first = (
-            f"{chips} have imagery selected for them: Sentinel-2 scenes, {scenes}, and "
-            f"Sentinel-2 quarterly cloudless mosaics, {quarters}."
+    lines = []
+    if imagery["chips_with_scenes"]:
+        lines.append(
+            f"{imagery['chips_with_scenes']:,} chips have Sentinel-2 scenes selected for them, "
+            "one in the planting window and one in the harvest window of the crop calendar."
         )
-    else:
-        first = f"{chips} have Sentinel-2 scenes selected for them, {scenes}."
-    lines = [first, *(_season_sentence(s, imagery[s]) for s in SEASONS if imagery.get(s))]
+        lines += [_season_sentence(s, imagery[s]) for s in SEASONS if imagery.get(s)]
+    if imagery["chips_with_mosaics"]:
+        lines.append(
+            f"{imagery['chips_with_mosaics']:,} chips have Sentinel-2 quarterly cloudless "
+            "mosaics selected for them, one for each quarter (Q1-Q4) of a single year."
+        )
     return " ".join(lines)
 
 

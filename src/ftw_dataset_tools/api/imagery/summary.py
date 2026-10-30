@@ -25,21 +25,13 @@ def imagery_summary_line(label: str, result: Any) -> str:
 def selection_summary_lines(result: Any) -> list[str]:
     """The selection summary: one line, or one per imagery mode when several ran.
 
-    A mode that was skipped as a whole (mosaics for a year without them) gets its
-    own line with the reason, so the skip is in the summary and not only the log.
     Chips that could not be read are counted once, not once per mode.
     """
-    if not isinstance(result, MultiModeSelectionResult):
-        return [imagery_summary_line("Imagery selection", result)]
-    if len(result.by_mode) == 1 and not result.skipped_modes:
+    if not isinstance(result, MultiModeSelectionResult) or len(result.by_mode) == 1:
         return [imagery_summary_line("Imagery selection", result)]
     lines = [
         imagery_summary_line(f"Imagery selection ({mode})", mode_result)
         for mode, mode_result in result.by_mode.items()
-    ]
-    lines += [
-        f"  Imagery selection ({mode}): skipped - {reason}"
-        for mode, reason in result.skipped_modes.items()
     ]
     if result.unreadable:
         first = result.unreadable[0].get("error", "unknown error")

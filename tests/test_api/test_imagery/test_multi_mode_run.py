@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +9,7 @@ import pytest
 
 from ftw_dataset_tools.api.imagery import download_workflow, selection_workflow
 from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
+from ftw_dataset_tools.api.imagery.mosaic_selection import MosaicYearError
 from ftw_dataset_tools.api.imagery.selection_workflow import select_imagery_modes_for_catalog
 from ftw_dataset_tools.api.imagery.slots import MOSAIC_SLOTS
 from ftw_dataset_tools.api.imagery.summary import selection_summary_lines
@@ -17,59 +17,99 @@ from tests.test_api.test_imagery.test_mosaics import _chip
 from tests.test_api.test_imagery.test_multi_mode import (
     _YEAR_AVAILABLE,
     _add_mosaics,
+    _add_scenes,
     _fake_select,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
 
-def _run(tmp_path: Path, available: object) -> tuple:
-    success = MagicMock(success=True, skipped_reason=None, candidates_checked=1)
+
+def _run(
+    tmp_path: Path, available: object, modes: tuple = ("scenes", "mosaics"), **kwargs: object
+) -> tuple:
+    def select(job: selection_workflow.ChipSelectionJob, **_options: object) -> MagicMock:
+        # Like a real selection: record the year and rewrite the temporal range.
+        job.item.properties["ftw:calendar_year"] = job.year
+        job.item.properties["start_datetime"] = "2019-06-01T00:00:00+00:00"
+        return MagicMock(success=True, skipped_reason=None, candidates_checked=1)
+
     with (
         patch(_YEAR_AVAILABLE, side_effect=available),
-        patch.object(selection_workflow, "run_chip_selection", return_value=success) as run,
+        patch.object(selection_workflow, "run_chip_selection", side_effect=select) as run,
         patch.object(selection_workflow, "ensure_crop_calendar_exists"),
         patch.object(selection_workflow, "_build_scene_index", return_value=None),
     ):
-        result = select_imagery_modes_for_catalog(tmp_path, ("scenes", "mosaics"), year=None)
+        result = select_imagery_modes_for_catalog(tmp_path, modes, **{"year": None, **kwargs})
     return result, run
 
 
-class TestOneYearForBothModes:
-    """Without a run year both modes use each chip's own year."""
+def _years(run: MagicMock) -> list[tuple[str, int]]:
+    return [(c.kwargs["imagery_mode"], c.args[0].year) for c in run.call_args_list]
 
-    def test_mosaics_follow_the_chip_year_not_the_fallback(self, tmp_path: Path) -> None:
-        _chip(tmp_path)  # dated 2024
+
+class TestOneYearForBothModes:
+    """Without a run year both modes use the chip's one stable year."""
+
+    def test_both_modes_use_the_chip_id_year_whatever_selection_rewrites(
+        self, tmp_path: Path
+    ) -> None:
+        _chip(tmp_path, "chip_001_2024")
         result, run = _run(tmp_path, lambda _year: True)
-        assert [(c.kwargs["imagery_mode"], c.args[0].year) for c in run.call_args_list] == [
-            ("scenes", 2024),
-            ("mosaics", 2024),
-        ]
+        assert _years(run) == [("scenes", 2024), ("mosaics", 2024)]
         assert result.successful == 2
 
+    def test_a_recorded_mosaic_year_is_kept(self, tmp_path: Path) -> None:
+        # Built before multi-mode support: mosaics selected without a year got 2025.
+        _parent, path = _chip(tmp_path, "chip_001_2024")
+        _add_mosaics(path, year=2025, requested=2025)
+        _result, run = _run(tmp_path, lambda _year: True)
+        assert _years(run) == [("scenes", 2025)]  # mosaics are already there
+
     def test_chips_whose_year_has_no_mosaics_skip_only_them(self, tmp_path: Path) -> None:
-        _chip(tmp_path)
-        result, run = _run(tmp_path, lambda year: year != 2024)
-        assert [c.kwargs["imagery_mode"] for c in run.call_args_list] == ["scenes"]
-        assert result.skipped_modes == {}
+        _chip(tmp_path, "chip_001_2023")
+        result, run = _run(tmp_path, lambda year: year != 2023)
+        assert _years(run) == [("scenes", 2023)]
         assert result.by_mode["mosaics"].skipped_details == [
             {
-                "chip": "chip_001",
-                "reason": "Mosaics for 2024 are not available (its quarterly index is incomplete)",
+                "chip": "chip_001_2023",
+                "reason": "Mosaics for 2023 are not available (its quarterly index is incomplete)",
             }
         ]
 
-    def test_a_chip_with_no_year_falls_back_for_mosaics_only(self) -> None:
-        item = SimpleNamespace(id="chip", properties={}, datetime=None)
-        assert selection_workflow.mode_year(item, "mosaics", None) == 2025
-        assert selection_workflow.mode_year(item, "scenes", None) is None
-        assert selection_workflow.mode_year(item, "mosaics", 2021) == 2021
+    def test_an_explicit_year_without_mosaics_skips_them_the_same_way(self, tmp_path: Path) -> None:
+        _chip(tmp_path, "chip_001_2024")
+        result, run = _run(tmp_path, lambda year: year != 2026, year=2026)
+        assert _years(run) == [("scenes", 2026)]
+        assert result.by_mode["mosaics"].skipped == 1
 
 
 class TestFailFast:
+    def test_mosaics_alone_without_mosaics_for_a_chip_year_fail_before_work(
+        self, tmp_path: Path
+    ) -> None:
+        _chip(tmp_path, "chip_001_2023")
+        with pytest.raises(MosaicYearError, match="2023"):
+            _run(tmp_path, lambda year: year != 2023, modes=("mosaics",))
+
+    def test_a_scene_year_conflict_stops_before_the_mosaics(
+        self, tmp_path: Path, mock_selection_result: SceneSelectionResult
+    ) -> None:
+        _parent, path = _chip(tmp_path, "chip_001_2024")
+        _add_scenes(path, mock_selection_result)  # calendar year 2024
+        calls: list[dict] = []
+        with (
+            patch(_YEAR_AVAILABLE, return_value=True),
+            patch.object(selection_workflow, "select_imagery_for_catalog", _fake_select(calls)),
+            pytest.raises(SelectionConflictError, match="has scenes for 2024"),
+        ):
+            select_imagery_modes_for_catalog(tmp_path, ("scenes", "mosaics"), year=2022)
+        assert calls == []
+
     def test_a_failing_availability_lookup_stops_before_the_scenes(self, tmp_path: Path) -> None:
-        _chip(tmp_path)
+        _chip(tmp_path, "chip_001_2024")
         with pytest.raises(OSError, match="offline"):
             _run(tmp_path, OSError("offline"))
 

@@ -8,7 +8,6 @@ __all__ = [
     "IMAGERY_SLOTS",
     "MOSAIC_SLOTS",
     "MOSAIC_SOURCE",
-    "MOSAIC_THUMBNAIL_SLOT",
     "SCENE_SLOTS",
     "SLOTS_BY_MODE",
     "THUMBNAIL_SLOTS",
@@ -32,10 +31,9 @@ SLOTS_BY_MODE = {"scenes": SCENE_SLOTS, "mosaics": MOSAIC_SLOTS}
 #: ``ftw:source`` of a quarterly mosaic child item.
 MOSAIC_SOURCE = "sentinel-2-mosaic"
 
-# Q3 is the main growing season across most of the northern-hemisphere cropland;
-# Q2 would be the alternative.
-MOSAIC_THUMBNAIL_SLOT = "q3"
-THUMBNAIL_SLOTS = ("planting", MOSAIC_THUMBNAIL_SLOT)
+#: Slots the chip preview can be drawn from, in preference order: a scene first, else
+#: Q3, the main growing season across most of the northern-hemisphere cropland.
+THUMBNAIL_SLOTS = ("planting", "harvest", "q3")
 
 
 class InvalidImageryModeError(ValueError):

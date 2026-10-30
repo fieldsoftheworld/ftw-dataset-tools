@@ -19,6 +19,7 @@ from ftw_dataset_tools.api.imagery import (
     get_imagery_stats,
 )
 from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError, has_mode_selection
+from ftw_dataset_tools.api.imagery.mosaic_selection import MosaicYearError
 from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
 from ftw_dataset_tools.api.imagery.selection_workflow import (
     MultiModeSelectionResult,
@@ -31,9 +32,9 @@ from ftw_dataset_tools.api.imagery.summary import selection_summary_lines
 from ftw_dataset_tools.api.stac_items import copy_catalog
 from ftw_dataset_tools.commands.cli_logging import is_verbose, verbose_alias_option
 from ftw_dataset_tools.commands.imagery_mode import (
-    check_mosaic_year_option,
     imagery_mode_option,
     reject_scene_only_options,
+    require_mosaic_year,
 )
 
 ChipEntries = list[tuple[pystac.Item, Path]]
@@ -260,7 +261,6 @@ def _write_report(
         "successful": result.successful,
         "skipped": result.skipped_details,
         "failed": result.failed_details,
-        "skipped_modes": result.skipped_modes,
         "parameters": parameters,
     }
     report_path.write_text(json.dumps(report, indent=2))
@@ -444,7 +444,7 @@ def select_images_cmd(
             is_verbose(),
         )
     if "mosaics" in imagery_modes:
-        check_mosaic_year_option(year, imagery_modes)
+        require_mosaic_year(year, imagery_modes)
         _echo_mosaic_settings(year, is_verbose() and not scenes)
     click.echo(f"\nFound {len(chip_items)} total chips")
 
@@ -464,7 +464,7 @@ def select_images_cmd(
             search_backend=search_backend,
             chip_items=chip_entries,
         )
-    except NoCloudFreeScenesError as e:
+    except (NoCloudFreeScenesError, MosaicYearError) as e:
         raise click.ClickException(str(e)) from e
     except SelectionConflictError as err:
         raise click.ClickException(

@@ -851,9 +851,21 @@ class TestCreateDatasetMosaics:
             sample_fields_geoparquet, "--imagery-mode", "scenes", "--imagery-mode", "mosaics"
         )
 
+        # Not an error: each chip of 2023 skips its mosaics (see selection_workflow).
         assert result.exit_code == 0, result.output
-        assert [c["imagery_mode"] for c in stub_pipeline.calls] == ["scenes"]
-        assert (
-            "Imagery selection (mosaics): skipped - Mosaics for 2023 are not available"
-            in result.output
-        )
+        assert [c["imagery_mode"] for c in stub_pipeline.calls] == ["scenes", "mosaics"]
+
+    def test_mosaics_alone_for_a_year_without_them_fail_before_any_work(
+        self,
+        stub_pipeline: SelectionStub,
+        sample_fields_geoparquet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ftw_dataset_tools.api.imagery import mosaic_selection
+
+        monkeypatch.setattr(mosaic_selection, "year_available", lambda _year: False)
+        result = _invoke(sample_fields_geoparquet, "--imagery-mode", "mosaics")
+
+        assert result.exit_code == 2
+        assert "Mosaics for 2023 are not available" in result.output
+        assert stub_pipeline.calls == []

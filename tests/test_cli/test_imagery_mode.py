@@ -218,11 +218,10 @@ class TestSelectImagesMosaics:
             )
         assert result.exit_code == 0, result.output
         assert [c.kwargs["imagery_mode"] for c in run.call_args_list] == ["scenes"]
-        assert (
-            "Imagery selection (mosaics): skipped - Mosaics for 2023 are not available"
-            in result.output
-        )
-        assert "mosaics" in json.loads(report.read_text())["skipped_modes"]
+        assert "Imagery selection (mosaics): 0 ok, 1 skipped" in result.output
+        skipped = json.loads(report.read_text())["skipped"]
+        assert skipped[0]["mode"] == "mosaics"
+        assert skipped[0]["reason"].startswith("Mosaics for 2023 are not available")
 
     def test_both_modes_allow_scene_options(self, tmp_path: Path) -> None:
         with (

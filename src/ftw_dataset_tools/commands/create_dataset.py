@@ -28,9 +28,9 @@ from ftw_dataset_tools.api.imagery.summary import selection_summary_lines
 from ftw_dataset_tools.api.pipeline import docs_summary_line
 from ftw_dataset_tools.api.stac import resolve_year
 from ftw_dataset_tools.commands.imagery_mode import (
-    check_mosaic_year_option,
     imagery_mode_option,
     reject_scene_only_options,
+    require_mosaic_year,
 )
 from ftw_dataset_tools.commands.options import KM_SIZE, KM_SIZE_HELP
 
@@ -418,11 +418,13 @@ def create_dataset_cmd(
         # Image selection (by default enabled, unless --skip-images is set)
         should_select_images = not skip_images or download_images
 
-        # Mosaic checks run before the masks are built, so a bad flag fails fast.
-        if should_select_images and "scenes" not in imagery_modes:
-            reject_scene_only_options(click.get_current_context(), _SCENE_ONLY_OPTIONS)
+        # Imagery checks run before the masks are built, so a bad setting fails fast.
+        run_year = None
         if should_select_images:
-            check_mosaic_year_option(year, imagery_modes)
+            if "scenes" not in imagery_modes:
+                reject_scene_only_options(click.get_current_context(), _SCENE_ONLY_OPTIONS)
+            run_year = _selection_year(fields_file, year)
+            require_mosaic_year(run_year, imagery_modes)
 
         def select_and_download(catalog_dir: Path) -> None:
             """Select (and optionally download) imagery for the written collection.
@@ -432,15 +434,12 @@ def create_dataset_cmd(
             README and AGENTS.md the docs stage writes then describe a collection
             that already has its imagery.
             """
-            # Both modes use this year; without one, mosaics take each chip's own.
-            selection_year = _selection_year(fields_file, year)
-            if selection_year is None and "scenes" in imagery_modes:
+            if run_year is None and "scenes" in imagery_modes:
                 raise click.ClickException(
                     "--year is required for image selection "
                     "(no determination_datetime column found). "
                     "Use --skip-images to skip image selection."
                 )
-
             click.echo("")
             click.echo(click.style("Selecting imagery...", fg="cyan", bold=True))
 
@@ -453,7 +452,7 @@ def create_dataset_cmd(
                 selection = select_imagery_modes_for_catalog(
                     catalog_dir,
                     imagery_modes,
-                    year=selection_year,
+                    year=run_year,
                     cloud_cover_chip=cloud_cover_chip,
                     nodata_max=nodata_max,
                     buffer_days=buffer_days,

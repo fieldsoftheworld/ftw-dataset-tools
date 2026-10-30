@@ -49,9 +49,11 @@ from ftw_dataset_tools.api.geo import (
     sql_path,
 )
 from ftw_dataset_tools.api.imagery import download_imagery_for_catalog
-from ftw_dataset_tools.api.imagery.mosaic_selection import check_mosaic_year
 from ftw_dataset_tools.api.imagery.preview_workflow import preview_imagery_for_catalog
-from ftw_dataset_tools.api.imagery.selection_workflow import select_imagery_modes_for_catalog
+from ftw_dataset_tools.api.imagery.selection_workflow import (
+    require_mosaic_years,
+    select_imagery_modes_for_catalog,
+)
 from ftw_dataset_tools.api.imagery.slots import MOSAIC_SLOTS
 from ftw_dataset_tools.api.logging_config import get_logger, success
 from ftw_dataset_tools.api.masks import MaskType
@@ -421,14 +423,9 @@ def _validate_stage_selection(ctx: PipelineContext, stages_to_run: list[str]) ->
             "'determination_datetime' column."
         )
 
-    # Mosaics alone for a year without them could select nothing, so fail up front.
-    # Alongside scenes the stage skips them with a warning instead.
-    if (
-        "select_images" in stages_to_run
-        and ctx.config.stages.select_images.imagery_modes == ("mosaics",)
-        and ctx.effective_year is not None
-    ):
-        check_mosaic_year(ctx.effective_year)
+    # Mosaics alone for a year without them fail here, before any heavy work.
+    if "select_images" in stages_to_run and ctx.effective_year is not None:
+        require_mosaic_years([ctx.effective_year], ctx.config.stages.select_images.imagery_modes)
 
 
 def _require(path: Path, *, stage: str, produced_by: str) -> None:

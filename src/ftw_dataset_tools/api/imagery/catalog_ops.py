@@ -13,22 +13,9 @@ from typing import TYPE_CHECKING
 
 import pystac
 
-from ftw_dataset_tools.api.assets import add_file_info
-from ftw_dataset_tools.api.imagery.slots import (
-    IMAGERY_MODES,
-    IMAGERY_SLOTS,
-    SLOTS_BY_MODE,
-    THUMBNAIL_SLOTS,
-    slot_title,
-)
-from ftw_dataset_tools.api.imagery.thumbnails import (
-    PREVIEW_EXTENSIONS,
-    PREVIEW_SUFFIX,
-    REFERENCE_MASK_SUFFIX,
-    ThumbnailError,
-    generate_overlay_thumbnail,
-    preview_media_type,
-)
+from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, refresh_chip_preview
+from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES, IMAGERY_SLOTS, SLOTS_BY_MODE
+from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_EXTENSIONS
 from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
@@ -56,8 +43,6 @@ __all__ = [
     "mosaic_requested_year",
     "normalize_imagery_properties",
     "preserve_imagery_selection",
-    "preview_slot",
-    "redraw_chip_preview",
     "refresh_temporal_extent",
     "selected_modes",
     "selection_conflict",
@@ -198,80 +183,22 @@ def normalize_imagery_properties(item: pystac.Item) -> None:
         props.pop(IMAGERY_MODES_PROPERTY, None)
 
 
-def selection_conflict(item: pystac.Item, imagery_mode: str, year: int | None) -> str | None:
-    """Why the item's existing ``imagery_mode`` selection does not match this run, or None.
+def selection_conflict(item: pystac.Item, imagery_mode: str, year: int) -> str | None:
+    """Why the item's existing ``imagery_mode`` selection is not for ``year``, or None.
 
     Only a selection of the same mode can conflict: a chip holding scenes takes
-    mosaics alongside them, and the other way round. ``year`` is only compared in
-    mosaic mode; scene selections predate the property.
+    mosaics alongside them, and the other way round, as long as both are for the
+    same year. A selection that recorded no year never conflicts.
     """
-    if imagery_mode != "mosaics" or not has_mode_selection(item, imagery_mode):
+    if not has_mode_selection(item, imagery_mode):
         return None
-    existing_year = mosaic_requested_year(item)
-    if existing_year != year:
-        return f"has mosaics for {existing_year}"
-    return None
-
-
-def _slot_preview_path(chip_dir: Path, chip_id: str, slot: str) -> Path | None:
-    """The slot's own preview image (``{chip}_{slot}_image_s2.webp``), if one is on disk."""
-    for ext in PREVIEW_EXTENSIONS:
-        path = chip_dir / f"{chip_id}_{slot}_image_s2{ext}"
-        if path.exists():
-            return path
-    return None
-
-
-def preview_slot(chip_dir: Path, chip_id: str) -> str | None:
-    """The slot the chip preview is drawn from: the first thumbnail slot with a preview.
-
-    Decided by the preview images actually on disk, so a chip holding both modes
-    shows its planting scene once that has a preview, and the Q3 mosaic until then
-    (or for good, when the planting image never downloaded). This is the one rule
-    the download, the remote preview and clearing all follow.
-    """
-    for slot in THUMBNAIL_SLOTS:
-        if _slot_preview_path(chip_dir, chip_id, slot) is not None:
-            return slot
-    return None
-
-
-def redraw_chip_preview(item: pystac.Item, chip_dir: Path) -> str | None:
-    """Draw the chip preview from :func:`preview_slot`'s image and attach it as ``thumbnail``.
-
-    The field overlay is drawn when the chip has its reference mask, else the slot's
-    plain preview is used. Removes any previous overlay and thumbnail first.
-
-    Returns:
-        The slot the preview now comes from, or None when no slot has a preview.
-    """
-    for ext in PREVIEW_EXTENSIONS:
-        (chip_dir / f"{item.id}_overlay{ext}").unlink(missing_ok=True)
-    item.assets.pop("thumbnail", None)
-    slot = preview_slot(chip_dir, item.id)
-    if slot is None:
+    if imagery_mode == "scenes":
+        existing = item.properties.get("ftw:calendar_year")
+    else:
+        existing = mosaic_requested_year(item)
+    if existing is None or existing == year:
         return None
-    target = _slot_preview_path(chip_dir, item.id, slot)
-    title = f"Chip preview ({slot_title(slot).lower()})"
-    mask = chip_dir / f"{item.id}{REFERENCE_MASK_SUFFIX}"
-    if mask.exists():
-        overlay = chip_dir / f"{item.id}_overlay{PREVIEW_SUFFIX}"
-        try:
-            generate_overlay_thumbnail(target, mask, overlay)
-            target, title = overlay, "Chip preview with field overlay"
-        except ThumbnailError:
-            pass
-    item.add_asset(
-        "thumbnail",
-        pystac.Asset(
-            href=f"./{target.name}",
-            media_type=preview_media_type(target.name),
-            title=title,
-            roles=["thumbnail"],
-        ),
-    )
-    add_file_info(item.assets["thumbnail"], target)
-    return slot
+    return f"has {imagery_mode} for {existing}"
 
 
 def _child_window(child: pystac.Item) -> tuple[datetime, datetime] | None:
@@ -558,7 +485,9 @@ def clear_chip_selections(item: pystac.Item, modes: Iterable[str] | None = None)
 
     if drop_preview:
         # Redrawn from whatever mode is left, e.g. the Q3 mosaic once scenes go.
-        redraw_chip_preview(item, chip_dir)
+        for ext in PREVIEW_EXTENSIONS:
+            (chip_dir / f"{item.id}_overlay{ext}").unlink(missing_ok=True)
+        refresh_chip_preview(item, chip_dir, redraw=True)
 
     cleared_rels = {f"ftw:{slot}" for slot in slots}
     item.links = [link for link in item.links if link.rel not in cleared_rels]

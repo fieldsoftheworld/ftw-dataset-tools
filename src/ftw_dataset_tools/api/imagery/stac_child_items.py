@@ -16,22 +16,17 @@ from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
 from ftw_dataset_tools.api.imagery.catalog_ops import (
     PROPERTIES_BY_MODE,
     normalize_imagery_properties,
-    preview_slot,
     refresh_temporal_extent,
 )
+from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, refresh_chip_preview
 from ftw_dataset_tools.api.imagery.settings import CHILD_ITEM_BANDS
 from ftw_dataset_tools.api.imagery.slots import (
     IMAGERY_SLOTS,
     MOSAIC_SOURCE,
-    MOSAIC_THUMBNAIL_SLOT,
     SCENE_SLOTS,
     SLOTS_BY_MODE,
     child_item_id,
     slot_title,
-)
-from ftw_dataset_tools.api.imagery.thumbnails import (
-    PREVIEW_EXTENSIONS,
-    preview_media_type,
 )
 from ftw_dataset_tools.api.stac import MEDIA_TYPE_COG, _add_portolan_schema
 from ftw_dataset_tools.api.stac_items import write_item
@@ -46,7 +41,6 @@ if TYPE_CHECKING:
 __all__ = [
     "attach_existing_seasons",
     "attach_season_to_parent",
-    "attach_thumbnail_to_parent",
     "create_child_items_from_selection",
     "create_mosaic_child_items",
 ]
@@ -507,55 +501,6 @@ def attach_season_to_parent(
     _attach_local_image_asset(parent_item, child_item, season, chip_dir, checksums=checksums)
 
 
-#: Chip preview candidates, in the order ``image_download`` itself prefers them:
-#: the mask overlay when it could be drawn, otherwise the plain planting preview.
-#: Each entry is (filename suffix, media type, asset title).
-#:
-#: Previews are written as WebP, but the ``.jpg`` entries stay on as a fallback
-#: *after* them: a catalog built before that switch still has ``.jpg`` on disk, and
-#: its next STAC rerun must keep finding it, or the rerun silently drops the
-#: thumbnail asset from every item. Nothing writes a ``.jpg`` preview any more --
-#: these entries only read what is already there.
-_THUMBNAIL_CANDIDATES = tuple(
-    (f"{stem}{ext}", preview_media_type(ext), title)
-    for ext in PREVIEW_EXTENSIONS
-    for stem, title in (
-        ("_overlay", "Chip preview with field overlay"),
-        ("_planting_image_s2", "Chip preview (planting season)"),
-        (f"_{MOSAIC_THUMBNAIL_SLOT}_image_s2", f"Chip preview ({MOSAIC_THUMBNAIL_SLOT})"),
-    )
-)
-
-
-def attach_thumbnail_to_parent(
-    parent_item: pystac.Item, chip_dir: Path, *, checksums: bool = False
-) -> None:
-    """Re-add the chip's preview asset from whichever thumbnail file is on disk.
-
-    The preview is written by the download stage and is not referenced from the
-    season children, so a rebuilt chip item would otherwise lose it.
-
-    Args:
-        parent_item: Chip item to update in place
-        chip_dir: Directory holding the chip's files
-        checksums: Also compute ``file:checksum`` for the thumbnail
-    """
-    for suffix, media_type, title in _THUMBNAIL_CANDIDATES:
-        filename = f"{parent_item.id}{suffix}"
-        path = chip_dir / filename
-        if not path.exists():
-            continue
-        asset = pystac.Asset(
-            href=f"./{filename}",
-            media_type=media_type,
-            title=title,
-            roles=["thumbnail"],
-        )
-        parent_item.add_asset("thumbnail", asset)
-        add_file_info(asset, path, checksum=checksums)
-        return
-
-
 def attach_existing_seasons(
     parent_item: pystac.Item, chip_dir: Path, *, checksums: bool = False
 ) -> list[str]:
@@ -592,5 +537,5 @@ def attach_existing_seasons(
             parent_item, child_item, season, chip_dir=chip_dir, checksums=checksums
         )
         attached.append(season)
-    attach_thumbnail_to_parent(parent_item, chip_dir, checksums=checksums)
+    refresh_chip_preview(parent_item, chip_dir, checksums=checksums)
     return attached

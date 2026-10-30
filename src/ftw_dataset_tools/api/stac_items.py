@@ -118,8 +118,6 @@ def update_parent_item(
     season: str,
     output_filename: str,
     band_list: list[str],
-    thumbnail_filename: str | None = None,
-    is_overlay: bool = False,
 ) -> None:
     """Update parent item with reference to downloaded image.
 
@@ -132,9 +130,6 @@ def update_parent_item(
         season: Season identifier
         output_filename: Name of downloaded image file
         band_list: List of bands in the image
-        thumbnail_filename: Optional thumbnail filename. If provided and season is a
-            thumbnail slot ("planting" or "q3"), adds as the chip's thumbnail asset.
-        is_overlay: If True, thumbnail has mask overlay (used for title).
 
     Raises:
         STACSaveError: If the save operation fails
@@ -142,11 +137,9 @@ def update_parent_item(
     # Imported here, not at module scope: ``api.imagery``'s package __init__ pulls
     # preview_workflow, which imports this module, so a top-level import deadlocks
     # whichever of the two is loaded first.
-    from ftw_dataset_tools.api.imagery.slots import THUMBNAIL_SLOTS, slot_title
-    from ftw_dataset_tools.api.imagery.thumbnails import preview_media_type
+    from ftw_dataset_tools.api.imagery.slots import slot_title
 
     asset_key = f"{season}_image"
-    added_thumbnail = False
 
     try:
         parent_item.add_asset(
@@ -163,32 +156,9 @@ def update_parent_item(
             add_file_info(parent_item.assets[asset_key], image_path)
             add_raster_bands(parent_item.assets[asset_key], image_path)
 
-        # The thumbnail slot's preview becomes the chip's thumbnail
-        if thumbnail_filename and season in THUMBNAIL_SLOTS:
-            thumb_title = (
-                "Chip preview with field overlay"
-                if is_overlay
-                else f"Chip preview ({slot_title(season).lower()})"
-            )
-            parent_item.add_asset(
-                "thumbnail",
-                pystac.Asset(
-                    href=f"./{thumbnail_filename}",
-                    media_type=preview_media_type(thumbnail_filename),
-                    title=thumb_title,
-                    roles=["thumbnail"],
-                ),
-            )
-            added_thumbnail = True
-            thumbnail_path = parent_path.parent / thumbnail_filename
-            if thumbnail_path.exists():
-                add_file_info(parent_item.assets["thumbnail"], thumbnail_path)
-
         write_item(parent_item, parent_path)
     except Exception as e:
         parent_item.assets.pop(asset_key, None)
-        if added_thumbnail:
-            parent_item.assets.pop("thumbnail", None)
         raise STACSaveError(f"Failed to update parent item at {parent_path}: {e}") from e
 
 

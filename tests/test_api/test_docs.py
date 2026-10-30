@@ -389,6 +389,8 @@ class TestConditionalProse:
 
         imagery = {
             "chips_with_imagery": 2,
+            "chips_with_scenes": 2,
+            "chips_with_mosaics": 0,
             "planting": {
                 "min": "2024-04-01T10:00:00Z",
                 "max": "2024-04-20T10:00:00Z",
@@ -517,24 +519,24 @@ class TestImageryStats:
         assert text.startswith("1 chips have Sentinel-2 quarterly cloudless mosaics")
         assert "planting" not in text
 
-    def test_chips_with_both_modes_describe_both(self, tmp_path: Path) -> None:
+    def test_each_mode_is_counted_on_its_own(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.docs import _imagery_block, imagery_stats
 
-        chip_dir = tmp_path / "chips" / "33UXP" / "ftw-33UXP0001"
-        chip_dir.mkdir(parents=True)
-        for slot in ("planting", "harvest", "q1", "q2", "q3", "q4"):
-            properties = {"ftw:season": slot}
-            if slot in ("planting", "harvest"):
-                properties["datetime"] = "2024-06-01T00:00:00Z"
-            (chip_dir / f"ftw-33UXP0001_{slot}_s2.json").write_text(
-                json.dumps({"id": f"ftw-33UXP0001_{slot}_s2", "properties": properties})
-            )
+        chips = {"ftw-a": ("planting", "harvest", "q1", "q2", "q3", "q4"), "ftw-b": ("planting",)}
+        for chip, slots in chips.items():
+            chip_dir = tmp_path / "chips" / "33UXP" / chip
+            chip_dir.mkdir(parents=True)
+            for slot in slots:
+                properties = {"ftw:season": slot, "datetime": "2024-06-01T00:00:00Z"}
+                (chip_dir / f"{chip}_{slot}_s2.json").write_text(
+                    json.dumps({"id": f"{chip}_{slot}_s2", "properties": properties})
+                )
 
         text = _imagery_block({"imagery": imagery_stats(tmp_path)})
 
-        assert text.startswith("1 chips have imagery selected for them: Sentinel-2 scenes")
-        assert "quarterly cloudless mosaics" in text
+        assert text.startswith("2 chips have Sentinel-2 scenes selected for them")
         assert "Planting imagery" in text
+        assert "1 chips have Sentinel-2 quarterly cloudless mosaics" in text
 
 
 class TestRegisterDocsAssetsPruning:

@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
+import pytest
+
 from ftw_dataset_tools.api import pipeline
 from ftw_dataset_tools.api.config import DatasetConfig
 from ftw_dataset_tools.api.imagery import mosaic_selection, selection_workflow
@@ -14,7 +16,6 @@ from ftw_dataset_tools.api.imagery.summary import selection_summary_lines
 if TYPE_CHECKING:
     from pathlib import Path
 
-    import pytest
 
 _BOTH = {"imagery_mode": ["scenes", "mosaics"]}
 
@@ -73,19 +74,20 @@ class TestSelectBothModes:
             "  Imagery selection (mosaics): 1 ok, 0 skipped, 0 failed",
         ]
 
-    def test_year_without_mosaics_skips_them_and_still_selects_scenes(
+    def test_year_without_mosaics_passes_validation_alongside_scenes(
         self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = _record_selection(monkeypatch, mosaics_exist=False)
+        _record_selection(monkeypatch, mosaics_exist=False)
         ctx = _ctx(sample_geoparquet_4326, tmp_path, {"select_images": _BOTH})
-        # Up-front validation lets the run through: the scenes can still be selected.
-        pipeline._validate_stage_selection(ctx, ["select_images"])
-        pipeline.stage_select_images(ctx)
+        pipeline._validate_stage_selection(ctx, ["select_images"])  # no error
 
-        assert [c["imagery_mode"] for c in calls] == ["scenes"]
-        assert "mosaics" in ctx.selection_result.skipped_modes
-        lines = selection_summary_lines(ctx.selection_result)
-        assert lines[-1].startswith("  Imagery selection (mosaics): skipped - Mosaics for 2023")
+    def test_year_without_mosaics_fails_validation_for_mosaics_alone(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _record_selection(monkeypatch, mosaics_exist=False)
+        ctx = _ctx(sample_geoparquet_4326, tmp_path, {"select_images": {"imagery_mode": "mosaics"}})
+        with pytest.raises(mosaic_selection.MosaicYearError, match="2023"):
+            pipeline._validate_stage_selection(ctx, ["select_images"])
 
 
 def _download(

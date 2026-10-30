@@ -14,14 +14,13 @@ import pytest
 
 from ftw_dataset_tools.api.imagery.catalog_ops import has_existing_scenes
 from ftw_dataset_tools.api.imagery.selection_workflow import (
-    NO_YEAR_REASON,
     ChipSelectionJob,
     NoCloudFreeScenesError,
     SelectionWorkflowResult,
-    chip_year,
     find_chip_items,
     run_chip_selection,
     select_imagery_for_catalog,
+    selection_year,
 )
 
 if TYPE_CHECKING:
@@ -966,27 +965,25 @@ def _chip(item_id: str, **kwargs: object) -> pystac.Item:
     )
 
 
-class TestChipYear:
-    """chip_year reads the id suffix first, then the item's temporal properties."""
+class TestSelectionYear:
+    """selection_year reads stable inputs only, never the dates selection rewrites."""
+
+    def test_explicit_year_wins(self) -> None:
+        item = _chip("chip_2024", properties={"ftw:calendar_year": 2022})
+        assert selection_year(item, 2020) == 2020
+
+    def test_recorded_selection_year_beats_the_id(self) -> None:
+        assert selection_year(_chip("c_2024", properties={"ftw:calendar_year": 2022})) == 2022
+        assert selection_year(_chip("c_2024", properties={"ftw:requested_year": 2025})) == 2025
+        mosaics = {"ftw:mosaic_requested_year": 2023, "ftw:calendar_year": 2022}
+        assert selection_year(_chip("c_2024", properties=mosaics)) == 2023
 
     def test_from_id_suffix(self) -> None:
-        assert chip_year(_chip("ftw-34UFF1628_2024")) == 2024
+        assert selection_year(_chip("ftw-34UFF1628_2024")) == 2024
 
-    def test_from_start_datetime(self) -> None:
+    def test_dates_are_ignored(self) -> None:
         item = _chip("chip", properties={"start_datetime": "2023-03-01T00:00:00Z"})
-        assert chip_year(item) == 2023
-
-    def test_bad_start_datetime_falls_back_to_datetime(self) -> None:
-        item = _chip("chip", properties={"start_datetime": "not-a-date"})
-        assert chip_year(item) == 2021
-
-    def test_none_without_any_date(self) -> None:
-        item = _chip(
-            "chip",
-            datetime=None,
-            properties={"start_datetime": "not-a-date", "end_datetime": "not-a-date"},
-        )
-        assert chip_year(item) is None
+        assert selection_year(item) == 2025  # the fallback, not the rewritable date
 
 
 class TestPerChipYearAndExplicitItems:
@@ -1031,9 +1028,8 @@ class TestPerChipYearAndExplicitItems:
             catalog_dir=tmp_path, year=None, chip_items=chip_items, workers=1
         )
 
-        assert seen == {"a_2022": 2022, "b": 2021}
-        assert result.successful == 2
-        assert result.skipped_details == [{"chip": "undated", "reason": NO_YEAR_REASON}]
+        assert seen == {"a_2022": 2022, "b": 2025, "undated": 2025}
+        assert result.successful == 3
 
     def test_chip_items_replace_discovery(
         self,

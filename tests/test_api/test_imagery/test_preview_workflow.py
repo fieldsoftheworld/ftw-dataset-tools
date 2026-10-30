@@ -180,7 +180,7 @@ class TestPreviewImageryForCatalog:
 
     def test_keeps_the_scene_preview_as_the_planting_preview(self, tmp_path: Path) -> None:
         """It tells a later mosaic download that the chip preview comes from the scene."""
-        from ftw_dataset_tools.api.imagery.catalog_ops import preview_slot
+        from ftw_dataset_tools.api.imagery.chip_preview import preview_slot
 
         out = _collection(tmp_path)
         chip_dir = _chip(out, "chip_a", scene=_scene(tmp_path / "scene.tif"))
@@ -189,16 +189,18 @@ class TestPreviewImageryForCatalog:
         assert (chip_dir / "chip_a_planting_image_s2.webp").stat().st_size > 0
         assert preview_slot(chip_dir, "chip_a") == "planting"
 
-    def test_resume_replaces_a_preview_drawn_from_the_q3_mosaic(self, tmp_path: Path) -> None:
+    def test_resume_renders_over_a_q3_preview(self, tmp_path: Path) -> None:
+        """A chip previewed from its Q3 mosaic gets the scene's preview, which wins."""
+        from ftw_dataset_tools.api.imagery.chip_preview import preview_slot
+
         out = _collection(tmp_path)
         chip_dir = _chip(out, "chip_a", scene=_scene(tmp_path / "scene.tif"))
         (chip_dir / "chip_a_q3_image_s2.webp").write_bytes(b"q3")
-        (chip_dir / "chip_a_overlay.webp").write_bytes(b"q3 overlay")
 
         again = preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
 
         assert again.successful == 1
-        assert (chip_dir / "chip_a_overlay.webp").read_bytes() != b"q3 overlay"
+        assert preview_slot(chip_dir, "chip_a") == "planting"
 
     def test_resume_is_the_default(self, tmp_path: Path) -> None:
         """No caller should inherit a re-render of everything by omitting the flag."""

@@ -6,7 +6,7 @@ and leaving the clipping to the client - has no such file, so there is nothing t
 preview from. This module renders the same overlay preview by reading the chip's
 window straight out of the scene's true-colour COG instead.
 
-The output filename is the one ``attach_thumbnail_to_parent`` already looks for, so
+The output filenames are the ones ``chip_preview`` already looks for, so
 a preview written here is picked up by the STAC stage exactly like a downloaded
 one, with no separate asset wiring.
 """
@@ -20,10 +20,10 @@ from typing import TYPE_CHECKING
 import pystac
 from tqdm import tqdm
 
-from ftw_dataset_tools.api.imagery.catalog_ops import preview_slot
+from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, refresh_chip_preview
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, run_in_parallel
 from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
-from ftw_dataset_tools.api.imagery.stac_child_items import attach_thumbnail_to_parent
+from ftw_dataset_tools.api.imagery.slots import SCENE_SLOTS
 from ftw_dataset_tools.api.imagery.thumbnails import (
     PREVIEW_SUFFIX,
     REFERENCE_MASK_SUFFIX,
@@ -114,7 +114,7 @@ def render_preview(task: PreviewTask) -> None:
         generate_scene_thumbnail(task.visual_href, task.mask_path, base_path)
         generate_overlay_thumbnail(base_path, task.mask_path, task.output_path)
         # Kept as the season's preview: it is how a later mosaic download (and
-        # catalog_ops.preview_slot) knows the chip preview comes from this scene.
+        # chip_preview.preview_slot) knows the chip preview comes from this scene.
         base_path.replace(task.base_path)
     finally:
         base_path.unlink(missing_ok=True)
@@ -178,12 +178,8 @@ def preview_imagery_for_catalog(
                 result.skipped_details.append({"chip": item.id, "reason": built})
                 advance()
                 continue
-            # A preview drawn from the Q3 mosaic is replaced by the scene's.
-            if (
-                resume
-                and built.output_path.exists()
-                and preview_slot(item_path.parent, item.id) != "q3"
-            ):
+            # Done once a scene draws the preview; one drawn from Q3 is replaced.
+            if resume and preview_slot(item_path.parent, item.id) in SCENE_SLOTS:
                 result.skipped += 1
                 result.skipped_details.append({"chip": item.id, "reason": "Already rendered"})
                 advance()
@@ -199,7 +195,7 @@ def preview_imagery_for_catalog(
                 return
             try:
                 parent = pystac.Item.from_file(str(task.item_path))
-                attach_thumbnail_to_parent(parent, task.item_path.parent)
+                refresh_chip_preview(parent, task.item_path.parent)
                 write_item(parent, task.item_path)
             except (OSError, pystac.STACError) as err:
                 # The preview is on disk; only the item update failed. Report it rather

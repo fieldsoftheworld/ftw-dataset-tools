@@ -5,7 +5,8 @@ from __future__ import annotations
 import click
 from click.core import ParameterSource
 
-from ftw_dataset_tools.api.imagery.mosaic_selection import MosaicYearError, check_mosaic_year
+from ftw_dataset_tools.api.imagery.mosaic_selection import MosaicYearError
+from ftw_dataset_tools.api.imagery.selection_workflow import require_mosaic_years
 from ftw_dataset_tools.api.imagery.slots import (
     DEFAULT_IMAGERY_MODE,
     IMAGERY_MODES,
@@ -37,16 +38,9 @@ def reject_scene_only_options(ctx: click.Context, names: tuple[str, ...]) -> Non
             )
 
 
-def check_mosaic_year_option(year: int | None, imagery_modes: tuple[str, ...]) -> None:
-    """Fail before any work when mosaics are the only mode and ``--year`` has none.
-
-    Alongside scenes the selection skips the mosaics with a warning instead. Without
-    ``--year`` each chip's own year is used, and chips whose year has no mosaics
-    skip them.
-    """
-    if year is None or imagery_modes != ("mosaics",):
-        return
+def require_mosaic_year(year: int | None, imagery_modes: tuple[str, ...]) -> None:
+    """``require_mosaic_years`` for the run's year, as a ``--year`` error; None checks nothing."""
     try:
-        check_mosaic_year(year)
+        require_mosaic_years([] if year is None else [year], imagery_modes)
     except MosaicYearError as err:
         raise click.BadParameter(str(err), param_hint="'--year'") from err
