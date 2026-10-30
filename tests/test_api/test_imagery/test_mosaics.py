@@ -40,10 +40,10 @@ from ftw_dataset_tools.api.imagery.mosaic_selection import (
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 from ftw_dataset_tools.api.imagery.selection_workflow import (
     ChipSelectionJob,
+    _select_mode,
     find_chip_items,
     resolve_selection_conflicts,
     run_chip_selection,
-    select_imagery_for_catalog,
 )
 from ftw_dataset_tools.api.imagery.slots import (
     MOSAIC_SOURCE,
@@ -598,7 +598,7 @@ class TestMosaicSelectionEdges:
                 "ftw_dataset_tools.api.imagery.selection_workflow.ensure_crop_calendar_exists"
             ) as warm,
         ):
-            result = select_imagery_for_catalog(tmp_path, year=2024, imagery_mode="mosaics")
+            result = _select_mode(tmp_path, year=2024, imagery_mode="mosaics")
         assert result.successful == 1
         warm.assert_not_called()
 

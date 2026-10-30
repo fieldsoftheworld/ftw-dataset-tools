@@ -39,7 +39,7 @@ def _record_selection(monkeypatch: pytest.MonkeyPatch, *, mosaics_exist: bool) -
         return selection_workflow.SelectionWorkflowResult(successful=1)
 
     monkeypatch.setattr(mosaic_selection, "year_available", lambda _year: mosaics_exist)
-    monkeypatch.setattr(selection_workflow, "select_imagery_for_catalog", fake_select)
+    monkeypatch.setattr(selection_workflow, "_select_mode", fake_select)
     return calls
 
 

@@ -15,8 +15,10 @@ import pystac
 from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
 from ftw_dataset_tools.api.imagery.catalog_ops import (
     PROPERTIES_BY_MODE,
+    has_mode_selection,
+    item_window,
     normalize_imagery_properties,
-    refresh_temporal_extent,
+    set_temporal_extent,
 )
 from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, refresh_chip_preview
 from ftw_dataset_tools.api.imagery.settings import CHILD_ITEM_BANDS
@@ -111,20 +113,6 @@ def create_child_items_from_selection(
     parent_item.properties["ftw:harvest_buffer_used"] = result.harvest_buffer_used
     parent_item.properties["ftw:expansions_performed"] = result.expansions_performed
 
-    # Set temporal extent based on actual scene acquisition dates
-    # Collect available scene datetimes
-    scene_datetimes = []
-    if result.planting_scene and result.planting_scene.datetime:
-        scene_datetimes.append(result.planting_scene.datetime)
-    if result.harvest_scene and result.harvest_scene.datetime:
-        scene_datetimes.append(result.harvest_scene.datetime)
-
-    if scene_datetimes:
-        start_dt = min(scene_datetimes)
-        end_dt = max(scene_datetimes)
-        parent_item.properties["start_datetime"] = start_dt.isoformat()
-        parent_item.properties["end_datetime"] = end_dt.isoformat()
-
     # Add cloud cover from child scenes to parent
     if result.planting_scene:
         parent_item.properties["ftw:planting_cloud_cover"] = round(
@@ -158,14 +146,22 @@ def create_child_items_from_selection(
             children[season] = child_item
             attach_season_to_parent(parent_item, child_item, season, chip_dir=chip_dir)
     finally:
-        _finish_parent(parent_item, parent_path, children)
+        _finish_parent(parent_item, parent_path, children, "scenes")
 
 
 def _finish_parent(
-    parent_item: pystac.Item, parent_path: Path, children: dict[str, pystac.Item]
+    parent_item: pystac.Item, parent_path: Path, children: dict[str, pystac.Item], mode: str
 ) -> None:
-    """Span every mode's imagery in the temporal range, record the modes, and write."""
-    refresh_temporal_extent(parent_item, parent_path.parent, children)
+    """Span both modes' imagery in the temporal range, record the modes, and write.
+
+    The new children give this mode's range. The other mode's range is the parent's
+    existing one, which already spans it: nothing is re-read from disk.
+    """
+    windows = [w for child in children.values() if (w := item_window(child)) is not None]
+    other = "mosaics" if mode == "scenes" else "scenes"
+    if has_mode_selection(parent_item, other) and (kept := item_window(parent_item)):
+        windows.append(kept)
+    set_temporal_extent(parent_item, windows)
     normalize_imagery_properties(parent_item)
     write_item(parent_item, parent_path)
 
@@ -175,8 +171,8 @@ def _drop_previous_selection(parent_item: pystac.Item, mode: str, chip_dir: Path
 
     A rerun that no longer finds a scene for a slot must not leave the old one behind,
     and the image assets describe the old selection's GeoTIFFs. The other mode's
-    selection on the same chip is left alone, and so is the chip preview unless it
-    was drawn from one of this mode's slots.
+    selection on the same chip is left alone, and so is the chip preview unless one
+    of this mode's slots drew it.
     """
     slots = SLOTS_BY_MODE[mode]
     rels = {f"ftw:{slot}" for slot in slots}
@@ -186,7 +182,7 @@ def _drop_previous_selection(parent_item: pystac.Item, mode: str, chip_dir: Path
     for slot in slots:
         parent_item.assets.pop(f"{slot}_visual", None)
         parent_item.assets.pop(f"{slot}_image", None)
-    if preview_slot(chip_dir, parent_item.id) in (*slots, None):
+    if preview_slot(parent_item, chip_dir) in slots:
         parent_item.assets.pop("thumbnail", None)
 
 
@@ -208,8 +204,6 @@ def create_mosaic_child_items(
         {
             "ftw:mosaic_requested_year": result.requested_year,
             "ftw:mosaic_year": result.imagery_year,
-            "start_datetime": quarters[0].item.properties["start_datetime"],
-            "end_datetime": quarters[-1].item.properties["end_datetime"],
         }
     )
     _drop_previous_selection(parent_item, "mosaics", chip_dir)
@@ -221,7 +215,7 @@ def create_mosaic_child_items(
             children[mosaic.quarter] = child_item
             attach_season_to_parent(parent_item, child_item, mosaic.quarter, chip_dir=chip_dir)
     finally:
-        _finish_parent(parent_item, parent_path, children)
+        _finish_parent(parent_item, parent_path, children, "mosaics")
 
 
 def _create_mosaic_child_item(

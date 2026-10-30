@@ -328,7 +328,7 @@ def _no_scenes(*, chip_id: str, bbox, year: int, **_kwargs):
 
 
 class TestSelectImagesSharedWorkflow:
-    """select-images runs through select_imagery_for_catalog."""
+    """select-images runs through _select_mode."""
 
     def _dataset(self, tmp_path: Path, item_id: str = "ftw-item1_2023") -> tuple[Path, Path]:
         dataset_dir = tmp_path / "dataset"

@@ -15,7 +15,8 @@ from rasterio.vrt import WarpedVRT
 from rasterio.warp import Resampling
 
 from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
-from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, refresh_chip_preview
+from ftw_dataset_tools.api.imagery.catalog_ops import normalize_imagery_properties
+from ftw_dataset_tools.api.imagery.chip_preview import refresh_chip_preview, takes_preview
 from ftw_dataset_tools.api.imagery.settings import (
     BANDS_OF_INTEREST,
     CHILD_ITEM_BAND_ASSETS,
@@ -596,8 +597,9 @@ def process_downloaded_scene(
         parent_item = pystac.Item.from_file(str(parent_item_path))
 
         # Only the chip's preview slot draws the chip preview (see chip_preview).
-        if result.thumbnail_path and season == preview_slot(item_path.parent, base_id):
-            refresh_chip_preview(parent_item, item_path.parent, redraw=True)
+        if result.thumbnail_path and takes_preview(parent_item, item_path.parent, season):
+            refresh_chip_preview(parent_item, item_path.parent, season, redraw=True)
+        normalize_imagery_properties(parent_item)
 
         # A failure here used to be swallowed, so a read-only or full destination
         # left the chip without its season image while the run still reported the

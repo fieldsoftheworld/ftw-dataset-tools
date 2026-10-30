@@ -138,9 +138,8 @@ stages:
     #   scenes  - a planting and a harvest scene, from the crop calendar (default)
     #   mosaics - the Q1-Q4 quarterly cloudless mosaics of one year
     # or both, as a list: `imagery_mode: [scenes, mosaics]` gives every chip both
-    # sets, side by side. Both modes use the same year: the top-level `year`, else
-    # the fields' determination year, else the year a chip's existing selection
-    # recorded, else its id's year (2025 for a chip with none). Chips whose year has
+    # sets, side by side. Both modes use the top-level `year`, else the fields'
+    # determination year (which chip ids carry too). Chips whose year has
     # no mosaics (2023's Q2 index is missing; future years have none yet) skip the
     # mosaics, with the reason recorded, and still get scenes; with mosaics alone
     # such a year is an error before any work starts.

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
 
 import pystac
@@ -66,11 +67,11 @@ __all__ = [
     "MultiModeSelectionResult",
     "NoCloudFreeScenesError",
     "SelectionWorkflowResult",
+    "SkipCode",
     "find_chip_items",
     "require_mosaic_years",
     "resolve_selection_conflicts",
     "run_chip_selection",
-    "select_imagery_for_catalog",
     "select_imagery_modes_for_catalog",
     "selection_year",
     "unavailable_mosaics_reason",
@@ -87,23 +88,43 @@ class NoCloudFreeScenesError(ValueError):
         self.chip_id = chip_id
 
 
-def selection_year(item: pystac.Item, year: int | None = None) -> int:
-    """The one year a chip is selected for, in every mode and every check.
+class SkipCode(StrEnum):
+    """Why a chip got no selection in a mode; the ``code`` of every skipped detail."""
+
+    NO_BBOX = "no_bbox"
+    ALREADY_SELECTED = "already_selected"
+    NO_YEAR = "no_year"
+    NO_MOSAICS_FOR_YEAR = "no_mosaics_for_year"
+    NO_IMAGERY = "no_imagery"
+
+
+NO_YEAR_REASON = "No year provided and could not extract from chip ID or item properties"
+
+
+def selection_year(item: pystac.Item, imagery_mode: str, year: int | None = None) -> int | None:
+    """The year a chip is selected for in ``imagery_mode``, used by every check.
 
     Read from stable inputs only, never the temporal properties, which selection
-    itself rewrites: the run's ``year``; else the year a selection already on the
-    chip recorded (its mosaic year, then ``ftw:calendar_year``), so a run without a
-    year never moves an existing selection; else the chip id's ``_YYYY`` suffix; else
-    ``MOSAIC_FALLBACK_YEAR``. Catalogs built before multi-mode support recorded 2025
-    for mosaics selected without a year, and keep that year here.
+    itself rewrites: the run's ``year``; else the year this mode's selection on the
+    chip recorded (``ftw:calendar_year`` for scenes, the mosaic requested year for
+    mosaics), so a run without a year never moves an existing selection; else the
+    chip id's ``_YYYY`` suffix. With none of those, mosaics use
+    ``MOSAIC_FALLBACK_YEAR`` (as before multi-mode support, which is why older
+    catalogs record 2025 for mosaics selected without a year) and scenes get None:
+    the chip is skipped.
     """
     if year is not None:
         return year
-    recorded = mosaic_requested_year(item) or item.properties.get("ftw:calendar_year")
+    if imagery_mode == "scenes":
+        recorded = item.properties.get("ftw:calendar_year")
+    else:
+        recorded = mosaic_requested_year(item)
     if recorded is not None:
         return recorded
     match = re.search(r"_(\d{4})$", item.id)
-    return int(match.group(1)) if match else MOSAIC_FALLBACK_YEAR
+    if match:
+        return int(match.group(1))
+    return MOSAIC_FALLBACK_YEAR if imagery_mode == "mosaics" else None
 
 
 @dataclass
@@ -246,13 +267,13 @@ def resolve_selection_conflicts(
         (item, mode, reason)
         for mode in normalize_imagery_modes(imagery_modes)
         for item in items
-        if (reason := selection_conflict(item, mode, selection_year(item, year))) is not None
+        if (reason := selection_conflict(item, mode, selection_year(item, mode, year)))
     ]
     if not conflicts:
         return 0
     if not force:
         item, mode, reason = conflicts[0]
-        wanted = f"{mode} for {selection_year(item, year)}"
+        wanted = f"{mode} for {selection_year(item, mode, year)}"
         raise SelectionConflictError(
             f"{len(conflicts)} chip(s) already hold imagery from a different run "
             f"(e.g. {item.id} {reason}; this run selects {wanted})."
@@ -262,7 +283,7 @@ def resolve_selection_conflicts(
     return len(conflicts)
 
 
-def select_imagery_for_catalog(
+def _select_mode(
     catalog_dir: Path,
     year: int | None,
     cloud_cover_chip: float = 2.0,
@@ -324,11 +345,11 @@ def select_imagery_for_catalog(
 
     jobs: list[ChipSelectionJob] = []
     for item, item_path in chip_items:
-        job_year = selection_year(item, year)
-        reason = _skip_reason(item, force=force, year=job_year, imagery_mode=imagery_mode)
-        if reason is not None:
+        job_year = selection_year(item, imagery_mode, year)
+        skip = _skip_reason(item, force=force, year=job_year, imagery_mode=imagery_mode)
+        if skip is not None:
             result.skipped += 1
-            result.skipped_details.append({"chip": item.id, "reason": reason})
+            result.skipped_details.append({"chip": item.id, "code": skip[0], "reason": skip[1]})
             continue
         jobs.append(ChipSelectionJob(item=item, item_path=item_path, year=job_year))
 
@@ -431,7 +452,7 @@ def select_imagery_modes_for_catalog(
 ) -> MultiModeSelectionResult:
     """Select imagery for every chip in each of ``imagery_modes``, scenes first.
 
-    Each mode is one :func:`select_imagery_for_catalog` pass over the same chip items,
+    Each mode is one :func:`_select_mode` pass over the same chip items,
     read once, and the modes write disjoint slots, links and properties, so a chip
     ends up holding both, for the one year :func:`selection_year` gives it.
 
@@ -446,7 +467,7 @@ def select_imagery_modes_for_catalog(
         force: Replace a conflicting or existing selection in the mode being run
         chip_items: (item, item_path) pairs to select for instead of every chip
                     found under ``catalog_dir``
-        **options: Passed on to :func:`select_imagery_for_catalog`
+        **options: Passed on to :func:`_select_mode`
 
     Raises:
         MosaicYearError: If mosaics are the only mode and a chip's year has none
@@ -458,7 +479,8 @@ def select_imagery_modes_for_catalog(
         chip_items = find_chip_items(catalog_dir, unreadable=result.unreadable)
     items = [item for item, _path in chip_items]
 
-    for missing in require_mosaic_years((selection_year(i, year) for i in items), modes):
+    mosaic_years = (selection_year(item, "mosaics", year) for item in items)
+    for missing in require_mosaic_years(mosaic_years, modes):
         logger.warning(f"Mosaics for {missing} are not available; its chips get scenes only.")
 
     cleared = resolve_selection_conflicts(items, imagery_modes=modes, year=year, force=force)
@@ -468,7 +490,7 @@ def select_imagery_modes_for_catalog(
     for mode in modes:
         if len(modes) > 1:
             logger.info(f"Selecting {mode}...")
-        result.by_mode[mode] = select_imagery_for_catalog(
+        result.by_mode[mode] = _select_mode(
             catalog_dir=catalog_dir,
             year=year,
             imagery_mode=mode,
@@ -480,16 +502,17 @@ def select_imagery_modes_for_catalog(
 
 
 def _skip_reason(
-    item: pystac.Item, *, force: bool, year: int, imagery_mode: str = DEFAULT_IMAGERY_MODE
-) -> str | None:
+    item: pystac.Item, *, force: bool, year: int | None, imagery_mode: str = DEFAULT_IMAGERY_MODE
+) -> tuple[SkipCode, str] | None:
     """Return why this chip needs no selection in ``imagery_mode``, or None if it does."""
     if not item.bbox:
-        return "No bbox in item"
+        return SkipCode.NO_BBOX, "No bbox in item"
     if not force and has_mode_selection(item, imagery_mode):
-        return "Already has imagery selections"
-    if imagery_mode == "mosaics":
-        return unavailable_mosaics_reason(year)
-    return None
+        return SkipCode.ALREADY_SELECTED, "Already has imagery selections"
+    if year is None:
+        return SkipCode.NO_YEAR, NO_YEAR_REASON
+    no_mosaics = unavailable_mosaics_reason(year) if imagery_mode == "mosaics" else None
+    return None if no_mosaics is None else (SkipCode.NO_MOSAICS_FOR_YEAR, no_mosaics)
 
 
 def _build_scene_index(
@@ -607,6 +630,7 @@ def _record_chip(
     result.skipped_details.append(
         {
             "chip": job.item.id,
+            "code": SkipCode.NO_IMAGERY,
             "reason": selection.skipped_reason or "Unknown reason",
             "candidates_checked": selection.candidates_checked,
         }

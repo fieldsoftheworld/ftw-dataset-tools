@@ -61,12 +61,29 @@ class TestOneYearForBothModes:
         assert _years(run) == [("scenes", 2024), ("mosaics", 2024)]
         assert result.successful == 2
 
-    def test_a_recorded_mosaic_year_is_kept(self, tmp_path: Path) -> None:
+    def test_a_recorded_mosaic_year_drives_only_the_mosaics(self, tmp_path: Path) -> None:
         # Built before multi-mode support: mosaics selected without a year got 2025.
         _parent, path = _chip(tmp_path, "chip_001_2024")
         _add_mosaics(path, year=2025, requested=2025)
-        _result, run = _run(tmp_path, lambda _year: True)
-        assert _years(run) == [("scenes", 2025)]  # mosaics are already there
+        result, run = _run(tmp_path, lambda _year: True)
+        assert _years(run) == [("scenes", 2024)]
+        assert result.by_mode["mosaics"].skipped_details[0]["code"] == "already_selected"
+
+    def test_explicit_years_per_mode_then_a_plain_run_changes_nothing(
+        self, tmp_path: Path, mock_selection_result: SceneSelectionResult
+    ) -> None:
+        _parent, path = _chip(tmp_path, "chip_001")
+        _add_scenes(path, mock_selection_result)  # scenes for 2024
+        _add_mosaics(path, year=2022, requested=2022)
+        result, run = _run(tmp_path, lambda _year: True)
+        assert run.call_count == 0
+        assert result.skipped == 2
+
+    def test_a_chip_with_no_year_skips_scenes(self, tmp_path: Path) -> None:
+        _chip(tmp_path, "chip_001")
+        result, run = _run(tmp_path, lambda _year: True)
+        assert _years(run) == [("mosaics", 2025)]
+        assert result.by_mode["scenes"].skipped_details[0]["code"] == "no_year"
 
     def test_chips_whose_year_has_no_mosaics_skip_only_them(self, tmp_path: Path) -> None:
         _chip(tmp_path, "chip_001_2023")
@@ -75,6 +92,7 @@ class TestOneYearForBothModes:
         assert result.by_mode["mosaics"].skipped_details == [
             {
                 "chip": "chip_001_2023",
+                "code": "no_mosaics_for_year",
                 "reason": "Mosaics for 2023 are not available (its quarterly index is incomplete)",
             }
         ]
@@ -102,7 +120,7 @@ class TestFailFast:
         calls: list[dict] = []
         with (
             patch(_YEAR_AVAILABLE, return_value=True),
-            patch.object(selection_workflow, "select_imagery_for_catalog", _fake_select(calls)),
+            patch.object(selection_workflow, "_select_mode", _fake_select(calls)),
             pytest.raises(SelectionConflictError, match="has scenes for 2024"),
         ):
             select_imagery_modes_for_catalog(tmp_path, ("scenes", "mosaics"), year=2022)
@@ -119,7 +137,7 @@ class TestFailFast:
         calls: list[dict] = []
         with (
             patch(_YEAR_AVAILABLE, return_value=True),
-            patch.object(selection_workflow, "select_imagery_for_catalog", _fake_select(calls)),
+            patch.object(selection_workflow, "_select_mode", _fake_select(calls)),
             pytest.raises(SelectionConflictError, match="has mosaics for 2022"),
         ):
             select_imagery_modes_for_catalog(tmp_path, ("scenes", "mosaics"), year=2024)
@@ -130,7 +148,7 @@ class TestFailFast:
 class TestChipItemsReadOnce:
     def test_a_bare_string_is_one_mode(self, tmp_path: Path) -> None:
         calls: list[dict] = []
-        with patch.object(selection_workflow, "select_imagery_for_catalog", _fake_select(calls)):
+        with patch.object(selection_workflow, "_select_mode", _fake_select(calls)):
             select_imagery_modes_for_catalog(tmp_path, "scenes", year=2024)
         assert [c["imagery_mode"] for c in calls] == ["scenes"]
 
@@ -142,7 +160,7 @@ class TestChipItemsReadOnce:
         calls: list[dict] = []
         with (
             patch(_YEAR_AVAILABLE, return_value=True),
-            patch.object(selection_workflow, "select_imagery_for_catalog", _fake_select(calls)),
+            patch.object(selection_workflow, "_select_mode", _fake_select(calls)),
         ):
             result = select_imagery_modes_for_catalog(tmp_path, ("scenes", "mosaics"), year=2024)
         assert calls[0]["chip_items"] is calls[1]["chip_items"]

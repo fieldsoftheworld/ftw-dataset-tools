@@ -61,6 +61,8 @@ class PreviewTask:
     visual_href: str
     mask_path: Path
     output_path: Path
+    #: The season the scene is from, which the chip preview is then recorded as.
+    season: str
     #: The scene's own preview, kept so the chip preview's source is visible on disk.
     base_path: Path
 
@@ -103,6 +105,7 @@ def build_preview_task(item: pystac.Item, item_path: Path) -> PreviewTask | str:
         visual_href=href,
         mask_path=mask_path,
         output_path=chip_dir / f"{item.id}_overlay{PREVIEW_SUFFIX}",
+        season=season,
         base_path=chip_dir / f"{item.id}_{season}_image_s2{PREVIEW_SUFFIX}",
     )
 
@@ -113,8 +116,7 @@ def render_preview(task: PreviewTask) -> None:
     try:
         generate_scene_thumbnail(task.visual_href, task.mask_path, base_path)
         generate_overlay_thumbnail(base_path, task.mask_path, task.output_path)
-        # Kept as the season's preview: it is how a later mosaic download (and
-        # chip_preview.preview_slot) knows the chip preview comes from this scene.
+        # Kept as the season's own preview, which the chip preview can be redrawn from.
         base_path.replace(task.base_path)
     finally:
         base_path.unlink(missing_ok=True)
@@ -179,7 +181,7 @@ def preview_imagery_for_catalog(
                 advance()
                 continue
             # Done once a scene draws the preview; one drawn from Q3 is replaced.
-            if resume and preview_slot(item_path.parent, item.id) in SCENE_SLOTS:
+            if resume and preview_slot(item, item_path.parent) in SCENE_SLOTS:
                 result.skipped += 1
                 result.skipped_details.append({"chip": item.id, "reason": "Already rendered"})
                 advance()
@@ -195,7 +197,7 @@ def preview_imagery_for_catalog(
                 return
             try:
                 parent = pystac.Item.from_file(str(task.item_path))
-                refresh_chip_preview(parent, task.item_path.parent)
+                refresh_chip_preview(parent, task.item_path.parent, task.season)
                 write_item(parent, task.item_path)
             except (OSError, pystac.STACError) as err:
                 # The preview is on disk; only the item update failed. Report it rather

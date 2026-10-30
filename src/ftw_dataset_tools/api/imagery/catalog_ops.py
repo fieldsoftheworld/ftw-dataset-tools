@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import pystac
 
-from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, refresh_chip_preview
+from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, redraw_chip_preview
 from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES, IMAGERY_SLOTS, SLOTS_BY_MODE
 from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_EXTENSIONS
 from ftw_dataset_tools.api.stac_items import write_item
@@ -39,6 +39,7 @@ __all__ = [
     "get_imagery_stats",
     "has_existing_scenes",
     "has_mode_selection",
+    "item_window",
     "iter_chip_dirs",
     "mosaic_requested_year",
     "normalize_imagery_properties",
@@ -46,6 +47,7 @@ __all__ = [
     "refresh_temporal_extent",
     "selected_modes",
     "selection_conflict",
+    "set_temporal_extent",
 ]
 
 
@@ -201,9 +203,10 @@ def selection_conflict(item: pystac.Item, imagery_mode: str, year: int) -> str |
     return f"has {imagery_mode} for {existing}"
 
 
-def _child_window(child: pystac.Item) -> tuple[datetime, datetime] | None:
-    start = child.common_metadata.start_datetime or child.datetime
-    end = child.common_metadata.end_datetime or child.datetime
+def item_window(item: pystac.Item) -> tuple[datetime, datetime] | None:
+    """The item's time range: start/end_datetime, else its datetime twice."""
+    start = item.common_metadata.start_datetime or item.datetime
+    end = item.common_metadata.end_datetime or item.datetime
     if start is None or end is None:
         return None
     # Naive times are UTC by STAC convention; comparing them with aware ones raises.
@@ -218,38 +221,27 @@ def _linked_slots(item: pystac.Item) -> list[tuple[str, pystac.Link]]:
     ]
 
 
-def refresh_temporal_extent(
-    item: pystac.Item,
-    chip_dir: Path,
-    children: dict[str, pystac.Item] | None = None,
-) -> bool:
-    """Set the parent's ``start_datetime``/``end_datetime`` to span every linked slot.
-
-    A scene contributes its acquisition time, a mosaic its quarter, so a chip holding
-    both modes spans both. ``children`` supplies slot items already in memory; any
-    other linked slot is read from disk.
-
-    Returns:
-        False when no linked child has a date; the properties are then left alone.
-    """
-    children = children or {}
-    windows = []
-    for slot, link in _linked_slots(item):
-        child = children.get(slot)
-        if child is None:
-            try:
-                child = pystac.Item.from_file(str(chip_dir / Path(link.href).name))
-            except Exception:
-                # A half-written child only narrows the extent; not worth failing over.
-                continue
-        window = _child_window(child)
-        if window is not None:
-            windows.append(window)
+def set_temporal_extent(item: pystac.Item, windows: list[tuple[datetime, datetime]]) -> bool:
+    """Set ``start_datetime``/``end_datetime`` to span ``windows``; False (untouched) if none."""
     if not windows:
         return False
     item.properties["start_datetime"] = min(start for start, _end in windows).isoformat()
     item.properties["end_datetime"] = max(end for _start, end in windows).isoformat()
     return True
+
+
+def refresh_temporal_extent(item: pystac.Item, chip_dir: Path) -> bool:
+    """Span every linked slot's child item on disk; False when none has a date."""
+    windows = []
+    for _slot, link in _linked_slots(item):
+        try:
+            child = pystac.Item.from_file(str(chip_dir / Path(link.href).name))
+        except Exception:
+            # A half-written child only narrows the extent; not worth failing over.
+            continue
+        if (window := item_window(child)) is not None:
+            windows.append(window)
+    return set_temporal_extent(item, windows)
 
 
 def preserve_imagery_selection(item: pystac.Item, existing_item_path: Path) -> bool:
@@ -476,7 +468,7 @@ def clear_chip_selections(item: pystac.Item, modes: Iterable[str] | None = None)
     slots = tuple(slot for mode in modes for slot in SLOTS_BY_MODE[mode])
 
     # Decided before the files go: afterwards the preview's source is unknowable.
-    drop_preview = preview_slot(chip_dir, item.id) in (*slots, None)
+    drop_preview = preview_slot(item, chip_dir) in (*slots, None)
 
     for slot in slots:
         _delete_slot_files(chip_dir, item.id, slot, result)
@@ -485,9 +477,7 @@ def clear_chip_selections(item: pystac.Item, modes: Iterable[str] | None = None)
 
     if drop_preview:
         # Redrawn from whatever mode is left, e.g. the Q3 mosaic once scenes go.
-        for ext in PREVIEW_EXTENSIONS:
-            (chip_dir / f"{item.id}_overlay{ext}").unlink(missing_ok=True)
-        refresh_chip_preview(item, chip_dir, redraw=True)
+        redraw_chip_preview(item, chip_dir)
 
     cleared_rels = {f"ftw:{slot}" for slot in slots}
     item.links = [link for link in item.links if link.rel not in cleared_rels]

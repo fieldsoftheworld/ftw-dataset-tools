@@ -424,6 +424,12 @@ def create_dataset_cmd(
             if "scenes" not in imagery_modes:
                 reject_scene_only_options(click.get_current_context(), _SCENE_ONLY_OPTIONS)
             run_year = _selection_year(fields_file, year)
+            if run_year is None and "scenes" in imagery_modes:
+                raise click.ClickException(
+                    "--year is required for image selection "
+                    "(no determination_datetime column found). "
+                    "Use --skip-images to skip image selection."
+                )
             require_mosaic_year(run_year, imagery_modes)
 
         def select_and_download(catalog_dir: Path) -> None:
@@ -434,12 +440,6 @@ def create_dataset_cmd(
             README and AGENTS.md the docs stage writes then describe a collection
             that already has its imagery.
             """
-            if run_year is None and "scenes" in imagery_modes:
-                raise click.ClickException(
-                    "--year is required for image selection "
-                    "(no determination_datetime column found). "
-                    "Use --skip-images to skip image selection."
-                )
             click.echo("")
             click.echo(click.style("Selecting imagery...", fg="cyan", bold=True))
 

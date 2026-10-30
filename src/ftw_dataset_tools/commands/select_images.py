@@ -25,6 +25,7 @@ from ftw_dataset_tools.api.imagery.selection_workflow import (
     MultiModeSelectionResult,
     NoCloudFreeScenesError,
     SelectionWorkflowResult,
+    SkipCode,
     select_imagery_modes_for_catalog,
 )
 from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES
@@ -38,6 +39,9 @@ from ftw_dataset_tools.commands.imagery_mode import (
 )
 
 ChipEntries = list[tuple[pystac.Item, Path]]
+
+# Skips that mean the chip found no imagery, as opposed to needing none.
+_NO_IMAGERY_CODES = (SkipCode.NO_IMAGERY, SkipCode.NO_MOSAICS_FOR_YEAR)
 
 # Options that only mean something for --imagery-mode scenes.
 _SCENE_ONLY_OPTIONS = (
@@ -215,12 +219,10 @@ def _echo_summary(
     chip_items: list[pystac.Item], result: SelectionWorkflowResult, *, mode: str
 ) -> None:
     """One mode's breakdown; the totals count chips holding this mode's imagery."""
-    mosaics = mode == "mosaics"
-    no_imagery = "No complete mosaic year" if mosaics else "No cloud-free"
-    no_imagery_label = no_imagery if mosaics else "No cloud-free scenes"
+    no_imagery_label = "No mosaics" if mode == "mosaics" else "No cloud-free scenes"
     skipped = result.skipped_details
-    already_has = [s for s in skipped if s["reason"] == "Already has imagery selections"]
-    no_scenes = [s for s in skipped if no_imagery in (s.get("reason") or "")]
+    already_has = [s for s in skipped if s.get("code") == SkipCode.ALREADY_SELECTED]
+    no_scenes = [s for s in skipped if s.get("code") in _NO_IMAGERY_CODES]
     other_skipped = [s for s in skipped if s not in already_has and s not in no_scenes]
 
     final_stats = get_imagery_stats(chip_items, mode=mode)
@@ -275,8 +277,9 @@ def _write_report(
     "--year",
     type=int,
     default=None,
-    help="Calendar year for the crop cycle. If not provided, extracted from chip IDs. "
-    "In mosaic mode, the mosaic year (default 2025, with a warning).",
+    help="Year to select imagery for, in every mode. If not provided, each chip keeps "
+    "the year its existing selection recorded, else its ID's year; a chip with neither "
+    "is skipped for scenes and gets 2025 mosaics.",
 )
 @click.option(
     "--cloud-cover-chip",

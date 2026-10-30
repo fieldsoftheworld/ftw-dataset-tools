@@ -1945,7 +1945,7 @@ class TestStageSelectImagesWiring:
         from ftw_dataset_tools.api.imagery import mosaic_selection, selection_workflow
 
         monkeypatch.setattr(mosaic_selection, "year_available", lambda _year: True)
-        monkeypatch.setattr(selection_workflow, "select_imagery_for_catalog", fake_select)
+        monkeypatch.setattr(selection_workflow, "_select_mode", fake_select)
         pipeline.stage_select_images(ctx)
         return seen
 

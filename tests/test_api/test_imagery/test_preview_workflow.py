@@ -187,7 +187,10 @@ class TestPreviewImageryForCatalog:
         preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
 
         assert (chip_dir / "chip_a_planting_image_s2.webp").stat().st_size > 0
-        assert preview_slot(chip_dir, "chip_a") == "planting"
+        assert (
+            preview_slot(pystac.Item.from_file(str(chip_dir / "chip_a.json")), chip_dir)
+            == "planting"
+        )
 
     def test_resume_renders_over_a_q3_preview(self, tmp_path: Path) -> None:
         """A chip previewed from its Q3 mosaic gets the scene's preview, which wins."""
@@ -200,7 +203,10 @@ class TestPreviewImageryForCatalog:
         again = preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
 
         assert again.successful == 1
-        assert preview_slot(chip_dir, "chip_a") == "planting"
+        assert (
+            preview_slot(pystac.Item.from_file(str(chip_dir / "chip_a.json")), chip_dir)
+            == "planting"
+        )
 
     def test_resume_is_the_default(self, tmp_path: Path) -> None:
         """No caller should inherit a re-render of everything by omitting the flag."""

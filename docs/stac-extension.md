@@ -87,12 +87,18 @@ its own; re-selecting one mode never touches the other.
 | Property | Item | Type | Description |
 |----------|------|------|-------------|
 | `ftw:imagery_modes` | parent | array of string | Modes whose selection is complete on the chip, in run order: `["scenes"]`, `["mosaics"]` or `["scenes", "mosaics"]`. Derived from the `ftw:<slot>` links |
+| `ftw:preview_slot` | parent `thumbnail` asset | string | Slot the chip preview was drawn from, e.g. `planting` or `q3` |
 
 The parent's `start_datetime`/`end_datetime` span every selected image of both modes. The
-chip preview (`thumbnail`) is drawn from a scene once it has a preview image
-(`{item_id}_planting_image_s2.webp`, else harvest's), else from the Q3 mosaic's; clearing
-the scenes redraws it from the Q3 mosaic. Both modes are selected for the same year (see
-`selection_year`), and a scene or mosaic selection recorded for another year conflicts.
+chip preview (`thumbnail`) comes from a scene (planting, else harvest) when one has a
+preview, else from the Q3 mosaic; the slot that drew it is recorded as `ftw:preview_slot`.
+A thumbnail without that field predates it and counts as a scene's. Clearing the mode that
+drew the preview redraws it from the other mode.
+
+Without an explicit year each mode keeps the year its selection on the chip recorded
+(`ftw:calendar_year`, `ftw:mosaic_requested_year`), else uses the chip id's year. A chip
+with neither is skipped for scenes and gets 2025 mosaics. A selection recorded for a year
+other than an explicit one conflicts.
 
 Catalogs written before multi-mode support carry a scalar `ftw:imagery_mode` (`mosaics`;
 absent meant scenes) and the un-namespaced mosaic years `ftw:requested_year` /

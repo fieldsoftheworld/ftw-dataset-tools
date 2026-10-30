@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ftw_dataset_tools.api.imagery.selection_workflow import MultiModeSelectionResult
+if TYPE_CHECKING:
+    from ftw_dataset_tools.api.imagery.selection_workflow import MultiModeSelectionResult
+
 
 __all__ = ["imagery_summary_line", "selection_summary_lines"]
 
@@ -22,12 +24,12 @@ def imagery_summary_line(label: str, result: Any) -> str:
     return line
 
 
-def selection_summary_lines(result: Any) -> list[str]:
+def selection_summary_lines(result: MultiModeSelectionResult) -> list[str]:
     """The selection summary: one line, or one per imagery mode when several ran.
 
     Chips that could not be read are counted once, not once per mode.
     """
-    if not isinstance(result, MultiModeSelectionResult) or len(result.by_mode) == 1:
+    if len(result.by_mode) == 1:
         return [imagery_summary_line("Imagery selection", result)]
     lines = [
         imagery_summary_line(f"Imagery selection ({mode})", mode_result)

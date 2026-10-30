@@ -76,6 +76,11 @@ class TestSelectImagesMosaics:
         assert "--cloud-cover-chip" in result.output
         assert "only applies to --imagery-mode scenes" in result.output
 
+    def test_year_help_describes_the_per_chip_rule(self) -> None:
+        result = CliRunner().invoke(cli, ["select-images", "--help"])
+        assert "else its ID's year" in " ".join(result.output.split())
+        assert "default 2025" not in result.output
+
     def test_without_year_uses_the_chip_year(self, tmp_path: Path) -> None:
         with (
             patch(_YEAR_AVAILABLE, return_value=True),
@@ -219,6 +224,7 @@ class TestSelectImagesMosaics:
         assert result.exit_code == 0, result.output
         assert [c.kwargs["imagery_mode"] for c in run.call_args_list] == ["scenes"]
         assert "Imagery selection (mosaics): 0 ok, 1 skipped" in result.output
+        assert "No mosaics: 1" in result.output  # classified by code, not reason text
         skipped = json.loads(report.read_text())["skipped"]
         assert skipped[0]["mode"] == "mosaics"
         assert skipped[0]["reason"].startswith("Mosaics for 2023 are not available")
