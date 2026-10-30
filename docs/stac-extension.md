@@ -89,8 +89,9 @@ its own; re-selecting one mode never touches the other.
 | `ftw:imagery_modes` | parent | array of string | Modes whose selection is complete on the chip, in run order: `["scenes"]`, `["mosaics"]` or `["scenes", "mosaics"]`. Derived from the `ftw:<slot>` links |
 
 The parent's `start_datetime`/`end_datetime` span every selected image of both modes. The
-chip preview (`thumbnail`) is drawn from the planting scene when the chip has one, else
-from the Q3 mosaic.
+chip preview (`thumbnail`) is drawn from the planting scene once it has a preview image
+(`{item_id}_planting_image_s2.webp`), else from the Q3 mosaic's; clearing the scenes
+redraws it from the Q3 mosaic. Both modes are selected for the same year.
 
 Catalogs written before multi-mode support carry a scalar `ftw:imagery_mode` (`mosaics`;
 absent meant scenes) and the un-namespaced mosaic years `ftw:requested_year` /

@@ -23,16 +23,14 @@ from ftw_dataset_tools.api.config import DEFAULT_MASK_TYPES, PMTILES_AUTO, VALID
 from ftw_dataset_tools.api.imagery import download_imagery_for_catalog
 from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
-from ftw_dataset_tools.api.imagery.selection_workflow import (
-    MultiModeSelectionResult,
-    select_imagery_modes_for_catalog,
-)
+from ftw_dataset_tools.api.imagery.selection_workflow import select_imagery_modes_for_catalog
+from ftw_dataset_tools.api.imagery.summary import selection_summary_lines
 from ftw_dataset_tools.api.pipeline import docs_summary_line
 from ftw_dataset_tools.api.stac import resolve_year
 from ftw_dataset_tools.commands.imagery_mode import (
+    check_mosaic_year_option,
     imagery_mode_option,
     reject_scene_only_options,
-    resolve_mosaic_year,
 )
 from ftw_dataset_tools.commands.options import KM_SIZE, KM_SIZE_HELP
 
@@ -47,27 +45,11 @@ _SCENE_ONLY_OPTIONS = (
 
 
 def _selection_year(fields_file: Path, year: int | None) -> int | None:
-    """The scene year: --year or the fields' determination year."""
+    """The selection year of both modes: --year or the fields' determination year."""
     effective_year = resolve_year(fields_file, year)
     if year is None and effective_year is not None:
         click.echo(f"  Year: {effective_year} (from determination_datetime)")
     return effective_year
-
-
-def _echo_selection(selection: MultiModeSelectionResult) -> None:
-    """Selected/skipped/failed counts, per mode when the run had several."""
-    several = len(selection.by_mode) + len(selection.skipped_modes) > 1
-    for mode, result in selection.by_mode.items():
-        indent = "  "
-        if several:
-            click.echo(f"  {mode.capitalize()}:")
-            indent = "    "
-        click.echo(f"{indent}Selected: {result.successful}")
-        click.echo(f"{indent}Skipped: {result.skipped}")
-        if result.failed:
-            click.echo(click.style(f"{indent}Failed: {result.failed}", fg="red"))
-    for mode, reason in selection.skipped_modes.items():
-        click.echo(click.style(f"  {mode.capitalize()} skipped: {reason}", fg="yellow"))
 
 
 @click.command("create-dataset")
@@ -437,11 +419,10 @@ def create_dataset_cmd(
         should_select_images = not skip_images or download_images
 
         # Mosaic checks run before the masks are built, so a bad flag fails fast.
-        mosaic_year = None
-        if should_select_images and "mosaics" in imagery_modes:
-            if "scenes" not in imagery_modes:
-                reject_scene_only_options(click.get_current_context(), _SCENE_ONLY_OPTIONS)
-            mosaic_year = resolve_mosaic_year(year, imagery_modes)
+        if should_select_images and "scenes" not in imagery_modes:
+            reject_scene_only_options(click.get_current_context(), _SCENE_ONLY_OPTIONS)
+        if should_select_images:
+            check_mosaic_year_option(year, imagery_modes)
 
         def select_and_download(catalog_dir: Path) -> None:
             """Select (and optionally download) imagery for the written collection.
@@ -451,15 +432,14 @@ def create_dataset_cmd(
             README and AGENTS.md the docs stage writes then describe a collection
             that already has its imagery.
             """
-            scene_year = None
-            if "scenes" in imagery_modes:
-                scene_year = _selection_year(fields_file, year)
-                if scene_year is None:
-                    raise click.ClickException(
-                        "--year is required for image selection "
-                        "(no determination_datetime column found). "
-                        "Use --skip-images to skip image selection."
-                    )
+            # Both modes use this year; without one, mosaics take each chip's own.
+            selection_year = _selection_year(fields_file, year)
+            if selection_year is None and "scenes" in imagery_modes:
+                raise click.ClickException(
+                    "--year is required for image selection "
+                    "(no determination_datetime column found). "
+                    "Use --skip-images to skip image selection."
+                )
 
             click.echo("")
             click.echo(click.style("Selecting imagery...", fg="cyan", bold=True))
@@ -473,8 +453,7 @@ def create_dataset_cmd(
                 selection = select_imagery_modes_for_catalog(
                     catalog_dir,
                     imagery_modes,
-                    year=scene_year,
-                    mosaic_year=mosaic_year,
+                    year=selection_year,
                     cloud_cover_chip=cloud_cover_chip,
                     nodata_max=nodata_max,
                     buffer_days=buffer_days,
@@ -489,7 +468,8 @@ def create_dataset_cmd(
                     f"{err} Pass --force-image-selection to replace it, or use a new output dir."
                 ) from err
 
-            _echo_selection(selection)
+            for line in selection_summary_lines(selection):
+                click.echo(line)
 
             if not download_images:
                 return

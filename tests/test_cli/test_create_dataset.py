@@ -418,8 +418,8 @@ class TestCreateDatasetImageSelection:
         result = _invoke(sample_fields_geoparquet)
 
         assert result.exit_code == 0, result.output
-        assert "Selected: 2" in result.output
-        assert "Skipped: 1" in result.output
+        assert "Imagery selection: 2 ok, 1 skipped, 0 failed" in result.output
+        assert "Scenes summary" not in result.output
         assert "Failed:" not in result.output
 
     def test_skip_images_does_not_select(
@@ -454,7 +454,7 @@ class TestCreateDatasetImageSelectionErrors:
         result = _invoke(sample_fields_geoparquet)
 
         assert result.exit_code == 0, result.output
-        assert "Failed: 2" in result.output
+        assert "Imagery selection: 1 ok, 0 skipped, 2 failed" in result.output
 
     def test_reports_empty_catalog(
         self, stub_pipeline: SelectionStub, sample_fields_geoparquet: Path
@@ -465,7 +465,7 @@ class TestCreateDatasetImageSelectionErrors:
         result = _invoke(sample_fields_geoparquet)
 
         assert result.exit_code == 0, result.output
-        assert "Selected: 0" in result.output
+        assert "Imagery selection: 0 ok, 0 skipped, 0 failed" in result.output
 
     def test_selection_value_error_exits_nonzero(
         self, stub_pipeline: SelectionStub, sample_fields_geoparquet: Path
@@ -835,8 +835,8 @@ class TestCreateDatasetMosaics:
             ("mosaics", 2023),
         ]
         assert stub_pipeline.calls[0]["buffer_days"] == 7
-        assert "Scenes:" in result.output
-        assert "Mosaics:" in result.output
+        assert "Imagery selection (scenes): 2 ok, 1 skipped, 0 failed" in result.output
+        assert "Imagery selection (mosaics): 2 ok, 1 skipped, 0 failed" in result.output
 
     def test_both_modes_skip_mosaics_for_a_year_without_them(
         self,
@@ -853,4 +853,7 @@ class TestCreateDatasetMosaics:
 
         assert result.exit_code == 0, result.output
         assert [c["imagery_mode"] for c in stub_pipeline.calls] == ["scenes"]
-        assert "Mosaics skipped: Mosaics for 2023 are not available" in result.output
+        assert (
+            "Imagery selection (mosaics): skipped - Mosaics for 2023 are not available"
+            in result.output
+        )

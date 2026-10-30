@@ -13,13 +13,22 @@ from typing import TYPE_CHECKING
 
 import pystac
 
+from ftw_dataset_tools.api.assets import add_file_info
 from ftw_dataset_tools.api.imagery.slots import (
     IMAGERY_MODES,
     IMAGERY_SLOTS,
     SLOTS_BY_MODE,
     THUMBNAIL_SLOTS,
+    slot_title,
 )
-from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_EXTENSIONS
+from ftw_dataset_tools.api.imagery.thumbnails import (
+    PREVIEW_EXTENSIONS,
+    PREVIEW_SUFFIX,
+    REFERENCE_MASK_SUFFIX,
+    ThumbnailError,
+    generate_overlay_thumbnail,
+    preview_media_type,
+)
 from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
@@ -48,6 +57,7 @@ __all__ = [
     "normalize_imagery_properties",
     "preserve_imagery_selection",
     "preview_slot",
+    "redraw_chip_preview",
     "refresh_temporal_extent",
     "selected_modes",
     "selection_conflict",
@@ -203,16 +213,65 @@ def selection_conflict(item: pystac.Item, imagery_mode: str, year: int | None) -
     return None
 
 
-def preview_slot(chip_dir: Path, chip_id: str) -> str | None:
-    """The slot the chip preview is drawn from: the first thumbnail slot selected for it.
+def _slot_preview_path(chip_dir: Path, chip_id: str, slot: str) -> Path | None:
+    """The slot's own preview image (``{chip}_{slot}_image_s2.webp``), if one is on disk."""
+    for ext in PREVIEW_EXTENSIONS:
+        path = chip_dir / f"{chip_id}_{slot}_image_s2{ext}"
+        if path.exists():
+            return path
+    return None
 
-    On a chip holding both modes that is the planting scene, whichever image happens
-    to download first, so the preview does not depend on download order.
+
+def preview_slot(chip_dir: Path, chip_id: str) -> str | None:
+    """The slot the chip preview is drawn from: the first thumbnail slot with a preview.
+
+    Decided by the preview images actually on disk, so a chip holding both modes
+    shows its planting scene once that has a preview, and the Q3 mosaic until then
+    (or for good, when the planting image never downloaded). This is the one rule
+    the download, the remote preview and clearing all follow.
     """
     for slot in THUMBNAIL_SLOTS:
-        if (chip_dir / f"{chip_id}_{slot}_s2.json").exists():
+        if _slot_preview_path(chip_dir, chip_id, slot) is not None:
             return slot
     return None
+
+
+def redraw_chip_preview(item: pystac.Item, chip_dir: Path) -> str | None:
+    """Draw the chip preview from :func:`preview_slot`'s image and attach it as ``thumbnail``.
+
+    The field overlay is drawn when the chip has its reference mask, else the slot's
+    plain preview is used. Removes any previous overlay and thumbnail first.
+
+    Returns:
+        The slot the preview now comes from, or None when no slot has a preview.
+    """
+    for ext in PREVIEW_EXTENSIONS:
+        (chip_dir / f"{item.id}_overlay{ext}").unlink(missing_ok=True)
+    item.assets.pop("thumbnail", None)
+    slot = preview_slot(chip_dir, item.id)
+    if slot is None:
+        return None
+    target = _slot_preview_path(chip_dir, item.id, slot)
+    title = f"Chip preview ({slot_title(slot).lower()})"
+    mask = chip_dir / f"{item.id}{REFERENCE_MASK_SUFFIX}"
+    if mask.exists():
+        overlay = chip_dir / f"{item.id}_overlay{PREVIEW_SUFFIX}"
+        try:
+            generate_overlay_thumbnail(target, mask, overlay)
+            target, title = overlay, "Chip preview with field overlay"
+        except ThumbnailError:
+            pass
+    item.add_asset(
+        "thumbnail",
+        pystac.Asset(
+            href=f"./{target.name}",
+            media_type=preview_media_type(target.name),
+            title=title,
+            roles=["thumbnail"],
+        ),
+    )
+    add_file_info(item.assets["thumbnail"], target)
+    return slot
 
 
 def _child_window(child: pystac.Item) -> tuple[datetime, datetime] | None:
@@ -371,11 +430,12 @@ class ImageryStats:
         return sum(self.harvest_cloud_covers) / len(self.harvest_cloud_covers)
 
 
-def get_imagery_stats(chip_items: list[pystac.Item]) -> ImageryStats:
+def get_imagery_stats(chip_items: list[pystac.Item], mode: str | None = None) -> ImageryStats:
     """Gather imagery selection statistics from chip items.
 
     Args:
         chip_items: List of STAC items to analyze
+        mode: Count only chips holding this mode's imagery; None counts any mode
 
     Returns:
         ImageryStats with counts and cloud cover data
@@ -383,7 +443,8 @@ def get_imagery_stats(chip_items: list[pystac.Item]) -> ImageryStats:
     stats = ImageryStats(total=len(chip_items))
 
     for item in chip_items:
-        if has_existing_scenes(item):
+        selected = has_existing_scenes(item) if mode is None else has_mode_selection(item, mode)
+        if selected:
             stats.with_imagery += 1
             # Get cloud cover values
             planting_cc = item.properties.get("ftw:planting_cloud_cover")
@@ -487,7 +548,7 @@ def clear_chip_selections(item: pystac.Item, modes: Iterable[str] | None = None)
     modes = IMAGERY_MODES if modes is None else tuple(modes)
     slots = tuple(slot for mode in modes for slot in SLOTS_BY_MODE[mode])
 
-    # Decided before the children go: afterwards the preview's source is unknowable.
+    # Decided before the files go: afterwards the preview's source is unknowable.
     drop_preview = preview_slot(chip_dir, item.id) in (*slots, None)
 
     for slot in slots:
@@ -496,9 +557,8 @@ def clear_chip_selections(item: pystac.Item, modes: Iterable[str] | None = None)
         item.assets.pop(f"{slot}_visual", None)
 
     if drop_preview:
-        for ext in PREVIEW_EXTENSIONS:
-            (chip_dir / f"{item.id}_overlay{ext}").unlink(missing_ok=True)
-        item.assets.pop("thumbnail", None)
+        # Redrawn from whatever mode is left, e.g. the Q3 mosaic once scenes go.
+        redraw_chip_preview(item, chip_dir)
 
     cleared_rels = {f"ftw:{slot}" for slot in slots}
     item.links = [link for link in item.links if link.rel not in cleared_rels]

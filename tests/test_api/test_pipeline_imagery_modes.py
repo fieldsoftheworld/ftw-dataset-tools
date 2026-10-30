@@ -9,6 +9,7 @@ from ftw_dataset_tools.api import pipeline
 from ftw_dataset_tools.api.config import DatasetConfig
 from ftw_dataset_tools.api.imagery import mosaic_selection, selection_workflow
 from ftw_dataset_tools.api.imagery.slots import MOSAIC_SLOTS
+from ftw_dataset_tools.api.imagery.summary import selection_summary_lines
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -42,6 +43,19 @@ def _record_selection(monkeypatch: pytest.MonkeyPatch, *, mosaics_exist: bool) -
 
 
 class TestSelectBothModes:
+    def test_mosaics_use_the_data_year_like_the_scenes(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = _record_selection(monkeypatch, mosaics_exist=True)
+        ctx = _ctx(sample_geoparquet_4326, tmp_path, {"select_images": _BOTH})
+        ctx.config.year = None
+        ctx.effective_year = 2021  # as if from determination_datetime
+        pipeline.stage_select_images(ctx)
+        assert [(c["imagery_mode"], c["year"]) for c in calls] == [
+            ("scenes", 2021),
+            ("mosaics", 2021),
+        ]
+
     def test_runs_scenes_then_mosaics(
         self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -54,7 +68,7 @@ class TestSelectBothModes:
             ("mosaics", 2023),
         ]
         assert ctx.selection_result.successful == 2
-        assert pipeline.selection_summary_lines(ctx.selection_result) == [
+        assert selection_summary_lines(ctx.selection_result) == [
             "  Imagery selection (scenes): 1 ok, 0 skipped, 0 failed",
             "  Imagery selection (mosaics): 1 ok, 0 skipped, 0 failed",
         ]
@@ -70,7 +84,7 @@ class TestSelectBothModes:
 
         assert [c["imagery_mode"] for c in calls] == ["scenes"]
         assert "mosaics" in ctx.selection_result.skipped_modes
-        lines = pipeline.selection_summary_lines(ctx.selection_result)
+        lines = selection_summary_lines(ctx.selection_result)
         assert lines[-1].startswith("  Imagery selection (mosaics): skipped - Mosaics for 2023")
 
 
@@ -79,7 +93,9 @@ def _download(
 ) -> tuple[list[dict], list[dict]]:
     downloads: list[dict] = []
     previews: list[dict] = []
-    empty = SimpleNamespace(successful=0, skipped=0, failed=0, failed_details=[], skipped_details=[])
+    empty = SimpleNamespace(
+        successful=0, skipped=0, failed=0, failed_details=[], skipped_details=[]
+    )
 
     def fake_download(**kwargs: object) -> object:
         downloads.append(kwargs)

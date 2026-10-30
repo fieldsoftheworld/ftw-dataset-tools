@@ -313,11 +313,13 @@ class TestSelectionConflicts:
     def test_conflict_raises_without_force(self, tmp_path: Path) -> None:
         chip = self._mosaic_chip(tmp_path)
         with pytest.raises(SelectionConflictError, match="mosaics for 2024"):
-            resolve_selection_conflicts([chip], imagery_mode="mosaics", year=2025, force=False)
+            resolve_selection_conflicts([chip], imagery_modes="mosaics", year=2025, force=False)
 
     def test_force_clears_the_conflicting_chips(self, tmp_path: Path) -> None:
         chip = self._mosaic_chip(tmp_path)
-        cleared = resolve_selection_conflicts([chip], imagery_mode="mosaics", year=2025, force=True)
+        cleared = resolve_selection_conflicts(
+            [chip], imagery_modes="mosaics", year=2025, force=True
+        )
         assert cleared == 1
         assert not has_existing_scenes(chip)
 
@@ -587,6 +589,7 @@ class TestMosaicSelectionEdges:
     def test_catalog_selection_skips_the_crop_calendar(self, tmp_path: Path) -> None:
         _chip(tmp_path)
         with (
+            patch(f"{_SELECTION}.year_available", return_value=True),
             patch(
                 "ftw_dataset_tools.api.imagery.selection_workflow.select_mosaics_for_chip",
                 return_value=_selection(),

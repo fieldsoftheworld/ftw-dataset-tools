@@ -467,8 +467,8 @@ class SelectImagesConfig:
     """Settings for the imagery selection stage."""
 
     enabled: bool = True
-    # "scenes" (planting/harvest, crop calendar), "mosaics" (Q1-Q4 of the top-level
-    # year), or a list of both: `imagery_mode: [scenes, mosaics]` gives every chip both
+    # "scenes" (planting/harvest, crop calendar), "mosaics" (Q1-Q4 of the same year
+    # the scenes use), or a list of both: `imagery_mode: [scenes, mosaics]` gives every chip both
     # sets of imagery. Validation normalises it to a tuple in run order (scenes
     # first); the resolved config writes a single mode back as a plain string.
     imagery_mode: str | tuple[str, ...] = (DEFAULT_IMAGERY_MODE,)

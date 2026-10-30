@@ -8,6 +8,7 @@ from typing import Literal
 
 import click
 import pystac
+from click.core import ParameterSource
 from tqdm import tqdm
 
 from ftw_dataset_tools.api.config import default_selection_workers
@@ -16,9 +17,8 @@ from ftw_dataset_tools.api.imagery import (
     find_chip_items,
     find_collection_dir,
     get_imagery_stats,
-    has_existing_scenes,
 )
-from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
+from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError, has_mode_selection
 from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
 from ftw_dataset_tools.api.imagery.selection_workflow import (
     MultiModeSelectionResult,
@@ -26,12 +26,14 @@ from ftw_dataset_tools.api.imagery.selection_workflow import (
     SelectionWorkflowResult,
     select_imagery_modes_for_catalog,
 )
+from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES
+from ftw_dataset_tools.api.imagery.summary import selection_summary_lines
 from ftw_dataset_tools.api.stac_items import copy_catalog
 from ftw_dataset_tools.commands.cli_logging import is_verbose, verbose_alias_option
 from ftw_dataset_tools.commands.imagery_mode import (
+    check_mosaic_year_option,
     imagery_mode_option,
     reject_scene_only_options,
-    resolve_mosaic_year,
 )
 
 ChipEntries = list[tuple[pystac.Item, Path]]
@@ -135,15 +137,16 @@ def _echo_stats(chip_items: list[pystac.Item], catalog_dir: Path) -> None:
         )
 
 
-def _clear_all_selections(chip_items: list[pystac.Item]) -> None:
-    stats = get_imagery_stats(chip_items)
+def _clear_all_selections(chip_items: list[pystac.Item], modes: tuple[str, ...]) -> None:
+    """Clear the ``modes`` selections of every chip, after confirmation."""
+    selected = [item for item in chip_items if any(has_mode_selection(item, m) for m in modes)]
 
-    if stats.with_imagery == 0:
+    if not selected:
         click.echo("No chips have imagery selections to clear.")
         return
 
     click.echo(click.style("\nWARNING: This will permanently delete:", fg="red", bold=True))
-    click.echo(f"  - The imagery STAC items of {stats.with_imagery} chips")
+    click.echo(f"  - The {' and '.join(modes)} imagery STAC items of {len(selected)} chips")
     click.echo("  - Any downloaded GeoTIFF imagery files")
     click.echo("  - Imagery links from parent chip items")
     click.echo("")
@@ -156,13 +159,12 @@ def _clear_all_selections(chip_items: list[pystac.Item]) -> None:
     total_tifs = 0
     chips_cleared = 0
 
-    with tqdm(total=len(chip_items), desc="Clearing selections", unit="chip") as pbar:
-        for item in chip_items:
-            if has_existing_scenes(item):
-                result = clear_chip_selections(item)
-                total_stac += result.stac_items_deleted
-                total_tifs += result.geotiffs_deleted
-                chips_cleared += 1
+    with tqdm(total=len(selected), desc="Clearing selections", unit="chip") as pbar:
+        for item in selected:
+            result = clear_chip_selections(item, modes=modes)
+            total_stac += result.stac_items_deleted
+            total_tifs += result.geotiffs_deleted
+            chips_cleared += 1
             pbar.update(1)
 
     click.echo("")
@@ -192,8 +194,8 @@ def _echo_settings(
         click.echo("Verbose mode: ON")
 
 
-def _echo_mosaic_settings(year: int, verbose: bool) -> None:
-    click.echo(f"Imagery: quarterly mosaics, Q1-Q4 of {year}")
+def _echo_mosaic_settings(year: int | None, verbose: bool) -> None:
+    click.echo(f"Imagery: quarterly mosaics, Q1-Q4 of {year or 'each chip year'}")
     if verbose:
         click.echo("Verbose mode: ON")
 
@@ -209,8 +211,10 @@ def _echo_first_five(heading: str, entries: list[dict]) -> None:
 
 
 def _echo_summary(
-    chip_items: list[pystac.Item], result: SelectionWorkflowResult, *, mosaics: bool
+    chip_items: list[pystac.Item], result: SelectionWorkflowResult, *, mode: str
 ) -> None:
+    """One mode's breakdown; the totals count chips holding this mode's imagery."""
+    mosaics = mode == "mosaics"
     no_imagery = "No complete mosaic year" if mosaics else "No cloud-free"
     no_imagery_label = no_imagery if mosaics else "No cloud-free scenes"
     skipped = result.skipped_details
@@ -218,10 +222,10 @@ def _echo_summary(
     no_scenes = [s for s in skipped if no_imagery in (s.get("reason") or "")]
     other_skipped = [s for s in skipped if s not in already_has and s not in no_scenes]
 
-    final_stats = get_imagery_stats(chip_items)
+    final_stats = get_imagery_stats(chip_items, mode=mode)
 
     click.echo("\n" + "=" * 50)
-    click.echo("Summary:")
+    click.echo(f"{mode.capitalize()} summary:")
     click.echo(f"  Newly selected: {result.successful}")
     click.echo(f"  Already had imagery: {len(already_has)}")
     click.echo(f"  {no_imagery_label}: {len(no_scenes)}")
@@ -229,7 +233,7 @@ def _echo_summary(
         click.echo(f"  Other skipped: {len(other_skipped)}")
     click.echo(f"  Failed: {len(result.failed_details)}")
     click.echo("")
-    click.echo(f"  Total with imagery: {final_stats.with_imagery}/{final_stats.total}")
+    click.echo(f"  Total with {mode}: {final_stats.with_imagery}/{final_stats.total}")
     click.echo(f"  Still without imagery: {final_stats.without_imagery}")
 
     _echo_first_five(f"chips with {no_imagery_label.lower()}", no_scenes)
@@ -237,14 +241,12 @@ def _echo_summary(
 
 
 def _echo_mode_summaries(chip_items: list[pystac.Item], result: MultiModeSelectionResult) -> None:
-    """The summary of each mode that ran, then a warning for each mode skipped whole."""
-    several = len(result.by_mode) + len(result.skipped_modes) > 1
+    """The shared one-line-per-mode summary, then each mode's breakdown."""
+    click.echo("")
+    for line in selection_summary_lines(result):
+        click.echo(line)
     for mode, mode_result in result.by_mode.items():
-        if several:
-            click.echo(click.style(f"\n{mode.capitalize()}:", bold=True))
-        _echo_summary(chip_items, mode_result, mosaics=mode == "mosaics")
-    for mode, reason in result.skipped_modes.items():
-        click.echo(click.style(f"\n{mode.capitalize()} skipped: {reason}", fg="yellow"))
+        _echo_summary(chip_items, mode_result, mode=mode)
 
 
 def _write_report(
@@ -362,7 +364,8 @@ def _write_report(
     "--clear-selections",
     is_flag=True,
     default=False,
-    help="Remove all imagery selections (STAC items, GeoTIFFs, and links).",
+    help="Remove imagery selections (STAC items, GeoTIFFs, and links): every mode's, "
+    "or only those of the modes given with --imagery-mode.",
 )
 def select_images_cmd(
     input_path: str,
@@ -410,9 +413,10 @@ def select_images_cmd(
         ftwd select-images ./my-dataset --force  # Overwrite existing selections
         ftwd select-images ./my-dataset --imagery-mode scenes --imagery-mode mosaics
     """
+    ctx = click.get_current_context()
     scenes = "scenes" in imagery_modes
     if not scenes:
-        reject_scene_only_options(click.get_current_context(), _SCENE_ONLY_OPTIONS)
+        reject_scene_only_options(ctx, _SCENE_ONLY_OPTIONS)
 
     if workers is None:
         workers = default_selection_workers(search_backend)
@@ -425,10 +429,11 @@ def select_images_cmd(
         return
 
     if clear_selections:
-        _clear_all_selections(chip_items)
+        # Explicit --imagery-mode clears just those modes; without it, every mode.
+        explicit = ctx.get_parameter_source("imagery_modes") == ParameterSource.COMMANDLINE
+        _clear_all_selections(chip_items, imagery_modes if explicit else IMAGERY_MODES)
         return
 
-    mosaic_year = None
     if scenes:
         _echo_settings(
             year,
@@ -439,8 +444,8 @@ def select_images_cmd(
             is_verbose(),
         )
     if "mosaics" in imagery_modes:
-        mosaic_year = resolve_mosaic_year(year, imagery_modes)
-        _echo_mosaic_settings(mosaic_year, is_verbose() and not scenes)
+        check_mosaic_year_option(year, imagery_modes)
+        _echo_mosaic_settings(year, is_verbose() and not scenes)
     click.echo(f"\nFound {len(chip_items)} total chips")
 
     try:
@@ -448,7 +453,6 @@ def select_images_cmd(
             catalog_dir,
             imagery_modes,
             year=year,
-            mosaic_year=mosaic_year,
             cloud_cover_chip=cloud_cover_chip,
             nodata_max=nodata_max,
             buffer_days=buffer_days,
@@ -472,8 +476,7 @@ def select_images_cmd(
     if output_report:
         parameters = {
             "imagery_mode": imagery_modes[0] if len(imagery_modes) == 1 else list(imagery_modes),
-            "year": (mosaic_year if not scenes else year) or "extracted_from_chip_ids",
-            "mosaic_year": mosaic_year,
+            "year": year or "extracted_from_chip_ids",
             "cloud_cover_chip": cloud_cover_chip,
             "buffer_days": buffer_days,
             "num_buffer_expansions": num_buffer_expansions,

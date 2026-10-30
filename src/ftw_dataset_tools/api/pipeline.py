@@ -51,11 +51,7 @@ from ftw_dataset_tools.api.geo import (
 from ftw_dataset_tools.api.imagery import download_imagery_for_catalog
 from ftw_dataset_tools.api.imagery.mosaic_selection import check_mosaic_year
 from ftw_dataset_tools.api.imagery.preview_workflow import preview_imagery_for_catalog
-from ftw_dataset_tools.api.imagery.selection_workflow import (
-    MultiModeSelectionResult,
-    select_imagery_modes_for_catalog,
-)
-from ftw_dataset_tools.api.imagery.settings import MOSAIC_FALLBACK_YEAR
+from ftw_dataset_tools.api.imagery.selection_workflow import select_imagery_modes_for_catalog
 from ftw_dataset_tools.api.imagery.slots import MOSAIC_SLOTS
 from ftw_dataset_tools.api.logging_config import get_logger, success
 from ftw_dataset_tools.api.masks import MaskType
@@ -134,40 +130,6 @@ def docs_summary_line(result: DocsStageResult, pmtiles: str | bool) -> str:
     if not result.tippecanoe_used and pmtiles == config_module.PMTILES_AUTO:
         line += " (tippecanoe not found)"
     return line
-
-
-def imagery_summary_line(label: str, result: Any) -> str:
-    """One line counting an imagery stage's successes, skips and failures.
-
-    Failures used to be invisible: selection swallows per-chip exceptions, so a
-    run in which every chip failed still printed only "Imagery selected: 0".
-    """
-    line = f"  {label}: {result.successful} ok, {result.skipped} skipped, {result.failed} failed"
-    if result.failed_details:
-        first = result.failed_details[0].get("error", "unknown error")
-        line += f" (first error: {first})"
-    return line
-
-
-def selection_summary_lines(result: Any) -> list[str]:
-    """The selection stage's summary: one line, or one per imagery mode when several ran.
-
-    A mode that was skipped as a whole (mosaics for a year without them) gets its
-    own line with the reason, so the skip is in the summary and not only the log.
-    """
-    if not isinstance(result, MultiModeSelectionResult):
-        return [imagery_summary_line("Imagery selection", result)]
-    if len(result.by_mode) == 1 and not result.skipped_modes:
-        return [imagery_summary_line("Imagery selection", result)]
-    lines = [
-        imagery_summary_line(f"Imagery selection ({mode})", mode_result)
-        for mode, mode_result in result.by_mode.items()
-    ]
-    lines += [
-        f"  Imagery selection ({mode}): skipped - {reason}"
-        for mode, reason in result.skipped_modes.items()
-    ]
-    return lines
 
 
 @dataclass
@@ -464,9 +426,9 @@ def _validate_stage_selection(ctx: PipelineContext, stages_to_run: list[str]) ->
     if (
         "select_images" in stages_to_run
         and ctx.config.stages.select_images.imagery_modes == ("mosaics",)
-        and ctx.config.year is not None
+        and ctx.effective_year is not None
     ):
-        check_mosaic_year(ctx.config.year)
+        check_mosaic_year(ctx.effective_year)
 
 
 def _require(path: Path, *, stage: str, produced_by: str) -> None:
@@ -818,32 +780,20 @@ def stage_stac(ctx: PipelineContext) -> None:
     logger.info(f"Created STAC collection with {n} items in {k} sub-catalog(s)")
 
 
-def mosaic_year(config_year: int | None) -> int:
-    """The mosaic year: the configured year, else a warning and the fallback year."""
-    if config_year is not None:
-        return config_year
-    logger.warning(f"no year given; using {MOSAIC_FALLBACK_YEAR} for mosaics.")
-    return MOSAIC_FALLBACK_YEAR
-
-
 def stage_select_images(ctx: PipelineContext) -> None:
     """Select Sentinel-2 imagery (seasonal scenes, quarterly mosaics, or both) for each chip."""
     _require(ctx.output_dir / "collection.json", stage="select_images", produced_by="stac")
     select_cfg = ctx.config.stages.select_images
     modes = select_cfg.imagery_modes
-    scene_year = None
-    if "scenes" in modes:
-        if ctx.effective_year is None:
-            raise ValueError("A year is required for image selection.")
-        scene_year = ctx.effective_year
-    year_of_mosaics = mosaic_year(ctx.config.year) if "mosaics" in modes else None
+    # Scenes need a year; mosaics use the same one, or each chip's own without it.
+    if "scenes" in modes and ctx.effective_year is None:
+        raise ValueError("A year is required for image selection.")
 
     logger.info("Selecting imagery...")
     ctx.selection_result = select_imagery_modes_for_catalog(
         ctx.output_dir,
         modes,
-        year=scene_year,
-        mosaic_year=year_of_mosaics,
+        year=ctx.effective_year,
         cloud_cover_chip=select_cfg.cloud_cover_chip,
         nodata_max=select_cfg.nodata_max,
         buffer_days=select_cfg.buffer_days,

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 import pystac
 from tqdm import tqdm
 
+from ftw_dataset_tools.api.imagery.catalog_ops import preview_slot
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, run_in_parallel
 from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
 from ftw_dataset_tools.api.imagery.stac_child_items import attach_thumbnail_to_parent
@@ -60,10 +61,12 @@ class PreviewTask:
     visual_href: str
     mask_path: Path
     output_path: Path
+    #: The scene's own preview, kept so the chip preview's source is visible on disk.
+    base_path: Path
 
 
-def _visual_href(chip_dir: Path, item_id: str) -> str | None:
-    """The true-colour scene href for this chip, preferring the planting season."""
+def _visual_href(chip_dir: Path, item_id: str) -> tuple[str, str] | None:
+    """``(season, href)`` of the true-colour scene for this chip, preferring planting."""
     for season in _PREVIEW_SEASONS:
         child_path = chip_dir / f"{item_id}_{season}_s2.json"
         if not child_path.exists():
@@ -80,7 +83,7 @@ def _visual_href(chip_dir: Path, item_id: str) -> str | None:
         # is accepted too, so a local mirror - or a test - can stand in for it; what
         # is rejected is a relative href, which is a locally written file, not a scene.
         if href and (href.startswith(("http://", "https://")) or Path(href).is_absolute()):
-            return href
+            return season, href
     return None
 
 
@@ -90,15 +93,17 @@ def build_preview_task(item: pystac.Item, item_path: Path) -> PreviewTask | str:
     mask_path = chip_dir / f"{item.id}{REFERENCE_MASK_SUFFIX}"
     if not mask_path.exists():
         return "No semantic mask to use as the preview grid"
-    href = _visual_href(chip_dir, item.id)
-    if href is None:
+    visual = _visual_href(chip_dir, item.id)
+    if visual is None:
         return "No remote true-colour scene selected"
+    season, href = visual
     return PreviewTask(
         item_id=item.id,
         item_path=item_path,
         visual_href=href,
         mask_path=mask_path,
         output_path=chip_dir / f"{item.id}_overlay{PREVIEW_SUFFIX}",
+        base_path=chip_dir / f"{item.id}_{season}_image_s2{PREVIEW_SUFFIX}",
     )
 
 
@@ -108,6 +113,9 @@ def render_preview(task: PreviewTask) -> None:
     try:
         generate_scene_thumbnail(task.visual_href, task.mask_path, base_path)
         generate_overlay_thumbnail(base_path, task.mask_path, task.output_path)
+        # Kept as the season's preview: it is how a later mosaic download (and
+        # catalog_ops.preview_slot) knows the chip preview comes from this scene.
+        base_path.replace(task.base_path)
     finally:
         base_path.unlink(missing_ok=True)
 
@@ -170,7 +178,12 @@ def preview_imagery_for_catalog(
                 result.skipped_details.append({"chip": item.id, "reason": built})
                 advance()
                 continue
-            if resume and built.output_path.exists():
+            # A preview drawn from the Q3 mosaic is replaced by the scene's.
+            if (
+                resume
+                and built.output_path.exists()
+                and preview_slot(item_path.parent, item.id) != "q3"
+            ):
                 result.skipped += 1
                 result.skipped_details.append({"chip": item.id, "reason": "Already rendered"})
                 advance()

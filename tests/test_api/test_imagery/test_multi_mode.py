@@ -30,15 +30,15 @@ from ftw_dataset_tools.api.imagery.selection_workflow import (
     select_imagery_modes_for_catalog,
 )
 from ftw_dataset_tools.api.imagery.slots import (
-    InvalidImageryModeError,
     MOSAIC_SLOTS,
+    InvalidImageryModeError,
     normalize_imagery_modes,
 )
 from ftw_dataset_tools.api.imagery.stac_child_items import (
     create_child_items_from_selection,
     create_mosaic_child_items,
 )
-from ftw_dataset_tools.api.pipeline import selection_summary_lines
+from ftw_dataset_tools.api.imagery.summary import selection_summary_lines
 from tests.test_api.test_imagery.test_mosaics import _chip, _selection
 
 if TYPE_CHECKING:
@@ -72,8 +72,19 @@ def _add_mosaics(path: Path, year: int = 2024, requested: int = 2024) -> pystac.
 
 def _bare_item(item_id: str) -> pystac.Item:
     return pystac.Item(
-        id=item_id, geometry=None, bbox=None, datetime=datetime(2024, 1, 1, tzinfo=UTC), properties={}
+        id=item_id,
+        geometry=None,
+        bbox=None,
+        datetime=datetime(2024, 1, 1, tzinfo=UTC),
+        properties={},
     )
+
+
+def _preview(path: Path, slot: str) -> Path:
+    """Write ``slot``'s downloaded preview image next to the chip item."""
+    preview = path.parent / f"chip_001_{slot}_image_s2.webp"
+    preview.write_bytes(b"preview")
+    return preview
 
 
 def _rels(item: pystac.Item) -> set[str]:
@@ -140,6 +151,7 @@ class TestCoexistence:
         assert sum(link.rel == "ftw:q1" for link in saved.links) == 1
 
     def test_reselecting_mosaics_leaves_scenes_and_their_assets(self, both: Path) -> None:
+        _preview(both, "planting")
         parent = pystac.Item.from_file(str(both))
         for key in ("planting_image", "q1_image", "thumbnail"):
             parent.add_asset(key, pystac.Asset(href=f"./{key}.tif"))
@@ -164,7 +176,9 @@ class TestPerModeConflicts:
 
     def test_force_clears_only_the_conflicting_mode(self, both: Path) -> None:
         item = pystac.Item.from_file(str(both))
-        cleared = resolve_selection_conflicts([item], imagery_mode="mosaics", year=2026, force=True)
+        cleared = resolve_selection_conflicts(
+            [item], imagery_modes="mosaics", year=2026, force=True
+        )
         assert cleared == 1
         saved = pystac.Item.from_file(str(both))
         assert selected_modes(saved) == ("scenes",)
@@ -245,6 +259,7 @@ class TestLegacySingleModeCatalog:
 
 class TestClearPerMode:
     def _with_preview(self, path: Path) -> pystac.Item:
+        _preview(path, "planting")
         (path.parent / "chip_001_overlay.webp").write_bytes(b"preview")
         item = pystac.Item.from_file(str(path))
         item.add_asset("thumbnail", pystac.Asset(href="./chip_001_overlay.webp"))
@@ -277,6 +292,32 @@ class TestClearPerMode:
         assert not (both.parent / "chip_001_overlay.webp").exists()
         assert saved.properties["start_datetime"].startswith("2025-01-01")
 
+    def test_clearing_scenes_falls_back_to_the_q3_preview(self, both: Path) -> None:
+        _preview(both, "q3")
+        item = self._with_preview(both)
+        clear_chip_selections(item, modes=("scenes",))
+
+        saved = pystac.Item.from_file(str(both))
+        assert saved.assets["thumbnail"].href == "./chip_001_q3_image_s2.webp"
+        assert saved.assets["thumbnail"].title == "Chip preview (q3)"
+
+    def test_clearing_scenes_redraws_the_overlay_from_q3(self, both: Path) -> None:
+        from ftw_dataset_tools.api.imagery import catalog_ops
+
+        _preview(both, "q3")
+        (both.parent / "chip_001_semantic_3_class.tif").write_bytes(b"")
+        item = self._with_preview(both)
+
+        def overlay(src: Path, _mask: Path, dst: Path) -> None:
+            dst.write_bytes(src.read_bytes() + b"+fields")
+
+        with patch.object(catalog_ops, "generate_overlay_thumbnail", side_effect=overlay):
+            clear_chip_selections(item, modes=("scenes",))
+
+        saved = pystac.Item.from_file(str(both))
+        assert saved.assets["thumbnail"].href == "./chip_001_overlay.webp"
+        assert (both.parent / "chip_001_overlay.webp").read_bytes() == b"preview+fields"
+
     def test_clearing_everything_restores_a_single_datetime(self, both: Path) -> None:
         clear_chip_selections(pystac.Item.from_file(str(both)))
         saved = pystac.Item.from_file(str(both))
@@ -288,12 +329,17 @@ class TestClearPerMode:
 
 class TestPreviewSlot:
     def test_planting_wins_over_q3(self, both: Path) -> None:
+        _preview(both, "q3")
+        _preview(both, "planting")
         assert preview_slot(both.parent, "chip_001") == "planting"
 
-    def test_q3_for_mosaics_alone(self, tmp_path: Path) -> None:
-        _parent, path = _chip(tmp_path)
-        _add_mosaics(path)
-        assert preview_slot(path.parent, "chip_001") == "q3"
+    def test_q3_when_planting_has_no_preview(self, both: Path) -> None:
+        # The planting scene is selected but its image never downloaded.
+        _preview(both, "q3")
+        assert preview_slot(both.parent, "chip_001") == "q3"
+
+    def test_selected_slots_without_previews_give_none(self, both: Path) -> None:
+        assert preview_slot(both.parent, "chip_001") is None
 
     def test_none_without_imagery(self, tmp_path: Path) -> None:
         _parent, path = _chip(tmp_path)
@@ -320,11 +366,11 @@ class TestSelectImageryModes:
             patch.object(selection_workflow, "select_imagery_for_catalog", _fake_select(calls)),
         ):
             result = select_imagery_modes_for_catalog(
-                tmp_path, ["mosaics", "scenes"], year=2022, mosaic_year=2024, workers=3
+                tmp_path, ["mosaics", "scenes"], year=2022, workers=3
             )
         assert [(c["imagery_mode"], c["year"]) for c in calls] == [
             ("scenes", 2022),
-            ("mosaics", 2024),
+            ("mosaics", 2022),
         ]
         assert all(c["workers"] == 3 for c in calls)
         assert result.successful == 4
@@ -349,9 +395,7 @@ class TestSelectImageryModes:
             patch(_YEAR_AVAILABLE, return_value=False),
             patch.object(selection_workflow, "select_imagery_for_catalog", _fake_select(calls)),
         ):
-            result = select_imagery_modes_for_catalog(
-                tmp_path, ["scenes", "mosaics"], year=year
-            )
+            result = select_imagery_modes_for_catalog(tmp_path, ["scenes", "mosaics"], year=year)
         assert [c["imagery_mode"] for c in calls] == ["scenes"]
         assert list(result.by_mode) == ["scenes"]
         assert f"Mosaics for {year} are not available" in result.skipped_modes["mosaics"]
@@ -383,9 +427,7 @@ class TestSelectImageryModes:
 class TestSelectionSummaryLines:
     def test_one_mode_keeps_the_single_line(self) -> None:
         result = MultiModeSelectionResult(by_mode={"scenes": SelectionWorkflowResult(3)})
-        assert selection_summary_lines(result) == [
-            "  Imagery selection: 3 ok, 0 skipped, 0 failed"
-        ]
+        assert selection_summary_lines(result) == ["  Imagery selection: 3 ok, 0 skipped, 0 failed"]
 
     def test_modes_and_skips_get_a_line_each(self) -> None:
         result = MultiModeSelectionResult(
@@ -399,9 +441,7 @@ class TestSelectionSummaryLines:
 
     def test_a_plain_result_still_works(self) -> None:
         plain = SimpleNamespace(successful=1, skipped=0, failed=0, failed_details=[])
-        assert selection_summary_lines(plain) == [
-            "  Imagery selection: 1 ok, 0 skipped, 0 failed"
-        ]
+        assert selection_summary_lines(plain) == ["  Imagery selection: 1 ok, 0 skipped, 0 failed"]
 
 
 class TestPreviewDrawnFromPlanting:
@@ -451,7 +491,11 @@ class TestPreviewDrawnFromPlanting:
         return overlay
 
     def test_q3_does_not_draw_over_the_planting_preview(self, both: Path) -> None:
+        _preview(both, "planting")
         self._download_q3(both).assert_not_called()
+
+    def test_q3_draws_while_planting_has_no_preview(self, both: Path) -> None:
+        self._download_q3(both).assert_called_once()
 
     def test_q3_draws_the_preview_for_mosaics_alone(self, tmp_path: Path) -> None:
         _parent, path = _chip(tmp_path)
