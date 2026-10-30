@@ -122,9 +122,14 @@ ITEM_PROPERTY_NOTES = {
     "ftw:stac_host": "STAC API the imagery was selected from",
     "ftw:season": "which crop-calendar window (or mosaic quarter) a child imagery item covers",
     "ftw:source": "satellite mission the imagery came from",
+    "ftw:imagery_modes": "imagery the chip holds: scenes (planting/harvest), "
+    "mosaics (quarterly, Q1-Q4), or both",
+    "ftw:mosaic_requested_year": "mosaic year the selection asked for",
+    "ftw:mosaic_year": "mosaic year actually used (differs when a nearby year was needed)",
+    "ftw:imagery_year": "mosaic year actually used (differs when a nearby year was needed)",
+    # Written by ftwd before a chip could hold both modes; still read.
     "ftw:imagery_mode": "scenes (planting/harvest) or mosaics (quarterly, Q1-Q4)",
     "ftw:requested_year": "mosaic year the selection asked for",
-    "ftw:imagery_year": "mosaic year actually used (differs when a nearby year was needed)",
     "ftw:mosaic_tile": "quarterly mosaic tile the imagery came from",
     "ftw:buffer_days": "half-width of the search window around the target day, in days",
     "ftw:field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
@@ -565,16 +570,21 @@ def _imagery_block(stats: dict) -> str:
     imagery = stats["imagery"]
     if not imagery:
         return ""
-    if any(imagery.get(q) for q in MOSAIC_QUARTERS):
-        return (
-            f"{imagery['chips_with_imagery']:,} chips have Sentinel-2 quarterly cloudless "
-            "mosaics selected for them, one for each quarter (Q1-Q4) of a single year."
+    chips = f"{imagery['chips_with_imagery']:,} chips"
+    scenes = "one in the planting window and one in the harvest window of the crop calendar"
+    quarters = "one for each quarter (Q1-Q4) of a single year"
+    has_mosaics = any(imagery.get(q) for q in MOSAIC_QUARTERS)
+    has_scenes = any(imagery.get(s) for s in SEASONS)
+    if has_mosaics and not has_scenes:
+        return f"{chips} have Sentinel-2 quarterly cloudless mosaics selected for them, {quarters}."
+    if has_mosaics:
+        first = (
+            f"{chips} have imagery selected for them: Sentinel-2 scenes, {scenes}, and "
+            f"Sentinel-2 quarterly cloudless mosaics, {quarters}."
         )
-    lines = [
-        f"{imagery['chips_with_imagery']:,} chips have Sentinel-2 scenes selected for them, "
-        "one in the planting window and one in the harvest window of the crop calendar."
-    ]
-    lines += [_season_sentence(s, imagery[s]) for s in SEASONS if imagery.get(s)]
+    else:
+        first = f"{chips} have Sentinel-2 scenes selected for them, {scenes}."
+    lines = [first, *(_season_sentence(s, imagery[s]) for s in SEASONS if imagery.get(s))]
     return " ".join(lines)
 
 

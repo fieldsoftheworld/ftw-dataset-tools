@@ -134,6 +134,18 @@ stages:
   select_images:
     # Set to false to skip imagery selection entirely.
     enabled: true
+    # Which Sentinel-2 imagery each chip gets:
+    #   scenes  - a planting and a harvest scene, from the crop calendar (default)
+    #   mosaics - the Q1-Q4 quarterly cloudless mosaics of the top-level `year`
+    #             (2025, with a warning, when no year is set)
+    # or both, as a list: `imagery_mode: [scenes, mosaics]` gives every chip both
+    # sets, side by side. A year with no mosaics (2023's Q2 index is missing, and
+    # future years have none yet) then skips the mosaics with a warning and still
+    # selects the scenes; with mosaics alone such a year is an error.
+    # The keys from cloud_cover_chip to search_backend below (bar nodata_max)
+    # apply to scenes only, and are rejected when scenes is not among the modes.
+    imagery_mode: scenes
+    # imagery_mode: [scenes, mosaics]
     cloud_cover_chip: 2.0
     nodata_max: 0.0
     buffer_days: 14
@@ -153,6 +165,11 @@ stages:
   download_images:
     # Disabled by default; imagery selection creates STAC references only.
     enabled: false
+    # "clip" writes a local GeoTIFF of every selected chip image. "preview" keeps
+    # the scene COGs remote and renders only each chip's preview from them. Preview
+    # applies to scenes only: with imagery_mode [scenes, mosaics] the scenes are
+    # previewed and the mosaics still clipped, and mosaics alone need "clip".
+    mode: clip
     bands: [red, green, blue, nir]
     resolution: 10.0
     # Scenes downloaded at once. The STAC item writes stay serialized.

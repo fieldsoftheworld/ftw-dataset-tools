@@ -31,7 +31,7 @@ from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
     from pathlib import Path
 
     from ftw_dataset_tools.api.imagery.image_download import DownloadResult
@@ -107,6 +107,7 @@ def download_imagery_for_catalog(
     show_progress_bar: bool = True,
     workers: int = DEFAULT_WORKERS,
     keep_remote_refs: bool = False,
+    slots: Iterable[str] | None = None,
 ) -> DownloadWorkflowResult:
     """Download imagery for all S2 child items in a catalog.
 
@@ -132,6 +133,8 @@ def download_imagery_for_catalog(
         workers: Number of scenes to download concurrently
         keep_remote_refs: Keep the remote band assets and add the local file as a
             `clipped` asset, instead of replacing them with a local `image`
+        slots: Only download these imagery slots (e.g. ``MOSAIC_SLOTS``); None
+            downloads every selected slot
 
     Returns:
         DownloadWorkflowResult with success/skipped/failed counts and details
@@ -144,6 +147,11 @@ def download_imagery_for_catalog(
     # failures rather than silently dropped from the run.
     unreadable: list[dict] = []
     child_items = find_s2_child_items(catalog_dir, unreadable=unreadable)
+    if slots is not None:
+        wanted = set(slots)
+        child_items = [
+            (item, path) for item, path in child_items if parse_child_id(item.id)[1] in wanted
+        ]
     result.failed += len(unreadable)
     result.failed_details.extend(unreadable)
 

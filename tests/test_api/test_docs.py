@@ -517,6 +517,25 @@ class TestImageryStats:
         assert text.startswith("1 chips have Sentinel-2 quarterly cloudless mosaics")
         assert "planting" not in text
 
+    def test_chips_with_both_modes_describe_both(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import _imagery_block, imagery_stats
+
+        chip_dir = tmp_path / "chips" / "33UXP" / "ftw-33UXP0001"
+        chip_dir.mkdir(parents=True)
+        for slot in ("planting", "harvest", "q1", "q2", "q3", "q4"):
+            properties = {"ftw:season": slot}
+            if slot in ("planting", "harvest"):
+                properties["datetime"] = "2024-06-01T00:00:00Z"
+            (chip_dir / f"ftw-33UXP0001_{slot}_s2.json").write_text(
+                json.dumps({"id": f"ftw-33UXP0001_{slot}_s2", "properties": properties})
+            )
+
+        text = _imagery_block({"imagery": imagery_stats(tmp_path)})
+
+        assert text.startswith("1 chips have imagery selected for them: Sentinel-2 scenes")
+        assert "quarterly cloudless mosaics" in text
+        assert "Planting imagery" in text
+
 
 class TestRegisterDocsAssetsPruning:
     """A rerun that produces less must leave the collection describing only what exists."""

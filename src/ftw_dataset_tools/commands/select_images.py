@@ -17,13 +17,14 @@ from ftw_dataset_tools.api.imagery import (
     find_collection_dir,
     get_imagery_stats,
     has_existing_scenes,
-    select_imagery_for_catalog,
 )
 from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
 from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
 from ftw_dataset_tools.api.imagery.selection_workflow import (
+    MultiModeSelectionResult,
     NoCloudFreeScenesError,
     SelectionWorkflowResult,
+    select_imagery_modes_for_catalog,
 )
 from ftw_dataset_tools.api.stac_items import copy_catalog
 from ftw_dataset_tools.commands.cli_logging import is_verbose, verbose_alias_option
@@ -235,10 +236,21 @@ def _echo_summary(
     _echo_first_five("chips skipped (other)", other_skipped)
 
 
+def _echo_mode_summaries(chip_items: list[pystac.Item], result: MultiModeSelectionResult) -> None:
+    """The summary of each mode that ran, then a warning for each mode skipped whole."""
+    several = len(result.by_mode) + len(result.skipped_modes) > 1
+    for mode, mode_result in result.by_mode.items():
+        if several:
+            click.echo(click.style(f"\n{mode.capitalize()}:", bold=True))
+        _echo_summary(chip_items, mode_result, mosaics=mode == "mosaics")
+    for mode, reason in result.skipped_modes.items():
+        click.echo(click.style(f"\n{mode.capitalize()} skipped: {reason}", fg="yellow"))
+
+
 def _write_report(
     report_path: Path,
     chip_count: int,
-    result: SelectionWorkflowResult,
+    result: MultiModeSelectionResult,
     parameters: dict,
 ) -> None:
     report = {
@@ -246,6 +258,7 @@ def _write_report(
         "successful": result.successful,
         "skipped": result.skipped_details,
         "failed": result.failed_details,
+        "skipped_modes": result.skipped_modes,
         "parameters": parameters,
     }
     report_path.write_text(json.dumps(report, indent=2))
@@ -353,7 +366,7 @@ def _write_report(
 )
 def select_images_cmd(
     input_path: str,
-    imagery_mode: str,
+    imagery_modes: tuple[str, ...],
     year: int | None,
     cloud_cover_chip: float,
     nodata_max: float,
@@ -377,10 +390,12 @@ def select_images_cmd(
     API instead). Creates child STAC items with remote asset links.
 
     With --imagery-mode mosaics, selects the Q1-Q4 Sentinel-2 quarterly cloudless
-    mosaics of one year instead, falling back to the nearest years.
+    mosaics of one year instead, falling back to the nearest years. Pass
+    --imagery-mode twice (scenes and mosaics) to give every chip both; the two
+    selections live side by side, so running one mode never touches the other.
 
-    By default, chips that already have imagery selections are skipped.
-    Use --force to overwrite existing selections.
+    By default, chips that already have imagery selections in the mode being run
+    are skipped. Use --force to overwrite existing selections in that mode.
 
     \b
     INPUT_PATH: One of:
@@ -393,9 +408,10 @@ def select_images_cmd(
         ftwd -v select-images ./my-dataset/chips/33UXP/ftw-34UFF1628_2024/ftw-34UFF1628_2024.json
         ftwd select-images ./my-dataset --year 2023 --cloud-cover-chip 5
         ftwd select-images ./my-dataset --force  # Overwrite existing selections
+        ftwd select-images ./my-dataset --imagery-mode scenes --imagery-mode mosaics
     """
-    mosaics = imagery_mode == "mosaics"
-    if mosaics:
+    scenes = "scenes" in imagery_modes
+    if not scenes:
         reject_scene_only_options(click.get_current_context(), _SCENE_ONLY_OPTIONS)
 
     if workers is None:
@@ -412,10 +428,8 @@ def select_images_cmd(
         _clear_all_selections(chip_items)
         return
 
-    if mosaics:
-        year = resolve_mosaic_year(year)
-        _echo_mosaic_settings(year, is_verbose())
-    else:
+    mosaic_year = None
+    if scenes:
         _echo_settings(
             year,
             cloud_cover_chip,
@@ -424,12 +438,17 @@ def select_images_cmd(
             num_buffer_expansions,
             is_verbose(),
         )
+    if "mosaics" in imagery_modes:
+        mosaic_year = resolve_mosaic_year(year, imagery_modes)
+        _echo_mosaic_settings(mosaic_year, is_verbose() and not scenes)
     click.echo(f"\nFound {len(chip_items)} total chips")
 
     try:
-        result = select_imagery_for_catalog(
+        result = select_imagery_modes_for_catalog(
             catalog_dir,
+            imagery_modes,
             year=year,
+            mosaic_year=mosaic_year,
             cloud_cover_chip=cloud_cover_chip,
             nodata_max=nodata_max,
             buffer_days=buffer_days,
@@ -439,7 +458,6 @@ def select_images_cmd(
             on_missing=on_missing,
             workers=workers,
             search_backend=search_backend,
-            imagery_mode=imagery_mode,
             chip_items=chip_entries,
         )
     except NoCloudFreeScenesError as e:
@@ -449,12 +467,13 @@ def select_images_cmd(
             f"{err} Pass --force to replace it, or use a new workspace."
         ) from err
 
-    _echo_summary(chip_items, result, mosaics=mosaics)
+    _echo_mode_summaries(chip_items, result)
 
     if output_report:
         parameters = {
-            "imagery_mode": imagery_mode,
-            "year": year if year else "extracted_from_chip_ids",
+            "imagery_mode": imagery_modes[0] if len(imagery_modes) == 1 else list(imagery_modes),
+            "year": (mosaic_year if not scenes else year) or "extracted_from_chip_ids",
+            "mosaic_year": mosaic_year,
             "cloud_cover_chip": cloud_cover_chip,
             "buffer_days": buffer_days,
             "num_buffer_expansions": num_buffer_expansions,

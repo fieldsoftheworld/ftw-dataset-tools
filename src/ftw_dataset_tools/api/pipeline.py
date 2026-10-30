@@ -48,13 +48,15 @@ from ftw_dataset_tools.api.geo import (
     reproject,
     sql_path,
 )
-from ftw_dataset_tools.api.imagery import (
-    download_imagery_for_catalog,
-    select_imagery_for_catalog,
-)
+from ftw_dataset_tools.api.imagery import download_imagery_for_catalog
 from ftw_dataset_tools.api.imagery.mosaic_selection import check_mosaic_year
 from ftw_dataset_tools.api.imagery.preview_workflow import preview_imagery_for_catalog
+from ftw_dataset_tools.api.imagery.selection_workflow import (
+    MultiModeSelectionResult,
+    select_imagery_modes_for_catalog,
+)
 from ftw_dataset_tools.api.imagery.settings import MOSAIC_FALLBACK_YEAR
+from ftw_dataset_tools.api.imagery.slots import MOSAIC_SLOTS
 from ftw_dataset_tools.api.logging_config import get_logger, success
 from ftw_dataset_tools.api.masks import MaskType
 from ftw_dataset_tools.api.source import (
@@ -145,6 +147,27 @@ def imagery_summary_line(label: str, result: Any) -> str:
         first = result.failed_details[0].get("error", "unknown error")
         line += f" (first error: {first})"
     return line
+
+
+def selection_summary_lines(result: Any) -> list[str]:
+    """The selection stage's summary: one line, or one per imagery mode when several ran.
+
+    A mode that was skipped as a whole (mosaics for a year without them) gets its
+    own line with the reason, so the skip is in the summary and not only the log.
+    """
+    if not isinstance(result, MultiModeSelectionResult):
+        return [imagery_summary_line("Imagery selection", result)]
+    if len(result.by_mode) == 1 and not result.skipped_modes:
+        return [imagery_summary_line("Imagery selection", result)]
+    lines = [
+        imagery_summary_line(f"Imagery selection ({mode})", mode_result)
+        for mode, mode_result in result.by_mode.items()
+    ]
+    lines += [
+        f"  Imagery selection ({mode}): skipped - {reason}"
+        for mode, reason in result.skipped_modes.items()
+    ]
+    return lines
 
 
 @dataclass
@@ -436,9 +459,11 @@ def _validate_stage_selection(ctx: PipelineContext, stages_to_run: list[str]) ->
             "'determination_datetime' column."
         )
 
+    # Mosaics alone for a year without them could select nothing, so fail up front.
+    # Alongside scenes the stage skips them with a warning instead.
     if (
         "select_images" in stages_to_run
-        and ctx.config.stages.select_images.imagery_mode == "mosaics"
+        and ctx.config.stages.select_images.imagery_modes == ("mosaics",)
         and ctx.config.year is not None
     ):
         check_mosaic_year(ctx.config.year)
@@ -802,21 +827,23 @@ def mosaic_year(config_year: int | None) -> int:
 
 
 def stage_select_images(ctx: PipelineContext) -> None:
-    """Select Sentinel-2 imagery (seasonal scenes or quarterly mosaics) for each chip."""
+    """Select Sentinel-2 imagery (seasonal scenes, quarterly mosaics, or both) for each chip."""
     _require(ctx.output_dir / "collection.json", stage="select_images", produced_by="stac")
     select_cfg = ctx.config.stages.select_images
-    if select_cfg.imagery_mode == "mosaics":
-        year = mosaic_year(ctx.config.year)
-    elif ctx.effective_year is None:
-        raise ValueError("A year is required for image selection.")
-    else:
-        year = ctx.effective_year
+    modes = select_cfg.imagery_modes
+    scene_year = None
+    if "scenes" in modes:
+        if ctx.effective_year is None:
+            raise ValueError("A year is required for image selection.")
+        scene_year = ctx.effective_year
+    year_of_mosaics = mosaic_year(ctx.config.year) if "mosaics" in modes else None
 
     logger.info("Selecting imagery...")
-    ctx.selection_result = select_imagery_for_catalog(
-        catalog_dir=ctx.output_dir,
-        year=year,
-        imagery_mode=select_cfg.imagery_mode,
+    ctx.selection_result = select_imagery_modes_for_catalog(
+        ctx.output_dir,
+        modes,
+        year=scene_year,
+        mosaic_year=year_of_mosaics,
         cloud_cover_chip=select_cfg.cloud_cover_chip,
         nodata_max=select_cfg.nodata_max,
         buffer_days=select_cfg.buffer_days,
@@ -835,6 +862,7 @@ def stage_download_images(ctx: PipelineContext) -> None:
         produced_by="stac",
     )
     download_cfg = ctx.config.stages.download_images
+    slots = None
     if download_cfg.mode == DOWNLOAD_MODE_PREVIEW:
         logger.info("Rendering chip previews from the remote scenes...")
         ctx.preview_result = preview_imagery_for_catalog(
@@ -842,7 +870,11 @@ def stage_download_images(ctx: PipelineContext) -> None:
             resume=download_cfg.resume,
             workers=download_cfg.workers,
         )
-        return
+        # Preview covers scenes only; mosaics have no remote true-colour image, so
+        # alongside scenes they are clipped as usual.
+        if "mosaics" not in ctx.config.stages.select_images.imagery_modes:
+            return
+        slots = MOSAIC_SLOTS
     logger.info("Downloading imagery...")
     ctx.download_result = download_imagery_for_catalog(
         catalog_dir=ctx.output_dir,
@@ -856,6 +888,7 @@ def stage_download_images(ctx: PipelineContext) -> None:
         # to fetch. Set stages.download_images.resume false to force a re-download,
         # which is what a changed `bands` or `resolution` needs.
         resume=download_cfg.resume,
+        slots=slots,
     )
 
 

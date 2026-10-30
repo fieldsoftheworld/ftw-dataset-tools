@@ -250,9 +250,11 @@ class TestMosaicChildItems:
         create_mosaic_child_items(path.parent, parent, _selection(year=2025, requested=2024))
 
         saved = pystac.Item.from_file(str(path))
-        assert saved.properties["ftw:imagery_mode"] == "mosaics"
-        assert saved.properties["ftw:requested_year"] == 2024
-        assert saved.properties["ftw:imagery_year"] == 2025
+        assert saved.properties["ftw:imagery_modes"] == ["mosaics"]
+        assert saved.properties["ftw:mosaic_requested_year"] == 2024
+        assert saved.properties["ftw:mosaic_year"] == 2025
+        assert "ftw:imagery_mode" not in saved.properties
+        assert "ftw:requested_year" not in saved.properties
         assert saved.properties["start_datetime"].startswith("2025-01-01")
         assert saved.properties["end_datetime"].startswith("2025-12-31")
         assert {link.rel for link in saved.links} >= {"ftw:q1", "ftw:q2", "ftw:q3", "ftw:q4"}
@@ -301,10 +303,8 @@ class TestSelectionConflicts:
         reason = selection_conflict(self._mosaic_chip(tmp_path), "mosaics", 2025)
         assert reason == "has mosaics for 2024"
 
-    def test_scenes_over_mosaics_conflicts(self, tmp_path: Path) -> None:
-        assert (
-            selection_conflict(self._mosaic_chip(tmp_path), "scenes", 2024) == "has mosaics imagery"
-        )
+    def test_scenes_over_mosaics_do_not_conflict(self, tmp_path: Path) -> None:
+        assert selection_conflict(self._mosaic_chip(tmp_path), "scenes", 2024) is None
 
     def test_unselected_chip_never_conflicts(self, tmp_path: Path) -> None:
         parent, _path = _chip(tmp_path)

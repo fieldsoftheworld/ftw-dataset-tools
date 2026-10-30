@@ -15,6 +15,7 @@ from rasterio.vrt import WarpedVRT
 from rasterio.warp import Resampling
 
 from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
+from ftw_dataset_tools.api.imagery.catalog_ops import preview_slot
 from ftw_dataset_tools.api.imagery.settings import (
     BANDS_OF_INTEREST,
     CHILD_ITEM_BAND_ASSETS,
@@ -22,7 +23,7 @@ from ftw_dataset_tools.api.imagery.settings import (
     MOSAIC_SCALE,
     REFLECTANCE_BANDS,
 )
-from ftw_dataset_tools.api.imagery.slots import MOSAIC_SOURCE, THUMBNAIL_SLOTS, parse_image_stem
+from ftw_dataset_tools.api.imagery.slots import MOSAIC_SOURCE, parse_image_stem
 from ftw_dataset_tools.api.imagery.thumbnails import (
     PREVIEW_MEDIA_TYPE,
     PREVIEW_SUFFIX,
@@ -601,7 +602,9 @@ def process_downloaded_scene(
         thumb_for_parent = None
         is_overlay = False
 
-        if result.thumbnail_path and season in THUMBNAIL_SLOTS:
+        # Only the chip's preview slot draws the chip preview: on a chip holding both
+        # modes the planting scene does, whichever of its images downloads first.
+        if result.thumbnail_path and season == preview_slot(item_path.parent, base_id):
             # Look for semantic 3-class mask
             mask_path = item_path.parent / f"{base_id}_semantic_3_class.tif"
             if mask_path.exists():

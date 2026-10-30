@@ -13,6 +13,7 @@ from click.testing import CliRunner, Result
 from shapely.geometry import box
 
 from ftw_dataset_tools.api.dataset import CreateDatasetResult
+from ftw_dataset_tools.api.imagery import selection_workflow
 from ftw_dataset_tools.api.imagery.download_workflow import DownloadWorkflowResult
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS
 from ftw_dataset_tools.api.imagery.selection_workflow import SelectionWorkflowResult
@@ -322,7 +323,7 @@ def stub_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SelectionS
         return stub.result
 
     monkeypatch.setattr(create_dataset_module.dataset, "create_dataset", fake_create_dataset)
-    monkeypatch.setattr(create_dataset_module, "select_imagery_for_catalog", fake_select)
+    monkeypatch.setattr(selection_workflow, "select_imagery_for_catalog", fake_select)
     return stub
 
 
@@ -808,3 +809,48 @@ class TestCreateDatasetMosaics:
         assert result.exit_code == 1
         assert "already hold imagery" in result.output
         assert "--force-image-selection" in result.output
+
+    def test_both_modes_select_scenes_then_mosaics(
+        self,
+        stub_pipeline: SelectionStub,
+        sample_fields_geoparquet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ftw_dataset_tools.api.imagery import mosaic_selection
+
+        monkeypatch.setattr(mosaic_selection, "year_available", lambda _year: True)
+        result = _invoke(
+            sample_fields_geoparquet,
+            "--imagery-mode",
+            "mosaics",
+            "--imagery-mode",
+            "scenes",
+            "--buffer-days",
+            "7",
+        )
+
+        assert result.exit_code == 0, result.output
+        assert [(c["imagery_mode"], c["year"]) for c in stub_pipeline.calls] == [
+            ("scenes", 2023),
+            ("mosaics", 2023),
+        ]
+        assert stub_pipeline.calls[0]["buffer_days"] == 7
+        assert "Scenes:" in result.output
+        assert "Mosaics:" in result.output
+
+    def test_both_modes_skip_mosaics_for_a_year_without_them(
+        self,
+        stub_pipeline: SelectionStub,
+        sample_fields_geoparquet: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ftw_dataset_tools.api.imagery import mosaic_selection
+
+        monkeypatch.setattr(mosaic_selection, "year_available", lambda _year: False)
+        result = _invoke(
+            sample_fields_geoparquet, "--imagery-mode", "scenes", "--imagery-mode", "mosaics"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert [c["imagery_mode"] for c in stub_pipeline.calls] == ["scenes"]
+        assert "Mosaics skipped: Mosaics for 2023 are not available" in result.output

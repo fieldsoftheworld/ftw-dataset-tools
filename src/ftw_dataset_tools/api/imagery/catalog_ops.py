@@ -9,22 +9,31 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pystac
 
 from ftw_dataset_tools.api.imagery.slots import (
-    DEFAULT_IMAGERY_MODE,
+    IMAGERY_MODES,
     IMAGERY_SLOTS,
     SLOTS_BY_MODE,
+    THUMBNAIL_SLOTS,
 )
 from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_EXTENSIONS
 from ftw_dataset_tools.api.stac_items import write_item
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
 __all__ = [
     "IMAGERY_ASSET_KEYS",
     "IMAGERY_LINK_RELS",
+    "IMAGERY_MODES_PROPERTY",
     "IMAGERY_PROPERTIES",
     "IMAGERY_TEMPORAL_PROPERTIES",
+    "MOSAIC_PROPERTIES",
+    "PROPERTIES_BY_MODE",
+    "SCENE_PROPERTIES",
     "ClearResult",
     "ImageryStats",
     "SelectionConflictError",
@@ -33,14 +42,20 @@ __all__ = [
     "find_collection_dir",
     "get_imagery_stats",
     "has_existing_scenes",
+    "has_mode_selection",
     "iter_chip_dirs",
+    "mosaic_requested_year",
+    "normalize_imagery_properties",
     "preserve_imagery_selection",
+    "preview_slot",
+    "refresh_temporal_extent",
+    "selected_modes",
     "selection_conflict",
 ]
 
 
 class SelectionConflictError(Exception):
-    """Chips already hold a selection from a different imagery mode or year."""
+    """Chips already hold a selection of the same imagery mode for a different year."""
 
 
 # The bookkeeping that image selection and download write onto a *parent* chip
@@ -49,10 +64,9 @@ class SelectionConflictError(Exception):
 # in sync: a key missing from these lists is silently dropped on a re-run.
 IMAGERY_LINK_RELS = tuple(f"ftw:{slot}" for slot in IMAGERY_SLOTS)
 
-IMAGERY_PROPERTIES = (
-    "ftw:imagery_mode",
-    "ftw:requested_year",
-    "ftw:imagery_year",
+#: What a scene selection records on the parent. The names already say which
+#: mode they belong to (crop calendar, planting/harvest, scene search buffers).
+SCENE_PROPERTIES = (
     "ftw:calendar_year",
     "ftw:planting_day",
     "ftw:harvest_day",
@@ -68,6 +82,34 @@ IMAGERY_PROPERTIES = (
     "ftw:expansions_performed",
     "ftw:planting_cloud_cover",
     "ftw:harvest_cloud_cover",
+)
+
+#: What a mosaic selection records on the parent.
+MOSAIC_PROPERTIES = ("ftw:mosaic_requested_year", "ftw:mosaic_year")
+
+#: The modes whose selection is complete on the chip, e.g. ``["scenes", "mosaics"]``.
+#: Derived from the slot links, which stay the source of truth.
+IMAGERY_MODES_PROPERTY = "ftw:imagery_modes"
+
+# Catalogs written before a chip could hold both modes carry one scalar
+# ``ftw:imagery_mode`` and un-namespaced mosaic years. They are still read, and are
+# rewritten to the per-mode keys whenever the chip's item is written again.
+_LEGACY_MODE_PROPERTY = "ftw:imagery_mode"
+_LEGACY_MOSAIC_PROPERTIES = {
+    "ftw:requested_year": "ftw:mosaic_requested_year",
+    "ftw:imagery_year": "ftw:mosaic_year",
+}
+
+PROPERTIES_BY_MODE = {
+    "scenes": SCENE_PROPERTIES,
+    "mosaics": (*MOSAIC_PROPERTIES, *_LEGACY_MOSAIC_PROPERTIES),
+}
+
+IMAGERY_PROPERTIES = (
+    IMAGERY_MODES_PROPERTY,
+    _LEGACY_MODE_PROPERTY,
+    *SCENE_PROPERTIES,
+    *PROPERTIES_BY_MODE["mosaics"],
 )
 
 # Selection narrows these to the actual scene acquisition dates; a freshly
@@ -105,26 +147,123 @@ def find_collection_dir(path: Path) -> Path:
     raise FileNotFoundError(f"No collection.json in {path}; pass the dataset output directory")
 
 
-def has_existing_scenes(item: pystac.Item) -> bool:
-    """Whether the item links a complete selection: both seasons, or all four quarters."""
+def has_mode_selection(item: pystac.Item, mode: str) -> bool:
+    """Whether the item links every slot of ``mode`` (both seasons, or all four quarters)."""
     rels = {link.rel for link in item.links}
-    return any(all(f"ftw:{slot}" in rels for slot in slots) for slots in SLOTS_BY_MODE.values())
+    return all(f"ftw:{slot}" in rels for slot in SLOTS_BY_MODE[mode])
+
+
+def selected_modes(item: pystac.Item) -> tuple[str, ...]:
+    """The modes whose selection is complete on the item, in canonical order."""
+    return tuple(mode for mode in IMAGERY_MODES if has_mode_selection(item, mode))
+
+
+def has_existing_scenes(item: pystac.Item) -> bool:
+    """Whether the item links a complete selection in any mode."""
+    return bool(selected_modes(item))
+
+
+def mosaic_requested_year(item: pystac.Item) -> int | None:
+    """The year the chip's mosaic selection asked for, read from current or legacy keys."""
+    props = item.properties
+    year = props.get("ftw:mosaic_requested_year")
+    return year if year is not None else props.get("ftw:requested_year")
+
+
+def normalize_imagery_properties(item: pystac.Item) -> None:
+    """Record ``ftw:imagery_modes`` from the links and retire the legacy single-mode keys.
+
+    Call after any change to a chip's selection, right before the item is written.
+    """
+    props = item.properties
+    for legacy, current in _LEGACY_MOSAIC_PROPERTIES.items():
+        value = props.pop(legacy, None)
+        if value is not None and current not in props:
+            props[current] = value
+    props.pop(_LEGACY_MODE_PROPERTY, None)
+    modes = selected_modes(item)
+    if modes:
+        props[IMAGERY_MODES_PROPERTY] = list(modes)
+    else:
+        props.pop(IMAGERY_MODES_PROPERTY, None)
 
 
 def selection_conflict(item: pystac.Item, imagery_mode: str, year: int | None) -> str | None:
-    """Why the item's existing selection does not match this run, or None if it does.
+    """Why the item's existing ``imagery_mode`` selection does not match this run, or None.
 
-    ``year`` is only compared in mosaic mode; scene selections predate the property.
+    Only a selection of the same mode can conflict: a chip holding scenes takes
+    mosaics alongside them, and the other way round. ``year`` is only compared in
+    mosaic mode; scene selections predate the property.
     """
-    if not has_existing_scenes(item):
+    if imagery_mode != "mosaics" or not has_mode_selection(item, imagery_mode):
         return None
-    existing_mode = item.properties.get("ftw:imagery_mode", DEFAULT_IMAGERY_MODE)
-    if existing_mode != imagery_mode:
-        return f"has {existing_mode} imagery"
-    existing_year = item.properties.get("ftw:requested_year")
-    if imagery_mode == "mosaics" and existing_year != year:
+    existing_year = mosaic_requested_year(item)
+    if existing_year != year:
         return f"has mosaics for {existing_year}"
     return None
+
+
+def preview_slot(chip_dir: Path, chip_id: str) -> str | None:
+    """The slot the chip preview is drawn from: the first thumbnail slot selected for it.
+
+    On a chip holding both modes that is the planting scene, whichever image happens
+    to download first, so the preview does not depend on download order.
+    """
+    for slot in THUMBNAIL_SLOTS:
+        if (chip_dir / f"{chip_id}_{slot}_s2.json").exists():
+            return slot
+    return None
+
+
+def _child_window(child: pystac.Item) -> tuple[datetime, datetime] | None:
+    start = child.common_metadata.start_datetime or child.datetime
+    end = child.common_metadata.end_datetime or child.datetime
+    if start is None or end is None:
+        return None
+    # Naive times are UTC by STAC convention; comparing them with aware ones raises.
+    return tuple(t if t.tzinfo else t.replace(tzinfo=UTC) for t in (start, end))  # type: ignore[return-value]
+
+
+def _linked_slots(item: pystac.Item) -> list[tuple[str, pystac.Link]]:
+    return [
+        (link.rel[4:], link)
+        for link in item.links
+        if link.rel.startswith("ftw:") and link.rel[4:] in IMAGERY_SLOTS
+    ]
+
+
+def refresh_temporal_extent(
+    item: pystac.Item,
+    chip_dir: Path,
+    children: dict[str, pystac.Item] | None = None,
+) -> bool:
+    """Set the parent's ``start_datetime``/``end_datetime`` to span every linked slot.
+
+    A scene contributes its acquisition time, a mosaic its quarter, so a chip holding
+    both modes spans both. ``children`` supplies slot items already in memory; any
+    other linked slot is read from disk.
+
+    Returns:
+        False when no linked child has a date; the properties are then left alone.
+    """
+    children = children or {}
+    windows = []
+    for slot, link in _linked_slots(item):
+        child = children.get(slot)
+        if child is None:
+            try:
+                child = pystac.Item.from_file(str(chip_dir / Path(link.href).name))
+            except Exception:
+                # A half-written child only narrows the extent; not worth failing over.
+                continue
+        window = _child_window(child)
+        if window is not None:
+            windows.append(window)
+    if not windows:
+        return False
+    item.properties["start_datetime"] = min(start for start, _end in windows).isoformat()
+    item.properties["end_datetime"] = max(end for _start, end in windows).isoformat()
+    return True
 
 
 def preserve_imagery_selection(item: pystac.Item, existing_item_path: Path) -> bool:
@@ -193,6 +332,7 @@ def preserve_imagery_selection(item: pystac.Item, existing_item_path: Path) -> b
         if asset is not None and (chip_dir / Path(asset.href).name).exists():
             item.add_asset(key, asset.clone())
 
+    normalize_imagery_properties(item)
     return True
 
 
@@ -287,15 +427,54 @@ def chip_dir_for_item(item: pystac.Item) -> Path:
     return Path(self_href).parent
 
 
-def clear_chip_selections(item: pystac.Item) -> ClearResult:
+def _delete_slot_files(chip_dir: Path, chip_id: str, slot: str, result: ClearResult) -> None:
+    """Delete one slot's child item, GeoTIFFs and per-slot previews."""
+    child_json = chip_dir / f"{chip_id}_{slot}_s2.json"
+    if child_json.exists():
+        child_json.unlink()
+        result.stac_items_deleted += 1
+
+    # Associated GeoTIFFs (e.g., ftw-xxx_planting_image_s2.tif)
+    for tif in chip_dir.glob(f"{chip_id}_{slot}_*.tif"):
+        tif.unlink()
+        result.geotiffs_deleted += 1
+
+    # Both extensions: previews are written as WebP, but a catalog built before
+    # that switch still has .jpg here, and leaving either behind strands a preview
+    # for imagery that no longer exists.
+    for ext in PREVIEW_EXTENSIONS:
+        for thumb in chip_dir.glob(f"{chip_id}_{slot}_*{ext}"):
+            thumb.unlink()
+
+
+def _restore_datetime(item: pystac.Item, calendar_year: int | None) -> None:
+    """Give an item with no imagery left a single datetime (Jan 1 of its year, or now)."""
+    for prop in IMAGERY_TEMPORAL_PROPERTIES:
+        item.properties.pop(prop, None)
+    if calendar_year:
+        restored_dt = datetime(calendar_year, 1, 1, 0, 0, 0, tzinfo=UTC)
+    else:
+        restored_dt = datetime.now(UTC)
+    # Set both the Item attribute and the properties dict
+    item.datetime = restored_dt
+    item.properties["datetime"] = restored_dt.isoformat()
+
+
+def clear_chip_selections(item: pystac.Item, modes: Iterable[str] | None = None) -> ClearResult:
     """Clear imagery selections for a single chip.
 
     Removes child STAC items, GeoTIFF files, and imagery-related properties
-    from the parent item. Restores the item's datetime to a valid state.
+    from the parent item, for every mode or only the given ones. The parent's
+    temporal range then spans whatever imagery is left; with none left its
+    datetime is restored to a valid single value.
+
+    The chip preview (the field overlay and the ``thumbnail`` asset) goes too when
+    it was drawn from a cleared slot; a preview drawn from a mode that stays is kept.
 
     Args:
         item: Parent chip STAC item (will be modified and saved). Must carry a
             self href, which locates the chip directory whose files are deleted.
+        modes: Imagery modes to clear ("scenes", "mosaics"); None clears all.
 
     Returns:
         ClearResult with counts of deleted items
@@ -305,66 +484,36 @@ def clear_chip_selections(item: pystac.Item) -> ClearResult:
     """
     chip_dir = chip_dir_for_item(item)
     result = ClearResult()
+    modes = IMAGERY_MODES if modes is None else tuple(modes)
+    slots = tuple(slot for mode in modes for slot in SLOTS_BY_MODE[mode])
 
-    # Delete every slot's child STAC item and its GeoTIFFs
-    for season in IMAGERY_SLOTS:
-        child_json = chip_dir / f"{item.id}_{season}_s2.json"
-        if child_json.exists():
-            child_json.unlink()
-            result.stac_items_deleted += 1
+    # Decided before the children go: afterwards the preview's source is unknowable.
+    drop_preview = preview_slot(chip_dir, item.id) in (*slots, None)
 
-        # Delete associated GeoTIFFs (e.g., ftw-xxx_planting_image_s2.tif)
-        for tif in chip_dir.glob(f"{item.id}_{season}_*.tif"):
-            tif.unlink()
-            result.geotiffs_deleted += 1
+    for slot in slots:
+        _delete_slot_files(chip_dir, item.id, slot, result)
+        item.assets.pop(f"{slot}_image", None)
+        item.assets.pop(f"{slot}_visual", None)
 
-        # Delete thumbnails. Both extensions: previews are written as WebP, but a
-        # catalog built before that switch still has .jpg here, and leaving either
-        # behind strands a preview for imagery that no longer exists.
+    if drop_preview:
         for ext in PREVIEW_EXTENSIONS:
-            for thumb in chip_dir.glob(f"{item.id}_{season}_*{ext}"):
-                thumb.unlink()
+            (chip_dir / f"{item.id}_overlay{ext}").unlink(missing_ok=True)
+        item.assets.pop("thumbnail", None)
 
-    # Delete overlay thumbnail if it exists
-    for ext in PREVIEW_EXTENSIONS:
-        overlay = chip_dir / f"{item.id}_overlay{ext}"
-        if overlay.exists():
-            overlay.unlink()
+    cleared_rels = {f"ftw:{slot}" for slot in slots}
+    item.links = [link for link in item.links if link.rel not in cleared_rels]
 
-    # Remove the slot links from parent item
-    item.links = [link for link in item.links if link.rel not in IMAGERY_LINK_RELS]
+    # Read before the properties go: the year a restored datetime falls in.
+    calendar_year = item.properties.get("ftw:calendar_year") or mosaic_requested_year(item)
+    for mode in modes:
+        for prop in PROPERTIES_BY_MODE[mode]:
+            item.properties.pop(prop, None)
 
-    # Extract calendar year before removing properties (needed to restore datetime)
-    calendar_year = item.properties.get("ftw:calendar_year") or item.properties.get(
-        "ftw:requested_year"
-    )
+    # STAC requires either datetime or both start/end_datetime.
+    if not refresh_temporal_extent(item, chip_dir):
+        _restore_datetime(item, calendar_year)
 
-    # Remove ftw: properties related to imagery selection
-    for prop in IMAGERY_PROPERTIES:
-        item.properties.pop(prop, None)
-
-    # Remove planting_image, harvest_image, and thumbnail assets if they exist
-    for asset_key in IMAGERY_ASSET_KEYS:
-        item.assets.pop(asset_key, None)
-
-    # Restore datetime - STAC requires either datetime or both start/end_datetime
-    # Remove the selection-set temporal range and restore a single datetime
-    for prop in IMAGERY_TEMPORAL_PROPERTIES:
-        item.properties.pop(prop, None)
-
-    # Set datetime to Jan 1 of the calendar year if known, otherwise current date
-    if calendar_year:
-        restored_dt = datetime(calendar_year, 1, 1, 0, 0, 0, tzinfo=UTC)
-    else:
-        restored_dt = datetime.now(UTC)
-    # Set both the Item attribute and the properties dict
-    item.datetime = restored_dt
-    item.properties["datetime"] = restored_dt.isoformat()
-
-    # Always save since we've modified the item (removed properties, restored datetime)
-    parent_path = chip_dir / f"{item.id}.json"
-    if item.get_self_href() is None:
-        item.set_self_href(str(parent_path))
-    write_item(item, parent_path)
+    normalize_imagery_properties(item)
+    write_item(item, chip_dir / f"{item.id}.json")
 
     return result

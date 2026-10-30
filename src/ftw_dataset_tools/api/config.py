@@ -23,7 +23,11 @@ from ftw_dataset_tools import __version__
 from ftw_dataset_tools.api import chip_grid, field_stats, scale, splits
 from ftw_dataset_tools.api.chip_borders import DEFAULT_BORDER_GAP_CHIPS
 from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
-from ftw_dataset_tools.api.imagery.slots import DEFAULT_IMAGERY_MODE, IMAGERY_MODES
+from ftw_dataset_tools.api.imagery.slots import (
+    DEFAULT_IMAGERY_MODE,
+    InvalidImageryModeError,
+    normalize_imagery_modes,
+)
 from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -91,7 +95,8 @@ SCENE_ONLY_SELECT_KEYS = (
 MOSAIC_PREVIEW_UNSUPPORTED = (
     "stages.download_images.mode 'preview' is not available with imagery_mode 'mosaics'. "
     "This is expected: preview mode draws from each scene's ready-made true-colour image, "
-    "which mosaics do not have. Use mode 'clip'."
+    "which mosaics do not have. Use mode 'clip', or imagery_mode [scenes, mosaics], "
+    "where 'preview' previews the scenes and clips the mosaics."
 )
 DEFAULT_PARQUET_WORKERS = 16
 
@@ -462,8 +467,11 @@ class SelectImagesConfig:
     """Settings for the imagery selection stage."""
 
     enabled: bool = True
-    # "scenes" (planting/harvest, crop calendar) or "mosaics" (Q1-Q4 of the top-level year).
-    imagery_mode: str = DEFAULT_IMAGERY_MODE
+    # "scenes" (planting/harvest, crop calendar), "mosaics" (Q1-Q4 of the top-level
+    # year), or a list of both: `imagery_mode: [scenes, mosaics]` gives every chip both
+    # sets of imagery. Validation normalises it to a tuple in run order (scenes
+    # first); the resolved config writes a single mode back as a plain string.
+    imagery_mode: str | tuple[str, ...] = (DEFAULT_IMAGERY_MODE,)
     cloud_cover_chip: float = 2.0
     nodata_max: float = 0.0
     buffer_days: int = 14
@@ -483,6 +491,11 @@ class SelectImagesConfig:
             return self.workers
         return default_selection_workers(self.search_backend)
 
+    @property
+    def imagery_modes(self) -> tuple[str, ...]:
+        """The configured modes as a tuple in run order, whatever form they were given in."""
+        return normalize_imagery_modes(self.imagery_mode)
+
 
 @dataclass
 class DownloadImagesConfig:
@@ -498,7 +511,10 @@ class DownloadImagesConfig:
     # pick up a changed `bands` or `resolution`, since resume skips on the local
     # file existing and never checks what is inside it.
     resume: bool = True
-    #: "clip" (default) or "preview"; see DOWNLOAD_MODES.
+    #: "clip" (default) or "preview"; see DOWNLOAD_MODES. "preview" applies to scenes
+    #: only: with `imagery_mode: [scenes, mosaics]` the scenes are previewed and the
+    #: mosaics still clipped, since a mosaic has no remote true-colour image to
+    #: preview from.
     mode: str = DOWNLOAD_MODE_CLIP
 
 
@@ -788,12 +804,11 @@ class DatasetConfig:
 
     def _validate_imagery_mode(self) -> None:
         select = self.stages.select_images
-        if select.imagery_mode not in IMAGERY_MODES:
-            raise ConfigError(
-                f"stages.select_images.imagery_mode must be one of {list(IMAGERY_MODES)} "
-                f"(got {select.imagery_mode!r})"
-            )
-        if select.imagery_mode != "mosaics":
+        try:
+            select.imagery_mode = normalize_imagery_modes(select.imagery_mode)
+        except InvalidImageryModeError as err:
+            raise ConfigError(f"stages.select_images.{err}") from err
+        if "scenes" in select.imagery_mode:
             return
         defaults = SelectImagesConfig()
         for key in SCENE_ONLY_SELECT_KEYS:
@@ -812,6 +827,12 @@ class DatasetConfig:
         data = asdict(self)
         # asdict turns the split_percents tuple into a list; keep it a list for YAML.
         data["stages"]["splits"]["split_percents"] = list(self.stages.splits.split_percents)
+        # One mode stays the plain string configs have always resolved to; several
+        # become a YAML list (safe_dump cannot write a tuple).
+        modes = self.stages.select_images.imagery_modes
+        data["stages"]["select_images"]["imagery_mode"] = (
+            modes[0] if len(modes) == 1 else list(modes)
+        )
         return data
 
     def provenance_dict(self, generated_at: datetime | None = None) -> dict[str, Any]:
