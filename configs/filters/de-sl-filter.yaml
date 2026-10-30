@@ -1,0 +1,30 @@
+# Class filter used for Saarland (de_sl) field boundaries.
+# SL has no crop:code; it publishes only a coarse crop-group label in `name` (16 groups in
+# the 2026 data). This is a crop-group-level filter: arable crop groups and permanent crops
+# are field; grassland, fallow/set-aside, landscape elements, ornamental and energy crops
+# are background, following the exclusions in de-bb-nds-nrw_filter.yaml where the groups
+# allow it. Covers de_sl year 2026 (the only published edition).
+# Ackerfutter (arable fodder) is treated as field: it mixes clover/alfalfa leys (field in
+# the bb/nds/nrw filter) with grass leys (background there), and the group cannot be split.
+column: ["name"]
+
+include:
+  - Getreide  # cereals
+  - Ölsaaten  # oilseeds
+  - Eiweißpflanzen  # protein crops (pulses)
+  - Hackfrüchte  # root crops (potatoes, beets)
+  - Gemüse  # vegetables
+  - Heil- und Gewürzpflanzen  # medicinal and aromatic plants
+  - Andere Handelsgewächse  # other industrial crops
+  - Ackerfutter  # arable fodder (clover/alfalfa and grass leys)
+  # Permanent and tree crops
+  - Dauerkulturen  # permanent crops (orchards, vineyards, nurseries)
+
+exclude:
+  - Dauergrünland  # permanent grassland
+  - Aus der Produktion genommen  # taken out of production (fallow)
+  - Stilllegung/ Aufforstung  # set-aside / afforestation
+  - Greening/Greening-Landschaftselemente  # greening landscape elements
+  - Sonstige Flächen  # other areas
+  - Zierpflanzen  # ornamental plants
+  - Energiepflanzen  # energy crops (Miscanthus, Silphie, coppice)
