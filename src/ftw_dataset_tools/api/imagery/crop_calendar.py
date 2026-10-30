@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import threading
 import urllib.request
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from pathlib import Path
 
 import rasterio
 
+from ftw_dataset_tools import __version__
 from ftw_dataset_tools.api.fs import create_temp_file, finalize_temp_file
 from ftw_dataset_tools.api.imagery.settings import (
     CROP_CAL_SUMMER_END,
@@ -118,10 +120,19 @@ def _download_to_cache(url: str, file_path: Path) -> None:
     tmp_path = create_temp_file(file_path, suffix=".part")
 
     try:
-        urllib.request.urlretrieve(url, str(tmp_path))
+        _fetch(url, str(tmp_path))
         finalize_temp_file(tmp_path, file_path)
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+def _fetch(url: str, filename: str) -> None:
+    # data.source.coop answers 403 to urllib's default User-Agent.
+    request = urllib.request.Request(
+        url, headers={"User-Agent": f"ftw-dataset-tools/{__version__}"}
+    )
+    with urllib.request.urlopen(request, timeout=120) as response, Path(filename).open("wb") as out:
+        shutil.copyfileobj(response, out)
 
 
 def download_crop_calendar_files(force: bool = False) -> None:

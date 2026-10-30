@@ -33,7 +33,7 @@ def cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path / "crop_calendar"
 
 
-def slow_urlretrieve(url: str, filename: str) -> None:  # noqa: ARG001
+def slow_fetch(url: str, filename: str) -> None:  # noqa: ARG001
     """Write the payload in chunks, with a gap wide enough to observe."""
     from pathlib import Path
 
@@ -64,7 +64,7 @@ class TestDownloadCropCalendarFiles:
     """Downloads land atomically and are not repeated needlessly."""
 
     def test_downloads_every_file(self, cache_dir: Path) -> None:
-        with patch.object(crop_calendar.urllib.request, "urlretrieve", slow_urlretrieve):
+        with patch.object(crop_calendar, "_fetch", slow_fetch):
             crop_calendar.download_crop_calendar_files()
 
         for filename in CROP_CALENDAR_FILES:
@@ -79,15 +79,15 @@ class TestDownloadCropCalendarFiles:
 
         def record(url: str, filename: str) -> None:
             calls.append(url)
-            slow_urlretrieve(url, filename)
+            slow_fetch(url, filename)
 
-        with patch.object(crop_calendar.urllib.request, "urlretrieve", record):
+        with patch.object(crop_calendar, "_fetch", record):
             crop_calendar.download_crop_calendar_files()
 
         assert calls == []
 
     def test_leaves_no_partial_files_behind(self, cache_dir: Path) -> None:
-        with patch.object(crop_calendar.urllib.request, "urlretrieve", slow_urlretrieve):
+        with patch.object(crop_calendar, "_fetch", slow_fetch):
             crop_calendar.download_crop_calendar_files()
 
         assert sorted(p.name for p in cache_dir.iterdir()) == sorted(CROP_CALENDAR_FILES)
@@ -100,7 +100,7 @@ class TestDownloadCropCalendarFiles:
             raise OSError("connection reset")
 
         with (
-            patch.object(crop_calendar.urllib.request, "urlretrieve", boom),
+            patch.object(crop_calendar, "_fetch", boom),
             pytest.raises(OSError, match="connection reset"),
         ):
             crop_calendar.download_crop_calendar_files()
@@ -132,7 +132,7 @@ class TestConcurrentCropCalendarDownload:
             except Exception as err:  # recorded so the assert reports it
                 errors.append(err)
 
-        with patch.object(crop_calendar.urllib.request, "urlretrieve", slow_urlretrieve):
+        with patch.object(crop_calendar, "_fetch", slow_fetch):
             threads = [threading.Thread(target=worker) for _ in range(8)]
             for thread in threads:
                 thread.start()
@@ -155,13 +155,13 @@ class TestConcurrentCropCalendarDownload:
         def counting(url: str, filename: str) -> None:
             with urls_lock:
                 urls.append(url)
-            slow_urlretrieve(url, filename)
+            slow_fetch(url, filename)
 
         def worker() -> None:
             start.wait(timeout=10)
             crop_calendar.ensure_crop_calendar_exists()
 
-        with patch.object(crop_calendar.urllib.request, "urlretrieve", counting):
+        with patch.object(crop_calendar, "_fetch", counting):
             threads = [threading.Thread(target=worker) for _ in range(6)]
             for thread in threads:
                 thread.start()
@@ -190,8 +190,30 @@ class TestEnsureCropCalendarExists:
         cache_dir.mkdir(parents=True)
         (cache_dir / CROP_CALENDAR_FILES[0]).write_bytes(FILE_BODY)
 
-        with patch.object(crop_calendar.urllib.request, "urlretrieve", slow_urlretrieve):
+        with patch.object(crop_calendar, "_fetch", slow_fetch):
             crop_calendar.ensure_crop_calendar_exists()
 
         for filename in CROP_CALENDAR_FILES:
             assert (cache_dir / filename).read_bytes() == FILE_BODY
+
+
+class TestFetch:
+    """The download identifies ftwd, since Source Cooperative refuses urllib's default."""
+
+    def test_sends_ftwd_user_agent(self, tmp_path: Path) -> None:
+        import io
+
+        from ftw_dataset_tools import __version__
+
+        seen = []
+
+        def fake_urlopen(request, timeout):  # noqa: ARG001
+            seen.append(request)
+            return io.BytesIO(FILE_BODY)
+
+        target = tmp_path / "calendar.tiff"
+        with patch.object(crop_calendar.urllib.request, "urlopen", fake_urlopen):
+            crop_calendar._fetch("https://example.test/calendar.tiff", str(target))
+
+        assert seen[0].get_header("User-agent") == f"ftw-dataset-tools/{__version__}"
+        assert target.read_bytes() == FILE_BODY
