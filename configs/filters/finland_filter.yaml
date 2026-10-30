@@ -8,8 +8,15 @@
 # oilseeds, potatoes, beet, field vegetables, herbs/medicinal, flax, hemp, hops, strawberries, grass
 # grown for seed, and permanent & tree crops: orchards, fruit trees, berries, grapevine, nurseries,
 # ornamental willow and short-rotation energy wood/trees.
-# Covers fi year 2023 (only year published). Codes are the Finnish crop:code from the harmonized
-# ftw/harmonized-field-data fi dataset; HCAT English names shown as comments.
+# Remediation/sanitation catch crops grown as a main crop (Saneerauskasvi: white mustard, oil
+# radish, Tagetes, mixtures) are background, like the land-improvement mixture 5854. Annual and
+# perennial hay/silage/pasture grass is background; grass grown for seed (61x3/61x5, 615x) is a
+# field. Cut greens/conifers for decoration (5440/5441) and forest-tree nurseries (5534) count as
+# permanent/tree crops, alongside ornamental willow and nurseries. Brown knapweed for energy
+# (4930) is background, like reed canary grass for energy.
+# Covers fi years 2020-2025 (246 distinct codes across those editions). Codes are the Finnish
+# crop:code from the harmonized ftw/harmonized-field-data fi dataset; HCAT English names (or the
+# Finnish crop:name) shown as comments.
 
 column: ["crop:code", "crop_code"]
 
@@ -142,6 +149,24 @@ include:
   - 6565  # Meadow fescue seed
   - 9061  # Lacy phacelia
   - 9630  # Garden plot
+  # Added for fi 2020-2022, 2024, 2025
+  - 1130  # Durum wheat (Durumvehnä)
+  - 1401  # Pure oats (Puhdaskaura)
+  - 2175  # Mixture pea/broad bean/sweet lupine/oil plants
+  - 2180  # Mixture pea/broad bean/sweet lupine over 50% + cereal
+  - 2196  # Mixed crops (nitrogen-fixing plants over 50%)
+  - 2197  # Mixed crops (over 50% clover + forage grass)
+  - 2460  # Chickpea (Kikherne)
+  - 3230  # Sugar beet, for energy production
+  - 5101  # Garden pea (Tarhaherne)
+  - 5133  # New Zealand spinach (Lamopinaatti)
+  - 5175  # Swiss chard (Lehtimangoldi)
+  - 5845  # Plantains (Ratamot), medicinal herb
+  - 6113  # 1-year seed grasses
+  - 6115  # 1-year seed grass, single species
+  - 6123  # Perennial seed grasses
+  - 6125  # Perennial seed grass, single species
+  - 6402  # Fodder rape (Rehurapsi)
   # Permanent and tree crops
   - 4913  # Energy wood, short rotation (aspen and willow)
   - 4914  # Energy trees, short cycle time (hybrid aspen and poplar)
@@ -167,6 +192,9 @@ include:
   - 5452  # Cherry
   - 5512  # Nursery (berries, fruits, ornamental plants under 5 years)
   - 5537  # Nursery (berries, fruits, ornamental plants at least 5 years old)
+  - 5440  # Cut greens and conifers for decoration, under 5 years old (Leikkovihreä ja leikkohavu)
+  - 5441  # Cut greens and conifers for decoration, at least 5 years old
+  - 5534  # Nursery for forest trees in fields (Metsäpuiden taimitarhat pellolla)
 
 exclude:
   - 4904  # reed canary grass (feed)
@@ -201,3 +229,46 @@ exclude:
   - 9814  # Environmental agreement area, wetland
   - 9820  # Protective strip
   - 9999  # Support cancellation
+  # Added for fi 2020-2022, 2024, 2025
+  - 4930  # Brown knapweed for energy production (Ahdekaunokki, energiantuotantoon)
+  - 5850  # Remediation crop (white mustard) (Saneerauskasvi, valkosinappi)
+  - 5851  # Remediation crop (oil radish) (Saneerauskasvi, öljyretikka)
+  - 5852  # Remediation crop (Tagetes) (Saneerauskasvi, samettikukka)
+  - 5853  # Remediation crop mixture (Saneerauskasviseos)
+  - 6051  # Green manure grass (no environmental commitment)
+  - 6111  # 1-year dry hay, silage and fresh fodder grass
+  - 6112  # Annual pasture grass
+  - 6121  # Perennial dry hay, silage and fresh fodder grass
+  - 6122  # Perennial pasture grass
+  - 6210  # Permanent dry hay/silage/fresh forage grass (5-10 years)
+  - 6220  # Permanent pasture (5-10 years)
+  - 6303  # Natural pasture with high nature values (Åland)
+  - 6305  # Natural pasture in cultural landscape (Åland)
+  - 6307  # Other natural pasture (Åland)
+  - 6600  # Forest pasture (Metsälaidun)
+  - 6710  # Wooded pasture, open (Hakamaa, avoin)
+  - 6720  # Wooded pasture, wooded (Hakamaa, puustoinen)
+  - 9060  # Plants for honey production
+  - 9101  # 20-year special support agreement, field
+  - 9102  # 20-year special support agreement, other area
+  - 9405  # Nature management field (grasses and legumes, min. 2 years)
+  - 9413  # Green fallow (game and landscape)
+  - 9414  # Green fallow (honey plants)
+  - 9416  # Annual sown mixed stand, eco-scheme (Yksivuotinen kylvetty seoskasvusto)
+  - 9422  # Diversity field, game
+  - 9423  # Diversity field, landscape
+  - 9424  # Diversity field, meadow 1st and 2nd year
+  - 9620  # Temporarily uncultivated area
+  - 9621  # Temporarily uncultivated natural pasture and meadow
+  - 9700  # Permanently uncultivated
+  - 9801  # Special-aid contract area, permanent pasture
+  - 9802  # Special-aid contract area, other area
+  - 9803  # Special-aid contract area, arable land
+  - 9804  # Special-aid contract area, woodland
+  - 9806  # Fields for cranes, geese and swans (agreement)
+  - 9807  # Environmental agreement area, other area
+  - 9808  # Environmental agreement area, woodland
+  - 9810  # Protection zone grass (agreements before 2015)
+  - 9811  # Protection zone (commitment from 2015)
+  - 9812  # Perennial environmental grass
+  - 9830  # Landscape feature (Maisemapiirre)

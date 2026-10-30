@@ -4,7 +4,11 @@
 # ftw/harmonized-field-data de_* datasets; German (or English) labels shown as comments.
 # The other German states use coarser or different schemes and have their own filters:
 # de_by, de_mv (crop:code, land-use only), de_sh (hbn), de_th (bnk).
-# 325 distinct NC codes across bb (2026), nds (2025), nrw (2026).
+# 325 distinct NC codes across bb (2026), nds (2025), nrw (2026), plus the variants below.
+# The current de_bb 2026 file writes the low landscape/admin codes without zero padding
+# (1, 4-6, 8, 11-14, 83, 89, 94 instead of "001" ... "094") and uses Brandenburg's own labels for
+# 1 and 11-13 (AUKM flower/margin strips, field-bird plots); all are background, like their padded
+# forms, which are kept for older conversions. Melde (garden orache, 640; nrw 2026) is a vegetable.
 #
 # Excluded (background): landscape elements (hedges, tree rows, field copses, stone walls,
 # margins) & eco-scheme strips incl. agroforestry strips, arable grass leys (Ackergras) and
@@ -127,6 +131,7 @@ include:
   - 637  # Lattich (Garten-Salat
   - 638  # Spinat
   - 639  # Mangold, Rote Beete
+  - 640  # Melde (garden orache)
   - 641  # Sellerie (Knollen-Sellerie, Bleich-Sellerie, Stangen-Sellerie)
   - 642  # Ampfer (Wiesen-Sauerampfer)
   - 643  # Pastinaken
@@ -241,6 +246,11 @@ exclude:
   # Unlabelled / non-agricultural / administrative
   - "005"  # Keine Nutzung
   - "006"  # Festwiese
+  # de_bb 2026 publishes these low codes without zero padding (and with BB-specific labels)
+  - 1  # Genehmigungspflichtige Baumaßnahmen (construction work requiring a permit)
+  - 4  # Nicht genehmigungspflichtiger Lagerplatz (Stroh, Futter, Silage) (storage site)
+  - 5  # Keine Nutzung (no use)
+  - 6  # Festwiese (permanent meadow)
   # Landscape elements & eco-scheme strips (hedges, margins, agroforestry, set-aside)
   - "011"  # Naturstein- o. Trockenmauern, Lesesteinwälle
   - "012"  # Fels- u. Steinriegel, naturversteinte Fl.
@@ -257,6 +267,14 @@ exclude:
   - "093"  # ÖR 1d Altgrasstreifen
   - 93  # ÖR 1d Altgrasstreifen DGL
   - "094"  # ÖR 3 Agroforststreifen
+  # de_bb 2026 (unpadded codes, BB labels)
+  - 11  # Mehrjährige Blühstreifen AUKM (perennial flower strips)
+  - 12  # Ackerrandstreifen AUKM (field margin strips)
+  - 13  # Feldvogelinseln AUKM (skylark/field-bird plots)
+  - 14  # Gewässerschutz-/Uferrandstreifen AUKM (water protection/riparian strips)
+  - 83  # Agroforststreifen ohne ÖR
+  - 89  # ÖR 1b Blühstreifen auf AL
+  - 94  # ÖR 3 Agroforststreifen
   # Arable grass leys, grassland, pasture, meadow
   - 424  # Ackergras
   - 428  # Alternating grassland
@@ -302,6 +320,7 @@ exclude:
   - 593  # Dauerkulturen aus der Erzeugung genommen
   # Protected cultivation (under foil/glass)
   - "008"  # Spargel unter Folie
+  - 8  # Spargel unter Folie (de_bb 2026, unpadded)
   # Turf/sod & ornamental plants
   - 702  # Rollrasen, Vegetationsmatten für Dachbegrünung
   - 704  # Glanzgräser

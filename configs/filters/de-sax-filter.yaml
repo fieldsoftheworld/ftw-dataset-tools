@@ -1,0 +1,30 @@
+# Class filter used for Saxony (de_sax) field boundaries.
+# SAX has no crop:code: the dataset is the LPIS field-block layer ("Feldblöcke und förderfähige
+# Elemente"), so the geometries are field blocks (Feldblöcke), which can hold several fields, not
+# individual parcels. FB_BEZEICH is only a block identifier (e.g. "AL-219-268169"); the land use
+# is the block's Bodennutzungskategorie (BNK) in FB_BN_KAT. This is a land-use-level filter, not
+# a crop-type filter, like de_th / de_mv: arable land (AL), orchards & permanent crops (OD), hops
+# (HO) and vineyards (RF) are field; grassland, heath, glass/foil, ponds & reed, environmental/
+# nature-conservation, forest and the special eligibility categories (BF, KF) are background.
+# BNK labels from LfULG "Antragstellung 2026 - Hinweise zum Antragsverfahren Direktzahlungen"
+# (Abkürzungsverzeichnis and Anlage 1). BF and KF only admit grassland agri-environment measures
+# (ISA GL) and say nothing about the crop, so they are background. Covers de_sax year 2026 (the
+# only published edition).
+column: ["FB_BN_KAT"]
+
+include:
+  - AL  # Ackerland (arable land)
+  - HO  # Hopfen (hops)
+  # Permanent and tree crops
+  - OD  # Obstplantagen, Dauerkulturen (orchards, permanent crops)
+  - RF  # Rebflächen (vineyards)
+
+exclude:
+  - GL  # Grünland (grassland)
+  - HF  # Heideflächen (heathland)
+  - GF  # Flächen unter Glas und Folie (areas under glass and foil)
+  - TS  # Teich und Schilf (ponds and reed)
+  - UN  # Umwelt- und Naturschutzflächen (environmental and nature-conservation areas)
+  - WH  # Wald, Holzungen, Erstaufforstungen (forest, woodland, first afforestation)
+  - BF  # Besondere beihilfefähige Fläche (special eligible area)
+  - KF  # Keine förderfähige Fläche für AUK, ÖBL, ISA (not eligible for agri-environment schemes)
