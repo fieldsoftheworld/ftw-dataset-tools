@@ -8,14 +8,21 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pystac
+import pytest
 import rasterio
+from pyproj import Transformer
 from rasterio.transform import from_origin
+from shapely import segmentize
+from shapely.geometry import box, mapping
+from shapely.ops import transform as shapely_transform
 
+from ftw_dataset_tools.api.chip_grid import utm_grid_for_cell
 from ftw_dataset_tools.api.imagery.image_download import (
     _missing_bands_error,
     compute_target_grid,
     download_and_clip_scene,
     find_reference_mask_for_output,
+    on_reference_grid,
 )
 from ftw_dataset_tools.api.imagery.settings import BANDS_OF_INTEREST
 
@@ -68,28 +75,102 @@ class TestFindReferenceMaskForOutput:
         assert found is None
 
 
+def _ftw_chip(minx: float = 500_000, miny: float = 5_540_000):
+    """A 2 km FTW chip in zone 32N as the grid stores it: in lon/lat, edge midpoints included."""
+    to_lonlat = Transformer.from_crs("EPSG:32632", "EPSG:4326", always_xy=True).transform
+    return shapely_transform(to_lonlat, segmentize(box(minx, miny, minx + 2000, miny + 2000), 1000))
+
+
+def _write_raster(path: Path, crs: str, transform, size: tuple[int, int]) -> None:
+    profile = {
+        "driver": "GTiff",
+        "dtype": "uint8",
+        "count": 1,
+        "width": size[0],
+        "height": size[1],
+        "crs": crs,
+        "transform": transform,
+    }
+    with rasterio.open(path, "w", **profile) as dst:
+        dst.write(np.zeros((1, size[1], size[0]), dtype="uint8"))
+
+
 class TestComputeTargetGrid:
     """The output grid when no mask sits beside the image."""
 
-    def test_fallback_is_the_chips_utm_grid(self, tmp_path: Path) -> None:
+    def test_fallback_is_the_chips_mask_grid(self, tmp_path: Path) -> None:
         chip_dir = tmp_path / "ftw-32UMA0101_2024"
         chip_dir.mkdir()
+        chip = _ftw_chip()
 
         grid, error = compute_target_grid(
-            bbox=(10.0, 50.0, 10.01, 50.01),
+            bbox=chip.bounds,
             output_path=chip_dir / "ftw-32UMA0101_2024_planting_image_s2.tif",
             resolution=10.0,
             reference_raster=None,
+            cell=chip,
         )
 
         assert error is None
         crs, transform, width, height, reference = grid
+        mask_grid = utm_grid_for_cell("ftw-32UMA0101", chip.bounds, "EPSG:4326", 10.0, chip)
+        assert (crs, transform, width, height) == mask_grid
         assert crs.to_string() == "EPSG:32632"
-        assert (transform.a, -transform.e) == (10.0, 10.0)
+        assert (width, height) == (200, 200)
+        assert (transform.c, transform.f) == pytest.approx((500_000, 5_542_000))
         assert reference is None
-        # ~716 m x ~1112 m of lon/lat box, rounded up to whole pixels
-        assert 72 <= width <= 74
-        assert 111 <= height <= 113
+
+
+class TestOnReferenceGrid:
+    """A resumed download keeps an image only when it is on its mask's grid."""
+
+    def _chip(self, tmp_path: Path) -> Path:
+        chip_dir = tmp_path / "ftw-32UMA0101_2024"
+        chip_dir.mkdir()
+        _write_raster(
+            chip_dir / "ftw-32UMA0101_2024_semantic_3_class.tif",
+            "EPSG:32632",
+            from_origin(500_000, 5_542_000, 10, 10),
+            (200, 200),
+        )
+        return chip_dir / "ftw-32UMA0101_2024_planting_image_s2.tif"
+
+    def test_matching_image_is_kept(self, tmp_path: Path) -> None:
+        image = self._chip(tmp_path)
+        _write_raster(image, "EPSG:32632", from_origin(500_000, 5_542_000, 10, 10), (200, 200))
+
+        assert on_reference_grid(image)
+
+    def test_lonlat_image_beside_a_utm_mask_is_not(self, tmp_path: Path) -> None:
+        image = self._chip(tmp_path)
+        _write_raster(image, "EPSG:4326", from_origin(9.0, 50.0, 0.00009, 0.00009), (310, 200))
+
+        assert not on_reference_grid(image)
+
+    def test_image_without_a_mask_is_kept(self, tmp_path: Path) -> None:
+        image = tmp_path / "ftw-32UMA0101_2024_planting_image_s2.tif"
+        _write_raster(image, "EPSG:4326", from_origin(9.0, 50.0, 0.00009, 0.00009), (310, 200))
+
+        assert on_reference_grid(image)
+
+    def test_resume_downloads_a_misregistered_image_again(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.imagery.download_workflow import skip_download_reason
+
+        image = self._chip(tmp_path)
+        _write_raster(image, "EPSG:4326", from_origin(9.0, 50.0, 0.00009, 0.00009), (310, 200))
+        item = pystac.Item(
+            "ftw-32UMA0101_2024_planting_s2",
+            mapping(_ftw_chip()),
+            list(_ftw_chip().bounds),
+            datetime(2024, 5, 1, tzinfo=UTC),
+            {},
+        )
+        item.add_asset("image", pystac.Asset(href=f"./{image.name}"))
+        item_path = image.parent / f"{item.id}.json"
+
+        assert skip_download_reason(item, item_path, resume=True) is None
+        _write_raster(image, "EPSG:32632", from_origin(500_000, 5_542_000, 10, 10), (200, 200))
+        assert skip_download_reason(item, item_path, resume=True) == "Already downloaded"
 
 
 class TestDownloadAndClipScene:

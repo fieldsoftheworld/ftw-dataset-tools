@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import functools
 import json
-import math
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -16,15 +16,13 @@ from typing import TYPE_CHECKING
 import duckdb
 import numpy as np
 import rasterio
-from pyproj import Transformer
+import shapely
 from rasterio import features
 from rasterio.crs import CRS
-from rasterio.transform import from_bounds, from_origin
-from rasterio.warp import transform_bounds
-from shapely.ops import transform as shapely_transform
+from rasterio.transform import from_bounds
 
 from ftw_dataset_tools.api import decode, field_stats
-from ftw_dataset_tools.api.chip_grid import utm_crs_for_cell
+from ftw_dataset_tools.api.chip_grid import reprojector, utm_grid_for_cell
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 
@@ -45,9 +43,7 @@ class MaskType(str, Enum):
     DECODE_DISTANCE = "decode_distance"
 
 
-def get_mask_filename(
-    grid_id: str, mask_type: MaskType, year: int | None = None, suffix: str = ""
-) -> str:
+def get_mask_filename(grid_id: str, mask_type: MaskType, year: int | None = None) -> str:
     """
     Generate mask filename for a grid cell.
 
@@ -55,15 +51,14 @@ def get_mask_filename(
         grid_id: The grid cell ID (e.g., "ftw-34UFF1628")
         mask_type: Type of mask
         year: Optional year to include in filename (e.g., 2024)
-        suffix: Appended to the mask type, e.g. "_planet" for masks on a PlanetScope grid
 
     Returns:
-        Filename like "{grid_id}_{year}_{mask_type.value}{suffix}.tif" if year provided,
-        otherwise "{grid_id}_{mask_type.value}{suffix}.tif"
+        Filename like "{grid_id}_{year}_{mask_type.value}.tif" if year provided,
+        otherwise "{grid_id}_{mask_type.value}.tif"
     """
     if year is not None:
-        return f"{grid_id}_{year}_{mask_type.value}{suffix}.tif"
-    return f"{grid_id}_{mask_type.value}{suffix}.tif"
+        return f"{grid_id}_{year}_{mask_type.value}.tif"
+    return f"{grid_id}_{mask_type.value}.tif"
 
 
 def get_item_id(grid_id: str, year: int | None = None) -> str:
@@ -189,7 +184,6 @@ def get_mask_output_path(
     output_dir: Path,
     field_dataset: str,
     year: int | None = None,
-    suffix: str = "",
 ) -> Path:
     """
     Get the output path for a mask file.
@@ -220,12 +214,12 @@ def get_mask_output_path(
                 f"chip_dirs contains all expected item IDs."
             )
         # Co-located with STAC item: simple filename
-        return chip_dirs[item_id] / get_mask_filename(grid_id, mask_type, year, suffix)
+        return chip_dirs[item_id] / get_mask_filename(grid_id, mask_type, year)
     else:
         # Legacy: dataset prefix in filename
         if year is not None:
-            return output_dir / f"{field_dataset}_{grid_id}_{year}_{mask_type.value}{suffix}.tif"
-        return output_dir / f"{field_dataset}_{grid_id}_{mask_type.value}{suffix}.tif"
+            return output_dir / f"{field_dataset}_{grid_id}_{year}_{mask_type.value}.tif"
+        return output_dir / f"{field_dataset}_{grid_id}_{mask_type.value}.tif"
 
 
 @dataclass
@@ -484,13 +478,15 @@ def _rasterize_mask(
 ) -> np.ndarray:
     """Burn field polygons and boundary lines into a label array.
 
-    ``to_raster_crs`` reprojects each geometry from the source files' CRS into the
-    raster's, for masks on a grid in another CRS.
+    ``to_raster_crs`` (see ``chip_grid.reprojector``) reprojects the geometries from the
+    source files' CRS into the raster's, for masks on a grid in another CRS.
     """
 
-    def shape_of(wkt: str):
-        geometry = _wkt_to_geometry(wkt)
-        return shapely_transform(to_raster_crs, geometry) if to_raster_crs else geometry
+    def shapes_of(wkts: list[str]) -> list:
+        geometries = [_wkt_to_geometry(wkt) for wkt in wkts]
+        if to_raster_crs is None:
+            return geometries
+        return list(shapely.transform(np.array(geometries, dtype=object), to_raster_crs))
 
     # Set data type based on mask type
     dtype = np.uint32 if mask_type == MaskType.INSTANCE else np.uint8
@@ -519,7 +515,8 @@ def _rasterize_mask(
             # A lookup must identify exactly one polygon per raster value.
             if crop_column is not None and len(set(ids)) != len(ids):
                 ids = list(range(1, len(boundaries) + 1))
-            shapes = [(shape_of(row[1]), value) for row, value in zip(boundaries, ids, strict=True)]
+            geometries = shapes_of([row[1] for row in boundaries])
+            shapes = list(zip(geometries, ids, strict=True))
             features.rasterize(shapes, out=mask, transform=transform, all_touched=False)
             if instance_labels is not None and crop_column is not None:
                 instance_labels.extend(
@@ -534,7 +531,7 @@ def _rasterize_mask(
         boundaries = _get_geometries_in_bounds(conn, boundaries_path, boundaries_geom_col, bounds)
         # Rasterize with value 1
         if boundaries:
-            shapes = [(shape_of(wkt), 1) for (wkt,) in boundaries]
+            shapes = [(geometry, 1) for geometry in shapes_of([wkt for (wkt,) in boundaries])]
             features.rasterize(shapes, out=mask, transform=transform, all_touched=False)
 
     # Get boundary lines
@@ -547,7 +544,7 @@ def _rasterize_mask(
         # as background, which is what separates two adjacent fields.
         line_value = 2 if mask_type == MaskType.SEMANTIC_3_CLASS else background_class_value
         features.rasterize(
-            [(shape_of(wkt), line_value) for (wkt,) in boundary_lines],
+            [(line, line_value) for line in shapes_of([wkt for (wkt,) in boundary_lines])],
             out=mask,
             transform=transform,
             all_touched=True,
@@ -699,15 +696,10 @@ def _create_masks_for_cell(
     layer shares a single burn. Rasterizing per output instead would repeat the
     boundary queries, which dominate the cost of a chip.
     """
-    to_raster_crs = None
-    raster_crs = crs
-    if utm:
-        raster_crs, transform, width, height = utm_raster_geometry(
-            grid_id, bounds, crs, resolution, cell_wkt
-        )
-        to_raster_crs = Transformer.from_crs(crs, raster_crs, always_xy=True).transform
-    else:
-        transform, width, height = _grid_raster_geometry(bounds, crs, resolution)
+    raster_crs, transform, width, height = _cell_grid(
+        grid_id, bounds, cell_wkt, crs=crs, resolution=resolution, utm=utm
+    )
+    to_raster_crs = reprojector(crs, raster_crs) if raster_crs != crs else None
     instance_labels: list[dict] = []
 
     source = _rasterize_mask(
@@ -1071,33 +1063,21 @@ def _read_grid_cells(
         raise
 
 
-def utm_raster_geometry(
+def _cell_grid(
     grid_id: str,
     bounds: tuple[float, float, float, float],
+    cell_wkt: str | None,
+    *,
     crs: CRS,
     resolution: float,
-    cell_wkt: str | None = None,
+    utm: bool,
 ) -> tuple[CRS, Affine, int, int]:
-    """The cell's grid in its UTM zone, starting at the cell's north-west corner.
-
-    Built from the cell polygon when given: an FTW chip is a square in its own UTM
-    zone, so its polygon maps back to exactly that square, whereas its lon/lat
-    bounding box would add a margin of the neighbouring chips. The far edges round
-    up to whole pixels.
-    """
-    lonlat = bounds if crs.to_epsg() == 4326 else transform_bounds(crs, "EPSG:4326", *bounds)
-    utm = CRS.from_user_input(utm_crs_for_cell(grid_id, lonlat))
-    if cell_wkt is not None:
-        to_utm = Transformer.from_crs(crs, utm, always_xy=True).transform
-        minx, miny, maxx, maxy = shapely_transform(to_utm, _wkt_to_geometry(cell_wkt)).bounds
-    else:
-        minx, miny, maxx, maxy = transform_bounds(crs, utm, *bounds, densify_pts=21)
-    # Centimetres: a reprojected corner lands a hair off the chip's metre grid, on the
-    # far edges too, where a hair over would round the size up by a whole pixel.
-    minx, miny, maxx, maxy = (round(v, 2) for v in (minx, miny, maxx, maxy))
-    width = math.ceil(round((maxx - minx) / resolution, 6))
-    height = math.ceil(round((maxy - miny) / resolution, 6))
-    return utm, from_origin(minx, maxy, resolution, resolution), width, height
+    """The (CRS, transform, width, height) a cell's masks are written on."""
+    if utm:
+        cell = _wkt_to_geometry(cell_wkt) if cell_wkt is not None else None
+        return utm_grid_for_cell(grid_id, bounds, crs, resolution, cell)
+    transform, width, height = _grid_raster_geometry(bounds, crs, resolution)
+    return crs, transform, width, height
 
 
 def _grid_crs(conn: duckdb.DuckDBPyConnection, chips_path: Path, grid_geom_col: str) -> CRS:
@@ -1145,11 +1125,13 @@ def _outputs_to_write(
     skip_existing: bool,
     existing: dict[MaskType, int],
     crop_column: str | None = None,
-    suffix: str = "",
-    utm: bool = True,
-    resolution: float = 10.0,
+    grid: Callable[[], tuple[CRS, Affine, int, int]] | None = None,
 ) -> list[tuple[MaskType, str]]:
-    """The (mask type, path) outputs of one cell's group that still need writing."""
+    """The (mask type, path) outputs of one cell's group that still need writing.
+
+    ``grid`` gives the grid this run writes the cell on; a mask already on disk is
+    kept only when it matches it.
+    """
     outputs: list[tuple[MaskType, str]] = []
     for mask_type in group:
         mask_path = get_mask_output_path(
@@ -1159,7 +1141,6 @@ def _outputs_to_write(
             output_dir=output_path,
             field_dataset=field_dataset,
             year=year,
-            suffix=suffix,
         )
 
         # Ensure parent directory exists when using chip_dirs
@@ -1174,7 +1155,7 @@ def _outputs_to_write(
             and mask_path.exists()
             and mask_path.stat().st_size > 0
             and (mask_type != MaskType.INSTANCE or _lookup_matches(mask_path, crop_column))
-            and _on_grid(mask_path, utm=utm, resolution=resolution)
+            and (grid is None or _on_grid(mask_path, grid()))
         ):
             existing[mask_type] += 1
             continue
@@ -1183,22 +1164,20 @@ def _outputs_to_write(
     return outputs
 
 
-def _is_utm(crs: CRS | None) -> bool:
-    epsg = crs.to_epsg() if crs is not None else None
-    return epsg is not None and (32601 <= epsg <= 32660 or 32701 <= epsg <= 32760)
+def _on_grid(mask_path: Path, grid: tuple[CRS, Affine, int, int]) -> bool:
+    """Whether a mask already on disk was written on ``grid`` (CRS, transform, size).
 
-
-def _on_grid(mask_path: Path, *, utm: bool, resolution: float) -> bool:
-    """Whether a mask already on disk was written on the grid this run asks for.
-
-    A rerun with ``skip_existing`` must not keep a mask from a build on the other
-    grid (a lon/lat mask in a UTM build, or the reverse) or at another resolution.
+    A rerun with ``skip_existing`` must not keep a mask from a build on another grid:
+    lon/lat instead of UTM or the reverse, another resolution, or another origin.
     """
+    crs, transform, width, height = grid
     try:
         with rasterio.open(mask_path) as src:
-            if not utm:
-                return not _is_utm(src.crs)
-            return _is_utm(src.crs) and math.isclose(src.res[0], resolution, rel_tol=1e-6)
+            return (
+                src.crs == crs
+                and (src.width, src.height) == (width, height)
+                and src.transform.almost_equals(transform)
+            )
     except rasterio.errors.RasterioIOError:
         return False
 
@@ -1213,23 +1192,40 @@ def _build_work_items(
     **output_opts,
 ) -> list[_MaskTask]:
     """One task per (grid cell, group) that still has an output to write."""
+    crs = CRS.from_wkt(shared_task_fields["crs_wkt"])
+    grid_opts = {
+        "crs": crs,
+        "resolution": shared_task_fields["resolution"],
+        "utm": shared_task_fields["utm"],
+    }
     work_items: list[_MaskTask] = []
     for grid_id, minx, miny, maxx, maxy, *geometry in grid_cells:
         grid_id_str = str(grid_id)
+        bounds = (minx, miny, maxx, maxy)
+        cell_wkt = geometry[0] if geometry else None
+        # Computed only when a mask is already on disk, and once per cell.
+        grid = functools.cache(
+            functools.partial(_cell_grid, grid_id_str, bounds, cell_wkt, **grid_opts)
+        )
         for source_type, group in groups.items():
             outputs = _outputs_to_write(
-                grid_id_str, group, existing=existing, crop_column=crop_column, **output_opts
+                grid_id_str,
+                group,
+                existing=existing,
+                crop_column=crop_column,
+                grid=grid,
+                **output_opts,
             )
             if not outputs:
                 continue
             work_items.append(
                 _MaskTask(
                     grid_id=grid_id_str,
-                    bounds=(minx, miny, maxx, maxy),
+                    bounds=bounds,
                     source_type=source_type,
                     outputs=tuple(outputs),
                     crop_column=crop_column if source_type == MaskType.INSTANCE else None,
-                    cell_wkt=geometry[0] if geometry else None,
+                    cell_wkt=cell_wkt,
                     **shared_task_fields,
                 )
             )
@@ -1256,7 +1252,6 @@ def create_masks(
     on_start: Callable[[int, int, int], None] | None = None,
     crop_column: str | None = None,
     utm: bool = True,
-    filename_suffix: str = "",
 ) -> dict[MaskType, CreateMasksResult]:
     """
     Create raster masks from vector boundaries for each grid cell.
@@ -1268,8 +1263,6 @@ def create_masks(
             metres, snapped to whole pixels), the default: pixels are square and every
             chip of one size gets the same shape. False rasterizes in the chips file's
             CRS instead, where ``resolution`` metres become degrees on both axes.
-        filename_suffix: Appended to each mask's type in its filename (e.g. "_planet"),
-            so masks on another grid sit beside the default ones.
         boundaries_file: Path to boundaries GeoParquet file (polygons)
         boundary_lines_file: Path to boundary lines GeoParquet file
         output_dir: Output directory for masks (default: ./masks)
@@ -1279,7 +1272,8 @@ def create_masks(
                     share a rasterization are burned once and written N times.
         coverage_col: Column name for field coverage percentage (to filter grids)
         min_coverage: Minimum coverage percentage (0-100) to process (default: 1.0)
-        resolution: Pixel resolution in CRS units (default: 10.0 meters)
+        resolution: Pixel size in metres (default: 10.0); with ``utm=False``, that many
+                    metres converted to degrees on both axes
         num_workers: Number of parallel workers (default: CPU count, capped at 8)
         chip_dirs: Optional dict mapping item_id (grid_id or grid_id_year) to output directory.
                    If None, one is built under ``output_dir/chips`` from the grid cells
@@ -1287,8 +1281,9 @@ def create_masks(
         year: Optional year for year-based naming convention (e.g., 2024).
               When provided, item IDs and filenames include the year.
         background_class_value: Value to use for background pixels (default: 0). Use 3 for presence-only labels; instance masks always use 0.
-        skip_existing: When True, cells whose output file already exists with a non-zero
-                       size are not recreated (counted in the result's masks_existing).
+        skip_existing: When True, a cell's output that already exists on the grid this
+                       run writes (same CRS, origin and size) is not recreated (counted
+                       in the result's masks_existing); one on another grid is rebuilt.
         on_progress: Optional callback (current, total) for progress updates
         on_start: Optional callback (total_grids, filtered_grids, total_tasks) called before
                   processing. total_tasks is the number of rasterizations actually queued
@@ -1411,9 +1406,6 @@ def create_masks(
         skip_existing=skip_existing,
         existing=existing,
         crop_column=crop_column,
-        suffix=filename_suffix,
-        utm=utm,
-        resolution=resolution,
     )
 
     # Announce (and count progress against) the work that is actually queued:

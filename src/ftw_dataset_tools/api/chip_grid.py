@@ -11,9 +11,20 @@ import math
 import re
 from typing import TYPE_CHECKING
 
+import numpy as np
+import shapely
+from pyproj import Transformer
+from rasterio.crs import CRS
+from rasterio.transform import from_origin
+from rasterio.warp import transform_bounds
+
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import duckdb
     import pandas as pd
+    from affine import Affine
+    from shapely.geometry.base import BaseGeometry
 
 __all__ = [
     "GridCutError",
@@ -24,7 +35,9 @@ __all__ = [
     "expand_bounds",
     "id_digits",
     "parse_chip_ids",
+    "reprojector",
     "utm_crs_for_cell",
+    "utm_grid_for_cell",
 ]
 
 SQUARE_M = 100_000
@@ -303,7 +316,7 @@ ORDER BY id
 """
 
 
-_FTW_ZONE = re.compile(r"^ftw-(?P<zone>\d{1,2})(?P<band>[C-HJ-NP-X])[A-HJ-NP-Z]{2}\d")
+_FTW_ZONE = re.compile(r"^ftw-(?P<zone>[1-9]|[1-5]\d|60)(?P<band>[C-HJ-NP-X])[A-HJ-NP-Z]{2}\d")
 
 
 def utm_crs_for_cell(grid_id: str, bounds: tuple[float, float, float, float]) -> str:
@@ -323,3 +336,49 @@ def utm_crs_for_cell(grid_id: str, bounds: tuple[float, float, float, float]) ->
         zone = min(int((lon + 180) // 6) + 1, 60)
         north = lat >= 0
     return f"EPSG:{32600 + zone if north else 32700 + zone}"
+
+
+def reprojector(src_crs: CRS | str, dst_crs: CRS | str) -> Callable[[np.ndarray], np.ndarray]:
+    """A coordinate function for ``shapely.transform``: (N, 2) arrays from ``src_crs`` to ``dst_crs``.
+
+    One call reprojects every vertex of every geometry passed to ``shapely.transform``.
+    """
+    transformer = Transformer.from_crs(src_crs, dst_crs, always_xy=True)
+
+    def apply(coords: np.ndarray) -> np.ndarray:
+        x, y = transformer.transform(coords[:, 0], coords[:, 1])
+        return np.column_stack([x, y])
+
+    return apply
+
+
+def utm_grid_for_cell(
+    grid_id: str,
+    bounds: tuple[float, float, float, float],
+    crs: CRS | str,
+    resolution: float,
+    cell: BaseGeometry | None = None,
+) -> tuple[CRS, Affine, int, int]:
+    """The raster grid (CRS, transform, width, height) of a cell in its own UTM zone.
+
+    Built from the cell polygon when given: an FTW chip is a square in its UTM zone, so
+    its polygon maps back to exactly that square (a 2 km chip at 10 m is 200x200),
+    whereas its lon/lat ``bounds`` add a margin of the neighbouring chips. The grid
+    snaps outward to multiples of ``resolution`` in the zone, so a chip clipped at a
+    zone or square edge keeps the pixel lattice of its neighbours and of the imagery.
+    """
+    crs = CRS.from_user_input(crs)
+    lonlat = bounds if crs.to_epsg() == 4326 else transform_bounds(crs, "EPSG:4326", *bounds)
+    utm = CRS.from_user_input(utm_crs_for_cell(grid_id, lonlat))
+    if cell is not None:
+        minx, miny, maxx, maxy = shapely.transform(cell, reprojector(crs, utm)).bounds
+    else:
+        minx, miny, maxx, maxy = transform_bounds(crs, utm, *bounds, densify_pts=21)
+    # Centimetres first: a reprojected corner lands a hair off the chip's metre grid,
+    # and a hair past the lattice on any edge would grow the grid by a whole pixel.
+    minx, miny, maxx, maxy = (round(v, 2) for v in (minx, miny, maxx, maxy))
+    left = math.floor(round(minx / resolution, 6)) * resolution
+    top = math.ceil(round(maxy / resolution, 6)) * resolution
+    width = math.ceil(round((maxx - left) / resolution, 6))
+    height = math.ceil(round((top - miny) / resolution, 6))
+    return utm, from_origin(left, top, resolution, resolution), width, height

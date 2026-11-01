@@ -11,11 +11,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import pystac
+from shapely.geometry import shape
 from tqdm import tqdm
 
 from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
 from ftw_dataset_tools.api.imagery.image_download import (
     download_and_clip_scene,
+    on_reference_grid,
     process_downloaded_scene,
 )
 from ftw_dataset_tools.api.imagery.parallel import (
@@ -26,7 +28,7 @@ from ftw_dataset_tools.api.imagery.parallel import (
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 from ftw_dataset_tools.api.imagery.slots import image_filename, parse_child_id
 from ftw_dataset_tools.api.imagery.thumbnails import has_rgb_bands
-from ftw_dataset_tools.api.logging_config import capture_logs, replay
+from ftw_dataset_tools.api.logging_config import capture_logs, get_logger, replay
 from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
@@ -47,6 +49,8 @@ __all__ = [
 ]
 
 DEFAULT_BANDS = ("red", "green", "blue", "nir")
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -239,7 +243,12 @@ def skip_download_reason(item: pystac.Item, item_path: Path, *, resume: bool) ->
         return None
 
     local_path = item_path.parent / local_asset.href.lstrip("./")
-    return "Already downloaded" if local_path.exists() else None
+    if not local_path.exists():
+        return None
+    if not on_reference_grid(local_path):
+        logger.info(f"{item.id}: image is not on its mask's grid, downloading it again")
+        return None
+    return "Already downloaded"
 
 
 def build_download_task(item: pystac.Item, item_path: Path) -> DownloadTask:
@@ -284,6 +293,7 @@ def download_task_scene(
             output_path=task.output_path,
             bands=bands,
             resolution=resolution,
+            cell=shape(task.item.geometry) if task.item.geometry else None,
         )
 
 
