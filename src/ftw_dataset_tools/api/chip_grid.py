@@ -316,7 +316,7 @@ ORDER BY id
 """
 
 
-_FTW_ZONE = re.compile(r"^ftw-(?P<zone>[1-9]|[1-5]\d|60)(?P<band>[C-HJ-NP-X])[A-HJ-NP-Z]{2}\d")
+_FTW_ZONE = re.compile(r"^ftw-(?P<zone>0?[1-9]|[1-5]\d|60)(?P<band>[C-HJ-NP-X])[A-HJ-NP-Z]{2}\d")
 
 
 def utm_crs_for_cell(grid_id: str, bounds: tuple[float, float, float, float]) -> str:
@@ -366,6 +366,8 @@ def utm_grid_for_cell(
     whereas its lon/lat ``bounds`` add a margin of the neighbouring chips. The grid
     snaps outward to multiples of ``resolution`` in the zone, so a chip clipped at a
     zone or square edge keeps the pixel lattice of its neighbours and of the imagery.
+    A ``resolution`` that does not divide the chip size (3 m for 2 km) gives full chips
+    shapes that differ by a pixel, depending on where each sits on the lattice.
     """
     crs = CRS.from_user_input(crs)
     lonlat = bounds if crs.to_epsg() == 4326 else transform_bounds(crs, "EPSG:4326", *bounds)

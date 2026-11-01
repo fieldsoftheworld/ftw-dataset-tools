@@ -246,8 +246,13 @@ def skip_download_reason(item: pystac.Item, item_path: Path, *, resume: bool) ->
     if not local_path.exists():
         return None
     if not on_reference_grid(local_path):
-        logger.info(f"{item.id}: image is not on its mask's grid, downloading it again")
-        return None
+        # Its band links were replaced by the local image, so it cannot be fetched again
+        # from here; select-images --force restores them.
+        logger.warning(
+            f"{item.id}: image is not on its mask's grid; "
+            "run select-images --force to download it again"
+        )
+        return "Image not on its mask's grid (run select-images --force)"
     return "Already downloaded"
 
 

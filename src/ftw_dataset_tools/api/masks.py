@@ -19,7 +19,8 @@ import rasterio
 import shapely
 from rasterio import features
 from rasterio.crs import CRS
-from rasterio.transform import from_bounds
+from rasterio.transform import array_bounds, from_bounds
+from rasterio.warp import transform_bounds
 
 from ftw_dataset_tools.api import decode, field_stats
 from ftw_dataset_tools.api.chip_grid import reprojector, utm_grid_for_cell
@@ -700,6 +701,11 @@ def _create_masks_for_cell(
         grid_id, bounds, cell_wkt, crs=crs, resolution=resolution, utm=utm
     )
     to_raster_crs = reprojector(crs, raster_crs) if raster_crs != crs else None
+    query_bounds = bounds
+    if to_raster_crs is not None:
+        # The grid snaps outward past the cell; query everything under its pixels.
+        extent = array_bounds(height, width, transform)
+        query_bounds = transform_bounds(raster_crs, crs, *extent, densify_pts=21)
     instance_labels: list[dict] = []
 
     source = _rasterize_mask(
@@ -708,7 +714,7 @@ def _create_masks_for_cell(
         boundary_lines_path=boundary_lines_path,
         boundaries_geom_col=boundaries_geom_col,
         boundary_lines_geom_col=boundary_lines_geom_col,
-        bounds=bounds,
+        bounds=query_bounds,
         transform=transform,
         width=width,
         height=height,
@@ -1260,8 +1266,10 @@ def create_masks(
         chips_file: Path to chips GeoParquet file (from create-chips)
         crop_column: Source crop column to save in the instance mask's JSON lookup.
         utm: Rasterize each cell on a grid in its own UTM zone (``resolution`` in
-            metres, snapped to whole pixels), the default: pixels are square and every
-            chip of one size gets the same shape. False rasterizes in the chips file's
+            metres, on the zone's pixel lattice), the default: pixels are square, and
+            when ``resolution`` divides the chip size (10 m for 2 km chips) every full
+            chip gets the same shape. Otherwise the shape varies by a pixel with where
+            the chip sits on the lattice. False rasterizes in the chips file's
             CRS instead, where ``resolution`` metres become degrees on both axes.
         boundaries_file: Path to boundaries GeoParquet file (polygons)
         boundary_lines_file: Path to boundary lines GeoParquet file

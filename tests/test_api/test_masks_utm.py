@@ -14,7 +14,7 @@ from shapely.geometry import box
 from shapely.ops import transform as shapely_transform
 
 from ftw_dataset_tools.api import masks
-from ftw_dataset_tools.api.chip_grid import utm_crs_for_cell
+from ftw_dataset_tools.api.chip_grid import utm_crs_for_cell, utm_grid_for_cell
 from ftw_dataset_tools.api.geo import write_geoparquet
 
 if TYPE_CHECKING:
@@ -61,6 +61,7 @@ class TestUtmCrs:
     @pytest.mark.parametrize(
         ("grid_id", "bounds", "expected"),
         [
+            ("ftw-04QFJ0101", (-160.0, 20.0, -159.99, 20.01), "EPSG:32604"),
             ("ftw-32UMA0101_2024", (10.0, 50.0, 10.01, 50.01), "EPSG:32632"),
             # The chip id's own zone wins at a seam, even if the centre is across it.
             ("ftw-31UGQ0101", (6.05, 49.6, 6.07, 49.62), "EPSG:32631"),
@@ -281,3 +282,42 @@ class TestUtmGridEdgeCases:
 
         assert result.masks_existing == 0
         assert len(result.masks_created) == 1
+
+
+class TestNonDividingResolution:
+    @pytest.mark.parametrize("x0", [500_000, 498_000, 166_000])
+    def test_3m_grid_covers_the_chip_on_the_lattice(self, x0: int) -> None:
+        chip = _utm_chip("EPSG:32632", x0, 5_540_000)
+
+        _, transform, width, height = utm_grid_for_cell(
+            "ftw-32UMA0101", chip.bounds, "EPSG:4326", 3.0, chip
+        )
+
+        left, top = transform.c, transform.f
+        assert left % 3 == 0 and top % 3 == 0
+        assert left <= x0 and left + 3 * width >= x0 + 2000
+        assert top >= 5_542_000 and top - 3 * height <= 5_540_000
+        # 2000 m is not a whole number of 3 m pixels: 667 or 668 depending on the offset.
+        assert {width, height} <= {667, 668}
+
+    def test_field_in_the_snapped_strip_is_burned(self, tmp_path: Path) -> None:
+        # At 3 m the grid starts 2 m west of the chip; a field lying only in that strip
+        # covers the first column's pixel centres and must not read as background.
+        field = box(499_990, 5_540_500, 499_999.9, 5_541_500)
+        chip = _utm_chip("EPSG:32632", 500_000, 5_540_000)
+        inputs = _one_chip_inputs(tmp_path, GRID_ID, chip, [field], "EPSG:32632")
+        # No outline, so the strip's only column is not burned back to background.
+        write_geoparquet(
+            inputs["boundary_lines_file"],
+            gdf=gpd.GeoDataFrame(geometry=[], crs=4326),
+        )
+
+        result = masks.create_masks(**{**inputs, "resolution": 3.0})[
+            masks.MaskType.SEMANTIC_2_CLASS
+        ]
+
+        with rasterio.open(result.masks_created[0].output_path) as src:
+            assert src.transform.c == pytest.approx(499_998)
+            mask = src.read(1)
+        assert mask[:, 0].sum() > 300
+        assert mask[:, 1:].sum() == 0

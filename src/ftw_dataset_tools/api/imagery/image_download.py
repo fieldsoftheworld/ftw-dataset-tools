@@ -145,22 +145,21 @@ def find_reference_mask_for_output(output_path: Path) -> Path | None:
     Returns:
         Path to reference mask if available, otherwise ``None``.
     """
+    return next(iter(_masks_beside(output_path)), None)
+
+
+def _masks_beside(output_path: Path) -> list[Path]:
+    """The chip's 3-class, 2-class and instance masks beside an image, in that order."""
     parsed = parse_image_stem(output_path.stem)
     if parsed is None:
-        return None
+        return []
     base_id = parsed[0]
-
     candidates = [
         output_path.parent / f"{base_id}_semantic_3_class.tif",
         output_path.parent / f"{base_id}_semantic_2_class.tif",
         output_path.parent / f"{base_id}_instance.tif",
     ]
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    return None
+    return [candidate for candidate in candidates if candidate.exists()]
 
 
 def compute_target_grid(
@@ -302,23 +301,25 @@ def write_cog(
 
 
 def on_reference_grid(image_path: Path) -> bool:
-    """Whether an image on disk is on the grid of the mask beside it (True if no mask).
+    """Whether an image on disk is on the grid of every mask beside it (True if none).
 
     Masks rebuilt on another grid (lon/lat to UTM) leave the old imagery behind; a
-    resumed download must fetch it again rather than keep it misregistered.
+    resumed download must not keep it misregistered. Every mask is checked, since a
+    rerun may have rebuilt only some mask types.
     """
-    reference = find_reference_mask_for_output(image_path)
-    if reference is None:
+    references = _masks_beside(image_path)
+    if not references:
         return True
     try:
-        with rasterio.open(image_path) as image, rasterio.open(reference) as mask:
-            return (
-                image.crs == mask.crs
-                and image.transform == mask.transform
-                and (image.width, image.height) == (mask.width, mask.height)
-            )
+        with rasterio.open(image_path) as image:
+            grid = (image.crs, image.transform, image.width, image.height)
+        for reference in references:
+            with rasterio.open(reference) as mask:
+                if (mask.crs, mask.transform, mask.width, mask.height) != grid:
+                    return False
     except rasterio.errors.RasterioIOError:
         return False
+    return True
 
 
 def validate_alignment(output_path: Path, reference_grid: Path | None) -> str | None:

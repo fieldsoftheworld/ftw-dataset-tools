@@ -153,7 +153,20 @@ class TestOnReferenceGrid:
 
         assert on_reference_grid(image)
 
-    def test_resume_downloads_a_misregistered_image_again(self, tmp_path: Path) -> None:
+    def test_stale_mask_beside_rebuilt_ones_is_caught(self, tmp_path: Path) -> None:
+        image = self._chip(tmp_path)
+        _write_raster(image, "EPSG:32632", from_origin(500_000, 5_542_000, 10, 10), (200, 200))
+        # A rerun rebuilt the instance mask on UTM but left a lon/lat 2-class mask behind.
+        _write_raster(
+            image.parent / "ftw-32UMA0101_2024_semantic_2_class.tif",
+            "EPSG:4326",
+            from_origin(9.0, 50.0, 0.00009, 0.00009),
+            (310, 200),
+        )
+
+        assert not on_reference_grid(image)
+
+    def test_resume_flags_a_misregistered_image(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.imagery.download_workflow import skip_download_reason
 
         image = self._chip(tmp_path)
@@ -168,7 +181,10 @@ class TestOnReferenceGrid:
         item.add_asset("image", pystac.Asset(href=f"./{image.name}"))
         item_path = image.parent / f"{item.id}.json"
 
-        assert skip_download_reason(item, item_path, resume=True) is None
+        # Its band links are gone, so it is reported for select-images --force, not queued.
+        reason = skip_download_reason(item, item_path, resume=True)
+        assert reason is not None
+        assert "select-images --force" in reason
         _write_raster(image, "EPSG:32632", from_origin(500_000, 5_542_000, 10, 10), (200, 200))
         assert skip_download_reason(item, item_path, resume=True) == "Already downloaded"
 
