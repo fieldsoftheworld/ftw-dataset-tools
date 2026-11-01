@@ -39,8 +39,9 @@ stages:
   chips:
     # Minimum field-coverage percentage for a grid cell to be kept.
     min_coverage: 0.01
-    # Drop chips on the outer border of the dataset (partial coverage).
-    drop_border_chips: false
+    # Drop chips on the edge of the labelled region, where part of the chip is land
+    # the source does not cover and would read as background.
+    drop_border_chips: true
     # Local FTW grid parquet (avoids fetching from Source Coop). It is
     # bbox-filtered to the fields' extent before use, so a global grid is fine.
     grid_file: /projects/bgtj/ftw-v2/ftw_grid.parquet

@@ -650,7 +650,9 @@ def _config_lines(collection: dict, config_dict: dict) -> list[str]:
         suffix = f", random seed {seed}" if seed is not None else ""
         lines.append(f"- Splits assigned with the `{split_type}` strategy{suffix}")
     if masks.get("resolution"):
-        lines.append(f"- Masks rasterized at {masks['resolution']:g} m per pixel")
+        # Configs resolved before the UTM default carry no `utm` key; those were lon/lat.
+        grid = " on each chip's own UTM zone grid" if masks.get("utm") else ""
+        lines.append(f"- Masks rasterized at {masks['resolution']:g} m per pixel{grid}")
     return lines
 
 

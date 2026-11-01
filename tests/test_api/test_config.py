@@ -269,6 +269,24 @@ class TestFromDict:
                 {"fields_file": "f.parquet", "stages": {"masks": {"skip_existing": "yes"}}}
             )
 
+    def test_masks_utm_defaults_true(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+
+        assert config.stages.masks.utm is True
+
+    def test_masks_utm_can_be_disabled(self) -> None:
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"masks": {"utm": False}}}
+        )
+
+        assert config.stages.masks.utm is False
+
+    def test_masks_utm_non_bool_raises(self) -> None:
+        with pytest.raises(ConfigError, match=r"stages\.masks\.utm must be true or false"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"masks": {"utm": "yes"}}}
+            )
+
     def test_download_resume_defaults_true(self) -> None:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
 

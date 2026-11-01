@@ -9,12 +9,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pystac
 import rasterio
-from rasterio.crs import CRS
-from rasterio.transform import from_bounds as transform_from_bounds
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import Resampling
 
 from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
+from ftw_dataset_tools.api.chip_grid import utm_grid_for_cell
 from ftw_dataset_tools.api.imagery.catalog_ops import normalize_imagery_properties
 from ftw_dataset_tools.api.imagery.chip_preview import refresh_chip_preview, takes_preview
 from ftw_dataset_tools.api.imagery.settings import (
@@ -40,6 +39,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from affine import Affine
+    from rasterio.crs import CRS
+    from shapely.geometry.base import BaseGeometry
 
     from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 
@@ -49,6 +50,7 @@ __all__ = [
     "DownloadResult",
     "download_and_clip_scene",
     "find_reference_mask_for_output",
+    "on_reference_grid",
     "process_downloaded_scene",
     "stack_nodata",
 ]
@@ -143,22 +145,21 @@ def find_reference_mask_for_output(output_path: Path) -> Path | None:
     Returns:
         Path to reference mask if available, otherwise ``None``.
     """
+    return next(iter(_masks_beside(output_path)), None)
+
+
+def _masks_beside(output_path: Path) -> list[Path]:
+    """The chip's 3-class, 2-class and instance masks beside an image, in that order."""
     parsed = parse_image_stem(output_path.stem)
     if parsed is None:
-        return None
+        return []
     base_id = parsed[0]
-
     candidates = [
         output_path.parent / f"{base_id}_semantic_3_class.tif",
         output_path.parent / f"{base_id}_semantic_2_class.tif",
         output_path.parent / f"{base_id}_instance.tif",
     ]
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    return None
+    return [candidate for candidate in candidates if candidate.exists()]
 
 
 def compute_target_grid(
@@ -166,8 +167,13 @@ def compute_target_grid(
     output_path: Path,
     resolution: float,
     reference_raster: Path | None,
+    cell: BaseGeometry | None = None,
 ) -> tuple[tuple[CRS, Affine, int, int, Path | None] | None, str | None]:
-    """Compute output grid from reference mask or bbox+resolution fallback."""
+    """Compute output grid from reference mask or bbox+resolution fallback.
+
+    The fallback is the chip's own UTM grid, the one its masks are written on; pass the
+    chip polygon as ``cell`` (lon/lat) so it matches them exactly.
+    """
     minx, miny, maxx, maxy = bbox
     reference_grid = reference_raster or find_reference_mask_for_output(output_path)
 
@@ -209,17 +215,11 @@ def compute_target_grid(
             f"{resolution}. Resolution must be > 0 when no reference mask grid is found.",
         )
 
-    lat_center = (miny + maxy) / 2
-    meters_per_degree_lon = 111320 * np.cos(np.radians(lat_center))
-    meters_per_degree_lat = 111320
-
-    width_meters = (maxx - minx) * meters_per_degree_lon
-    height_meters = (maxy - miny) * meters_per_degree_lat
-
-    target_width = max(1, int(width_meters / resolution))
-    target_height = max(1, int(height_meters / resolution))
-    target_crs = CRS.from_epsg(4326)
-    target_transform = transform_from_bounds(minx, miny, maxx, maxy, target_width, target_height)
+    # The chip's own UTM grid, as its masks would have it; the chip directory is
+    # named after the item id, which carries the chip's MGRS zone.
+    target_crs, target_transform, target_width, target_height = utm_grid_for_cell(
+        output_path.parent.name, bbox, "EPSG:4326", resolution, cell
+    )
 
     logger.debug(
         f"Grid: source=fallback_bbox_resolution bbox=({minx:.6f}, {miny:.6f}, "
@@ -230,7 +230,7 @@ def compute_target_grid(
         f"height={target_height} transform={target_transform}"
     )
     logger.debug(
-        f"No reference mask found, using EPSG:4326 fallback grid: {target_width}x{target_height}"
+        f"No reference mask found, using {target_crs} fallback grid: {target_width}x{target_height}"
     )
 
     return (target_crs, target_transform, target_width, target_height, None), None
@@ -300,6 +300,28 @@ def write_cog(
     return None
 
 
+def on_reference_grid(image_path: Path) -> bool:
+    """Whether an image on disk is on the grid of every mask beside it (True if none).
+
+    Masks rebuilt on another grid (lon/lat to UTM) leave the old imagery behind; a
+    resumed download must not keep it misregistered. Every mask is checked, since a
+    rerun may have rebuilt only some mask types.
+    """
+    references = _masks_beside(image_path)
+    if not references:
+        return True
+    try:
+        with rasterio.open(image_path) as image:
+            grid = (image.crs, image.transform, image.width, image.height)
+        for reference in references:
+            with rasterio.open(reference) as mask:
+                if (mask.crs, mask.transform, mask.width, mask.height) != grid:
+                    return False
+    except rasterio.errors.RasterioIOError:
+        return False
+    return True
+
+
 def validate_alignment(output_path: Path, reference_grid: Path | None) -> str | None:
     """Validate output alignment against reference mask; cleanup output on failure."""
     if reference_grid is None:
@@ -332,6 +354,7 @@ def download_and_clip_scene(
     bands: list[str] | None = None,
     resolution: float = 10.0,
     reference_raster: Path | None = None,
+    cell: BaseGeometry | None = None,
 ) -> DownloadResult:
     """
     Download and clip a scene to the specified bounding box.
@@ -345,6 +368,7 @@ def download_and_clip_scene(
         reference_raster: Optional mask raster path used as exact output grid
             reference (CRS, transform, width, height). If not provided, the
             function auto-detects a co-located mask from ``output_path``.
+        cell: The chip polygon (lon/lat), for the chip's UTM grid when no mask is found.
 
     Returns:
         DownloadResult with output information
@@ -377,6 +401,7 @@ def download_and_clip_scene(
         output_path=output_path,
         resolution=resolution,
         reference_raster=reference_raster,
+        cell=cell,
     )
 
     if target_grid_error is not None or target_grid is None:

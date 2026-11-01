@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 
 def _collection_dir(tmp_path: Path):
     """A minimal collection on disk: collection.json, chips/fields parquet, items.parquet."""
@@ -888,6 +890,29 @@ class TestQueriesResolveAgainstTheCollection:
 
         assert [path.name for path in written] == ["README.md", "AGENTS.md"]
         assert "Chips per split" not in (tmp_path / "AGENTS.md").read_text()
+
+
+class TestMaskGridLine:
+    """The README names the mask grid when the resolved config records it."""
+
+    @pytest.mark.parametrize(
+        ("masks", "line"),
+        [
+            (
+                {"resolution": 10.0, "utm": True},
+                "at 10 m per pixel on each chip's own UTM zone grid",
+            ),
+            ({"resolution": 10.0, "utm": False}, "at 10 m per pixel\n"),
+            # Resolved by an ftwd from before the UTM default: no utm key, lon/lat masks.
+            ({"resolution": 10.0}, "at 10 m per pixel\n"),
+        ],
+    )
+    def test_grid(self, masks: dict, line: str) -> None:
+        from ftw_dataset_tools.api.docs import _readme_provenance
+
+        text = _readme_provenance({"links": []}, {"stages": {"masks": masks}}) + "\n"
+
+        assert line in text
 
 
 class TestChipSizeLine:

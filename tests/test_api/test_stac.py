@@ -1581,7 +1581,7 @@ def test_thumbnail_candidates_support_legacy_and_mixed_formats(tmp_path, suffixe
     assert asset.href == f"./chip_a{expected}"
     assert asset.media_type == ("image/webp" if expected.endswith(".webp") else "image/jpeg")
     definition = _build_item_assets()["thumbnail"].to_dict()
-    assert "type" not in definition
+    assert definition["type"] == "image/webp"
     assert definition["roles"] == ["thumbnail"]
     assert definition["title"] == "Chip preview"
 

@@ -7,7 +7,8 @@
 # clover/lucerne/melilot/trefoil/N-fixing forage leys), oilseeds, potatoes, beet, field
 # vegetables, herbs/medicinal, flax, hemp, hops, strawberries, named grass-seed varieties, and
 # permanent & tree crops (orchards, fruit & nut trees, berries, vineyards, nurseries, willow).
-# Pure/forage grass and permanent grass are background.
+# Pure/forage grass and permanent grass are background, and so is the legume-grass mixture
+# 0074 (30-80% legumes), which from orbit is indistinguishable from the grassland beside it.
 
 column: ["crop:code", "crop_code"]
 
@@ -70,7 +71,6 @@ include:
   - "0071"  # lavender star
   - "0072"  # kale
   - "0073"  # lettuce
-  - "0074"  # mixture of legumes and grasses (30-80% legumes)
   - "0075"  # Mix of legumes and other crops (30-80% legumes)
   - "0076"  # mustard foreign
   - "0078"  # Cauliflower
@@ -333,6 +333,7 @@ exclude:
   - "0046"  # Rough grazings
   - "0062"  # grassland (at least 80% grasses)
   - "0067"  # cucumber
+  - "0074"  # mixture of legumes and grasses (30-80% legumes); looks like grassland
   - "0077"  # flowers and ornamental plants (ornamental plants) in the ope
   - "0084"  # melon
   - "0090"  # Fallow land (bare land)
