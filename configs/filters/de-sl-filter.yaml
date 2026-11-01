@@ -4,8 +4,8 @@
 # are field; grassland, fallow/set-aside, landscape elements, ornamental and energy crops
 # are background, following the exclusions in de-bb-nds-nrw_filter.yaml where the groups
 # allow it. Covers de_sl year 2026 (the only published edition).
-# Ackerfutter (arable fodder) is treated as field: it mixes clover/alfalfa leys (field in
-# the bb/nds/nrw filter) with grass leys (background there), and the group cannot be split.
+# Ackerfutter (arable fodder) is background for now: its clover-grass and grass leys are
+# indistinguishable from grassland, and the group cannot be split into its crops.
 column: ["name"]
 
 include:
@@ -16,12 +16,12 @@ include:
   - Gemüse  # vegetables
   - Heil- und Gewürzpflanzen  # medicinal and aromatic plants
   - Andere Handelsgewächse  # other industrial crops
-  - Ackerfutter  # arable fodder (clover/alfalfa and grass leys)
   # Permanent and tree crops
   - Dauerkulturen  # permanent crops (orchards, vineyards, nurseries)
 
 exclude:
   - Dauergrünland  # permanent grassland
+  - Ackerfutter  # arable fodder (leys look like grassland)
   - Aus der Produktion genommen  # taken out of production (fallow)
   - Stilllegung/ Aufforstung  # set-aside / afforestation
   - Greening/Greening-Landschaftselemente  # greening landscape elements
