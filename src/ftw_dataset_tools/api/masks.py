@@ -430,8 +430,8 @@ class _MaskTask:
     memory_limit_mb: int
     crop_column: str | None = None
     # Rasterize on a grid in the cell's UTM zone (see utm_crs_for_cell) instead of
-    # the chips file's CRS: the native grid of PlanetScope imagery.
-    utm: bool = False
+    # the chips file's CRS: square pixels, and the native grid of the imagery.
+    utm: bool = True
     # The cell polygon (UTM mode), so the grid covers the chip itself rather than
     # its lon/lat bounding box.
     cell_wkt: str | None = None
@@ -689,7 +689,7 @@ def _create_masks_for_cell(
     id_col: str | None = None,
     background_class_value: int = 0,
     crop_column: str | None = None,
-    utm: bool = False,
+    utm: bool = True,
     cell_wkt: str | None = None,
 ) -> list[tuple[MaskType, MaskResult]]:
     """Rasterize ``source_type`` once for a grid cell and write every output from it.
@@ -702,7 +702,7 @@ def _create_masks_for_cell(
     to_raster_crs = None
     raster_crs = crs
     if utm:
-        raster_crs, transform, width, height = _utm_raster_geometry(
+        raster_crs, transform, width, height = utm_raster_geometry(
             grid_id, bounds, crs, resolution, cell_wkt
         )
         to_raster_crs = Transformer.from_crs(crs, raster_crs, always_xy=True).transform
@@ -1071,7 +1071,7 @@ def _read_grid_cells(
         raise
 
 
-def _utm_raster_geometry(
+def utm_raster_geometry(
     grid_id: str,
     bounds: tuple[float, float, float, float],
     crs: CRS,
@@ -1145,6 +1145,8 @@ def _outputs_to_write(
     existing: dict[MaskType, int],
     crop_column: str | None = None,
     suffix: str = "",
+    utm: bool = True,
+    resolution: float = 10.0,
 ) -> list[tuple[MaskType, str]]:
     """The (mask type, path) outputs of one cell's group that still need writing."""
     outputs: list[tuple[MaskType, str]] = []
@@ -1171,12 +1173,33 @@ def _outputs_to_write(
             and mask_path.exists()
             and mask_path.stat().st_size > 0
             and (mask_type != MaskType.INSTANCE or _lookup_matches(mask_path, crop_column))
+            and _on_grid(mask_path, utm=utm, resolution=resolution)
         ):
             existing[mask_type] += 1
             continue
 
         outputs.append((mask_type, str(mask_path)))
     return outputs
+
+
+def _is_utm(crs: CRS | None) -> bool:
+    epsg = crs.to_epsg() if crs is not None else None
+    return epsg is not None and (32601 <= epsg <= 32660 or 32701 <= epsg <= 32760)
+
+
+def _on_grid(mask_path: Path, *, utm: bool, resolution: float) -> bool:
+    """Whether a mask already on disk was written on the grid this run asks for.
+
+    A rerun with ``skip_existing`` must not keep a mask from a build on the other
+    grid (a lon/lat mask in a UTM build, or the reverse) or at another resolution.
+    """
+    try:
+        with rasterio.open(mask_path) as src:
+            if not utm:
+                return not _is_utm(src.crs)
+            return _is_utm(src.crs) and math.isclose(src.res[0], resolution, rel_tol=1e-6)
+    except rasterio.errors.RasterioIOError:
+        return False
 
 
 def _build_work_items(
@@ -1231,7 +1254,7 @@ def create_masks(
     on_progress: Callable[[int, int], None] | None = None,
     on_start: Callable[[int, int, int], None] | None = None,
     crop_column: str | None = None,
-    utm: bool = False,
+    utm: bool = True,
     filename_suffix: str = "",
 ) -> dict[MaskType, CreateMasksResult]:
     """
@@ -1241,8 +1264,9 @@ def create_masks(
         chips_file: Path to chips GeoParquet file (from create-chips)
         crop_column: Source crop column to save in the instance mask's JSON lookup.
         utm: Rasterize each cell on a grid in its own UTM zone (``resolution`` in
-            metres, snapped to whole pixels) instead of the chips file's CRS. Used for
-            masks on the native grid of PlanetScope imagery.
+            metres, snapped to whole pixels), the default: pixels are square and every
+            chip of one size gets the same shape. False rasterizes in the chips file's
+            CRS instead, where ``resolution`` metres become degrees on both axes.
         filename_suffix: Appended to each mask's type in its filename (e.g. "_planet"),
             so masks on another grid sit beside the default ones.
         boundaries_file: Path to boundaries GeoParquet file (polygons)
@@ -1387,6 +1411,8 @@ def create_masks(
         existing=existing,
         crop_column=crop_column,
         suffix=filename_suffix,
+        utm=utm,
+        resolution=resolution,
     )
 
     # Announce (and count progress against) the work that is actually queued:

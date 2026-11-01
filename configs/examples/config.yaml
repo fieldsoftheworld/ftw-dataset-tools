@@ -62,8 +62,9 @@ stages:
   chips:
     # Minimum field-coverage percentage (0-100) for a grid cell to be kept.
     min_coverage: 1.0
-    # Drop chips on the outer border of the dataset (partial coverage).
-    drop_border_chips: false
+    # Drop chips on the edge of the labelled region, where part of the chip is land
+    # the source does not cover and would read as background.
+    drop_border_chips: true
     # Per-chip HCAT crop composition (skipped automatically when the fields lack hcat:code).
     crop_stats: true
     # Per-chip land cover from the Impact Observatory annual maps (2017-2023), read from
@@ -105,6 +106,10 @@ stages:
     crop_column: null  # Optional source column, e.g. crop:name, for instance labels.
     # Pixel resolution in meters.
     resolution: 10.0
+    # Rasterize each chip on its own UTM zone's grid: square pixels, and every chip
+    # of one size gets the same shape (a 2 km chip at 10 m is 200x200). false
+    # rasterizes in the chips' lon/lat CRS instead. Imagery follows the mask grid.
+    utm: true
     # Parallel workers (null = CPU count, capped at 8). Each worker's DuckDB
     # connection is memory-limited so N workers don't oversubscribe RAM; if a
     # worker still dies (OOM), the pool restarts automatically (see the run

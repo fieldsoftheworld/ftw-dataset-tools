@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import rasterio
 from click.testing import CliRunner
+from rasterio.warp import transform
 from shapely.geometry import box, mapping
 
 from ftw_dataset_tools.api import masks, pipeline, stac
@@ -90,7 +91,8 @@ def test_labels_match_pixels_with_arbitrary_ids(tmp_path, ids, background):
         assert set(by_value) == values
         assert len(by_value) == 2
         for i, x in enumerate((10.002, 10.007)):
-            value = int(raster[src.index(x, 50.002)])
+            (east,), (north,) = transform("EPSG:4326", src.crs, [x], [50.002])
+            value = int(raster[src.index(east, north)])
             assert by_value[value]["crop_value"] == ("Wheat", None)[i]
             assert by_value[value]["field_id"] == (str(ids[i]) if ids else None)
 

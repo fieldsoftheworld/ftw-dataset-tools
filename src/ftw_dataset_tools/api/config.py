@@ -332,6 +332,9 @@ class MasksConfig:
     skip_existing: bool = False
     # Source crop column for instance labels.
     crop_column: str | None = None
+    # Rasterize each chip on its own UTM zone's grid (square pixels, one shape per
+    # chip size). False rasterizes in the chips file's CRS (lon/lat), as before.
+    utm: bool = True
 
 
 @dataclass
@@ -791,6 +794,8 @@ class DatasetConfig:
 
         if not isinstance(self.stages.masks.skip_existing, bool):
             raise ConfigError("stages.masks.skip_existing must be true or false")
+        if not isinstance(self.stages.masks.utm, bool):
+            raise ConfigError("stages.masks.utm must be true or false")
 
         crop_column = self.stages.masks.crop_column
         if crop_column is not None and (

@@ -10,7 +10,6 @@ import numpy as np
 import pystac
 import rasterio
 from rasterio.crs import CRS
-from rasterio.transform import from_bounds as transform_from_bounds
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import Resampling
 
@@ -33,6 +32,7 @@ from ftw_dataset_tools.api.imagery.thumbnails import (
     has_rgb_bands,
 )
 from ftw_dataset_tools.api.logging_config import get_logger
+from ftw_dataset_tools.api.masks import utm_raster_geometry
 from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 from ftw_dataset_tools.api.stac_items import update_parent_item, write_item
 
@@ -209,17 +209,11 @@ def compute_target_grid(
             f"{resolution}. Resolution must be > 0 when no reference mask grid is found.",
         )
 
-    lat_center = (miny + maxy) / 2
-    meters_per_degree_lon = 111320 * np.cos(np.radians(lat_center))
-    meters_per_degree_lat = 111320
-
-    width_meters = (maxx - minx) * meters_per_degree_lon
-    height_meters = (maxy - miny) * meters_per_degree_lat
-
-    target_width = max(1, int(width_meters / resolution))
-    target_height = max(1, int(height_meters / resolution))
-    target_crs = CRS.from_epsg(4326)
-    target_transform = transform_from_bounds(minx, miny, maxx, maxy, target_width, target_height)
+    # The chip's own UTM grid, as its masks would have it; the chip directory is
+    # named after the item id, which carries the chip's MGRS zone.
+    target_crs, target_transform, target_width, target_height = utm_raster_geometry(
+        output_path.parent.name, bbox, CRS.from_epsg(4326), resolution
+    )
 
     logger.debug(
         f"Grid: source=fallback_bbox_resolution bbox=({minx:.6f}, {miny:.6f}, "
@@ -230,7 +224,7 @@ def compute_target_grid(
         f"height={target_height} transform={target_transform}"
     )
     logger.debug(
-        f"No reference mask found, using EPSG:4326 fallback grid: {target_width}x{target_height}"
+        f"No reference mask found, using {target_crs} fallback grid: {target_width}x{target_height}"
     )
 
     return (target_crs, target_transform, target_width, target_height, None), None

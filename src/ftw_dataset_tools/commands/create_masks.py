@@ -64,7 +64,13 @@ from ftw_dataset_tools.api.masks import MaskType
     type=float,
     default=10.0,
     show_default=True,
-    help="Pixel resolution in CRS units (e.g., meters).",
+    help="Pixel size in metres (in degrees' worth of metres with --no-utm).",
+)
+@click.option(
+    "--utm/--no-utm",
+    default=True,
+    show_default=True,
+    help="Rasterize each chip on its own UTM zone's grid; --no-utm uses the chips file's CRS.",
 )
 @click.option(
     "--workers",
@@ -98,6 +104,7 @@ def create_masks_cmd(
     num_workers: int | None,
     skip_existing: bool,
     crop_column: str | None,
+    utm: bool,
 ) -> None:
     """Create raster masks from vector boundaries for each grid cell.
 
@@ -191,6 +198,7 @@ def create_masks_cmd(
             year=year,
             skip_existing=skip_existing,
             crop_column=crop_column,
+            utm=utm,
             on_progress=on_progress,
             on_start=on_start,
         )

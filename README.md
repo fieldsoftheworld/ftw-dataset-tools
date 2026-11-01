@@ -435,7 +435,8 @@ ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spa
 - `--grid-id-col` - Column name for grid cell ID (default: `id`)
 - `--coverage-col` - Column name for coverage percentage (default: `field_coverage_pct`)
 - `--min-coverage` - Minimum coverage percentage (0-100) to process (default: 1.0)
-- `--resolution` - Pixel resolution in CRS units (default: 10.0)
+- `--resolution` - Pixel size in metres (default: 10.0)
+- `--utm/--no-utm` - Rasterize each chip on its own UTM zone's grid, so pixels are square and every chip of one size has the same shape (default). `--no-utm` uses the chips file's CRS, where the resolution in metres becomes degrees on both axes
 - `--workers` - Number of parallel workers (default: CPU count, capped at 8)
 - `--skip-existing` - Reuse masks already on disk instead of recreating them
 

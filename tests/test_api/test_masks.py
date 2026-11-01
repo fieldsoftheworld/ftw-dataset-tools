@@ -6,6 +6,7 @@ from typing import ClassVar
 
 import numpy as np
 import pytest
+import rasterio
 
 
 def expected_mask_path(output_dir, grid_id: str, mask_type, year: int | None = None) -> Path:
@@ -609,63 +610,101 @@ class TestCreateMasksSkipExisting:
         assert result.total_created == 2
         assert result.masks_existing == 0
 
-    def test_skip_existing_skips_non_empty_file_and_recreates_empty_one(self, tmp_path) -> None:
-        from ftw_dataset_tools.api.masks import MaskType, create_masks
+    def _create(self, tmp_path, mask_types, **kwargs):
+        from ftw_dataset_tools.api.masks import create_masks
 
         chips_path, fields_path, lines_path = self._build_inputs(tmp_path)
+        return create_masks(
+            chips_file=chips_path,
+            boundaries_file=fields_path,
+            boundary_lines_file=lines_path,
+            output_dir=tmp_path / "masks",
+            field_dataset="test",
+            mask_types=mask_types,
+            num_workers=1,
+            **kwargs,
+        )
+
+    def test_skip_existing_skips_non_empty_file_and_recreates_empty_one(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import MaskType
+
+        self._create(tmp_path, [MaskType.SEMANTIC_2_CLASS])
         output_dir = tmp_path / "masks"
-        output_dir.mkdir()
-
-        existing_path = expected_mask_path(output_dir, "c1", MaskType.SEMANTIC_2_CLASS)
-        existing_path.write_bytes(b"not-really-a-tif-but-non-empty")
-
+        kept = expected_mask_path(output_dir, "c1", MaskType.SEMANTIC_2_CLASS)
+        kept_bytes = kept.read_bytes()
         empty_path = expected_mask_path(output_dir, "c2", MaskType.SEMANTIC_2_CLASS)
         empty_path.write_bytes(b"")
 
-        results = create_masks(
-            chips_file=chips_path,
-            boundaries_file=fields_path,
-            boundary_lines_file=lines_path,
-            output_dir=output_dir,
-            field_dataset="test",
-            mask_types=[MaskType.SEMANTIC_2_CLASS],
-            num_workers=1,
-            skip_existing=True,
-        )
+        result = self._create(tmp_path, [MaskType.SEMANTIC_2_CLASS], skip_existing=True)[
+            MaskType.SEMANTIC_2_CLASS
+        ]
 
-        result = results[MaskType.SEMANTIC_2_CLASS]
         assert result.masks_existing == 1
         assert result.total_created == 1
         assert result.masks_created[0].grid_id == "c2"
-        # The non-empty file was left untouched (still not a valid raster).
-        assert existing_path.read_bytes() == b"not-really-a-tif-but-non-empty"
+        assert kept.read_bytes() == kept_bytes
         # The empty file was recreated into a real raster.
         assert empty_path.stat().st_size > 0
 
-    def test_skip_existing_filters_per_output_not_per_group(self, tmp_path) -> None:
-        """A group whose 2-class mask exists must still burn its missing DECODE layer."""
-        from ftw_dataset_tools.api.masks import MaskType, create_masks
+    def test_skip_existing_recreates_unreadable_file(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import MaskType
 
-        chips_path, fields_path, lines_path = self._build_inputs(tmp_path)
         output_dir = tmp_path / "masks"
         output_dir.mkdir()
+        corrupt = expected_mask_path(output_dir, "c1", MaskType.SEMANTIC_2_CLASS)
+        corrupt.write_bytes(b"not-really-a-tif-but-non-empty")
 
-        paths = {
-            mask_type: expected_mask_path(output_dir, grid_id, mask_type)
-            for grid_id in ("c1",)
-            for mask_type in (MaskType.SEMANTIC_2_CLASS, MaskType.DECODE_BOUNDARY)
-        }
-        # Only the 2-class output of c1's group is already on disk.
-        paths[MaskType.SEMANTIC_2_CLASS].write_bytes(b"not-really-a-tif-but-non-empty")
+        result = self._create(tmp_path, [MaskType.SEMANTIC_2_CLASS], skip_existing=True)[
+            MaskType.SEMANTIC_2_CLASS
+        ]
 
-        results = create_masks(
-            chips_file=chips_path,
-            boundaries_file=fields_path,
-            boundary_lines_file=lines_path,
-            output_dir=output_dir,
-            field_dataset="test",
-            mask_types=[MaskType.SEMANTIC_2_CLASS, MaskType.DECODE_BOUNDARY],
-            num_workers=1,
+        assert result.masks_existing == 0
+        assert result.total_created == 2
+        with rasterio.open(corrupt) as src:
+            assert src.crs.is_projected
+
+    @pytest.mark.parametrize(("first_utm", "rerun_utm"), [(False, True), (True, False)])
+    def test_skip_existing_recreates_masks_from_the_other_grid(
+        self, tmp_path, first_utm, rerun_utm
+    ) -> None:
+        from ftw_dataset_tools.api.masks import MaskType
+
+        self._create(tmp_path, [MaskType.SEMANTIC_2_CLASS], utm=first_utm)
+        result = self._create(
+            tmp_path, [MaskType.SEMANTIC_2_CLASS], skip_existing=True, utm=rerun_utm
+        )[MaskType.SEMANTIC_2_CLASS]
+
+        assert result.masks_existing == 0
+        assert result.total_created == 2
+        path = expected_mask_path(tmp_path / "masks", "c1", MaskType.SEMANTIC_2_CLASS)
+        with rasterio.open(path) as src:
+            assert src.crs.is_projected == rerun_utm
+
+    def test_skip_existing_recreates_masks_at_another_resolution(self, tmp_path) -> None:
+        from ftw_dataset_tools.api.masks import MaskType
+
+        self._create(tmp_path, [MaskType.SEMANTIC_2_CLASS], resolution=10.0)
+        result = self._create(
+            tmp_path, [MaskType.SEMANTIC_2_CLASS], skip_existing=True, resolution=5.0
+        )[MaskType.SEMANTIC_2_CLASS]
+
+        assert result.masks_existing == 0
+        assert result.total_created == 2
+
+    def test_skip_existing_filters_per_output_not_per_group(self, tmp_path) -> None:
+        """A group whose 2-class mask exists must still burn its missing DECODE layer."""
+        from ftw_dataset_tools.api.masks import MaskType
+
+        self._create(tmp_path, [MaskType.SEMANTIC_2_CLASS])
+        output_dir = tmp_path / "masks"
+        # Only the 2-class output of c1's group stays on disk.
+        expected_mask_path(output_dir, "c2", MaskType.SEMANTIC_2_CLASS).unlink()
+        two_class_path = expected_mask_path(output_dir, "c1", MaskType.SEMANTIC_2_CLASS)
+        two_class_bytes = two_class_path.read_bytes()
+
+        results = self._create(
+            tmp_path,
+            [MaskType.SEMANTIC_2_CLASS, MaskType.DECODE_BOUNDARY],
             skip_existing=True,
         )
 
@@ -675,8 +714,8 @@ class TestCreateMasksSkipExisting:
         assert two_class.total_created == 1  # only c2
         assert boundary.masks_existing == 0
         assert boundary.total_created == 2  # c1's group still burned for the DECODE layer
-        assert paths[MaskType.SEMANTIC_2_CLASS].read_bytes() == b"not-really-a-tif-but-non-empty"
-        assert paths[MaskType.DECODE_BOUNDARY].stat().st_size > 0
+        assert two_class_path.read_bytes() == two_class_bytes
+        assert expected_mask_path(output_dir, "c1", MaskType.DECODE_BOUNDARY).stat().st_size > 0
 
 
 class TestDecodeMaskTypes:

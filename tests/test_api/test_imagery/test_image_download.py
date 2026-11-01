@@ -13,6 +13,7 @@ from rasterio.transform import from_origin
 
 from ftw_dataset_tools.api.imagery.image_download import (
     _missing_bands_error,
+    compute_target_grid,
     download_and_clip_scene,
     find_reference_mask_for_output,
 )
@@ -65,6 +66,30 @@ class TestFindReferenceMaskForOutput:
         found = find_reference_mask_for_output(output_path)
 
         assert found is None
+
+
+class TestComputeTargetGrid:
+    """The output grid when no mask sits beside the image."""
+
+    def test_fallback_is_the_chips_utm_grid(self, tmp_path: Path) -> None:
+        chip_dir = tmp_path / "ftw-32UMA0101_2024"
+        chip_dir.mkdir()
+
+        grid, error = compute_target_grid(
+            bbox=(10.0, 50.0, 10.01, 50.01),
+            output_path=chip_dir / "ftw-32UMA0101_2024_planting_image_s2.tif",
+            resolution=10.0,
+            reference_raster=None,
+        )
+
+        assert error is None
+        crs, transform, width, height, reference = grid
+        assert crs.to_string() == "EPSG:32632"
+        assert (transform.a, -transform.e) == (10.0, 10.0)
+        assert reference is None
+        # ~716 m x ~1112 m of lon/lat box, rounded up to whole pixels
+        assert 72 <= width <= 74
+        assert 111 <= height <= 113
 
 
 class TestDownloadAndClipScene:

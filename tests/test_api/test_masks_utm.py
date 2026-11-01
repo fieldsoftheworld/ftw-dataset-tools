@@ -1,4 +1,4 @@
-"""Masks on a per-chip UTM grid, the native grid of PlanetScope imagery."""
+"""Masks on a per-chip UTM grid, the default grid for every imagery source."""
 
 from __future__ import annotations
 
@@ -8,7 +8,9 @@ import geopandas as gpd
 import numpy as np
 import pytest
 import rasterio
+from pyproj import Transformer
 from shapely.geometry import box
+from shapely.ops import transform as shapely_transform
 
 from ftw_dataset_tools.api import masks
 from ftw_dataset_tools.api.chip_grid import utm_crs_for_cell
@@ -84,7 +86,7 @@ class TestUtmMasks:
 
     def test_fields_land_where_they_are(self, tmp_path: Path) -> None:
         utm = _mask(tmp_path / "utm", utm=True, resolution=3.0, filename_suffix="_planet")
-        lonlat = _mask(tmp_path / "lonlat")
+        lonlat = _mask(tmp_path / "lonlat", utm=False)
 
         with rasterio.open(utm) as a, rasterio.open(lonlat) as b:
             utm_share = float(np.mean(a.read(1) == 1))
@@ -95,9 +97,67 @@ class TestUtmMasks:
         assert np.mean(north == 1) < 0.01
         assert np.mean(south == 1) > 0.8
 
-    def test_default_masks_are_unchanged(self, tmp_path: Path) -> None:
+    def test_default_masks_are_on_a_10m_utm_grid(self, tmp_path: Path) -> None:
         path = _mask(tmp_path)
 
         assert path.name == f"{GRID_ID}_2024_semantic_2_class.tif"
         with rasterio.open(path) as src:
+            assert src.crs.to_string() == "EPSG:32632"
+            assert src.res == (10.0, 10.0)
+
+    def test_lonlat_masks_on_request(self, tmp_path: Path) -> None:
+        with rasterio.open(_mask(tmp_path, utm=False)) as src:
             assert src.crs.to_epsg() == 4326
+
+    def test_ftw_chip_is_exactly_200_by_200(self, tmp_path: Path) -> None:
+        # A 2 km chip as the FTW grid cuts it: a square in its UTM zone, stored in lon/lat.
+        to_lonlat = Transformer.from_crs("EPSG:32632", "EPSG:4326", always_xy=True).transform
+        square = box(500_000, 5_540_000, 502_000, 5_542_000)
+        chip = shapely_transform(to_lonlat, square)
+        inputs = _inputs(tmp_path)
+        write_geoparquet(
+            inputs["chips_file"],
+            gdf=gpd.GeoDataFrame(
+                {"id": [GRID_ID], "field_coverage_pct": [50]}, geometry=[chip], crs=4326
+            ),
+        )
+
+        result = masks.create_masks(**inputs)[masks.MaskType.SEMANTIC_2_CLASS]
+
+        with rasterio.open(result.masks_created[0].output_path) as src:
+            assert (src.width, src.height) == (200, 200)
+            assert (src.transform.c, src.transform.f) == pytest.approx((500_000, 5_542_000))
+
+
+class TestCreateMasksCli:
+    @pytest.mark.parametrize(("flag", "epsg"), [([], 32632), (["--no-utm"], 4326)])
+    def test_grid_flag(self, tmp_path: Path, flag: list[str], epsg: int) -> None:
+        from click.testing import CliRunner
+
+        from ftw_dataset_tools.cli import cli
+
+        inputs = _inputs(tmp_path)
+        out = tmp_path / "out"
+        result = CliRunner().invoke(
+            cli,
+            [
+                "create-masks",
+                str(inputs["chips_file"]),
+                str(inputs["boundaries_file"]),
+                str(inputs["boundary_lines_file"]),
+                "--output-dir",
+                str(out),
+                "--field-dataset",
+                "test",
+                "--mask-type",
+                "semantic_2_class",
+                "--year",
+                "2024",
+                *flag,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        (path,) = out.rglob("*_semantic_2_class.tif")
+        with rasterio.open(path) as src:
+            assert src.crs.to_epsg() == epsg
