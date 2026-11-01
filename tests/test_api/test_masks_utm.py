@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import rasterio
 from pyproj import Transformer
+from shapely import segmentize
 from shapely.geometry import box
 from shapely.ops import transform as shapely_transform
 
@@ -109,11 +110,13 @@ class TestUtmMasks:
         with rasterio.open(_mask(tmp_path, utm=False)) as src:
             assert src.crs.to_epsg() == 4326
 
-    def test_ftw_chip_is_exactly_200_by_200(self, tmp_path: Path) -> None:
-        # A 2 km chip as the FTW grid cuts it: a square in its UTM zone, stored in lon/lat.
+    @pytest.mark.parametrize("slack", [0.0, 5e-5, -5e-5])
+    def test_ftw_chip_is_exactly_200_by_200(self, tmp_path: Path, slack: float) -> None:
+        # A 2 km chip as the FTW grid stores it: a square in its UTM zone with a midpoint
+        # on each edge, in lon/lat, whose round trip lands a fraction of a mm off.
         to_lonlat = Transformer.from_crs("EPSG:32632", "EPSG:4326", always_xy=True).transform
-        square = box(500_000, 5_540_000, 502_000, 5_542_000)
-        chip = shapely_transform(to_lonlat, square)
+        square = box(500_000 - slack, 5_540_000 - slack, 502_000 + slack, 5_542_000 + slack)
+        chip = shapely_transform(to_lonlat, segmentize(square, 1000))
         inputs = _inputs(tmp_path)
         write_geoparquet(
             inputs["chips_file"],

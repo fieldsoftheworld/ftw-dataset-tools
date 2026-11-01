@@ -1092,8 +1092,9 @@ def utm_raster_geometry(
         minx, miny, maxx, maxy = shapely_transform(to_utm, _wkt_to_geometry(cell_wkt)).bounds
     else:
         minx, miny, maxx, maxy = transform_bounds(crs, utm, *bounds, densify_pts=21)
-    # Centimetres: a reprojected corner lands a hair off the chip's metre grid.
-    minx, maxy = round(minx, 2), round(maxy, 2)
+    # Centimetres: a reprojected corner lands a hair off the chip's metre grid, on the
+    # far edges too, where a hair over would round the size up by a whole pixel.
+    minx, miny, maxx, maxy = (round(v, 2) for v in (minx, miny, maxx, maxy))
     width = math.ceil(round((maxx - minx) / resolution, 6))
     height = math.ceil(round((maxy - miny) / resolution, 6))
     return utm, from_origin(minx, maxy, resolution, resolution), width, height
