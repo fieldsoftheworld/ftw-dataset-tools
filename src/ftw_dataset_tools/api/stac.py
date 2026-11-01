@@ -615,7 +615,15 @@ def _build_item_assets() -> dict[str, ItemAssetDefinition]:
                 "title": f"{season.capitalize()} season scene (true colour)",
             }
         )
-    defs["thumbnail"] = ItemAssetDefinition({"roles": ["thumbnail"], "title": "Chip preview"})
+    # Imported here: api.imagery's package init imports this module back.
+    from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_MEDIA_TYPE
+
+    # Validators require a type on every definition. ftwd writes WebP previews; a
+    # tree still holding legacy JPEGs describes them on each item's own asset
+    # (``ftwd convert-previews`` replaces them).
+    defs["thumbnail"] = ItemAssetDefinition(
+        {"type": PREVIEW_MEDIA_TYPE, "roles": ["thumbnail"], "title": "Chip preview"}
+    )
     return defs
 
 
