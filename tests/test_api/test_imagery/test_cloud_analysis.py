@@ -116,6 +116,22 @@ class TestReadSCLChipStats:
         assert stats.nodata_pct == pytest.approx(50.0, abs=2.0)
         assert stats.cloud_pct == 0.0
 
+    def test_footprint_inside_the_scene_is_clean(self, scl_path):
+        from pyproj import Transformer
+
+        to_lonlat = Transformer.from_crs("EPSG:32633", "EPSG:4326", always_xy=True)
+        corners = [
+            (ORIGIN_X, ORIGIN_Y - PIXEL),
+            (ORIGIN_X + 4 * PIXEL, ORIGIN_Y - PIXEL),
+            (ORIGIN_X + 4 * PIXEL, ORIGIN_Y),
+            (ORIGIN_X, ORIGIN_Y),
+        ]
+        ring = [list(to_lonlat.transform(x, y)) for x, y in corners]
+        footprint = {"type": "Polygon", "coordinates": [[*ring, ring[0]]]}
+        stats = read_scl_chip_stats(scl_path, _bbox_for(4, 1), footprint)
+        assert stats.nodata_pct == 0.0
+        assert stats.cloud_pct == 0.0
+
     def test_all_nodata_window_reports_no_cloud(self, tmp_path):
         path = _write_scl(tmp_path / "empty.tif", [[0, 0], [0, 0]])
         stats = read_scl_chip_stats(path, _bbox_for(2, 2))

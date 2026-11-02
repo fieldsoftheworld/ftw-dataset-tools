@@ -180,6 +180,7 @@ def run_chip_selection(
             num_buffer_expansions=num_buffer_expansions,
             buffer_expansion_size=buffer_expansion_size,
             search_backend=search_backend,
+            footprint=job.item.geometry,
         )
 
         if selection.success:
