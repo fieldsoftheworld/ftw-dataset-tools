@@ -365,6 +365,7 @@ def _chip_nodata_pct(
         return stats.nodata_pct
     nir_asset = item.assets.get("nir")
     if nir_asset is None:
+        logger.warning(f"{item.id}: chip nodata check failed (no readable SCL, no NIR band)")
         return None
     try:
         return calculate_nodata_percentage(nir_asset.href, bbox, footprint)

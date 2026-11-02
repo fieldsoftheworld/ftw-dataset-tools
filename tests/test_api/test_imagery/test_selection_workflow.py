@@ -1137,3 +1137,52 @@ class TestBuildSceneIndex:
             index = selection_workflow._build_scene_index(jobs, "parquet")
 
         assert index is None
+
+
+class TestRunChipSelectionFootprint:
+    """The chip's polygon, not just its bbox, reaches scene selection's pixel check."""
+
+    def test_item_geometry_is_passed_as_footprint(self, monkeypatch, tmp_path):
+        from datetime import UTC, datetime
+
+        import pystac
+
+        from ftw_dataset_tools.api.imagery import selection_workflow
+        from ftw_dataset_tools.api.imagery.scene_selection import SceneSelectionResult
+
+        geometry = {
+            "type": "Polygon",
+            "coordinates": [[[14.9, 45.9], [15.1, 45.9], [15.1, 46.1], [14.9, 46.1], [14.9, 45.9]]],
+        }
+        item = pystac.Item(
+            id="ftw-33TVM0000_2021",
+            geometry=geometry,
+            bbox=[14.9, 45.9, 15.1, 46.1],
+            datetime=datetime(2021, 1, 1, tzinfo=UTC),
+            properties={},
+        )
+        seen = {}
+
+        def fake_select(**kwargs):
+            seen.update(kwargs)
+            return SceneSelectionResult(
+                chip_id=kwargs["chip_id"],
+                bbox=kwargs["bbox"],
+                year=kwargs["year"],
+                crop_calendar=None,
+                skipped_reason="stub",
+            )
+
+        monkeypatch.setattr(selection_workflow, "select_scenes_for_chip", fake_select)
+        job = selection_workflow.ChipSelectionJob(
+            item=item, item_path=tmp_path / "ftw-33TVM0000_2021.json", year=2021
+        )
+        selection_workflow.run_chip_selection(
+            job,
+            cloud_cover_chip=2.0,
+            nodata_max=0.0,
+            buffer_days=14,
+            num_buffer_expansions=0,
+            buffer_expansion_size=14,
+        )
+        assert seen["footprint"] == geometry
