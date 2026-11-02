@@ -65,6 +65,44 @@ class TestCalculateNodataPercentage:
         assert calculate_nodata_percentage(band_path, _bbox(-2, 2)) == pytest.approx(50.0, abs=3.0)
 
 
+class TestFullResolution:
+    def test_a_few_pixel_hole_an_overview_averages_away_is_counted(self, tmp_path):
+        """A quarterly mosaic's cloud hole is a few pixels; overviews blur it out."""
+        from rasterio.enums import Resampling
+
+        size = 256
+        data = np.full((size, size), 5, dtype="int16")
+        data[100:102, 100:102] = -32768  # 4 pixels
+        path = tmp_path / "mosaic.tif"
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            height=size,
+            width=size,
+            count=1,
+            dtype="int16",
+            nodata=-32768,
+            crs="EPSG:32633",
+            transform=from_origin(ORIGIN_X, ORIGIN_Y, PIXEL, PIXEL),
+        ) as dst:
+            dst.write(data, 1)
+            dst.build_overviews([2, 4, 8], Resampling.average)
+        with rasterio.open(path, overview_level=2) as src:
+            assert not (src.read(1) == -32768).any()  # the hole is gone at this level
+
+        # A window around the hole, inside the raster: 4 of ~100x100 pixels.
+        bbox = transform_bounds(
+            "EPSG:32633",
+            "EPSG:4326",
+            ORIGIN_X + 50 * PIXEL,
+            ORIGIN_Y - 150 * PIXEL,
+            ORIGIN_X + 150 * PIXEL,
+            ORIGIN_Y - 50 * PIXEL,
+        )
+        assert 0.03 < calculate_nodata_percentage(str(path), bbox) < 0.05
+
+
 class TestChipNodataPct:
     def test_fully_inside(self):
         assert chip_nodata_pct(0.0, 0.25) == pytest.approx(25.0)

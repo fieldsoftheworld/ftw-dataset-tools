@@ -1,6 +1,6 @@
 """Nodata/blackfill detection for Sentinel-2 imagery.
 
-Provides efficient nodata percentage calculation using COG overviews.
+Measures a chip's nodata on the COG's full-resolution pixels.
 """
 
 from __future__ import annotations
@@ -41,7 +41,9 @@ def calculate_nodata_percentage(
 ) -> float:
     """Calculate percentage of nodata pixels in a COG within bbox.
 
-    Uses COG overviews for efficient reading (16x less data at overview level 2).
+    Reads full-resolution pixels: a chip window is small, and an overview would
+    average away the few-pixel holes a quarterly mosaic leaves where every scene was
+    cloudy, letting a chip with gaps pass a zero-nodata check.
 
     Args:
         cog_url: URL to COG file
@@ -51,16 +53,8 @@ def calculate_nodata_percentage(
     Returns:
         Percentage of nodata pixels (0-100)
     """
-    # Use overview level 2 for efficient reading (16x less data)
-    try:
-        with rasterio.open(cog_url, overview_level=2) as src:
-            nodata_pct = _calculate_nodata_for_source(src, bbox, footprint)
-    except rasterio.errors.RasterioIOError:
-        # If overview level 2 doesn't exist, try without specifying level
-        with rasterio.open(cog_url) as src:
-            nodata_pct = _calculate_nodata_for_source(src, bbox, footprint)
-
-    return nodata_pct
+    with rasterio.open(cog_url) as src:
+        return _calculate_nodata_for_source(src, bbox, footprint)
 
 
 def _calculate_nodata_for_source(
