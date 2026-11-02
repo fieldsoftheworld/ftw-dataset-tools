@@ -279,7 +279,7 @@ def _write_report(
     default=None,
     help="Year to select imagery for, in every mode. If not provided, each chip keeps "
     "the year its existing selection recorded, else its ID's year; a chip with neither "
-    "is skipped for scenes and gets 2025 mosaics.",
+    "is skipped. Mosaics are never taken from another year.",
 )
 @click.option(
     "--cloud-cover-chip",
@@ -396,7 +396,7 @@ def select_images_cmd(
     API instead). Creates child STAC items with remote asset links.
 
     With --imagery-mode mosaics, selects the Q1-Q4 Sentinel-2 quarterly cloudless
-    mosaics of one year instead, falling back to the nearest years. Pass
+    mosaics of the chip's year instead (never another year). Pass
     --imagery-mode twice (scenes and mosaics) to give every chip both; the two
     selections live side by side, so running one mode never touches the other.
 

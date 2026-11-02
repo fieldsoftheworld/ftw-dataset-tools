@@ -36,7 +36,6 @@ from ftw_dataset_tools.api.imagery.mosaic_selection import (
     MosaicYearError,
     SelectedMosaic,
     check_mosaic_year,
-    fallback_years,
     select_mosaics_for_chip,
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
@@ -98,7 +97,6 @@ def _selection(year: int = 2024, requested: int = 2024) -> MosaicSelectionResult
         requested_year=requested,
         imagery_year=year,
         quarters=quarters,
-        years_tried=[year],
     )
 
 
@@ -139,14 +137,7 @@ class TestSlots:
         assert parse_child_id("_q1_s2") is None
 
 
-class TestFallbackYears:
-    def test_nearest_first(self) -> None:
-        assert fallback_years(2024, lambda _y: True) == [2024, 2023, 2025, 2022]
-
-    def test_unavailable_years_do_not_use_a_try(self) -> None:
-        available = {2018, 2019, 2020, 2021, 2022, 2024, 2025}
-        assert fallback_years(2024, available.__contains__) == [2024, 2025, 2022, 2021]
-
+class TestMosaicYear:
     def test_check_rejects_unavailable_year(self) -> None:
         with (
             patch(f"{_SELECTION}.year_available", return_value=False),
@@ -311,9 +302,8 @@ class TestFindContainingTile:
         )
         monkeypatch.setitem(mosaic_search._indexes, (2024, 1), [other, own])
         footprint, bbox = self._utm_chip(604000, 5550000)
-        item = mosaic_search.find_containing_tile(bbox, 2024, 1, footprint, "EPSG:32632")
-        assert item is not None
-        assert item.properties["ftw:mosaic_tile"] == "own"
+        tiles = mosaic_search.containing_tiles(bbox, 2024, 1, footprint, "EPSG:32632")
+        assert [t.properties["ftw:mosaic_tile"] for t in tiles] == ["own", "other"]
         assert (
             mosaic_search.find_containing_tile(bbox, 2024, 1, footprint).properties[
                 "ftw:mosaic_tile"
@@ -327,8 +317,8 @@ class TestSelectMosaicsForChip:
         with (
             patch(f"{_SELECTION}.year_available", return_value=True),
             patch(
-                f"{_SELECTION}.find_containing_tile",
-                side_effect=lambda _b, y, n, *_: _tile_item(y, n),
+                f"{_SELECTION}.containing_tiles",
+                side_effect=lambda _b, y, n, *_: [_tile_item(y, n)],
             ),
             patch(f"{_SELECTION}.calculate_nodata_percentage", return_value=0.0),
         ):
@@ -337,22 +327,26 @@ class TestSelectMosaicsForChip:
         assert result.imagery_year == 2024
         assert sorted(result.quarters) == ["q1", "q2", "q3", "q4"]
 
-    def test_any_nodata_moves_the_whole_series_to_the_next_year(self) -> None:
+    def test_any_nodata_leaves_the_chip_without_mosaics(self) -> None:
+        """Never a nearby year: the imagery must show the labels' year."""
+
         def nodata(href: str, _bbox: object, _footprint: object) -> float:
             return 0.5 if "/2024/Q2/" in href else 0.0
 
         with (
             patch(f"{_SELECTION}.year_available", return_value=True),
             patch(
-                f"{_SELECTION}.find_containing_tile",
-                side_effect=lambda _b, y, n, *_: _tile_item(y, n),
+                f"{_SELECTION}.containing_tiles",
+                side_effect=lambda _b, y, n, *_: [_tile_item(y, n)],
             ),
             patch(f"{_SELECTION}.calculate_nodata_percentage", side_effect=nodata),
         ):
             result = select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024)
-        assert result.imagery_year == 2023
-        assert result.years_tried == [2024, 2023]
-        assert {m.year for m in result.quarters.values()} == {2023}
+        assert not result.success
+        assert result.quarters == {}
+        assert result.skipped_reason == (
+            "No complete 2024 mosaics: Q2 nodata in chip window (32UNA_0_0 0.5%)"
+        )
 
     def test_footprint_reaches_the_tile_and_nodata_checks(self) -> None:
         footprint = {
@@ -360,12 +354,12 @@ class TestSelectMosaicsForChip:
             "coordinates": [[[10.0, 50.0], [10.01, 50.0], [10.0, 50.0]]],
         }
         tiles, nodata = (
-            MagicMock(side_effect=lambda _b, y, n, *_: _tile_item(y, n)),
+            MagicMock(side_effect=lambda _b, y, n, *_: [_tile_item(y, n)]),
             MagicMock(return_value=0.0),
         )
         with (
             patch(f"{_SELECTION}.year_available", return_value=True),
-            patch(f"{_SELECTION}.find_containing_tile", tiles),
+            patch(f"{_SELECTION}.containing_tiles", tiles),
             patch(f"{_SELECTION}.calculate_nodata_percentage", nodata),
         ):
             select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024, footprint=footprint)
@@ -375,26 +369,102 @@ class TestSelectMosaicsForChip:
 
     def test_an_ftw_chip_asks_for_its_own_zone(self) -> None:
         """The zone comes from the chip id, even where the chip's centre is in another."""
-        tiles = MagicMock(side_effect=lambda _b, y, n, *_: _tile_item(y, n))
+        tiles = MagicMock(side_effect=lambda _b, y, n, *_: [_tile_item(y, n)])
         with (
             patch(f"{_SELECTION}.year_available", return_value=True),
-            patch(f"{_SELECTION}.find_containing_tile", tiles),
+            patch(f"{_SELECTION}.containing_tiles", tiles),
             patch(f"{_SELECTION}.calculate_nodata_percentage", return_value=0.0),
         ):
             # CHIP_BBOX's centre is in zone 32.
             select_mosaics_for_chip("ftw-33UUR0000_2024", CHIP_BBOX, 2024)
         assert all(c.args[4] == "EPSG:32633" for c in tiles.call_args_list)
 
-    def test_skips_when_no_tile_covers_the_chip(self) -> None:
+    def test_a_neighbouring_tile_stands_in_for_one_with_nodata(self) -> None:
+        """The chip's own-zone tile has a gap over it; the other zone's tile has none."""
+        own, other = _tile_item(2024, 2), _tile_item(2024, 2, subtile="33UUR_0_0")
+        other.assets["nir"].href = "https://example.com/other/nir.tif"
+
+        def tiles(_b, y, n, *_):
+            return [own, other] if (y, n) == (2024, 2) else [_tile_item(y, n)]
+
+        def nodata(href: str, *_: object) -> float:
+            return 30.0 if href == own.assets["nir"].href else 0.0
+
         with (
             patch(f"{_SELECTION}.year_available", return_value=True),
-            patch(f"{_SELECTION}.find_containing_tile", return_value=None),
+            patch(f"{_SELECTION}.containing_tiles", side_effect=tiles),
+            patch(f"{_SELECTION}.calculate_nodata_percentage", side_effect=nodata),
+        ):
+            result = select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024)
+        assert result.imagery_year == 2024
+        assert result.quarters["q2"].item is other
+        assert result.candidates_checked == 5
+
+    def test_the_year_fails_only_when_every_tile_has_nodata(self) -> None:
+        own, other = _tile_item(2024, 1), _tile_item(2024, 1, subtile="33UUR_0_0")
+        with (
+            patch(f"{_SELECTION}.year_available", return_value=True),
+            patch(f"{_SELECTION}.containing_tiles", return_value=[own, other]),
+            patch(f"{_SELECTION}.calculate_nodata_percentage", side_effect=[30.0, 5.0]),
         ):
             result = select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024)
         assert not result.success
-        assert result.years_tried == [2024, 2023, 2025, 2022]
-        assert result.skipped_reason.startswith("No complete mosaic year")
-        assert "no single mosaic tile covers the chip" in result.skipped_reason
+        assert result.skipped_reason == (
+            "No complete 2024 mosaics: Q1 nodata in chip window (32UNA_0_0 30.0%, 33UUR_0_0 5.0%)"
+        )
+
+    def test_an_unreadable_tile_falls_through_to_the_next(self) -> None:
+        own, other = _tile_item(2024, 1), _tile_item(2024, 1, subtile="33UUR_0_0")
+
+        def tiles(_b, y, n, *_):
+            return [own, other] if n == 1 else [_tile_item(y, n)]
+
+        nodata = MagicMock(side_effect=[OSError("HTTP 503"), 0.0, 0.0, 0.0, 0.0])
+        with (
+            patch(f"{_SELECTION}.year_available", return_value=True),
+            patch(f"{_SELECTION}.containing_tiles", side_effect=tiles),
+            patch(f"{_SELECTION}.calculate_nodata_percentage", nodata),
+        ):
+            result = select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024)
+        assert result.success
+        assert result.quarters["q1"].item is other
+
+    def test_a_read_error_with_no_clean_tile_fails_the_chip(self) -> None:
+        """Raised, not skipped: a rerun retries a failed chip but not a skipped one."""
+        own, other = _tile_item(2024, 1), _tile_item(2024, 1, subtile="33UUR_0_0")
+        with (
+            patch(f"{_SELECTION}.year_available", return_value=True),
+            patch(f"{_SELECTION}.containing_tiles", return_value=[own, other]),
+            patch(
+                f"{_SELECTION}.calculate_nodata_percentage",
+                side_effect=[OSError("HTTP 503"), 5.0],
+            ),
+            pytest.raises(OSError, match="503"),
+        ):
+            select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024)
+
+    def test_skips_when_no_tile_covers_the_chip(self) -> None:
+        with (
+            patch(f"{_SELECTION}.year_available", return_value=True),
+            patch(f"{_SELECTION}.containing_tiles", return_value=[]),
+        ):
+            result = select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024)
+        assert not result.success
+        assert (
+            result.skipped_reason
+            == "No complete 2024 mosaics: no single mosaic tile covers the chip"
+        )
+
+    def test_an_unavailable_year_is_skipped_not_replaced(self) -> None:
+        tiles = MagicMock()
+        with (
+            patch(f"{_SELECTION}.year_available", side_effect=lambda y: y != 2026),
+            patch(f"{_SELECTION}.containing_tiles", tiles),
+        ):
+            result = select_mosaics_for_chip("chip_001", CHIP_BBOX, 2026)
+        assert not result.success
+        assert result.skipped_reason == "No mosaics for 2026"
+        tiles.assert_not_called()
 
 
 class TestMosaicChildItems:
@@ -702,16 +772,13 @@ class TestMosaicSearchEdges:
 
 
 class TestMosaicSelectionEdges:
-    def test_fallback_stops_when_candidates_run_out(self) -> None:
-        assert fallback_years(2024, lambda year: year == 2024) == [2024]
-
     def test_progress_lines_are_reported(self, caplog: pytest.LogCaptureFixture) -> None:
         caplog.set_level("INFO")
         with (
             patch(f"{_SELECTION}.year_available", return_value=True),
             patch(
-                f"{_SELECTION}.find_containing_tile",
-                side_effect=lambda _b, y, n, *_: _tile_item(y, n),
+                f"{_SELECTION}.containing_tiles",
+                side_effect=lambda _b, y, n, *_: [_tile_item(y, n)],
             ),
             patch(f"{_SELECTION}.calculate_nodata_percentage", return_value=0.0),
         ):

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "MOSAIC_BAND_ASSETS",
+    "containing_tiles",
     "find_containing_tile",
     "index_url",
     "year_available",
@@ -138,6 +139,39 @@ def _margin(
     return min(minx - tile_minx, miny - tile_miny, tile_maxx - maxx, tile_maxy - maxy)
 
 
+def containing_tiles(
+    bbox: tuple[float, float, float, float],
+    year: int,
+    quarter: int,
+    footprint: Mapping[str, Any] | None = None,
+    crs: str | None = None,
+) -> list[pystac.Item]:
+    """The mosaic tiles of ``year`` Q``quarter`` that fully contain the chip, best first.
+
+    Pass the chip's GeoJSON polygon as ``footprint`` whenever it is known; ``bbox``
+    alone rejects chips along a tile's edge (see :func:`_margin`). Near a zone seam
+    tiles of both zones can contain the chip: those in ``crs``, the CRS of the chip's
+    own grid, come first so its pixels need no warping; then the tiles the chip lies
+    deepest inside.
+
+    Each item carries ``red``/``green``/``blue``/``nir`` assets pointing at the
+    mirror's COGs.
+    """
+    west, south, east, north = bbox
+    ranked = []
+    for tile in _load_index(year, quarter):
+        tile_west, tile_south, tile_east, tile_north = tile.bbox
+        if tile_south > north or tile_north < south:
+            continue
+        if not _lon_overlaps(tile_west, tile_east, west, east):
+            continue
+        margin = _margin(tile, bbox, footprint)
+        if margin >= -_EDGE_TOLERANCE:
+            ranked.append(((tile.crs == crs, margin), tile))
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    return [_to_item(tile, year, quarter) for _, tile in ranked]
+
+
 def find_containing_tile(
     bbox: tuple[float, float, float, float],
     year: int,
@@ -145,29 +179,9 @@ def find_containing_tile(
     footprint: Mapping[str, Any] | None = None,
     crs: str | None = None,
 ) -> pystac.Item | None:
-    """The mosaic tile of ``year`` Q``quarter`` that fully contains the chip, or None.
-
-    Pass the chip's GeoJSON polygon as ``footprint`` whenever it is known; ``bbox``
-    alone rejects chips along a tile's edge (see :func:`_margin`). Near a zone seam
-    tiles of both zones can contain the chip: one in ``crs``, the CRS of the chip's
-    own grid, wins so its pixels need no warping; otherwise the tile the chip lies
-    deepest inside.
-
-    The returned item carries ``red``/``green``/``blue``/``nir`` assets pointing at
-    the mirror's COGs.
-    """
-    west, south, east, north = bbox
-    best, best_rank = None, (False, -_EDGE_TOLERANCE)
-    for tile in _load_index(year, quarter):
-        tile_west, tile_south, tile_east, tile_north = tile.bbox
-        if tile_south > north or tile_north < south:
-            continue
-        if not _lon_overlaps(tile_west, tile_east, west, east):
-            continue
-        rank = (tile.crs == crs, _margin(tile, bbox, footprint))
-        if rank[1] >= -_EDGE_TOLERANCE and rank >= best_rank:
-            best, best_rank = tile, rank
-    return None if best is None else _to_item(best, year, quarter)
+    """The best mosaic tile that fully contains the chip (see :func:`containing_tiles`)."""
+    tiles = containing_tiles(bbox, year, quarter, footprint, crs)
+    return tiles[0] if tiles else None
 
 
 def _to_item(tile: _Tile, year: int, quarter: int) -> pystac.Item:

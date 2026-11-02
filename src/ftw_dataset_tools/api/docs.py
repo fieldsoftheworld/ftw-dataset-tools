@@ -125,8 +125,8 @@ ITEM_PROPERTY_NOTES = {
     "ftw:imagery_modes": "imagery the chip holds: scenes (planting/harvest), "
     "mosaics (quarterly, Q1-Q4), or both",
     "ftw:mosaic_requested_year": "mosaic year the selection asked for",
-    "ftw:mosaic_year": "mosaic year actually used (differs when a nearby year was needed)",
-    "ftw:imagery_year": "mosaic year actually used (differs when a nearby year was needed)",
+    "ftw:mosaic_year": "mosaic year used",
+    "ftw:imagery_year": "mosaic year used",
     # Written by ftwd before a chip could hold both modes; still read.
     "ftw:imagery_mode": "scenes (planting/harvest) or mosaics (quarterly, Q1-Q4)",
     "ftw:requested_year": "mosaic year the selection asked for",

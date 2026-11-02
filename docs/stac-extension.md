@@ -69,7 +69,7 @@ properties above belong to scenes and are not written for mosaics.
 | Property | Item | Type | Description |
 |----------|------|------|-------------|
 | `ftw:mosaic_requested_year` | parent | integer | Mosaic year the selection asked for |
-| `ftw:mosaic_year` | parent | integer | Mosaic year used; differs when a nearby year was needed |
+| `ftw:mosaic_year` | parent | integer | Mosaic year used; always the requested year (older catalogs may differ) |
 | `ftw:imagery_year` | child | integer | Mosaic year of this quarter's image |
 | `ftw:season` | child | string | `q1`..`q4` |
 | `ftw:source` | child | string | `sentinel-2-mosaic` |
@@ -97,8 +97,9 @@ drew the preview redraws it from the other mode.
 
 Without an explicit year each mode keeps the year its selection on the chip recorded
 (`ftw:calendar_year`, `ftw:mosaic_requested_year`), else uses the chip id's year. A chip
-with neither is skipped for scenes and gets 2025 mosaics. A selection recorded for a year
-other than an explicit one conflicts.
+with neither is skipped. Mosaics are only ever selected for that one year, never a nearby
+one. A selection recorded for another year conflicts, as do mosaics whose `ftw:mosaic_year`
+(older ftwd could fill a request with a nearby year) is not the year being selected.
 
 Catalogs written before multi-mode support carry a scalar `ftw:imagery_mode` (`mosaics`;
 absent meant scenes) and the un-namespaced mosaic years `ftw:requested_year` /
