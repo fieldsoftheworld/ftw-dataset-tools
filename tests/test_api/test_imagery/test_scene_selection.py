@@ -67,7 +67,7 @@ class TestGetStacClient:
 
 
 def _canned_item(item_id: str, dt) -> object:
-    """A trusted-clear scene item: no COG reads needed to select it."""
+    """A clear scene item whose chip pixel check reads clean (see ``_clean_chip_pixels``)."""
     import pystac
     from pystac.extensions.eo import EOExtension
 
@@ -82,8 +82,15 @@ def _canned_item(item_id: str, dt) -> object:
         properties={"eo:cloud_cover": 0.05, "s2:nodata_pixel_percentage": 0.0},
     )
     EOExtension.ext(item, add_if_missing=True)
+    item.add_asset("nir", pystac.Asset(href=f"https://example.com/{item_id}/B08.tif"))
     item.set_self_href(f"https://example.com/items/{item_id}")
     return item
+
+
+@pytest.fixture(autouse=True)
+def _clean_chip_pixels(monkeypatch) -> None:
+    """Every chip pixel check reads clean unless a test patches it; no COG is opened."""
+    monkeypatch.setattr(scene_selection, "calculate_nodata_percentage", lambda *_args: 0.0)
 
 
 class TestSearchBackendDispatch:
@@ -313,54 +320,98 @@ class TestSelectBestSceneNodata:
         item.add_asset("nir", pystac.Asset(href="https://example.com/B08.tif"))
         return item
 
-    def test_zero_scene_nodata_accepts_without_pixel_check(self, monkeypatch):
-        called = []
-        monkeypatch.setattr(
-            scene_selection,
-            "calculate_nodata_percentage",
-            lambda href, _bbox: called.append(href) or 0.0,
+    def test_zero_scene_nodata_still_checks_the_chip_pixels(self, monkeypatch):
+        """A clean scene can still miss the chip: its lon/lat bbox reaches past the granule."""
+        monkeypatch.setattr(scene_selection, "calculate_nodata_percentage", lambda *_args: 100.0)
+        scene = scene_selection._select_best_scene(
+            [self._item(0.0)], season="planting", bbox=self.BBOX
         )
+        assert scene is None
+
+    def test_zero_scene_nodata_accepts_a_covered_chip(self, monkeypatch):
+        monkeypatch.setattr(scene_selection, "calculate_nodata_percentage", lambda *_args: 0.0)
         scene = scene_selection._select_best_scene(
             [self._item(0.0)], season="planting", bbox=self.BBOX
         )
         assert scene is not None
-        assert not called
 
     def test_scene_nodata_triggers_chip_pixel_check_and_accepts_clean_window(self, monkeypatch):
         """A scene with edge nodata is kept when the chip's own window has none."""
-        monkeypatch.setattr(
-            scene_selection, "calculate_nodata_percentage", lambda _href, _bbox: 0.0
-        )
+        monkeypatch.setattr(scene_selection, "calculate_nodata_percentage", lambda *_args: 0.0)
         scene = scene_selection._select_best_scene(
             [self._item(18.3)], season="planting", bbox=self.BBOX
         )
         assert scene is not None
 
     def test_chip_window_nodata_still_rejects(self, monkeypatch):
-        monkeypatch.setattr(
-            scene_selection, "calculate_nodata_percentage", lambda _href, _bbox: 42.0
-        )
+        monkeypatch.setattr(scene_selection, "calculate_nodata_percentage", lambda *_args: 42.0)
         scene = scene_selection._select_best_scene(
             [self._item(18.3)], season="planting", bbox=self.BBOX
         )
         assert scene is None
 
     @staticmethod
-    def _failing_check(_href, _bbox):
+    def _failing_check(*_args):
         raise OSError("object not found")
 
-    def test_failed_pixel_check_falls_back_to_scene_nodata(self, monkeypatch):
-        """A scene whose metadata reports nodata is rejected when the pixel check fails."""
+    @pytest.mark.parametrize("scene_nodata", [None, 0.0, 18.3])
+    def test_failed_pixel_check_rejects(self, monkeypatch, scene_nodata):
+        """Without a pixel answer the scene is rejected, whatever its metadata says."""
         monkeypatch.setattr(scene_selection, "calculate_nodata_percentage", self._failing_check)
         scene = scene_selection._select_best_scene(
-            [self._item(18.3)], season="planting", bbox=self.BBOX
+            [self._item(scene_nodata)], season="planting", bbox=self.BBOX
         )
         assert scene is None
 
-    def test_failed_pixel_check_without_scene_nodata_continues(self, monkeypatch):
-        """With no scene-level value to fall back on, a failed check does not reject."""
-        monkeypatch.setattr(scene_selection, "calculate_nodata_percentage", self._failing_check)
-        scene = scene_selection._select_best_scene(
-            [self._item(None)], season="planting", bbox=self.BBOX
+    def test_unreadable_scl_without_nir_rejects(self, monkeypatch):
+        import pystac
+
+        def failing_scl(*_args):
+            raise OSError("SCL unreadable")
+
+        monkeypatch.setattr(scene_selection, "read_scl_chip_stats", failing_scl)
+        item = self._item(0.0)
+        del item.assets["nir"]
+        item.add_asset("scl", pystac.Asset(href="https://example.com/SCL.tif"))
+        scene = scene_selection._select_best_scene([item], season="planting", bbox=self.BBOX)
+        assert scene is None
+
+    def test_select_scenes_for_chip_passes_the_footprint_down(self, monkeypatch):
+        """The chip polygon must reach the pixel check, not just the bbox."""
+        from datetime import UTC, datetime
+
+        seen = []
+        monkeypatch.setattr(
+            scene_selection,
+            "calculate_nodata_percentage",
+            lambda _href, _bbox, footprint: seen.append(footprint) or 0.0,
         )
-        assert scene is not None
+        monkeypatch.setattr(
+            scene_selection.parquet_search,
+            "query_scenes",
+            lambda *_a, **_k: [_canned_item("S2A_fake", datetime(2021, 5, 30, 10, 0, tzinfo=UTC))],
+        )
+        footprint = {
+            "type": "Polygon",
+            "coordinates": [[[14.9, 45.9], [15.1, 45.9], [15.1, 46.1], [14.9, 45.9]]],
+        }
+        scene_selection.select_scenes_for_chip(
+            chip_id="c", bbox=self.BBOX, year=2021, footprint=footprint
+        )
+        assert seen and all(f == footprint for f in seen)
+
+    def test_footprint_reaches_the_pixel_check(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(
+            scene_selection,
+            "calculate_nodata_percentage",
+            lambda _href, _bbox, footprint: seen.append(footprint) or 0.0,
+        )
+        footprint = {
+            "type": "Polygon",
+            "coordinates": [[[14.9, 45.9], [15.1, 45.9], [15.1, 46.1], [14.9, 45.9]]],
+        }
+        scene_selection._select_best_scene(
+            [self._item(0.0)], season="planting", bbox=self.BBOX, footprint=footprint
+        )
+        assert seen == [footprint]

@@ -7,15 +7,17 @@ import time
 import urllib.error
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import pystac_client
 from pystac.extensions.eo import EOExtension
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     import pystac
+
+    from ftw_dataset_tools.api.imagery.cloud_analysis import SCLChipStats
 
 from ftw_dataset_tools.api.imagery import parquet_search
 from ftw_dataset_tools.api.imagery.cloud_analysis import read_scl_chip_stats
@@ -23,10 +25,7 @@ from ftw_dataset_tools.api.imagery.crop_calendar import (
     CropCalendarDates,
     get_crop_calendar_dates,
 )
-from ftw_dataset_tools.api.imagery.nodata_analysis import (
-    calculate_nodata_percentage,
-    get_nodata_from_metadata,
-)
+from ftw_dataset_tools.api.imagery.nodata_analysis import calculate_nodata_percentage
 from ftw_dataset_tools.api.imagery.progress import STATUS_ICON
 from ftw_dataset_tools.api.imagery.settings import (
     DEFAULT_BUFFER_DAYS,
@@ -351,12 +350,37 @@ def _log_candidates(items: list[pystac.Item]) -> None:
         logger.debug(f"  - {item.id}: {cc:.1f}% cloud, {item.datetime}")
 
 
+def _chip_nodata_pct(
+    item: pystac.Item,
+    stats: SCLChipStats | None,
+    bbox: tuple[float, float, float, float],
+    footprint: Mapping[str, Any] | None,
+) -> float | None:
+    """The chip's nodata percentage from its SCL window, else from the NIR band.
+
+    None when neither could be read. Scene metadata is no stand-in: a scene that
+    reports 0% nodata may not cover the chip at all.
+    """
+    if stats is not None:
+        return stats.nodata_pct
+    nir_asset = item.assets.get("nir")
+    if nir_asset is None:
+        logger.warning(f"{item.id}: chip nodata check failed (no readable SCL, no NIR band)")
+        return None
+    try:
+        return calculate_nodata_percentage(nir_asset.href, bbox, footprint)
+    except Exception as e:
+        logger.warning(f"{item.id}: chip nodata check failed ({e})")
+        return None
+
+
 def _select_best_scene(
     items: list[pystac.Item],
     season: str,
     bbox: tuple[float, float, float, float],
     cloud_cover_chip: float = DEFAULT_CLOUD_COVER_CHIP,
     nodata_max: float = DEFAULT_NODATA_MAX,
+    footprint: Mapping[str, Any] | None = None,
 ) -> SelectedScene | None:
     """
     Select the best scene from candidates.
@@ -367,6 +391,7 @@ def _select_best_scene(
         bbox: Bounding box for chip-level cloud calculation
         cloud_cover_chip: Maximum chip-level cloud cover percentage (0-100)
         nodata_max: Maximum nodata percentage (0-100). Default 0 rejects any nodata.
+        footprint: The chip's GeoJSON polygon in EPSG:4326, measured instead of bbox
 
     Returns:
         SelectedScene or None if no suitable scene found
@@ -377,14 +402,13 @@ def _select_best_scene(
     for item in items:
         short_dt = _short_date(item)
 
-        # A scene-level nodata of zero proves the chip's window is clean; any
-        # other value says nothing about this chip (granule-edge nodata may sit
-        # far from it), so check the actual pixels. Old-baseline products in
-        # particular carry edge nodata on most scenes.
-        scene_nodata = get_nodata_from_metadata(item)
-        needs_nodata_check = (
-            not (scene_nodata is not None and scene_nodata <= 0) and nodata_max < 100
-        )
+        # Scene-level nodata says nothing about this chip, so always check its
+        # pixels. A non-zero value may sit far from the chip (old-baseline
+        # products carry granule-edge nodata on most scenes), and a value of zero
+        # does not mean the scene covers the chip at all: candidates match on the
+        # scene's lon/lat bbox, which at high latitudes reaches well past the
+        # granule into the neighbouring tile.
+        needs_nodata_check = nodata_max < 100
         scene_cloud_cover = EOExtension.ext(item).cloud_cover or 0.0
         # For very clear scenes (< 0.1% reported), trust the metadata.
         needs_cloud_check = scene_cloud_cover >= PIXEL_CHECK_SKIP_THRESHOLD
@@ -396,28 +420,16 @@ def _select_best_scene(
         scl_asset = item.assets.get("scl")
         if (needs_nodata_check or needs_cloud_check) and scl_asset:
             try:
-                stats = read_scl_chip_stats(scl_asset.href, bbox)
+                stats = read_scl_chip_stats(scl_asset.href, bbox, footprint)
             except Exception as e:
                 logger.debug(f"{item.id}: SCL read failed ({e})")
 
         if needs_nodata_check:
-            nodata_pct = stats.nodata_pct if stats else None
+            nodata_pct = _chip_nodata_pct(item, stats, bbox, footprint)
             if nodata_pct is None:
-                # No usable SCL: fall back to the NIR band, then to metadata.
-                try:
-                    nir_asset = item.assets.get("nir")
-                    if nir_asset:
-                        nodata_pct = calculate_nodata_percentage(nir_asset.href, bbox)
-                except Exception as e:
-                    if scene_nodata is not None and scene_nodata > nodata_max:
-                        _status(
-                            "✗",
-                            f"Skipping {short_dt}: nodata check failed ({e}), "
-                            f"scene reports {scene_nodata:.1f}% nodata",
-                        )
-                        continue
-                    logger.debug(f"{item.id}: nodata check failed ({e}), continuing")
-            if nodata_pct is not None and nodata_pct > nodata_max:
+                _status("✗", f"Skipping {short_dt}: the chip's nodata could not be checked")
+                continue
+            if nodata_pct > nodata_max:
                 _status("✗", f"Skipping {short_dt}: {nodata_pct:.1f}% nodata in chip window")
                 continue
 
@@ -483,6 +495,7 @@ def _search_season(
     bbox: tuple[float, float, float, float],
     cloud_cover_chip: float,
     nodata_max: float,
+    footprint: Mapping[str, Any] | None = None,
 ) -> None:
     """Query one season's window and select its best scene among unseen candidates.
 
@@ -517,6 +530,7 @@ def _search_season(
         bbox=bbox,
         cloud_cover_chip=cloud_cover_chip,
         nodata_max=nodata_max,
+        footprint=footprint,
     )
     if state.scene:
         _status(
@@ -546,6 +560,7 @@ def select_scenes_for_chip(
     num_buffer_expansions: int = DEFAULT_NUM_BUFFER_EXPANSIONS,
     buffer_expansion_size: int = DEFAULT_BUFFER_EXPANSION_SIZE,
     search_backend: str = "parquet",
+    footprint: Mapping[str, Any] | None = None,
 ) -> SceneSelectionResult:
     """
     Select optimal Sentinel-2 scenes for a chip based on crop calendar.
@@ -563,6 +578,9 @@ def select_scenes_for_chip(
         buffer_expansion_size: Days to add to buffer on each expansion
         search_backend: "parquet" (the STAC-GeoParquet mirror, default) or
             "earth-search" (the Earth Search STAC API)
+        footprint: The chip's GeoJSON polygon in EPSG:4326. The nodata check measures
+            it instead of bbox, whose envelope on a scene's UTM grid is wider than the
+            chip and can push a chip at a granule's edge over it.
 
     Returns:
         SceneSelectionResult with selected scenes or skip reason
@@ -647,6 +665,7 @@ def select_scenes_for_chip(
                     bbox=bbox,
                     cloud_cover_chip=cloud_cover_chip,
                     nodata_max=nodata_max,
+                    footprint=footprint,
                 )
             except ValueError as e:
                 if state is planting:
