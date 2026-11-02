@@ -114,7 +114,7 @@ def _select_year(
         tiles = containing_tiles(bbox, year, number, footprint, crs)
         if not tiles:
             return None, "no single mosaic tile covers the chip"
-        tile, reason = _first_clean_tile(tiles, bbox, nodata_max, result, footprint)
+        tile, reason = _least_nodata_tile(tiles, bbox, nodata_max, result, footprint)
         if tile is None:
             return None, f"Q{number} {reason}"
         logger.info(f"  {year} Q{number}: {tile.id}")
@@ -122,36 +122,40 @@ def _select_year(
     return quarters, ""
 
 
-def _first_clean_tile(
+def _least_nodata_tile(
     tiles: list[pystac.Item],
     bbox: tuple[float, float, float, float],
     nodata_max: float,
     result: MosaicSelectionResult,
     footprint: Mapping[str, Any] | None,
 ) -> tuple[pystac.Item | None, str]:
-    """The first of ``tiles`` whose chip window is within ``nodata_max``.
+    """The tile of ``tiles`` with the least nodata over the chip, if within ``nodata_max``.
 
     A neighbouring zone's tile can hold the chip with full data where the chip's own
-    zone's tile has a gap, or can't be read, so every containing tile is tried before
-    the year fails. If none is clean and one could not be read, its error is raised:
-    the chip failed, which a rerun retries, rather than having no mosaics.
+    zone's tile has a gap, or can't be read, so every containing tile is read until
+    one is clean. On equal nodata the earlier, better-ranked tile wins. If no tile is
+    within ``nodata_max`` and one could not be read, its error is raised: the chip
+    failed, which a rerun retries, rather than having no mosaics.
 
     Raises:
-        Exception: The last read error, when no tile was clean and a read failed.
+        Exception: The last read error, when no tile was within ``nodata_max``.
     """
-    nodata_seen, error = [], None
+    best, best_nodata, nodata_seen, error = None, float("inf"), [], None
     for tile in tiles:
         result.candidates_checked += 1
-        name = tile.properties.get("ftw:mosaic_tile", tile.id)
         try:
             nodata = calculate_nodata_percentage(tile.assets["nir"].href, bbox, footprint)
         except Exception as e:
             logger.warning(f"{tile.id}: chip nodata check failed ({e})")
             error = e
             continue
-        if nodata <= nodata_max:
-            return tile, ""
-        nodata_seen.append(f"{name} {nodata:.1f}%")
+        nodata_seen.append(f"{tile.properties.get('ftw:mosaic_tile', tile.id)} {nodata:.2f}%")
+        if nodata < best_nodata:
+            best, best_nodata = tile, nodata
+        if nodata == 0:
+            break
+    if best is not None and best_nodata <= nodata_max:
+        return best, ""
     if error is not None:
         raise error
     return None, f"nodata in chip window ({', '.join(nodata_seen)})"
