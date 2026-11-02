@@ -165,6 +165,7 @@ def run_chip_selection(
                 bbox=tuple(job.item.bbox),
                 year=job.year,
                 nodata_max=nodata_max,
+                footprint=job.item.geometry,
             )
             if mosaics.success:
                 create_mosaic_child_items(job.item_path.parent, job.item, mosaics)

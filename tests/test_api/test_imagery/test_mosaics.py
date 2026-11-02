@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import urllib.error
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -12,6 +13,7 @@ import numpy as np
 import pystac
 import pytest
 import rasterio
+from pyproj import Transformer
 from rasterio.transform import from_origin
 
 from ftw_dataset_tools.api.imagery import mosaic_search
@@ -201,13 +203,132 @@ class TestFindContainingTile:
         item = mosaic_search.find_containing_tile((10.39, 50.0, 10.41, 50.01), 2024, 1)
         assert item is None
 
+    @staticmethod
+    def _edge_chip() -> tuple[dict, tuple[float, float, float, float]]:
+        """A 2 km UTM chip ending at easting 600.06 km, 20 m inside the first tile.
+
+        Its lon/lat bbox taken back onto the grid ends near 600.10 km, past the tile.
+        """
+        to_lonlat = Transformer.from_crs("EPSG:32632", "EPSG:4326", always_xy=True)
+        corners = [(598060, 5550000), (600060, 5550000), (600060, 5552000), (598060, 5552000)]
+        ring = [list(to_lonlat.transform(x, y)) for x, y in corners]
+        lons, lats = zip(*ring, strict=True)
+        footprint = {"type": "Polygon", "coordinates": [[*ring, ring[0]]]}
+        return footprint, (min(lons), min(lats), max(lons), max(lats))
+
+    def test_chip_on_a_tile_edge_fits_by_its_footprint(self) -> None:
+        footprint, bbox = self._edge_chip()
+        item = mosaic_search.find_containing_tile(bbox, 2024, 1, footprint)
+        assert item is not None
+        assert item.properties["ftw:mosaic_tile"] == "32UNA_0_0"
+
+    def test_chip_on_a_tile_edge_misses_by_its_bbox(self) -> None:
+        """Why selection passes the footprint: the bbox envelope overhangs the tile."""
+        _, bbox = self._edge_chip()
+        assert mosaic_search.find_containing_tile(bbox, 2024, 1) is None
+
+    @staticmethod
+    def _utm_chip(x0: float, y0: float) -> tuple[dict, tuple[float, float, float, float]]:
+        to_lonlat = Transformer.from_crs("EPSG:32632", "EPSG:4326", always_xy=True)
+        corners = [(x0, y0), (x0 + 2000, y0), (x0 + 2000, y0 + 2000), (x0, y0 + 2000)]
+        ring = [list(to_lonlat.transform(x, y)) for x, y in corners]
+        lons, lats = zip(*ring, strict=True)
+        footprint = {"type": "Polygon", "coordinates": [[*ring, ring[0]]]}
+        return footprint, (min(lons), min(lats), max(lons), max(lats))
+
+    def test_chip_exactly_on_a_tile_edge_fits(self) -> None:
+        # Starts at easting 600 km, the second tile's west edge.
+        footprint, bbox = self._utm_chip(600000, 5550000)
+        item = mosaic_search.find_containing_tile(bbox, 2024, 1, footprint)
+        assert item is not None
+        assert item.properties["ftw:mosaic_tile"] == "32UNA_1_0"
+
+    def test_chip_a_metre_past_every_tile_has_none(self) -> None:
+        # Ends at easting 600.081 km, 1 m past the first tile; starts before the second.
+        footprint, bbox = self._utm_chip(598081, 5550000)
+        assert mosaic_search.find_containing_tile(bbox, 2024, 1, footprint) is None
+
+    def test_the_tile_holding_the_chip_deepest_wins(self, monkeypatch) -> None:
+        """Of two tiles that both contain the chip, the first in index order loses
+        when the chip sits nearer its edge."""
+        first, second = mosaic_search._load_index(2024, 1)
+        lonlat = (9.0, 49.6, 11.8, 50.6)
+        shallow = replace(
+            first,
+            subtile="shallow",
+            bbox=lonlat,
+            proj_bbox=(590000.0, 5500000.0, 606100.0, 5600000.0),
+        )
+        deep = replace(
+            second,
+            subtile="deep",
+            bbox=lonlat,
+            proj_bbox=(500000.0, 5500000.0, 700000.0, 5600000.0),
+        )
+        monkeypatch.setitem(mosaic_search._indexes, (2024, 1), [shallow, deep])
+        footprint, bbox = self._utm_chip(604000, 5550000)
+        item = mosaic_search.find_containing_tile(bbox, 2024, 1, footprint)
+        assert item is not None
+        assert item.properties["ftw:mosaic_tile"] == "deep"
+
+    def test_an_own_crs_tile_the_chip_overhangs_never_wins(self, monkeypatch) -> None:
+        first, second = mosaic_search._load_index(2024, 1)
+        lonlat = (9.0, 49.6, 11.8, 50.6)
+        short = replace(
+            first,
+            subtile="short",
+            bbox=lonlat,
+            proj_bbox=(590000.0, 5500000.0, 605000.0, 5600000.0),
+        )
+        other = replace(
+            second,
+            subtile="other",
+            crs="EPSG:32633",
+            bbox=lonlat,
+            proj_bbox=(-1e6, 5000000.0, 1e6, 6000000.0),
+        )
+        footprint, bbox = self._utm_chip(604000, 5550000)
+        monkeypatch.setitem(mosaic_search._indexes, (2024, 1), [short, other])
+        item = mosaic_search.find_containing_tile(bbox, 2024, 1, footprint, "EPSG:32632")
+        assert item is not None
+        assert item.properties["ftw:mosaic_tile"] == "other"
+        monkeypatch.setitem(mosaic_search._indexes, (2024, 1), [short])
+        assert mosaic_search.find_containing_tile(bbox, 2024, 1, footprint, "EPSG:32632") is None
+
+    def test_a_tile_in_the_chips_own_crs_wins(self, monkeypatch) -> None:
+        """At a zone seam the chip's own zone beats a neighbour it sits deeper in."""
+        first, second = mosaic_search._load_index(2024, 1)
+        lonlat = (9.0, 49.6, 11.8, 50.6)
+        own = replace(
+            first, subtile="own", bbox=lonlat, proj_bbox=(590000.0, 5500000.0, 606100.0, 5600000.0)
+        )
+        other = replace(
+            second,
+            subtile="other",
+            crs="EPSG:32633",
+            bbox=lonlat,
+            proj_bbox=(-1e6, 5000000.0, 1e6, 6000000.0),
+        )
+        monkeypatch.setitem(mosaic_search._indexes, (2024, 1), [other, own])
+        footprint, bbox = self._utm_chip(604000, 5550000)
+        item = mosaic_search.find_containing_tile(bbox, 2024, 1, footprint, "EPSG:32632")
+        assert item is not None
+        assert item.properties["ftw:mosaic_tile"] == "own"
+        assert (
+            mosaic_search.find_containing_tile(bbox, 2024, 1, footprint).properties[
+                "ftw:mosaic_tile"
+            ]
+            == "other"
+        )
+
 
 class TestSelectMosaicsForChip:
     def test_selects_all_four_quarters_of_the_requested_year(self) -> None:
         with (
             patch(f"{_SELECTION}.year_available", return_value=True),
             patch(
-                f"{_SELECTION}.find_containing_tile", side_effect=lambda _b, y, n: _tile_item(y, n)
+                f"{_SELECTION}.find_containing_tile",
+                side_effect=lambda _b, y, n, *_: _tile_item(y, n),
             ),
             patch(f"{_SELECTION}.calculate_nodata_percentage", return_value=0.0),
         ):
@@ -217,13 +338,14 @@ class TestSelectMosaicsForChip:
         assert sorted(result.quarters) == ["q1", "q2", "q3", "q4"]
 
     def test_any_nodata_moves_the_whole_series_to_the_next_year(self) -> None:
-        def nodata(href: str, _bbox: object) -> float:
+        def nodata(href: str, _bbox: object, _footprint: object) -> float:
             return 0.5 if "/2024/Q2/" in href else 0.0
 
         with (
             patch(f"{_SELECTION}.year_available", return_value=True),
             patch(
-                f"{_SELECTION}.find_containing_tile", side_effect=lambda _b, y, n: _tile_item(y, n)
+                f"{_SELECTION}.find_containing_tile",
+                side_effect=lambda _b, y, n, *_: _tile_item(y, n),
             ),
             patch(f"{_SELECTION}.calculate_nodata_percentage", side_effect=nodata),
         ):
@@ -231,6 +353,37 @@ class TestSelectMosaicsForChip:
         assert result.imagery_year == 2023
         assert result.years_tried == [2024, 2023]
         assert {m.year for m in result.quarters.values()} == {2023}
+
+    def test_footprint_reaches_the_tile_and_nodata_checks(self) -> None:
+        footprint = {
+            "type": "Polygon",
+            "coordinates": [[[10.0, 50.0], [10.01, 50.0], [10.0, 50.0]]],
+        }
+        tiles, nodata = (
+            MagicMock(side_effect=lambda _b, y, n, *_: _tile_item(y, n)),
+            MagicMock(return_value=0.0),
+        )
+        with (
+            patch(f"{_SELECTION}.year_available", return_value=True),
+            patch(f"{_SELECTION}.find_containing_tile", tiles),
+            patch(f"{_SELECTION}.calculate_nodata_percentage", nodata),
+        ):
+            select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024, footprint=footprint)
+        assert all(c.args[3] is footprint for c in tiles.call_args_list)
+        assert all(c.args[4] == "EPSG:32632" for c in tiles.call_args_list)
+        assert all(c.args[2] is footprint for c in nodata.call_args_list)
+
+    def test_an_ftw_chip_asks_for_its_own_zone(self) -> None:
+        """The zone comes from the chip id, even where the chip's centre is in another."""
+        tiles = MagicMock(side_effect=lambda _b, y, n, *_: _tile_item(y, n))
+        with (
+            patch(f"{_SELECTION}.year_available", return_value=True),
+            patch(f"{_SELECTION}.find_containing_tile", tiles),
+            patch(f"{_SELECTION}.calculate_nodata_percentage", return_value=0.0),
+        ):
+            # CHIP_BBOX's centre is in zone 32.
+            select_mosaics_for_chip("ftw-33UUR0000_2024", CHIP_BBOX, 2024)
+        assert all(c.args[4] == "EPSG:32633" for c in tiles.call_args_list)
 
     def test_skips_when_no_tile_covers_the_chip(self) -> None:
         with (
@@ -343,6 +496,7 @@ class TestRunChipSelection:
             )
         assert result.success
         assert select.call_args.kwargs["nodata_max"] == 0.0
+        assert select.call_args.kwargs["footprint"] == parent.geometry
         assert (path.parent / "chip_001_q1_s2.json").exists()
 
 
@@ -556,7 +710,8 @@ class TestMosaicSelectionEdges:
         with (
             patch(f"{_SELECTION}.year_available", return_value=True),
             patch(
-                f"{_SELECTION}.find_containing_tile", side_effect=lambda _b, y, n: _tile_item(y, n)
+                f"{_SELECTION}.find_containing_tile",
+                side_effect=lambda _b, y, n, *_: _tile_item(y, n),
             ),
             patch(f"{_SELECTION}.calculate_nodata_percentage", return_value=0.0),
         ):

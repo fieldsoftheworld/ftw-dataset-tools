@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from ftw_dataset_tools.api.chip_grid import utm_crs_for_cell
 from ftw_dataset_tools.api.imagery.mosaic_search import find_containing_tile, year_available
 from ftw_dataset_tools.api.imagery.nodata_analysis import calculate_nodata_percentage
 from ftw_dataset_tools.api.imagery.settings import DEFAULT_NODATA_MAX, MOSAIC_MAX_YEAR_TRIES
@@ -12,7 +13,7 @@ from ftw_dataset_tools.api.imagery.slots import MOSAIC_SLOTS
 from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     import pystac
 
@@ -100,18 +101,21 @@ def select_mosaics_for_chip(
     bbox: tuple[float, float, float, float],
     year: int,
     nodata_max: float = DEFAULT_NODATA_MAX,
+    footprint: Mapping[str, Any] | None = None,
 ) -> MosaicSelectionResult:
     """Pick Q1-Q4 mosaics of one year for a chip, falling back to nearby years.
 
     A year is used only if every quarter has a tile wholly containing the chip and
     the chip's nodata is within ``nodata_max`` (same check as scene selection).
+    Both are measured on the chip's GeoJSON ``footprint`` when given, else on ``bbox``.
     """
 
     result = MosaicSelectionResult(chip_id=chip_id, bbox=bbox, requested_year=year)
+    crs = utm_crs_for_cell(chip_id, bbox)
     reason = "No mosaic year available"
     for candidate in fallback_years(year):
         result.years_tried.append(candidate)
-        quarters, reason = _select_year(bbox, candidate, nodata_max, result)
+        quarters, reason = _select_year(bbox, candidate, nodata_max, result, footprint, crs)
         if quarters is not None:
             result.imagery_year = candidate
             result.quarters = quarters
@@ -129,14 +133,16 @@ def _select_year(
     year: int,
     nodata_max: float,
     result: MosaicSelectionResult,
+    footprint: Mapping[str, Any] | None = None,
+    crs: str | None = None,
 ) -> tuple[dict[str, SelectedMosaic] | None, str]:
     quarters: dict[str, SelectedMosaic] = {}
     for number, slot in enumerate(MOSAIC_SLOTS, start=1):
-        tile = find_containing_tile(bbox, year, number)
+        tile = find_containing_tile(bbox, year, number, footprint, crs)
         if tile is None:
             return None, "no single mosaic tile covers the chip"
         result.candidates_checked += 1
-        nodata = calculate_nodata_percentage(tile.assets["nir"].href, bbox)
+        nodata = calculate_nodata_percentage(tile.assets["nir"].href, bbox, footprint)
         if nodata > nodata_max:
             return None, f"{year} Q{number}: {nodata:.1f}% nodata in chip window"
         logger.info(f"  {year} Q{number}: {tile.id}")

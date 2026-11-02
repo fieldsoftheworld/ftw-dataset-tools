@@ -116,7 +116,7 @@ def chip_window(
         The in-raster window (None when the chip misses the raster entirely) and
         the share of the chip's area that lies beyond the raster.
     """
-    chip = _chip_in_crs(src.crs, bbox, footprint)
+    chip = chip_in_crs(src.crs, bbox, footprint)
     inside = chip.intersection(box(*src.bounds))
     if chip.area <= 0 or inside.is_empty or inside.area <= 0:
         return None, 1.0
@@ -133,7 +133,7 @@ def chip_nodata_pct(outside: float, nodata_share: float) -> float:
     return 100.0 * (outside + (1.0 - outside) * nodata_share)
 
 
-def _chip_in_crs(
+def chip_in_crs(
     crs: CRS,
     bbox: tuple[float, float, float, float],
     footprint: Mapping[str, Any] | None,
