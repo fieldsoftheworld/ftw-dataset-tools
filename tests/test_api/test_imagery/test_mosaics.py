@@ -345,7 +345,7 @@ class TestSelectMosaicsForChip:
         assert not result.success
         assert result.quarters == {}
         assert result.skipped_reason == (
-            "No complete 2024 mosaics: Q2 nodata in chip window (32UNA_0_0 0.5%)"
+            "No complete 2024 mosaics: Q2 nodata in chip window (32UNA_0_0 0.50%)"
         )
 
     def test_footprint_reaches_the_tile_and_nodata_checks(self) -> None:
@@ -410,8 +410,68 @@ class TestSelectMosaicsForChip:
             result = select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024)
         assert not result.success
         assert result.skipped_reason == (
-            "No complete 2024 mosaics: Q1 nodata in chip window (32UNA_0_0 30.0%, 33UUR_0_0 5.0%)"
+            "No complete 2024 mosaics: Q1 nodata in chip window (32UNA_0_0 30.00%, 33UUR_0_0 5.00%)"
         )
+
+    def test_with_gaps_allowed_the_tile_with_the_fewest_wins(self) -> None:
+        """At nodata_max=100 the own-zone tile's gap is no reason to keep it."""
+        gappy, clean = _tile_item(2024, 1), _tile_item(2024, 1, subtile="33UUR_0_0")
+        clean.assets["nir"].href = "https://example.com/clean/nir.tif"
+
+        def tiles(_b, y, n, *_):
+            return [gappy, clean] if n == 1 else [_tile_item(y, n)]
+
+        def nodata(href: str, *_: object) -> float:
+            return 3.0 if href == gappy.assets["nir"].href else 0.0
+
+        with (
+            patch(f"{_SELECTION}.year_available", return_value=True),
+            patch(f"{_SELECTION}.containing_tiles", side_effect=tiles),
+            patch(f"{_SELECTION}.calculate_nodata_percentage", side_effect=nodata),
+        ):
+            result = select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024, nodata_max=100.0)
+        assert result.quarters["q1"].item is clean
+
+    def test_with_gaps_allowed_a_gappy_tile_is_kept_when_it_is_the_best(self) -> None:
+        own, other = _tile_item(2024, 1), _tile_item(2024, 1, subtile="33UUR_0_0")
+        other.assets["nir"].href = "https://example.com/other/nir.tif"
+
+        def tiles(_b, y, n, *_):
+            return [own, other] if n == 1 else [_tile_item(y, n)]
+
+        def nodata(href: str, *_: object) -> float:
+            return 2.0 if href == own.assets["nir"].href else (7.0 if "other" in href else 0.0)
+
+        with (
+            patch(f"{_SELECTION}.year_available", return_value=True),
+            patch(f"{_SELECTION}.containing_tiles", side_effect=tiles),
+            patch(f"{_SELECTION}.calculate_nodata_percentage", side_effect=nodata),
+        ):
+            result = select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024, nodata_max=100.0)
+        assert result.success
+        assert result.quarters["q1"].item is own
+
+    def test_on_equal_nodata_the_better_ranked_tile_wins(self) -> None:
+        own, other = _tile_item(2024, 1), _tile_item(2024, 1, subtile="33UUR_0_0")
+        with (
+            patch(f"{_SELECTION}.year_available", return_value=True),
+            patch(f"{_SELECTION}.containing_tiles", return_value=[own, other]),
+            patch(f"{_SELECTION}.calculate_nodata_percentage", return_value=2.0),
+        ):
+            result = select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024, nodata_max=100.0)
+        assert result.quarters["q1"].item is own
+
+    def test_a_clean_tile_stops_the_search(self) -> None:
+        clean, other = _tile_item(2024, 1), _tile_item(2024, 1, subtile="33UUR_0_0")
+        nodata = MagicMock(return_value=0.0)
+        with (
+            patch(f"{_SELECTION}.year_available", return_value=True),
+            patch(f"{_SELECTION}.containing_tiles", return_value=[clean, other]),
+            patch(f"{_SELECTION}.calculate_nodata_percentage", nodata),
+        ):
+            result = select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024)
+        assert nodata.call_count == 4  # one read per quarter
+        assert result.candidates_checked == 4
 
     def test_an_unreadable_tile_falls_through_to_the_next(self) -> None:
         own, other = _tile_item(2024, 1), _tile_item(2024, 1, subtile="33UUR_0_0")
