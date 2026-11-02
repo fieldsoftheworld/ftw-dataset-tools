@@ -6,14 +6,14 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ftw_dataset_tools.api.chip_grid import utm_crs_for_cell
-from ftw_dataset_tools.api.imagery.mosaic_search import find_containing_tile, year_available
+from ftw_dataset_tools.api.imagery.mosaic_search import containing_tiles, year_available
 from ftw_dataset_tools.api.imagery.nodata_analysis import calculate_nodata_percentage
-from ftw_dataset_tools.api.imagery.settings import DEFAULT_NODATA_MAX, MOSAIC_MAX_YEAR_TRIES
+from ftw_dataset_tools.api.imagery.settings import DEFAULT_NODATA_MAX
 from ftw_dataset_tools.api.imagery.slots import MOSAIC_SLOTS
 from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Mapping
 
     import pystac
 
@@ -22,13 +22,8 @@ __all__ = [
     "MosaicYearError",
     "SelectedMosaic",
     "check_mosaic_year",
-    "fallback_years",
     "select_mosaics_for_chip",
 ]
-
-# How far from the requested year the fallback looks before giving up.
-_MAX_YEAR_DISTANCE = 10
-
 
 logger = get_logger(__name__)
 
@@ -62,7 +57,6 @@ class MosaicSelectionResult:
     requested_year: int
     imagery_year: int | None = None
     quarters: dict[str, SelectedMosaic] = field(default_factory=dict)
-    years_tried: list[int] = field(default_factory=list)
     skipped_reason: str | None = None
     candidates_checked: int = 0
 
@@ -77,25 +71,6 @@ def check_mosaic_year(year: int) -> None:
         raise MosaicYearError(year)
 
 
-def fallback_years(
-    year: int,
-    is_available: Callable[[int], bool] | None = None,
-    max_tries: int = MOSAIC_MAX_YEAR_TRIES,
-) -> list[int]:
-    """``year`` then the nearest years (Y-1, Y+1, Y-2, ...); unavailable years don't count."""
-    is_available = is_available or year_available
-    candidates = [year]
-    for distance in range(1, _MAX_YEAR_DISTANCE + 1):
-        candidates += [year - distance, year + distance]
-    years: list[int] = []
-    for candidate in candidates:
-        if len(years) == max_tries:
-            break
-        if is_available(candidate):
-            years.append(candidate)
-    return years
-
-
 def select_mosaics_for_chip(
     chip_id: str,
     bbox: tuple[float, float, float, float],
@@ -103,28 +78,26 @@ def select_mosaics_for_chip(
     nodata_max: float = DEFAULT_NODATA_MAX,
     footprint: Mapping[str, Any] | None = None,
 ) -> MosaicSelectionResult:
-    """Pick Q1-Q4 mosaics of one year for a chip, falling back to nearby years.
+    """Pick Q1-Q4 mosaics of ``year`` for a chip, or none.
 
-    A year is used only if every quarter has a tile wholly containing the chip and
-    the chip's nodata is within ``nodata_max`` (same check as scene selection).
-    Both are measured on the chip's GeoJSON ``footprint`` when given, else on ``bbox``.
+    Only the chip's own year is used, never a nearby one: a dataset's imagery must
+    show the same year as its labels. A year is used only if every quarter has a tile
+    wholly containing the chip with the chip's nodata within ``nodata_max`` (same
+    check as scene selection). Both are measured on the chip's GeoJSON ``footprint``
+    when given, else on ``bbox``.
     """
-
     result = MosaicSelectionResult(chip_id=chip_id, bbox=bbox, requested_year=year)
+    if not year_available(year):
+        result.skipped_reason = f"No mosaics for {year}"
+        return result
     crs = utm_crs_for_cell(chip_id, bbox)
-    reason = "No mosaic year available"
-    for candidate in fallback_years(year):
-        result.years_tried.append(candidate)
-        quarters, reason = _select_year(bbox, candidate, nodata_max, result, footprint, crs)
-        if quarters is not None:
-            result.imagery_year = candidate
-            result.quarters = quarters
-            logger.info(f"Selected mosaics for {candidate}")
-            return result
-        logger.info(f"  {reason}")
-
-    tried = ", ".join(str(y) for y in result.years_tried)
-    result.skipped_reason = f"No complete mosaic year (tried {tried}): {reason}"
+    quarters, reason = _select_year(bbox, year, nodata_max, result, footprint, crs)
+    if quarters is None:
+        result.skipped_reason = f"No complete {year} mosaics: {reason}"
+        return result
+    result.imagery_year = year
+    result.quarters = quarters
+    logger.info(f"Selected mosaics for {year}")
     return result
 
 
@@ -138,13 +111,47 @@ def _select_year(
 ) -> tuple[dict[str, SelectedMosaic] | None, str]:
     quarters: dict[str, SelectedMosaic] = {}
     for number, slot in enumerate(MOSAIC_SLOTS, start=1):
-        tile = find_containing_tile(bbox, year, number, footprint, crs)
-        if tile is None:
+        tiles = containing_tiles(bbox, year, number, footprint, crs)
+        if not tiles:
             return None, "no single mosaic tile covers the chip"
-        result.candidates_checked += 1
-        nodata = calculate_nodata_percentage(tile.assets["nir"].href, bbox, footprint)
-        if nodata > nodata_max:
-            return None, f"{year} Q{number}: {nodata:.1f}% nodata in chip window"
+        tile, reason = _first_clean_tile(tiles, bbox, nodata_max, result, footprint)
+        if tile is None:
+            return None, f"Q{number} {reason}"
         logger.info(f"  {year} Q{number}: {tile.id}")
         quarters[slot] = SelectedMosaic(item=tile, quarter=slot, year=year)
     return quarters, ""
+
+
+def _first_clean_tile(
+    tiles: list[pystac.Item],
+    bbox: tuple[float, float, float, float],
+    nodata_max: float,
+    result: MosaicSelectionResult,
+    footprint: Mapping[str, Any] | None,
+) -> tuple[pystac.Item | None, str]:
+    """The first of ``tiles`` whose chip window is within ``nodata_max``.
+
+    A neighbouring zone's tile can hold the chip with full data where the chip's own
+    zone's tile has a gap, or can't be read, so every containing tile is tried before
+    the year fails. If none is clean and one could not be read, its error is raised:
+    the chip failed, which a rerun retries, rather than having no mosaics.
+
+    Raises:
+        Exception: The last read error, when no tile was clean and a read failed.
+    """
+    nodata_seen, error = [], None
+    for tile in tiles:
+        result.candidates_checked += 1
+        name = tile.properties.get("ftw:mosaic_tile", tile.id)
+        try:
+            nodata = calculate_nodata_percentage(tile.assets["nir"].href, bbox, footprint)
+        except Exception as e:
+            logger.warning(f"{tile.id}: chip nodata check failed ({e})")
+            error = e
+            continue
+        if nodata <= nodata_max:
+            return tile, ""
+        nodata_seen.append(f"{name} {nodata:.1f}%")
+    if error is not None:
+        raise error
+    return None, f"nodata in chip window ({', '.join(nodata_seen)})"

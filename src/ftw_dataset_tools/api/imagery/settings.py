@@ -76,8 +76,6 @@ REFLECTANCE_BANDS = frozenset(
 MOSAIC_BASE_URL = "https://data.source.coop/tge-labs/sentinel-2-quarterly-cloudless-mosaics"
 MOSAIC_NODATA = -32768
 MOSAIC_SCALE = 0.0001
-MOSAIC_FALLBACK_YEAR = 2025
-MOSAIC_MAX_YEAR_TRIES = 4
 
 # Cloud probability band (for pixel-level cloud filtering)
 CLOUD_PROBABILITY_BAND = "cloud_probability"

@@ -69,6 +69,13 @@ class TestOneYearForBothModes:
         assert _years(run) == [("scenes", 2024)]
         assert result.by_mode["mosaics"].skipped_details[0]["code"] == "already_selected"
 
+    def test_mosaics_from_a_nearby_year_stop_a_rerun(self, tmp_path: Path) -> None:
+        # Older ftwd filled a 2024 request with 2023 mosaics.
+        _parent, path = _chip(tmp_path, "chip_001_2024")
+        _add_mosaics(path, year=2023, requested=2024)
+        with pytest.raises(SelectionConflictError, match="has mosaics for 2023"):
+            _run(tmp_path, lambda _year: True)
+
     def test_explicit_years_per_mode_then_a_plain_run_changes_nothing(
         self, tmp_path: Path, mock_selection_result: SceneSelectionResult
     ) -> None:
@@ -79,11 +86,12 @@ class TestOneYearForBothModes:
         assert run.call_count == 0
         assert result.skipped == 2
 
-    def test_a_chip_with_no_year_skips_scenes(self, tmp_path: Path) -> None:
+    def test_a_chip_with_no_year_skips_both_modes(self, tmp_path: Path) -> None:
         _chip(tmp_path, "chip_001")
         result, run = _run(tmp_path, lambda _year: True)
-        assert _years(run) == [("mosaics", 2025)]
-        assert result.by_mode["scenes"].skipped_details[0]["code"] == "no_year"
+        assert run.call_count == 0
+        for mode in ("scenes", "mosaics"):
+            assert result.by_mode[mode].skipped_details[0]["code"] == "no_year"
 
     def test_chips_whose_year_has_no_mosaics_skip_only_them(self, tmp_path: Path) -> None:
         _chip(tmp_path, "chip_001_2023")

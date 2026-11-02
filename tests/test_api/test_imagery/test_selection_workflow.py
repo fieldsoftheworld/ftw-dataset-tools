@@ -981,10 +981,10 @@ class TestSelectionYear:
     def test_from_id_suffix(self) -> None:
         assert selection_year(_chip("ftw-34UFF1628_2024"), "scenes") == 2024
 
-    def test_without_a_year_scenes_get_none_and_mosaics_2025(self) -> None:
+    def test_without_a_year_both_modes_get_none(self) -> None:
         item = _chip("chip", properties={"start_datetime": "2023-03-01T00:00:00Z"})
         assert selection_year(item, "scenes") is None  # not the rewritable date
-        assert selection_year(item, "mosaics") == 2025
+        assert selection_year(item, "mosaics") is None  # never a default year
 
 
 class TestPerChipYearAndExplicitItems:

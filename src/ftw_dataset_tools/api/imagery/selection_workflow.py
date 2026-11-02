@@ -40,7 +40,6 @@ from ftw_dataset_tools.api.imagery.parallel import (
 )
 from ftw_dataset_tools.api.imagery.progress import ImageryProgressBar
 from ftw_dataset_tools.api.imagery.scene_selection import select_scenes_for_chip
-from ftw_dataset_tools.api.imagery.settings import MOSAIC_FALLBACK_YEAR
 from ftw_dataset_tools.api.imagery.slots import (
     DEFAULT_IMAGERY_MODE,
     normalize_imagery_modes,
@@ -108,10 +107,7 @@ def selection_year(item: pystac.Item, imagery_mode: str, year: int | None = None
     itself rewrites: the run's ``year``; else the year this mode's selection on the
     chip recorded (``ftw:calendar_year`` for scenes, the mosaic requested year for
     mosaics), so a run without a year never moves an existing selection; else the
-    chip id's ``_YYYY`` suffix. With none of those, mosaics use
-    ``MOSAIC_FALLBACK_YEAR`` (as before multi-mode support, which is why older
-    catalogs record 2025 for mosaics selected without a year) and scenes get None:
-    the chip is skipped.
+    chip id's ``_YYYY`` suffix. With none of those the chip gets None and is skipped.
     """
     if year is not None:
         return year
@@ -122,9 +118,7 @@ def selection_year(item: pystac.Item, imagery_mode: str, year: int | None = None
     if recorded is not None:
         return recorded
     match = re.search(r"_(\d{4})$", item.id)
-    if match:
-        return int(match.group(1))
-    return MOSAIC_FALLBACK_YEAR if imagery_mode == "mosaics" else None
+    return int(match.group(1)) if match else None
 
 
 @dataclass

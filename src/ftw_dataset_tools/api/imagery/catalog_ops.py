@@ -160,6 +160,13 @@ def has_existing_scenes(item: pystac.Item) -> bool:
     return bool(selected_modes(item))
 
 
+def mosaic_year(item: pystac.Item) -> int | None:
+    """The year of the chip's selected mosaics, from the current or legacy property."""
+    props = item.properties
+    year = props.get("ftw:mosaic_year")
+    return year if year is not None else props.get("ftw:imagery_year")
+
+
 def mosaic_requested_year(item: pystac.Item) -> int | None:
     """The year the chip's mosaic selection asked for, read from current or legacy keys."""
     props = item.properties
@@ -190,17 +197,18 @@ def selection_conflict(item: pystac.Item, imagery_mode: str, year: int) -> str |
 
     Only a selection of the same mode can conflict: a chip holding scenes takes
     mosaics alongside them, and the other way round, as long as both are for the
-    same year. A selection that recorded no year never conflicts.
+    same year. A selection that recorded no year never conflicts. Mosaics also
+    conflict when the year actually used differs from the one asked for, which
+    older ftwd allowed by falling back to a nearby year.
     """
     if not has_mode_selection(item, imagery_mode):
         return None
     if imagery_mode == "scenes":
-        existing = item.properties.get("ftw:calendar_year")
+        recorded = [item.properties.get("ftw:calendar_year")]
     else:
-        existing = mosaic_requested_year(item)
-    if existing is None or existing == year:
-        return None
-    return f"has {imagery_mode} for {existing}"
+        recorded = [mosaic_requested_year(item), mosaic_year(item)]
+    other = next((y for y in recorded if y is not None and y != year), None)
+    return None if other is None else f"has {imagery_mode} for {other}"
 
 
 def item_window(item: pystac.Item) -> tuple[datetime, datetime] | None:

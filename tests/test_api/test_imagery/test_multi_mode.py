@@ -100,7 +100,10 @@ def _rels(item: pystac.Item) -> set[str]:
 
 @pytest.fixture
 def both(tmp_path: Path, mock_selection_result: SceneSelectionResult) -> Path:
-    """A chip holding scenes (2024) and then mosaics (requested 2024, used 2025)."""
+    """A chip holding scenes (2024) and then mosaics (requested 2024, used 2025).
+
+    Older ftwd fell back to a nearby mosaic year like this; ftwd no longer does.
+    """
     _parent, path = _chip(tmp_path)
     _add_scenes(path, mock_selection_result)
     _add_mosaics(path, year=2025)
@@ -193,12 +196,22 @@ class TestCoexistence:
 
 
 class TestPerModeConflicts:
-    def test_each_mode_conflicts_on_its_own_year(self, both: Path) -> None:
-        item = pystac.Item.from_file(str(both))
+    def test_each_mode_conflicts_on_its_own_year(
+        self, tmp_path: Path, mock_selection_result
+    ) -> None:
+        _parent, path = _chip(tmp_path)
+        _add_scenes(path, mock_selection_result)
+        _add_mosaics(path, year=2024)
+        item = pystac.Item.from_file(str(path))
         assert selection_conflict(item, "scenes", 2024) is None
         assert selection_conflict(item, "mosaics", 2024) is None
         assert selection_conflict(item, "scenes", 2030) == "has scenes for 2024"
         assert selection_conflict(item, "mosaics", 2026) == "has mosaics for 2024"
+
+    def test_mosaics_from_a_nearby_year_conflict(self, both: Path) -> None:
+        """Requested 2024 but used 2025: the imagery doesn't show the labels' year."""
+        item = pystac.Item.from_file(str(both))
+        assert selection_conflict(item, "mosaics", 2024) == "has mosaics for 2025"
 
     def test_force_clears_only_the_conflicting_mode(self, both: Path) -> None:
         item = pystac.Item.from_file(str(both))
