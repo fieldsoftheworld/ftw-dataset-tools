@@ -11,16 +11,18 @@ import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pystac
-from pyproj import CRS, Transformer
+from rasterio.crs import CRS
 
 from ftw_dataset_tools import __version__
+from ftw_dataset_tools.api.imagery.nodata_analysis import chip_in_crs
 from ftw_dataset_tools.api.imagery.parquet_search import _connection
 from ftw_dataset_tools.api.imagery.settings import MOSAIC_BASE_URL
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from datetime import datetime
 
 __all__ = [
@@ -34,6 +36,10 @@ __all__ = [
 MOSAIC_BAND_ASSETS = {"B02": "blue", "B03": "green", "B04": "red", "B08": "nir"}
 
 _COG = "image/tiff; application=geotiff; profile=cloud-optimized"
+
+# Slack (metres) for a chip edge that lies exactly on a tile edge: its lon/lat
+# footprint, reprojected, bows up to ~1 cm past it. Far below a 10 m pixel.
+_EDGE_TOLERANCE = 0.1
 
 
 @dataclass(frozen=True)
@@ -95,7 +101,7 @@ def _load_index(year: int, quarter: int) -> list[_Tile]:
             _Tile(
                 subtile=row[0],
                 crs=row[1],
-                proj_bbox=tuple(row[2]),
+                proj_bbox=tuple(float(v) for v in row[2]),
                 bbox=tuple(row[3]),
                 start=row[4],
                 end=row[5],
@@ -114,34 +120,54 @@ def _lon_overlaps(tile_west: float, tile_east: float, west: float, east: float) 
     return west <= tile_east or east >= tile_west
 
 
-def _contains(tile: _Tile, bbox: tuple[float, float, float, float]) -> bool:
-    """Whether the chip bbox lies wholly inside the tile, measured in the tile's own CRS."""
-    transformer = Transformer.from_crs(
-        CRS.from_epsg(4326), CRS.from_user_input(tile.crs), always_xy=True
-    )
-    minx, miny, maxx, maxy = transformer.transform_bounds(*bbox, densify_pts=21)
+def _margin(
+    tile: _Tile,
+    bbox: tuple[float, float, float, float],
+    footprint: Mapping[str, Any] | None = None,
+) -> float:
+    """How far (metres) the chip lies inside the tile, in the tile's own CRS.
+
+    Negative when the chip overhangs the tile. Tiles are MGRS squares that overlap
+    their neighbours by only ~60 m, while a lon/lat bbox taken onto the tile's grid
+    swells by up to ~90 m per side, so a chip on a square's edge fits only when
+    measured by its ``footprint``.
+    """
+    chip = chip_in_crs(CRS.from_user_input(tile.crs), bbox, footprint)
+    minx, miny, maxx, maxy = chip.bounds
     tile_minx, tile_miny, tile_maxx, tile_maxy = tile.proj_bbox
-    return tile_minx <= minx and tile_miny <= miny and maxx <= tile_maxx and maxy <= tile_maxy
+    return min(minx - tile_minx, miny - tile_miny, tile_maxx - maxx, tile_maxy - maxy)
 
 
 def find_containing_tile(
-    bbox: tuple[float, float, float, float], year: int, quarter: int
+    bbox: tuple[float, float, float, float],
+    year: int,
+    quarter: int,
+    footprint: Mapping[str, Any] | None = None,
+    crs: str | None = None,
 ) -> pystac.Item | None:
-    """The mosaic tile of ``year`` Q``quarter`` that fully contains ``bbox``, or None.
+    """The mosaic tile of ``year`` Q``quarter`` that fully contains the chip, or None.
+
+    Pass the chip's GeoJSON polygon as ``footprint`` whenever it is known; ``bbox``
+    alone rejects chips along a tile's edge (see :func:`_margin`). Near a zone seam
+    tiles of both zones can contain the chip: one in ``crs``, the CRS of the chip's
+    own grid, wins so its pixels need no warping; otherwise the tile the chip lies
+    deepest inside.
 
     The returned item carries ``red``/``green``/``blue``/``nir`` assets pointing at
     the mirror's COGs.
     """
     west, south, east, north = bbox
+    best, best_rank = None, (False, -_EDGE_TOLERANCE)
     for tile in _load_index(year, quarter):
         tile_west, tile_south, tile_east, tile_north = tile.bbox
         if tile_south > north or tile_north < south:
             continue
         if not _lon_overlaps(tile_west, tile_east, west, east):
             continue
-        if _contains(tile, bbox):
-            return _to_item(tile, year, quarter)
-    return None
+        rank = (tile.crs == crs, _margin(tile, bbox, footprint))
+        if rank[1] >= -_EDGE_TOLERANCE and rank >= best_rank:
+            best, best_rank = tile, rank
+    return None if best is None else _to_item(best, year, quarter)
 
 
 def _to_item(tile: _Tile, year: int, quarter: int) -> pystac.Item:
