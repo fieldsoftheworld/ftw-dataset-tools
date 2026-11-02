@@ -313,18 +313,24 @@ class TestSelectBestSceneNodata:
         item.add_asset("nir", pystac.Asset(href="https://example.com/B08.tif"))
         return item
 
-    def test_zero_scene_nodata_accepts_without_pixel_check(self, monkeypatch):
-        called = []
+    def test_zero_scene_nodata_still_checks_the_chip_pixels(self, monkeypatch):
+        """A clean scene can still miss the chip: its lon/lat bbox reaches past the granule."""
         monkeypatch.setattr(
-            scene_selection,
-            "calculate_nodata_percentage",
-            lambda href, _bbox: called.append(href) or 0.0,
+            scene_selection, "calculate_nodata_percentage", lambda _href, _bbox: 100.0
+        )
+        scene = scene_selection._select_best_scene(
+            [self._item(0.0)], season="planting", bbox=self.BBOX
+        )
+        assert scene is None
+
+    def test_zero_scene_nodata_accepts_a_covered_chip(self, monkeypatch):
+        monkeypatch.setattr(
+            scene_selection, "calculate_nodata_percentage", lambda _href, _bbox: 0.0
         )
         scene = scene_selection._select_best_scene(
             [self._item(0.0)], season="planting", bbox=self.BBOX
         )
         assert scene is not None
-        assert not called
 
     def test_scene_nodata_triggers_chip_pixel_check_and_accepts_clean_window(self, monkeypatch):
         """A scene with edge nodata is kept when the chip's own window has none."""

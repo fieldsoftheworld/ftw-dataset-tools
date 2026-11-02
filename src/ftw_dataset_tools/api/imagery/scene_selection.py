@@ -377,14 +377,14 @@ def _select_best_scene(
     for item in items:
         short_dt = _short_date(item)
 
-        # A scene-level nodata of zero proves the chip's window is clean; any
-        # other value says nothing about this chip (granule-edge nodata may sit
-        # far from it), so check the actual pixels. Old-baseline products in
-        # particular carry edge nodata on most scenes.
+        # Scene-level nodata says nothing about this chip, so always check its
+        # pixels. A non-zero value may sit far from the chip (old-baseline
+        # products carry granule-edge nodata on most scenes), and a value of zero
+        # does not mean the scene covers the chip at all: candidates match on the
+        # scene's lon/lat bbox, which at high latitudes reaches well past the
+        # granule into the neighbouring tile.
         scene_nodata = get_nodata_from_metadata(item)
-        needs_nodata_check = (
-            not (scene_nodata is not None and scene_nodata <= 0) and nodata_max < 100
-        )
+        needs_nodata_check = nodata_max < 100
         scene_cloud_cover = EOExtension.ext(item).cloud_cover or 0.0
         # For very clear scenes (< 0.1% reported), trust the metadata.
         needs_cloud_check = scene_cloud_cover >= PIXEL_CHECK_SKIP_THRESHOLD

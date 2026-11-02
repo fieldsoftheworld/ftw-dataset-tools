@@ -99,6 +99,23 @@ class TestReadSCLChipStats:
         assert stats.nodata_pct == 100.0
         assert stats.cloud_pct == 0.0
 
+    def test_window_hanging_off_the_scene_counts_the_missing_part(self, scl_path):
+        """A chip half beyond the raster's west edge is half nodata, not clean."""
+        from rasterio.warp import transform_bounds
+
+        # Columns -2..2 of row 0: two pixels outside the raster, two vegetation.
+        bbox = transform_bounds(
+            "EPSG:32633",
+            "EPSG:4326",
+            ORIGIN_X - 2 * PIXEL,
+            ORIGIN_Y - PIXEL,
+            ORIGIN_X + 2 * PIXEL,
+            ORIGIN_Y,
+        )
+        stats = read_scl_chip_stats(scl_path, bbox)
+        assert stats.nodata_pct == pytest.approx(50.0, abs=2.0)
+        assert stats.cloud_pct == 0.0
+
     def test_all_nodata_window_reports_no_cloud(self, tmp_path):
         path = _write_scl(tmp_path / "empty.tif", [[0, 0], [0, 0]])
         stats = read_scl_chip_stats(path, _bbox_for(2, 2))

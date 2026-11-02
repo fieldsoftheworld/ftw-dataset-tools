@@ -11,6 +11,8 @@ from rasterio.errors import WindowError
 from rasterio.warp import transform_bounds
 from rasterio.windows import Window, from_bounds
 
+from ftw_dataset_tools.api.imagery.nodata_analysis import window_nodata_pct
+
 __all__ = ["SCLChipStats", "calculate_pixel_cloud_cover", "read_scl_chip_stats"]
 
 
@@ -31,7 +33,8 @@ def read_scl_chip_stats(scl_href: str, bbox: tuple[float, float, float, float]) 
 
     ``cloud_pct`` is the share of *valid* pixels that are cloud, matching
     :func:`calculate_pixel_cloud_cover`; ``nodata_pct`` is the share of the
-    whole window that is missing.
+    whole window that is missing, counting any part of the chip that lies
+    beyond the scene's raster as missing too.
     """
     with rasterio.open(scl_href) as src:
         if src.crs != CRS.from_epsg(4326):
@@ -56,7 +59,7 @@ def read_scl_chip_stats(scl_href: str, bbox: tuple[float, float, float, float]) 
 
     valid_mask = data > 0
     valid_count = int(np.count_nonzero(valid_mask))
-    nodata_pct = (data.size - valid_count) / data.size * 100.0
+    nodata_pct = window_nodata_pct(requested, window, (data.size - valid_count) / data.size)
     if valid_count == 0:
         return SCLChipStats(nodata_pct=nodata_pct, cloud_pct=0.0)
 
