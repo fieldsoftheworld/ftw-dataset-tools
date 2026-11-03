@@ -168,6 +168,11 @@ def run_cmd(
         raise SystemExit(1) from err
 
     _print_summary(ctx)
+    incomplete = pipeline.imagery_failures(ctx)
+    if incomplete:
+        raise click.ClickException(
+            f"Imagery is incomplete: {incomplete}. Rerun to retry them (see the log for reasons)."
+        )
 
 
 def _print_summary(ctx: pipeline.PipelineContext) -> None:

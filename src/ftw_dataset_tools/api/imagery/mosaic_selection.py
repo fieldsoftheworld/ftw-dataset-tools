@@ -46,6 +46,8 @@ class SelectedMosaic:
     item: pystac.Item
     quarter: str
     year: int
+    # Share (0-100) of the chip the tile has no data for, as selection measured it.
+    nodata_pct: float = 0.0
 
 
 @dataclass
@@ -114,11 +116,11 @@ def _select_year(
         tiles = containing_tiles(bbox, year, number, footprint, crs)
         if not tiles:
             return None, "no single mosaic tile covers the chip"
-        tile, reason = _least_nodata_tile(tiles, bbox, nodata_max, result, footprint)
+        tile, nodata, reason = _least_nodata_tile(tiles, bbox, nodata_max, result, footprint)
         if tile is None:
             return None, f"Q{number} {reason}"
         logger.info(f"  {year} Q{number}: {tile.id}")
-        quarters[slot] = SelectedMosaic(item=tile, quarter=slot, year=year)
+        quarters[slot] = SelectedMosaic(item=tile, quarter=slot, year=year, nodata_pct=nodata)
     return quarters, ""
 
 
@@ -128,8 +130,9 @@ def _least_nodata_tile(
     nodata_max: float,
     result: MosaicSelectionResult,
     footprint: Mapping[str, Any] | None,
-) -> tuple[pystac.Item | None, str]:
-    """The tile of ``tiles`` with the least nodata over the chip, if within ``nodata_max``.
+) -> tuple[pystac.Item | None, float, str]:
+    """The tile of ``tiles`` with the least nodata over the chip, if within ``nodata_max``,
+    with that nodata percentage.
 
     A neighbouring zone's tile can hold the chip with full data where the chip's own
     zone's tile has a gap, or can't be read, so every containing tile is read until
@@ -155,7 +158,7 @@ def _least_nodata_tile(
         if nodata == 0:
             break
     if best is not None and best_nodata <= nodata_max:
-        return best, ""
+        return best, best_nodata, ""
     if error is not None:
         raise error
-    return None, f"nodata in chip window ({', '.join(nodata_seen)})"
+    return None, best_nodata, f"nodata in chip window ({', '.join(nodata_seen)})"

@@ -87,6 +87,7 @@ properties above belong to scenes and are not written for mosaics.
 | `ftw:season` | child | string | `q1`..`q4` |
 | `ftw:source` | child | string | `sentinel-2-mosaic` |
 | `ftw:mosaic_tile` | child | string | Mosaic tile id, e.g. `31UGR_0_0` |
+| `ftw:nodata_pct` | child | number | Share of the chip (0-100) the quarter's mosaic has no data for (cloudy all quarter, or past the tile's edge); the pixels are nodata (-32768) |
 
 Child items carry `start_datetime`/`end_datetime` for the quarter instead of `datetime`.
 

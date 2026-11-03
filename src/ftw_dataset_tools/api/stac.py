@@ -717,16 +717,22 @@ def refresh_item_assets(catalog_dir: Path | str) -> None:
     Imagery is selected after the stac stage writes the collection (by ``ftwd run``'s
     later stages, ``create-dataset`` and the standalone commands) and can be cleared,
     so each of those calls this when done. Only the imagery slots change; the file is
-    edited as JSON so everything else the stac stage wrote stays as it was.
+    edited as JSON so everything else the stac stage wrote stays as it was. Chips are
+    read one at a time and the scan stops once every mode is found.
     """
-    from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
-    from ftw_dataset_tools.api.imagery.slots import IMAGERY_SLOTS
+    from ftw_dataset_tools.api.fs import create_temp_file, finalize_temp_file
+    from ftw_dataset_tools.api.imagery.selection_workflow import iter_chip_items
+    from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES, IMAGERY_SLOTS
 
     path = Path(catalog_dir) / "collection.json"
     if not path.exists():
         return
-    items = [item for item, _path in find_chip_items(Path(catalog_dir))]
-    modes = _declared_imagery_modes(None, items)
+    held: set[str] = set()
+    for item in iter_chip_items(Path(catalog_dir)):
+        held |= _held_imagery_modes([item])
+        if len(held) == len(IMAGERY_MODES):
+            break
+    modes = tuple(mode for mode in IMAGERY_MODES if mode in held)
     imagery_keys = {f"{slot}_{kind}" for slot in IMAGERY_SLOTS for kind in ("image", "visual")}
 
     collection = json.loads(path.read_text(encoding="utf-8"))
@@ -742,7 +748,9 @@ def refresh_item_assets(catalog_dir: Path | str) -> None:
     if updated == declared:
         return
     collection["item_assets"] = updated
-    path.write_text(json.dumps(collection, indent=2) + "\n", encoding="utf-8")
+    tmp = create_temp_file(path)
+    tmp.write_text(json.dumps(collection, indent=2) + "\n", encoding="utf-8")
+    finalize_temp_file(tmp, path)
 
 
 def _create_collection(

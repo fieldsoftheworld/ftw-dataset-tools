@@ -183,6 +183,18 @@ class TestPrintSummaryCropComposition:
         ctx.docs_result = None
         return ctx
 
+    def test_failed_imagery_chips_make_the_run_incomplete(self, tmp_path: Path) -> None:
+        from types import SimpleNamespace
+
+        from ftw_dataset_tools.api.pipeline import imagery_failures
+
+        ctx = self._base_ctx(tmp_path)
+        ctx.preview_result = None
+        assert imagery_failures(ctx) is None
+        ctx.selection_result = SimpleNamespace(failed=0)
+        ctx.download_result = SimpleNamespace(failed=3)
+        assert imagery_failures(ctx) == "3 image(s) failed download"
+
     def test_populated_crop_composition(self, tmp_path: Path, capsys) -> None:
         ctx = self._base_ctx(tmp_path)
         ctx.crop_stats_result = CropStatsResult(

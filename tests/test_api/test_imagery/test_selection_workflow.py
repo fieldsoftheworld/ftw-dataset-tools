@@ -1186,3 +1186,14 @@ class TestRunChipSelectionFootprint:
             buffer_expansion_size=14,
         )
         assert seen["footprint"] == geometry
+
+
+class TestRequireMosaicYears:
+    def test_chips_without_a_year_are_not_a_year_to_check(self, monkeypatch) -> None:
+        from ftw_dataset_tools.api.imagery import selection_workflow
+
+        monkeypatch.setattr(
+            selection_workflow, "unavailable_mosaics_reason", lambda y: None if y == 2024 else "no"
+        )
+        assert selection_workflow.require_mosaic_years([2024, None, 2024], ("mosaics",)) == []
+        assert selection_workflow.require_mosaic_years([None], ("mosaics",)) == []

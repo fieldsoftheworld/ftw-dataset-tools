@@ -54,7 +54,7 @@ from ftw_dataset_tools.api.stac import refresh_item_assets
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable, Iterator, Sequence
     from pathlib import Path
 
     from ftw_dataset_tools.api.imagery.mosaic_selection import MosaicSelectionResult
@@ -205,6 +205,23 @@ class SelectionWorkflowResult:
     failed_details: list[dict] = field(default_factory=list)
 
 
+def _chip_item_files(catalog_dir: Path) -> Iterator[Path]:
+    """Each parent chip item's JSON file, skipping the imagery child items."""
+    for subdir in iter_chip_dirs(catalog_dir):
+        for json_file in subdir.glob("*.json"):
+            if parse_child_id(json_file.stem) is None:
+                yield json_file
+
+
+def iter_chip_items(catalog_dir: Path) -> Iterator[pystac.Item]:
+    """Each readable parent chip item, read lazily; unreadable ones are passed over."""
+    for json_file in _chip_item_files(catalog_dir):
+        try:
+            yield pystac.Item.from_file(str(json_file))
+        except Exception:  # find_chip_items reports unreadable chips
+            continue
+
+
 def find_chip_items(
     catalog_dir: Path,
     unreadable: list[dict] | None = None,
@@ -228,19 +245,14 @@ def find_chip_items(
         Returns empty list if no items found.
     """
     chip_items = []
-
-    for subdir in iter_chip_dirs(catalog_dir):
-        for json_file in subdir.glob("*.json"):
-            if parse_child_id(json_file.stem) is not None:
-                continue
-            try:
-                item = pystac.Item.from_file(str(json_file))
-            except Exception as e:
-                if unreadable is not None:
-                    unreadable.append({"chip": json_file.stem, "error": f"Unreadable chip: {e}"})
-                continue
-            chip_items.append((item, json_file))
-
+    for json_file in _chip_item_files(catalog_dir):
+        try:
+            item = pystac.Item.from_file(str(json_file))
+        except Exception as e:
+            if unreadable is not None:
+                unreadable.append({"chip": json_file.stem, "error": f"Unreadable chip: {e}"})
+            continue
+        chip_items.append((item, json_file))
     return chip_items
 
 
@@ -423,16 +435,18 @@ def unavailable_mosaics_reason(year: int) -> str | None:
     return None
 
 
-def require_mosaic_years(years: Iterable[int], imagery_modes: Sequence[str]) -> list[int]:
+def require_mosaic_years(years: Iterable[int | None], imagery_modes: Sequence[str]) -> list[int]:
     """The one rule for a year with no mosaics; returns those of ``years`` without them.
 
     With mosaics as the only mode that is an error (MosaicYearError), raised before
     any work. Alongside scenes the chips of such a year skip their mosaics, each
-    with a recorded reason, and still get scenes.
+    with a recorded reason, and still get scenes. A chip with no year (None) is not
+    a year to check; it is skipped later with ``NO_YEAR``.
     """
     if "mosaics" not in imagery_modes:
         return []
-    missing = [y for y in sorted(set(years)) if unavailable_mosaics_reason(y) is not None]
+    known = {y for y in years if y is not None}
+    missing = [y for y in sorted(known) if unavailable_mosaics_reason(y) is not None]
     if missing and tuple(imagery_modes) == ("mosaics",):
         raise MosaicYearError(missing[0])
     return missing
