@@ -408,6 +408,18 @@ class TestConditionalProse:
         assert "Harvest imagery was acquired between 2024-08-01T10:00:00Z" in with_imagery
         assert "crop calendar" in with_imagery
 
+    def test_mosaics_only_carry_the_mosaic_caveat_not_the_scene_one(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents, render_readme
+
+        collection = {"title": "T", "description": "d", "links": []}
+        imagery = {"chips_with_imagery": 4, "chips_with_scenes": 0, "chips_with_mosaics": 4}
+        for text in (
+            render_readme(collection, _stats(imagery=imagery), [], {}),
+            render_agents(collection, _stats(imagery=imagery), []),
+        ):
+            assert "crop calendar" not in text
+            assert "ftw:nodata_pct" in text
+
     def test_crop_suggestion_only_when_crops_measured(self) -> None:
         from ftw_dataset_tools.api.docs import render_readme
 

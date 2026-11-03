@@ -137,6 +137,7 @@ ITEM_PROPERTY_NOTES = {
     "ftw:imagery_mode": "scenes (planting/harvest) or mosaics (quarterly, Q1-Q4)",
     "ftw:requested_year": "mosaic year the selection asked for",
     "ftw:mosaic_tile": "quarterly mosaic tile the imagery came from",
+    "ftw:nodata_pct": "share of the chip (0-100) the quarter's mosaic has no data for",
     "ftw:buffer_days": "half-width of the search window around the target day, in days",
     "ftw:field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
     **{f"ftw:{name}": note for name, note in _HCAT_NOTES.items()},
@@ -714,15 +715,30 @@ def _limitation_lines(stats: dict) -> list[str]:
         "- Masks are derived from field boundaries declared for a given year; parcels that "
         "changed shape, were subdivided or merged after that declaration are not reflected."
     ]
-    if stats.get("imagery"):
-        lines.append(
-            "- Imagery windows follow a crop calendar rather than a fixed date, so acquisition "
-            "dates differ between chips and cloud-free scenes are not guaranteed."
-        )
+    lines += _imagery_caveats(stats.get("imagery"))
     lines.append(
         "- Chips on the border of the source dataset may be only partly covered by field "
         "boundaries, and empty area there means unmapped, not fieldless."
     )
+    return lines
+
+
+def _imagery_caveats(imagery: dict | None) -> list[str]:
+    """The caveats of the imagery the collection actually has, scenes and/or mosaics."""
+    if not imagery:
+        return []
+    lines = []
+    if imagery.get("chips_with_scenes"):
+        lines.append(
+            "- Scenes are chosen against a crop calendar, so acquisition dates and cloud cover "
+            "vary between chips; check `eo:cloud_cover` on the season child items."
+        )
+    if imagery.get("chips_with_mosaics"):
+        lines.append(
+            "- Quarterly mosaics are cloudless composites, but where every scene of a quarter "
+            "was cloudy they have no data (-32768) rather than the chip being dropped; check "
+            "`ftw:nodata_pct` on each quarter's child item."
+        )
     return lines
 
 
@@ -877,11 +893,7 @@ def _agents_quality(stats: dict) -> str:
         "- Empty area inside a chip means unmapped, not necessarily fieldless.",
         "- Chips on the dataset border may be only partly covered by the source boundaries.",
     ]
-    if stats.get("imagery"):
-        lines.append(
-            "- Imagery is chosen against a crop calendar, so acquisition dates and cloud cover "
-            "vary between chips; check `eo:cloud_cover` on the season child items."
-        )
+    lines += _imagery_caveats(stats.get("imagery"))
     if stats.get("split_counts"):
         note = _split_quality_note(stats.get("split_type"))
         if note:

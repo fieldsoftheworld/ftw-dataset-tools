@@ -117,6 +117,28 @@ class DocsStageResult:
     tippecanoe_used: bool = False
 
 
+def imagery_failures(ctx: PipelineContext) -> str | None:
+    """Why the run's imagery is incomplete, or None.
+
+    Selection and download carry on past a chip that fails (a read error, a
+    throttled request) so one bad chip does not lose the rest; the run still
+    finishes its later stages. But a run with failed chips is not complete, and
+    a rerun retries them, so the caller should exit non-zero rather than let a
+    batch record the dataset as done.
+    """
+    counts = {
+        "chip(s) failed selection": ctx.selection_result,
+        "image(s) failed download": ctx.download_result,
+        "preview(s) failed": ctx.preview_result,
+    }
+    failed = [
+        f"{result.failed} {what}"
+        for what, result in counts.items()
+        if result is not None and result.failed
+    ]
+    return "; ".join(failed) or None
+
+
 def docs_summary_line(result: DocsStageResult, pmtiles: str | bool) -> str:
     """One line naming the documents written and counting the tiles and styles.
 

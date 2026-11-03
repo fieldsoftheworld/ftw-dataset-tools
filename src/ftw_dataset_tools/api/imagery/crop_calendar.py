@@ -230,6 +230,13 @@ def _sample_raster_at_center(
         return int(value)
 
 
+#: (start of season, end of season) rasters of each WorldCereal crop calendar season.
+_SEASON_FILES = {
+    "summer": (CROP_CAL_SUMMER_START, CROP_CAL_SUMMER_END),
+    "winter": (CROP_CAL_WINTER_START, CROP_CAL_WINTER_END),
+}
+
+
 def get_crop_calendar_dates(
     bbox: tuple[float, float, float, float],
 ) -> CropCalendarDates:
@@ -239,7 +246,7 @@ def get_crop_calendar_dates(
     Samples the crop calendar at the bbox center. This handles small bboxes
     that are smaller than the crop calendar pixel size (~50km).
 
-    Currently uses summer crop calendar only.
+    Uses the summer season; :func:`get_crop_calendar_seasons` gives both.
 
     Args:
         bbox: Bounding box (minx, miny, maxx, maxy) in EPSG:4326
@@ -251,13 +258,6 @@ def get_crop_calendar_dates(
         ValueError: If no valid crop calendar data found for the region
     """
     return _season_dates(bbox, *_SEASON_FILES["summer"])
-
-
-#: (start of season, end of season) rasters of each WorldCereal crop calendar season.
-_SEASON_FILES = {
-    "summer": (CROP_CAL_SUMMER_START, CROP_CAL_SUMMER_END),
-    "winter": (CROP_CAL_WINTER_START, CROP_CAL_WINTER_END),
-}
 
 
 def _season_dates(

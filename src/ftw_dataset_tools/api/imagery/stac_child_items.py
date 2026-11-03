@@ -236,6 +236,7 @@ def _create_mosaic_child_item(
             "ftw:source": MOSAIC_SOURCE,
             "ftw:imagery_year": mosaic.year,
             "ftw:mosaic_tile": tile.properties.get("ftw:mosaic_tile"),
+            "ftw:nodata_pct": round(mosaic.nodata_pct, 2),
         },
     )
     child_item.set_self_href(str(child_path))

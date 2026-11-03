@@ -572,6 +572,29 @@ class TestMosaicChildItems:
         assert "ftw:imagery_mode" not in saved.properties
         assert not has_existing_scenes(saved)
 
+    def test_each_quarter_child_records_its_nodata(self, tmp_path: Path) -> None:
+        parent, path = _chip(tmp_path)
+        selection = _selection()
+        selection.quarters["q2"].nodata_pct = 2.2874
+        create_mosaic_child_items(path.parent, parent, selection)
+
+        q2 = pystac.Item.from_file(str(path.parent / "chip_001_q2_s2.json"))
+        q1 = pystac.Item.from_file(str(path.parent / "chip_001_q1_s2.json"))
+        assert q2.properties["ftw:nodata_pct"] == 2.29
+        assert q1.properties["ftw:nodata_pct"] == 0.0
+
+    def test_selection_carries_the_measured_nodata_through(self) -> None:
+        with (
+            patch(f"{_SELECTION}.year_available", return_value=True),
+            patch(
+                f"{_SELECTION}.containing_tiles",
+                side_effect=lambda _b, y, n, *_: [_tile_item(y, n)],
+            ),
+            patch(f"{_SELECTION}.calculate_nodata_percentage", return_value=1.5),
+        ):
+            result = select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024, nodata_max=100.0)
+        assert {m.nodata_pct for m in result.quarters.values()} == {1.5}
+
 
 class TestSelectionConflicts:
     def _mosaic_chip(self, tmp_path: Path, requested: int = 2024) -> pystac.Item:
