@@ -217,3 +217,27 @@ class TestFetch:
 
         assert seen[0].get_header("User-agent") == f"ftw-dataset-tools/{__version__}"
         assert target.read_bytes() == FILE_BODY
+
+
+class TestCropCalendarSeasons:
+    def test_both_seasons_and_a_missing_one_is_left_out(self, monkeypatch) -> None:
+        from ftw_dataset_tools.api.imagery import crop_calendar
+        from ftw_dataset_tools.api.imagery.settings import CROP_CAL_WINTER_START
+
+        monkeypatch.undo()  # the autouse stac_crop_calendar stub replaces this function
+
+        def season(_bbox, start, _end):
+            if start == CROP_CAL_WINTER_START:
+                raise ValueError("no winter crops here")
+            return crop_calendar.CropCalendarDates(101, 297)
+
+        monkeypatch.setattr(crop_calendar, "_season_dates", season)
+        seasons = crop_calendar.get_crop_calendar_seasons((15.0, 46.0, 15.01, 46.01))
+        assert seasons == {"summer": crop_calendar.CropCalendarDates(101, 297)}
+
+    def test_summer_reads_sc_and_winter_wc(self) -> None:
+        from ftw_dataset_tools.api.imagery.crop_calendar import _SEASON_FILES
+
+        assert all(f.startswith("sc-") for f in _SEASON_FILES["summer"])
+        assert all(f.startswith("wc-") for f in _SEASON_FILES["winter"])
+        assert [f.split("-")[1] for f in _SEASON_FILES["winter"]] == ["sos", "eos"]

@@ -48,7 +48,10 @@ from ftw_dataset_tools.api.renders import (
 from ftw_dataset_tools.api.scale import SCALE_VERSION
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from ftw_dataset_tools.api.config import DatasetConfig, MetadataConfig
+    from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
 
 logger = get_logger(__name__)
 
@@ -291,18 +294,29 @@ def get_temporal_extent_from_year(year: int) -> tuple[datetime, datetime]:
     return (start, end)
 
 
-def _crop_season_extent(
+def _crop_calendar_properties(
     bbox: tuple[float, float, float, float],
-    year: int,
-) -> tuple[datetime, datetime] | None:
-    """Planting day to the end of harvest day for ``bbox``, or None outside the crop calendar."""
-    # Imported here to avoid a circular import: api.imagery imports back into this module.
-    from ftw_dataset_tools.api.imagery.crop_calendar import get_crop_calendar_dates
+) -> tuple[dict[str, int], CropCalendarDates | None]:
+    """The chip's crop calendar days as ``ftw:`` properties, and its summer season.
 
-    try:
-        planting, harvest = get_crop_calendar_dates(bbox).to_datetime(year)
-    except ValueError:
-        return None
+    Both WorldCereal seasons are recorded, whatever imagery the chip gets:
+    ``ftw:<season>_planting_day`` and ``ftw:<season>_harvest_day`` (day of year).
+    """
+    # Imported here to avoid a circular import: api.imagery imports back into this module.
+    from ftw_dataset_tools.api.imagery.crop_calendar import get_crop_calendar_seasons
+
+    seasons = get_crop_calendar_seasons(bbox)
+    properties = {
+        f"ftw:{season}_{stage}_day": getattr(dates, f"{stage}_day")
+        for season, dates in seasons.items()
+        for stage in ("planting", "harvest")
+    }
+    return properties, seasons.get("summer")
+
+
+def _crop_season_extent(dates: CropCalendarDates, year: int) -> tuple[datetime, datetime]:
+    """Planting day to the end of harvest day of ``dates`` in ``year``."""
+    planting, harvest = dates.to_datetime(year)
     return (
         planting.replace(tzinfo=UTC),
         harvest.replace(hour=23, minute=59, second=59, tzinfo=UTC),
@@ -519,15 +533,17 @@ def _collection_ftw_properties(config: DatasetConfig) -> dict:
         props["ftw:landcover_product"] = land_cover.PRODUCT
     if stages.select_images.enabled:
         sel = stages.select_images
-        props.update(
-            {
-                "ftw:cloud_cover_chip_threshold": sel.cloud_cover_chip,
-                "ftw:nodata_max": sel.nodata_max,
-                "ftw:buffer_days": sel.buffer_days,
-                "ftw:num_buffer_expansions": sel.num_buffer_expansions,
-                "ftw:buffer_expansion_size": sel.buffer_expansion_size,
-            }
-        )
+        props["ftw:nodata_max"] = sel.nodata_max
+        # Cloud and crop-calendar windows apply to scene selection only.
+        if "scenes" in sel.imagery_modes:
+            props.update(
+                {
+                    "ftw:cloud_cover_chip_threshold": sel.cloud_cover_chip,
+                    "ftw:buffer_days": sel.buffer_days,
+                    "ftw:num_buffer_expansions": sel.num_buffer_expansions,
+                    "ftw:buffer_expansion_size": sel.buffer_expansion_size,
+                }
+            )
     return {k: v for k, v in props.items() if v is not None}
 
 
@@ -593,31 +609,46 @@ def _group_items_by_square(items: list[Item], squares: dict[str, str]) -> dict[s
     return {square: groups[square] for square in sorted(groups)}
 
 
-def _build_item_assets() -> dict[str, ItemAssetDefinition]:
-    """Declare the assets a chip item may carry (core ``item_assets`` collection field)."""
+def _build_item_assets(imagery_modes: Sequence[str] = ()) -> dict[str, ItemAssetDefinition]:
+    """Declare the assets a chip item may carry (core ``item_assets`` collection field).
+
+    Imagery slots are declared only for ``imagery_modes``, the modes the build
+    selects, so a mosaics-only collection does not advertise planting/harvest scenes.
+    """
+    # Imported here: api.imagery's package init imports this module back.
+    from ftw_dataset_tools.api.imagery.slots import MOSAIC_SLOTS, SCENE_SLOTS
+    from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_MEDIA_TYPE
+
     defs: dict[str, ItemAssetDefinition] = {}
     for mask_name in _MASK_TYPE_BY_ASSET_NAME:
         defs[f"{mask_name}_mask"] = ItemAssetDefinition(
             {"type": MEDIA_TYPE_COG, "roles": ["labels"], "title": _MASK_TITLES[mask_name]}
         )
-    for season in ("planting", "harvest"):
-        defs[f"{season}_image"] = ItemAssetDefinition(
-            {
-                "type": MEDIA_TYPE_COG,
-                "roles": ["data"],
-                "title": f"{season.capitalize()} season imagery",
-            }
-        )
-        defs[f"{season}_visual"] = ItemAssetDefinition(
-            {
-                "type": MEDIA_TYPE_COG,
-                "roles": ["visual"],
-                "title": f"{season.capitalize()} season scene (true colour)",
-            }
-        )
-    # Imported here: api.imagery's package init imports this module back.
-    from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_MEDIA_TYPE
-
+    if "scenes" in imagery_modes:
+        for season in SCENE_SLOTS:
+            defs[f"{season}_image"] = ItemAssetDefinition(
+                {
+                    "type": MEDIA_TYPE_COG,
+                    "roles": ["data"],
+                    "title": f"{season.capitalize()} season imagery",
+                }
+            )
+            defs[f"{season}_visual"] = ItemAssetDefinition(
+                {
+                    "type": MEDIA_TYPE_COG,
+                    "roles": ["visual"],
+                    "title": f"{season.capitalize()} season scene (true colour)",
+                }
+            )
+    if "mosaics" in imagery_modes:
+        for quarter in MOSAIC_SLOTS:
+            defs[f"{quarter}_image"] = ItemAssetDefinition(
+                {
+                    "type": MEDIA_TYPE_COG,
+                    "roles": ["data"],
+                    "title": f"{quarter.upper()} quarterly mosaic imagery",
+                }
+            )
     # Validators require a type on every definition. ftwd writes WebP previews; a
     # tree still holding legacy JPEGs describes them on each item's own asset
     # (``ftwd convert-previews`` replaces them).
@@ -650,6 +681,70 @@ def _add_parquet_asset(
     add_table_columns(collection.assets[key], path)
 
 
+def _held_imagery_modes(items: list[Item]) -> set[str]:
+    """The modes some chip holds imagery in: a slot link, or an image or visual asset."""
+    from ftw_dataset_tools.api.imagery.slots import SLOTS_BY_MODE
+
+    def holds(item: Item, slot: str) -> bool:
+        if f"{slot}_image" in item.assets or f"{slot}_visual" in item.assets:
+            return True
+        return any(link.rel == f"ftw:{slot}" for link in item.links)
+
+    return {
+        mode
+        for mode, slots in SLOTS_BY_MODE.items()
+        if any(holds(item, slot) for item in items for slot in slots)
+    }
+
+
+def _declared_imagery_modes(config: DatasetConfig | None, items: list[Item]) -> tuple[str, ...]:
+    """The imagery modes the collection declares item assets for, in run order.
+
+    The modes the build selects, plus any the chips already hold: a rebuild with
+    selection switched off keeps the imagery an earlier run selected.
+    """
+    from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES
+
+    select = config.stages.select_images if config is not None else None
+    configured = select.imagery_modes if select is not None and select.enabled else ()
+    held = _held_imagery_modes(items)
+    return tuple(mode for mode in IMAGERY_MODES if mode in configured or mode in held)
+
+
+def refresh_item_assets(catalog_dir: Path | str) -> None:
+    """Re-declare a written collection's imagery ``item_assets`` from what its chips hold.
+
+    Imagery is selected after the stac stage writes the collection (by ``ftwd run``'s
+    later stages, ``create-dataset`` and the standalone commands) and can be cleared,
+    so each of those calls this when done. Only the imagery slots change; the file is
+    edited as JSON so everything else the stac stage wrote stays as it was.
+    """
+    from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
+    from ftw_dataset_tools.api.imagery.slots import IMAGERY_SLOTS
+
+    path = Path(catalog_dir) / "collection.json"
+    if not path.exists():
+        return
+    items = [item for item, _path in find_chip_items(Path(catalog_dir))]
+    modes = _declared_imagery_modes(None, items)
+    imagery_keys = {f"{slot}_{kind}" for slot in IMAGERY_SLOTS for kind in ("image", "visual")}
+
+    collection = json.loads(path.read_text(encoding="utf-8"))
+    declared = collection.get("item_assets") or {}
+    updated = {key: value for key, value in declared.items() if key not in imagery_keys}
+    updated.update(
+        {
+            key: definition.to_dict()
+            for key, definition in _build_item_assets(modes).items()
+            if key in imagery_keys
+        }
+    )
+    if updated == declared:
+        return
+    collection["item_assets"] = updated
+    path.write_text(json.dumps(collection, indent=2) + "\n", encoding="utf-8")
+
+
 def _create_collection(
     dataset_name: str,
     fields_file: Path,
@@ -661,6 +756,7 @@ def _create_collection(
     filtered_fields_file: Path | None = None,
     checksums: bool = False,
     background_class_value: int = 0,
+    imagery_modes: Sequence[str] = (),
 ) -> Collection:
     """
     Create the single dataset collection with source-data and chip-definition assets.
@@ -719,7 +815,7 @@ def _create_collection(
         checksums=checksums,
     )
 
-    collection.item_assets = _build_item_assets()
+    collection.item_assets = _build_item_assets(imagery_modes)
     # A Collection carries renders at its top level (the schema's Collection branch).
     collection.extra_fields["renders"] = build_collection_renders(
         background_value=background_class_value
@@ -930,12 +1026,14 @@ def _build_chip_items(
             continue
 
         chip_extent = temporal_extent
-        if crop_calendar and chip_info.year is not None:
-            season = _crop_season_extent(chip_info.bbox, chip_info.year)
-            if season is None:
-                outside_calendar += 1
-            else:
-                chip_extent = season
+        calendar: dict[str, int] = {}
+        if crop_calendar:
+            calendar, summer = _crop_calendar_properties(chip_info.bbox)
+            if chip_info.year is not None:
+                if summer is None:
+                    outside_calendar += 1
+                else:
+                    chip_extent = _crop_season_extent(summer, chip_info.year)
 
         item = _create_chip_item(
             chip_info=chip_info,
@@ -945,6 +1043,7 @@ def _build_chip_items(
             background_class_value=background_class_value,
         )
         if item:
+            item.properties.update(calendar)
             # Items are rebuilt from scratch, so carry over any imagery
             # selection the previous run recorded; otherwise saving the catalog
             # would wipe it and every chip would re-select.
@@ -1076,9 +1175,10 @@ def generate_stac_catalog(
             written on the collection.
         checksums: Compute file:checksum (multihash sha256) for every asset. Slow; default False.
         background_class_value: Pixel value used for background in masks (3 for presence-only).
-        crop_calendar: Date each year-tagged chip item by its crop season (planting to
-            harvest) rather than the dataset extent. Chips the calendar does not cover
-            keep the dataset extent.
+        crop_calendar: Record both WorldCereal seasons' planting and harvest days on
+            every chip item (``ftw:<season>_<stage>_day``), and date each year-tagged
+            chip by its summer season (planting to harvest) rather than the dataset
+            extent. Chips the summer calendar does not cover keep the dataset extent.
 
     Returns:
         STACGenerationResult with paths to generated files
@@ -1149,6 +1249,7 @@ def generate_stac_catalog(
         filtered_fields_file=filtered_fields_file,
         checksums=checksums,
         background_class_value=background_class_value,
+        imagery_modes=_declared_imagery_modes(config, items),
     )
 
     _apply_collection_context(collection, config, metadata, previous, provenance)

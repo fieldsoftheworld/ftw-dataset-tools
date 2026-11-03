@@ -457,8 +457,7 @@ class TestCropCalendarExtent:
     def _use_season(self, lookup, planting_day: int, harvest_day: int) -> None:
         from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
 
-        lookup.side_effect = None
-        lookup.return_value = CropCalendarDates(planting_day, harvest_day)
+        lookup.return_value = {"summer": CropCalendarDates(planting_day, harvest_day)}
 
     def test_item_spans_crop_season(self, tmp_path: Path, stac_crop_calendar) -> None:
         self._use_season(stac_crop_calendar, 100, 250)
@@ -472,6 +471,36 @@ class TestCropCalendarExtent:
             datetime(2024, 1, 1, tzinfo=UTC),
             datetime(2024, 12, 31, 23, 59, 59, tzinfo=UTC),
         )
+
+    def test_both_seasons_are_recorded_on_the_chip(
+        self, tmp_path: Path, stac_crop_calendar
+    ) -> None:
+        """Whatever imagery the chip gets: a mosaics-only chip keeps its calendar."""
+        from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
+
+        stac_crop_calendar.return_value = {
+            "summer": CropCalendarDates(101, 297),
+            "winter": CropCalendarDates(280, 204),
+        }
+        build_catalog(tmp_path)
+
+        props = self._item(tmp_path)["properties"]
+        assert props["ftw:summer_planting_day"] == 101
+        assert props["ftw:summer_harvest_day"] == 297
+        assert props["ftw:winter_planting_day"] == 280
+        assert props["ftw:winter_harvest_day"] == 204
+        assert props["start_datetime"].startswith("2024-04-10")  # the summer season
+
+    def test_a_season_without_data_is_left_out(self, tmp_path: Path, stac_crop_calendar) -> None:
+        from ftw_dataset_tools.api.imagery.crop_calendar import CropCalendarDates
+
+        stac_crop_calendar.return_value = {"winter": CropCalendarDates(280, 204)}
+        build_catalog(tmp_path)
+
+        props = self._item(tmp_path)["properties"]
+        assert props["ftw:winter_planting_day"] == 280
+        assert "ftw:summer_planting_day" not in props
+        assert props["start_datetime"].startswith("2024-01-01")  # no summer: the year
 
     def test_next_year_harvest_widens_collection(self, tmp_path: Path, stac_crop_calendar) -> None:
         import json
@@ -644,12 +673,77 @@ class TestSingleCollectionLayout:
             "instance_mask",
             "semantic_2class_mask",
             "semantic_3class_mask",
-            "planting_image",
             "thumbnail",
         }
+        # No imagery selected or held: no imagery slots are advertised.
+        assert not {key for key in ia if key.endswith(("_image", "_visual"))}
         assert ia["semantic_3class_mask"]["roles"] == ["labels"]
         assert ia["semantic_3class_mask"]["type"].startswith("image/tiff")
         assert "item-assets" not in " ".join(coll.get("stac_extensions", []))
+
+    def test_item_assets_declare_only_the_selected_modes(self) -> None:
+        from ftw_dataset_tools.api.stac import _build_item_assets
+
+        mosaics = _build_item_assets(("mosaics",))
+        assert {"q1_image", "q2_image", "q3_image", "q4_image"} <= set(mosaics)
+        assert not {k for k in mosaics if k.startswith(("planting", "harvest"))}
+        scenes = _build_item_assets(("scenes",))
+        assert {"planting_image", "planting_visual", "harvest_image", "harvest_visual"} <= set(
+            scenes
+        )
+        assert "q1_image" not in scenes
+
+    def test_declared_modes_are_the_configured_ones_plus_any_held(self) -> None:
+        from types import SimpleNamespace
+
+        import pystac
+
+        from ftw_dataset_tools.api.stac import _declared_imagery_modes
+
+        def config(enabled: bool, modes: tuple[str, ...]) -> SimpleNamespace:
+            select = SimpleNamespace(enabled=enabled, imagery_modes=modes)
+            return SimpleNamespace(stages=SimpleNamespace(select_images=select))
+
+        chip = pystac.Item("c", None, None, datetime(2024, 1, 1, tzinfo=UTC), {})
+        assert _declared_imagery_modes(config(True, ("mosaics",)), [chip]) == ("mosaics",)
+        assert _declared_imagery_modes(config(False, ("mosaics",)), [chip]) == ()
+        assert _declared_imagery_modes(None, [chip]) == ()
+        held = chip.clone()
+        held.add_asset("planting_image", pystac.Asset(href="./p.tif"))
+        assert _declared_imagery_modes(config(True, ("mosaics",)), [held]) == (
+            "scenes",
+            "mosaics",
+        )
+        assert _declared_imagery_modes(None, [held]) == ("scenes",)
+        previewed = chip.clone()  # preview mode: the scene is linked, never clipped
+        previewed.add_asset("harvest_visual", pystac.Asset(href="https://x/tci.tif"))
+        assert _declared_imagery_modes(None, [previewed]) == ("scenes",)
+
+    def test_refresh_declares_what_the_chips_hold_now(self, tmp_path: Path) -> None:
+        """Selection lands after the stac stage; clearing a mode takes its slots away."""
+        import json
+
+        import pystac
+
+        from ftw_dataset_tools.api.stac import refresh_item_assets
+
+        result = build_catalog(tmp_path)
+        chip_path = next((tmp_path / "chips").glob("*/*/ftw-*_2024.json"))
+        chip = pystac.Item.from_file(str(chip_path))
+        chip.add_link(pystac.Link(rel="ftw:q1", target="./x_q1_s2.json"))
+        chip.save_object(include_self_link=False, dest_href=str(chip_path))
+
+        refresh_item_assets(tmp_path)
+        declared = json.loads(result.collection_path.read_text())["item_assets"]
+        assert {"q1_image", "q4_image"} <= set(declared)
+        assert "planting_image" not in declared
+        assert "semantic_2class_mask" in declared  # untouched
+
+        chip.links = [link for link in chip.links if link.rel != "ftw:q1"]
+        chip.save_object(include_self_link=False, dest_href=str(chip_path))
+        refresh_item_assets(tmp_path)
+        declared = json.loads(result.collection_path.read_text())["item_assets"]
+        assert not {key for key in declared if key.endswith(("_image", "_visual"))}
 
     def test_custom_grid_ids_go_under_other(self, tmp_path: Path) -> None:
         result = build_catalog(tmp_path, grid_id="grid_001")
@@ -821,6 +915,24 @@ class TestCollectionMetadata:
         assert props["ftw:scale_percent"] == 10
         assert props["ftw:scale_min_blocks_per_square"] == 1
         assert props["ftw:scale_version"] == "ftw-scale-v1"
+
+    def test_scene_settings_only_when_scenes_are_selected(self) -> None:
+        from ftw_dataset_tools.api.config import DatasetConfig
+        from ftw_dataset_tools.api.stac import _collection_ftw_properties
+
+        def props(modes):
+            select = {"enabled": True, "imagery_mode": modes, "nodata_max": 100.0}
+            return _collection_ftw_properties(
+                DatasetConfig.from_dict(
+                    {"fields_file": "f.parquet", "stages": {"select_images": select}}
+                )
+            )
+
+        mosaics = props("mosaics")
+        assert mosaics["ftw:nodata_max"] == 100.0
+        assert "ftw:buffer_days" not in mosaics
+        assert "ftw:cloud_cover_chip_threshold" not in mosaics
+        assert props(["scenes", "mosaics"])["ftw:buffer_days"] == 14
 
     def test_warns_without_license(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         build_catalog(tmp_path)
@@ -1270,12 +1382,10 @@ class TestRendersOnCatalog:
         assert coll["renders"]["instance_mask"]["colormap_name"] == "viridis"
         assert coll["stac_extensions"].count(RENDER_SCHEMA_URI) == 1
 
-    def test_visual_season_item_assets_declared(self, tmp_path: Path) -> None:
-        import json
+    def test_visual_season_item_assets_declared(self) -> None:
+        from ftw_dataset_tools.api.stac import _build_item_assets
 
-        result = build_catalog(tmp_path)
-
-        ia = json.loads(result.collection_path.read_text())["item_assets"]
+        ia = {k: v.to_dict() for k, v in _build_item_assets(("scenes",)).items()}
         assert ia["planting_visual"]["roles"] == ["visual"]
         assert ia["harvest_visual"]["type"] == MEDIA_TYPE_COG
         assert ia["planting_image"]["roles"] == ["data"]

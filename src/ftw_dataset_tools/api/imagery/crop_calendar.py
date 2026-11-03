@@ -17,6 +17,8 @@ from ftw_dataset_tools.api.fs import create_temp_file, finalize_temp_file
 from ftw_dataset_tools.api.imagery.settings import (
     CROP_CAL_SUMMER_END,
     CROP_CAL_SUMMER_START,
+    CROP_CAL_WINTER_END,
+    CROP_CAL_WINTER_START,
     CROP_CALENDAR_BASE_URL,
     CROP_CALENDAR_FILES,
 )
@@ -30,6 +32,7 @@ __all__ = [
     "ensure_crop_calendar_exists",
     "get_crop_calendar_cache_dir",
     "get_crop_calendar_dates",
+    "get_crop_calendar_seasons",
     "harvest_day_to_datetime",
 ]
 
@@ -247,15 +250,38 @@ def get_crop_calendar_dates(
     Raises:
         ValueError: If no valid crop calendar data found for the region
     """
+    return _season_dates(bbox, *_SEASON_FILES["summer"])
+
+
+#: (start of season, end of season) rasters of each WorldCereal crop calendar season.
+_SEASON_FILES = {
+    "summer": (CROP_CAL_SUMMER_START, CROP_CAL_SUMMER_END),
+    "winter": (CROP_CAL_WINTER_START, CROP_CAL_WINTER_END),
+}
+
+
+def _season_dates(
+    bbox: tuple[float, float, float, float], start_file: str, end_file: str
+) -> CropCalendarDates:
     cache_dir = ensure_crop_calendar_exists()
-
-    start_raster_path = cache_dir / CROP_CAL_SUMMER_START
-    end_raster_path = cache_dir / CROP_CAL_SUMMER_END
-
-    planting_day = _sample_raster_at_center(start_raster_path, bbox)
-    harvest_day = _sample_raster_at_center(end_raster_path, bbox)
-
     return CropCalendarDates(
-        planting_day=planting_day,
-        harvest_day=harvest_day,
+        planting_day=_sample_raster_at_center(cache_dir / start_file, bbox),
+        harvest_day=_sample_raster_at_center(cache_dir / end_file, bbox),
     )
+
+
+def get_crop_calendar_seasons(
+    bbox: tuple[float, float, float, float],
+) -> dict[str, CropCalendarDates]:
+    """Planting and harvest days of both WorldCereal seasons at the bbox centre.
+
+    Keyed ``summer`` and ``winter``; a season the calendar has no data for at that
+    location (no such crop grown there) is left out.
+    """
+    seasons = {}
+    for season, files in _SEASON_FILES.items():
+        try:
+            seasons[season] = _season_dates(bbox, *files)
+        except ValueError:
+            continue
+    return seasons

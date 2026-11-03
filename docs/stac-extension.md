@@ -38,6 +38,19 @@ All FTW properties use the `ftw:` prefix.
 
 ## Properties
 
+### Crop Calendar Properties
+
+Every chip item carries the WorldCereal crop calendar at its centre (0.5° grid), whatever
+imagery it has, written by the `stac` stage when `stages.stac.crop_calendar` is on (the
+default). A season the calendar has no data for at that location is left out.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `ftw:summer_planting_day` | integer | Summer crops' start of season, day of year (1-366) |
+| `ftw:summer_harvest_day` | integer | Summer crops' end of season, day of year (1-366) |
+| `ftw:winter_planting_day` | integer | Winter crops' start of season, day of year (1-366); usually the autumn before harvest |
+| `ftw:winter_harvest_day` | integer | Winter crops' end of season, day of year (1-366) |
+
 ### Parent Chip Item Properties
 
 These properties are added to parent chip items after image selection:
@@ -45,8 +58,8 @@ These properties are added to parent chip items after image selection:
 | Property | Type | Description |
 |----------|------|-------------|
 | `ftw:calendar_year` | integer | Calendar year for the crop cycle (e.g., 2024) |
-| `ftw:planting_day` | integer | Day of year (1-365) for planting from crop calendar |
-| `ftw:harvest_day` | integer | Day of year (1-365) for harvest from crop calendar |
+| `ftw:planting_day` | integer | Day of year (1-366) the planting scene window was centred on: the summer season's `ftw:summer_planting_day` |
+| `ftw:harvest_day` | integer | Day of year (1-366) the harvest scene window was centred on: the summer season's `ftw:summer_harvest_day` |
 | `ftw:stac_host` | string | Scene search backend used: "parquet-mirror" (the Sentinel-2 STAC-GeoParquet mirror, default) or "earthsearch" (the Earth Search API) |
 | `ftw:cloud_cover_chip_threshold` | number | Chip-level cloud cover threshold percentage (0-100). Note: 2 means 2%, not 0.02 |
 | `ftw:buffer_days` | integer | Search buffer in days around crop calendar dates |
@@ -208,11 +221,11 @@ describing how the whole dataset was built:
 | `ftw:scale_min_blocks_per_square` | integer | Blocks always kept per MGRS 100 km square (present only for scaled datasets) |
 | `ftw:scale_version` | string | Hash version used to score blocks (present only for scaled datasets) |
 | `ftw:landcover_product` | string | Land-cover product behind the `ftw:landcover_*` item properties: `io-lulc-annual-v02` (present only when land cover is enabled, alongside a `derived_from` link to that collection) |
-| `ftw:cloud_cover_chip_threshold` | number | Chip-level cloud cover threshold percentage (present only when image selection is enabled) |
+| `ftw:cloud_cover_chip_threshold` | number | Chip-level cloud cover threshold percentage (present only when scene selection is configured) |
 | `ftw:nodata_max` | number | Maximum allowed nodata percentage (0-100) for a selected scene (present only when image selection is enabled) |
-| `ftw:buffer_days` | integer | Search buffer in days around crop calendar dates (present only when image selection is enabled) |
-| `ftw:num_buffer_expansions` | integer | Number of times to expand the buffer if no cloud-free scenes are found (present only when image selection is enabled) |
-| `ftw:buffer_expansion_size` | integer | Days added to the buffer on each expansion (present only when image selection is enabled) |
+| `ftw:buffer_days` | integer | Search buffer in days around crop calendar dates (present only when scene selection is configured) |
+| `ftw:num_buffer_expansions` | integer | Number of times to expand the buffer if no cloud-free scenes are found (present only when scene selection is configured) |
+| `ftw:buffer_expansion_size` | integer | Days added to the buffer on each expansion (present only when scene selection is configured) |
 | `ftw:config` | object | Resolved config provenance for the run that produced the dataset |
 
 `license`, `providers`, `keywords`, `version` (from the

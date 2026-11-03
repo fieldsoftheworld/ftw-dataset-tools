@@ -30,6 +30,7 @@ from ftw_dataset_tools.api.imagery.selection_workflow import (
 )
 from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES
 from ftw_dataset_tools.api.imagery.summary import selection_summary_lines
+from ftw_dataset_tools.api.stac import refresh_item_assets
 from ftw_dataset_tools.api.stac_items import copy_catalog
 from ftw_dataset_tools.commands.cli_logging import is_verbose, verbose_alias_option
 from ftw_dataset_tools.commands.imagery_mode import (
@@ -142,7 +143,9 @@ def _echo_stats(chip_items: list[pystac.Item], catalog_dir: Path) -> None:
         )
 
 
-def _clear_all_selections(chip_items: list[pystac.Item], modes: tuple[str, ...]) -> None:
+def _clear_all_selections(
+    catalog_dir: Path, chip_items: list[pystac.Item], modes: tuple[str, ...]
+) -> None:
     """Clear the ``modes`` selections of every chip, after confirmation."""
     selected = [item for item in chip_items if any(has_mode_selection(item, m) for m in modes)]
 
@@ -171,6 +174,7 @@ def _clear_all_selections(chip_items: list[pystac.Item], modes: tuple[str, ...])
             total_tifs += result.geotiffs_deleted
             chips_cleared += 1
             pbar.update(1)
+    refresh_item_assets(catalog_dir)
 
     click.echo("")
     click.echo(click.style("Cleared imagery selections:", fg="green"))
@@ -434,7 +438,7 @@ def select_images_cmd(
     if clear_selections:
         # Explicit --imagery-mode clears just those modes; without it, every mode.
         explicit = ctx.get_parameter_source("imagery_modes") == ParameterSource.COMMANDLINE
-        _clear_all_selections(chip_items, imagery_modes if explicit else IMAGERY_MODES)
+        _clear_all_selections(catalog_dir, chip_items, imagery_modes if explicit else IMAGERY_MODES)
         return
 
     if scenes:
