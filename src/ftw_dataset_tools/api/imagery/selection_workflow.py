@@ -50,6 +50,7 @@ from ftw_dataset_tools.api.imagery.stac_child_items import (
     create_mosaic_child_items,
 )
 from ftw_dataset_tools.api.logging_config import capture_logs, get_logger
+from ftw_dataset_tools.api.stac import refresh_item_assets
 
 if TYPE_CHECKING:
     import logging
@@ -479,21 +480,25 @@ def select_imagery_modes_for_catalog(
     for missing in require_mosaic_years(mosaic_years, modes):
         logger.warning(f"Mosaics for {missing} are not available; its chips get scenes only.")
 
-    cleared = resolve_selection_conflicts(items, imagery_modes=modes, year=year, force=force)
-    if cleared:
-        logger.info(f"Cleared imagery from a different run: {cleared}")
-
-    for mode in modes:
-        if len(modes) > 1:
-            logger.info(f"Selecting {mode}...")
-        result.by_mode[mode] = _select_mode(
-            catalog_dir=catalog_dir,
-            year=year,
-            imagery_mode=mode,
-            force=force,
-            chip_items=chip_items,
-            **options,
-        )
+    try:
+        cleared = resolve_selection_conflicts(items, imagery_modes=modes, year=year, force=force)
+        if cleared:
+            logger.info(f"Cleared imagery from a different run: {cleared}")
+        for mode in modes:
+            if len(modes) > 1:
+                logger.info(f"Selecting {mode}...")
+            result.by_mode[mode] = _select_mode(
+                catalog_dir=catalog_dir,
+                year=year,
+                imagery_mode=mode,
+                force=force,
+                chip_items=chip_items,
+                **options,
+            )
+    finally:
+        # Selection runs after the stac stage wrote the collection: declare what
+        # landed, also when a mode failed after another had changed the chips.
+        refresh_item_assets(catalog_dir)
     return result
 
 

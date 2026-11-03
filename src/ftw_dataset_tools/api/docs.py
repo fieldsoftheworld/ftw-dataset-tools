@@ -117,6 +117,12 @@ ITEM_PROPERTY_NOTES = {
     "ftw:calendar_year": "calendar year of the crop cycle the chip documents",
     "ftw:planting_day": "day of year the planting window is centred on",
     "ftw:harvest_day": "day of year the harvest window is centred on",
+    "ftw:summer_planting_day": "WorldCereal crop calendar: summer crops' start of season, "
+    "day of year",
+    "ftw:summer_harvest_day": "WorldCereal crop calendar: summer crops' end of season, day of year",
+    "ftw:winter_planting_day": "WorldCereal crop calendar: winter crops' start of season, "
+    "day of year (usually in the autumn before harvest)",
+    "ftw:winter_harvest_day": "WorldCereal crop calendar: winter crops' end of season, day of year",
     "ftw:planting_cloud_cover": "cloud cover of the selected planting scene, in percent",
     "ftw:harvest_cloud_cover": "cloud cover of the selected harvest scene, in percent",
     "ftw:stac_host": "STAC API the imagery was selected from",

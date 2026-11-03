@@ -344,7 +344,8 @@ class StacConfig:
     # Compute file:checksum (multihash sha256) for every asset. Optional in
     # Portolan and slow on tens of thousands of COGs, so off by default.
     checksums: bool = False
-    # Date chip items by their crop calendar season instead of the whole year.
+    # Record the WorldCereal crop calendar (summer and winter planting/harvest days)
+    # on every chip, and date chip items by their summer season, not the whole year.
     crop_calendar: bool = True
 
 

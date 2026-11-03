@@ -276,13 +276,13 @@ def crop_calendar_warmup(monkeypatch: pytest.MonkeyPatch):
 def stac_crop_calendar(monkeypatch: pytest.MonkeyPatch):
     """Keep STAC generation off the crop calendar download.
 
-    Raises as the calendar does for an uncovered location, so items keep the
-    dataset extent; tests that want a season set ``side_effect``/``return_value``.
+    Answers as the calendar does for an uncovered location (no season), so items
+    keep the dataset extent; tests that want seasons set ``return_value``.
     """
     from unittest.mock import MagicMock
 
     from ftw_dataset_tools.api.imagery import crop_calendar
 
-    lookup = MagicMock(name="get_crop_calendar_dates", side_effect=ValueError("no data"))
-    monkeypatch.setattr(crop_calendar, "get_crop_calendar_dates", lookup)
+    lookup = MagicMock(name="get_crop_calendar_seasons", return_value={})
+    monkeypatch.setattr(crop_calendar, "get_crop_calendar_seasons", lookup)
     return lookup
