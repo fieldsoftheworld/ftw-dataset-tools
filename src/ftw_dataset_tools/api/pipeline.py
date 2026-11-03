@@ -42,6 +42,7 @@ from ftw_dataset_tools.api import (
 from ftw_dataset_tools.api import config as config_module
 from ftw_dataset_tools.api.config import DOWNLOAD_MODE_PREVIEW
 from ftw_dataset_tools.api.geo import (
+    CRSInfo,
     detect_crs,
     detect_geometry_column,
     ensure_spatial_loaded,
@@ -487,10 +488,53 @@ def stage_reproject(ctx: PipelineContext) -> None:
             target_crs="EPSG:4326",
         )
         ctx.was_reprojected = True
+        _drop_declared_crs(ctx.output_fields_path)
         logger.info(f"Reprojected to: {ctx.output_fields_path}")
+    elif _declares_crs(crs_info):
+        logger.info("CRS is EPSG:4326, rewriting with the default CRS...")
+        _write_default_crs(ctx.fields_input, ctx.output_fields_path)
     else:
         logger.info("CRS is already EPSG:4326, copying to output directory...")
         shutil.copy2(ctx.fields_input, ctx.output_fields_path)
+
+
+def _declares_crs(crs_info: CRSInfo) -> bool:
+    return crs_info.projjson is not None or crs_info.wkt is not None
+
+
+def _drop_declared_crs(path: Path) -> None:
+    """Rewrite lon/lat fields in place so they carry the default CRS.
+
+    An explicit EPSG:4326 makes DuckDB refuse to intersect these fields with the
+    chips, which carry the default OGC:CRS84, and the published queries join them.
+    """
+    if not _declares_crs(detect_crs(path)):
+        return
+    tmp = path.with_suffix(".default-crs.parquet")
+    _write_default_crs(path, tmp)
+    tmp.replace(path)
+
+
+def _write_default_crs(src: Path | str, dst: Path) -> None:
+    """Copy lon/lat GeoParquet without an explicit CRS, i.e. with the default OGC:CRS84.
+
+    Only the ``geo`` metadata changes, so this streams the row groups through pyarrow;
+    geoparquet-io has no way to drop a declared CRS without reprojecting.
+    """
+    import json
+
+    import pyarrow.parquet as pq
+
+    source = pq.ParquetFile(src)
+    metadata = dict(source.schema_arrow.metadata)
+    geo = json.loads(metadata[b"geo"])
+    for column in geo.get("columns", {}).values():
+        column.pop("crs", None)
+    metadata[b"geo"] = json.dumps(geo).encode()
+    schema = source.schema_arrow.with_metadata(metadata)
+    with pq.ParquetWriter(dst, schema, compression="zstd") as writer:
+        for batch in source.iter_batches():
+            writer.write_batch(batch)
 
 
 def stage_filter(ctx: PipelineContext) -> None:

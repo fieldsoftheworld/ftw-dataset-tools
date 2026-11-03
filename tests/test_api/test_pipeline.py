@@ -15,6 +15,7 @@ from shapely.geometry import box
 from ftw_dataset_tools.api import crop_stats, field_stats, pipeline
 from ftw_dataset_tools.api import tiles as tiles_module
 from ftw_dataset_tools.api.config import ClassFilter, ClassFilterError, DatasetConfig
+from ftw_dataset_tools.api.geo import detect_crs
 from ftw_dataset_tools.api.pipeline import StageInputError
 
 
@@ -457,6 +458,59 @@ class TestReprojectStage:
         pipeline.stage_reproject(ctx)
         assert ctx.output_fields_path.exists()
         assert ctx.was_reprojected is False
+
+    def test_explicit_4326_is_written_with_the_default_crs(
+        self, sample_geoparquet_4326: Path, tmp_path: Path
+    ) -> None:
+        """A declared EPSG:4326 won't intersect the chips' default OGC:CRS84 in DuckDB."""
+        assert detect_crs(sample_geoparquet_4326).projjson is not None
+        config = _config(sample_geoparquet_4326, tmp_path / "out", year=2023)
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        pipeline.stage_reproject(ctx)
+        written = detect_crs(ctx.output_fields_path)
+        assert written.projjson is None
+        assert written.authority_code == "EPSG:4326"
+        assert ctx.was_reprojected is False
+        source = gpd.read_parquet(sample_geoparquet_4326)
+        rewritten = gpd.read_parquet(ctx.output_fields_path)
+        assert list(rewritten.geometry.to_wkb()) == list(source.geometry.to_wkb())
+        assert list(rewritten.columns) == list(source.columns)
+
+    def test_reprojected_output_carries_the_default_crs(
+        self,
+        sample_geoparquet_3035: Path,
+        sample_geoparquet_4326: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """geoparquet-io's reproject declares EPSG:4326 explicitly; the stage drops it."""
+
+        def fake_reproject(_src, dst, target_crs):
+            assert target_crs == "EPSG:4326"
+            Path(dst).write_bytes(sample_geoparquet_4326.read_bytes())
+
+        monkeypatch.setattr(pipeline, "reproject", fake_reproject)
+        config = _config(sample_geoparquet_3035, tmp_path / "out", year=2023)
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        pipeline.stage_reproject(ctx)
+        written = detect_crs(ctx.output_fields_path)
+        assert ctx.was_reprojected is True
+        assert written.projjson is None
+        assert written.authority_code == "EPSG:4326"
+        assert not list(ctx.output_dir.glob("*.default-crs.parquet"))
+
+    def test_default_crs_input_is_copied(
+        self, sample_geoparquet_4326: Path, tmp_path: Path
+    ) -> None:
+        default = tmp_path / "default.parquet"
+        pipeline._write_default_crs(sample_geoparquet_4326, default)
+        config = _config(default, tmp_path / "out", year=2023)
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        pipeline.stage_reproject(ctx)
+        assert ctx.output_fields_path.read_bytes() == default.read_bytes()
 
     def test_skip_reproject_errors_on_non_4326(
         self, sample_geoparquet_3035: Path, tmp_path: Path
