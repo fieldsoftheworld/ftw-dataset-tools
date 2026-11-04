@@ -294,6 +294,65 @@ _BBOX_SIDES = ("xmin", "ymin", "xmax", "ymax")
 # Rows checked to confirm a bbox column holds its geometry's envelope before it is trusted.
 _BBOX_CHECK_ROWS = 2000
 
+# Slack, relative to the coordinate, that the check allows a bbox side and the prefilter adds
+# to each chip side. Equal, so a bbox the check accepts can never cost a geometry its chip.
+_BBOX_REL_TOL = 1e-6
+
+
+def _bbox_pad(value: float) -> float:
+    return _BBOX_REL_TOL * (1 + abs(value))
+
+
+def _geometry_is_geographic(schema, geom_col: str) -> bool:
+    """Whether the GeoParquet metadata puts ``geom_col`` in lon/lat (absent crs = OGC:CRS84)."""
+    import pyproj
+
+    try:
+        column = json.loads((schema.metadata or {}).get(b"geo", b"{}"))["columns"][geom_col]
+    except (KeyError, TypeError, ValueError):
+        return False
+    if "crs" not in column:
+        return True
+    crs = column["crs"]
+    if crs is None:
+        return False
+    try:
+        return pyproj.CRS.from_user_input(
+            json.dumps(crs) if isinstance(crs, dict) else crs
+        ).is_geographic
+    except pyproj.exceptions.CRSError:
+        return False
+
+
+def _bbox_footer_ok(path: Path, column: str, fields: dict[str, str], geographic: bool) -> bool:
+    """Whole-file guard from the Parquet footer: no NULL bbox sides, and lon/lat in range.
+
+    The row sample in ``_bbox_matches_geometry`` can't see rows past it; every row group's
+    statistics can. A NULL side would make the prefilter drop its row. A projected value in
+    a lon/lat file means some rows' bbox is stale.
+    """
+    import pyarrow.parquet as pq
+
+    meta = pq.ParquetFile(path).metadata
+    if meta.num_row_groups == 0:
+        return False
+    first = meta.row_group(0)
+    index = {first.column(i).path_in_schema: i for i in range(first.num_columns)}
+    limits = {"xmin": 180.0, "xmax": 180.0, "ymin": 90.0, "ymax": 90.0}
+    for side, field in fields.items():
+        i = index.get(f"{column}.{field}")
+        if i is None:
+            return False
+        for rg in range(meta.num_row_groups):
+            stats = meta.row_group(rg).column(i).statistics
+            if stats is None or not stats.has_min_max or stats.null_count != 0:
+                return False
+            if geographic and not (
+                -limits[side] - 1e-6 <= stats.min and stats.max <= limits[side] + 1e-6
+            ):
+                return False
+    return True
+
 
 def _declared_covering(schema, geom_col: str) -> dict[str, list[str]] | None:
     """The ``{side: [column, field]}`` bbox covering the GeoParquet metadata declares, if any."""
@@ -326,11 +385,13 @@ def _bbox_matches_geometry(path: Path, geom_col: str, sides: dict[str, str]) -> 
     conn = duckdb.connect(":memory:")
     try:
         ensure_spatial_loaded(conn)
+        # One thread: LIMIT then reads the file's first rows, the same in every worker.
+        conn.execute("SET threads = 1")
         g = '"' + geom_col.replace('"', '""') + '"'
         # Covers float rounding of a correct bbox, not a different CRS.
-        tol = "1e-6 * (1 + abs({v}))"
+        tol = f"{_BBOX_REL_TOL} * (1 + abs({{v}}))"
         outside = " OR ".join(
-            f"{sides[s]} {op} {fn}({g}) {sign} " + tol.format(v=f"{fn}({g})")
+            f"{sides[s]} IS NULL OR {sides[s]} {op} {fn}({g}) {sign} " + tol.format(v=f"{fn}({g})")
             for s, op, fn, sign in (
                 ("xmin", ">", "ST_XMin", "+"),
                 ("ymin", ">", "ST_YMin", "+"),
@@ -339,7 +400,7 @@ def _bbox_matches_geometry(path: Path, geom_col: str, sides: dict[str, str]) -> 
             )
         )
         bad, total = conn.execute(
-            f"""SELECT count(*) FILTER (WHERE {outside}), count(*)
+            f"""SELECT count(*) FILTER (WHERE coalesce({outside}, true)), count(*)
                 FROM (SELECT * FROM '{sql_path(path)}' WHERE {g} IS NOT NULL
                       LIMIT {_BBOX_CHECK_ROWS})"""
         ).fetchone()
@@ -357,11 +418,13 @@ def _bbox_covering(path: Path, geom_col: str) -> dict[str, str] | None:
     column (what ``add_bbox`` writes; a reprojection recomputes it but can leave another
     declared covering in the old CRS). Each candidate must exist as a struct with all four
     sides and match a sample of geometries; otherwise callers fall back to ``ST_Intersects``
-    alone, which is slower but correct.
+    alone, which is slower but correct. Before the sample, the footer statistics must show
+    no NULL sides anywhere and, for a lon/lat geometry, every side within ±180/±90.
     """
     import pyarrow.parquet as pq
 
     schema = pq.read_schema(path)
+    geographic = _geometry_is_geographic(schema, geom_col)
     candidates = []
     declared = _declared_covering(schema, geom_col)
     if declared is not None:
@@ -373,6 +436,8 @@ def _bbox_covering(path: Path, geom_col: str) -> dict[str, str] | None:
         if any(p[0] != column for p in parts.values()) or not _struct_has_fields(
             schema, column, fields
         ):
+            continue
+        if not _bbox_footer_ok(path, column, {s: parts[s][1] for s in _BBOX_SIDES}, geographic):
             continue
         sides = {
             side: ".".join('"' + str(p).replace('"', '""') + '"' for p in parts[side])
@@ -399,9 +464,12 @@ def _bbox_prefilter(
     if sides is None:
         return ""
     minx, miny, maxx, maxy = bounds
+    # Widened by the slack the check allowed; ST_Intersects still decides exactly.
+    minx, miny = minx - _bbox_pad(minx), miny - _bbox_pad(miny)
+    maxx, maxy = maxx + _bbox_pad(maxx), maxy + _bbox_pad(maxy)
     return (
-        f"{sides['xmax']} >= {minx} AND {sides['xmin']} <= {maxx} AND "
-        f"{sides['ymax']} >= {miny} AND {sides['ymin']} <= {maxy} AND "
+        f"{sides['xmax']} >= {minx!r} AND {sides['xmin']} <= {maxx!r} AND "
+        f"{sides['ymax']} >= {miny!r} AND {sides['ymin']} <= {maxy!r} AND "
     )
 
 

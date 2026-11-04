@@ -96,8 +96,8 @@ class TestBboxPrefilter:
 
     def test_uses_the_declared_columns(self, tmp_path) -> None:
         clause = masks._bbox_prefilter(_write(tmp_path / "a.parquet"), "geometry", BOUNDS)
-        assert '"bbox"."xmax" >= 0.0' in clause
-        assert '"bbox"."ymin" <= 10.0' in clause
+        assert '"bbox"."xmax" >= -1e-06' in clause
+        assert '"bbox"."ymin" <= 10.000011' in clause
         assert clause.endswith(" AND ")
 
     def test_undeclared_bbox_column_is_used_when_it_matches(self, tmp_path) -> None:
@@ -196,3 +196,81 @@ class TestReprojectedSource:
         for path in (fields, lines):
             assert "geometry_bbox" not in masks._bbox_prefilter(path, "geometry", bounds)
             assert len(masks._get_geometries_in_bounds(conn, path, "geometry", bounds)) == 1
+
+
+def _lonlat_file(path: Path, geoms: list, bboxes: list, row_group_size: int = 1000) -> Path:
+    sides = ("xmin", "ymin", "xmax", "ymax")
+    table = pa.table(
+        {
+            "id": [f"f{i}" for i in range(len(geoms))],
+            "geometry": [shapely.to_wkb(g) for g in geoms],
+            "bbox": pa.array(
+                [None if b is None else dict(zip(sides, b, strict=True)) for b in bboxes],
+                type=pa.struct([(s, pa.float64()) for s in sides]),
+            ),
+        }
+    )
+    geo = {
+        "version": "1.1.0",
+        "primary_column": "geometry",
+        "columns": {
+            "geometry": {
+                "encoding": "WKB",
+                "geometry_types": ["Polygon"],
+                "covering": {"bbox": {s: ["bbox", s] for s in sides}},
+            }
+        },
+    }
+    pq.write_table(
+        table.replace_schema_metadata({b"geo": json.dumps(geo).encode()}),
+        path,
+        row_group_size=row_group_size,
+    )
+    return path
+
+
+def _count(path: Path, bounds) -> int:
+    conn = duckdb.connect(":memory:")
+    ensure_spatial_loaded(conn)
+    return len(masks._get_geometries_in_bounds(conn, path, "geometry", bounds))
+
+
+class TestBboxEdgeCases:
+    def test_bbox_within_tolerance_still_finds_edge_geometry(self, tmp_path) -> None:
+        """At 170E the check's slack is ~1.7e-4 deg; the prefilter must allow the same."""
+        geom = shapely.box(169.99, 10.0, 170.00005, 10.01)
+        short = (169.99, 10.0, 169.9999, 10.01)  # xmax short by 1.5e-4, within the slack
+        path = _lonlat_file(tmp_path / "a.parquet", [geom], [short])
+        bounds = (170.0, 10.0, 170.02, 10.02)
+        assert masks._bbox_prefilter(path, "geometry", bounds)
+        assert _count(path, bounds) == 1
+
+    def test_null_bbox_disables_prefilter(self, tmp_path) -> None:
+        geoms = [shapely.box(1, 1, 2, 2), shapely.box(3, 3, 4, 4)]
+        path = _lonlat_file(tmp_path / "a.parquet", geoms, [geoms[0].bounds, None])
+        bounds = (2.5, 2.5, 5.0, 5.0)
+        assert masks._bbox_prefilter(path, "geometry", bounds) == ""
+        assert _count(path, bounds) == 1
+
+    def test_stale_rows_past_the_sample_disable_prefilter(self, tmp_path) -> None:
+        """Projected values anywhere in a lon/lat file are caught from the footer."""
+        n = masks._BBOX_CHECK_ROWS + 100
+        geoms = [shapely.box(10 + i * 1e-4, 45, 10 + i * 1e-4 + 5e-5, 45.0001) for i in range(n)]
+        bboxes = [g.bounds for g in geoms[: masks._BBOX_CHECK_ROWS]]
+        bboxes += [(5e5, 5e6, 5e5 + 10, 5e6 + 10)] * 100
+        path = _lonlat_file(tmp_path / "a.parquet", geoms, bboxes)
+        last = geoms[-1].bounds
+        assert masks._bbox_prefilter(path, "geometry", last) == ""
+        assert _count(path, last) >= 1
+
+    def test_projected_file_skips_the_range_check(self, tmp_path) -> None:
+        """Metres are fine when the geometry's declared CRS is projected."""
+        import pyproj
+
+        path = _write(tmp_path / "a.parquet")
+        table = pq.read_table(path)
+        geo = json.loads(table.schema.metadata[b"geo"])
+        geo["columns"]["geometry"]["crs"] = pyproj.CRS("EPSG:32633").to_json_dict()
+        big = tmp_path / "utm.parquet"
+        pq.write_table(table.replace_schema_metadata({b"geo": json.dumps(geo).encode()}), big)
+        assert masks._bbox_prefilter(big, "geometry", BOUNDS)
