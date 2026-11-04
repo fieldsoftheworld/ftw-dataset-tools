@@ -4,6 +4,10 @@
 # land (Ackerland) and permanent crops (Dauerkulturen) are field; permanent grassland and
 # non-agricultural areas are background. Covers de_sh years 2023-2026 (the 2023 edition uses an
 # "Art. 32" wording for the non-agricultural category; both spellings are listed).
+#
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
 column: ["hbn"]
 
 include:
@@ -11,8 +15,10 @@ include:
   # Permanent and tree crops
   - Dauerkulturen  # permanent crops
 
-exclude:
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
   - Dauergrünland                                  # permanent grassland
+
+exclude:
   - Nicht landwirtschaftliche förderfähige Flächen  # non-agricultural eligible areas (2024-2026)
   - Sonstige Art. 32-Flächen                       # other Article-32 areas (2023 edition)
   - Sonstige nicht ldw. genutzte Flächen           # other non-agriculturally used areas

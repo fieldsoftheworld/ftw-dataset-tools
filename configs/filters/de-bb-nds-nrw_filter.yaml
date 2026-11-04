@@ -10,6 +10,10 @@
 # 1 and 11-13 (AUKM flower/margin strips, field-bird plots); all are background, like their padded
 # forms, which are kept for older conversions. Melde (garden orache, 640; nrw 2026) is a vegetable.
 #
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
+#
 # Excluded (background): landscape elements (hedges, tree rows, field copses, stone walls,
 # margins) & eco-scheme strips incl. agroforestry strips, arable grass leys (Ackergras) and
 # all grassland/pasture/meadow, fallow/set-aside/nature-conservation/buffer & erosion strips/
@@ -235,7 +239,23 @@ include:
   - 982  # Sonstige KUP
   - 983  # Weihnachtsbäume
 
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
+  - "006"  # Festwiese
+  - 6  # Festwiese (permanent meadow)
+  - 424  # Ackergras
+  - 428  # Alternating grassland
+  - 441  # Wiesen (Grünlandneueinsaat im Rahmen von AUKM)
+  - 442  # Mowing pastures
+  - 443  # pastures
+  - 451  # Wiesen
+  - 452  # Mähweiden
+  - 459  # Grünland
+  - 464  # Grazed grasslands
+  - 466  # Mowed grasslands
+  - 444  # DGL Neueinsaat als Ersatz für genehmigten DGL Umbruch
+
 exclude:
+  - 567  # Longterm. o. 20 years old stilll. Permanent grass land
   # Unlabelled / non-agricultural / administrative
   - ""  # unlabelled
   # Landscape elements & eco-scheme strips (hedges, margins, agroforestry, set-aside)
@@ -245,12 +265,10 @@ exclude:
   - "004"  # Feuchtgebiete (< 2.000m²) CC
   # Unlabelled / non-agricultural / administrative
   - "005"  # Keine Nutzung
-  - "006"  # Festwiese
   # de_bb 2026 publishes these low codes without zero padding (and with BB-specific labels)
   - 1  # Genehmigungspflichtige Baumaßnahmen (construction work requiring a permit)
   - 4  # Nicht genehmigungspflichtiger Lagerplatz (Stroh, Futter, Silage) (storage site)
   - 5  # Keine Nutzung (no use)
-  - 6  # Festwiese (permanent meadow)
   # Landscape elements & eco-scheme strips (hedges, margins, agroforestry, set-aside)
   - "011"  # Naturstein- o. Trockenmauern, Lesesteinwälle
   - "012"  # Fels- u. Steinriegel, naturversteinte Fl.
@@ -276,23 +294,12 @@ exclude:
   - 89  # ÖR 1b Blühstreifen auf AL
   - 94  # ÖR 3 Agroforststreifen
   # Arable grass leys, grassland, pasture, meadow
-  - 424  # Ackergras
-  - 428  # Alternating grassland
-  - 441  # Wiesen (Grünlandneueinsaat im Rahmen von AUKM)
-  - 442  # Mowing pastures
-  - 443  # pastures
-  - 444  # DGL Neueinsaat als Ersatz für genehmigten DGL Umbruch
-  - 451  # Wiesen
-  - 452  # Mähweiden
   - 453  # Weiden und Almen
   - 454  # Hutungen
   - 458  # Streuwiesen
-  - 459  # Grünland
   - 462  # Grazed sandy heaths
   - 463  # Grazed bog heaths
-  - 464  # Grazed grasslands
   - 465  # Grazed montane meadows
-  - 466  # Mowed grasslands
   - 467  # Mown montane meadows
   - 492  # Dauergrünland unter etablierten lokalen Praktiken (z.B. Heide)
   - 493  # unlabelled
@@ -305,7 +312,6 @@ exclude:
   - 559  # Set-aside for nature conservation and landscape management (5-year program
   - 560  # Brache im Rahmen einer VNS-Maßnahme
   - 564  # Nicht landwirtschaftliche, aber §11 (1) Nr.3 Bst. c) der GAPDZV förderfähi
-  - 567  # Longterm. o. 20 years old stilll. Permanent grass land
   - 573  # Uferrandstreifenprogramm (AUM)
   - 574  # Flower strips (only to be used for areas with AUM-BS 1)
   - 575  # Flowering area (only to be used for areas with AUM-BS 1)

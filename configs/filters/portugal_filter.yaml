@@ -5,6 +5,10 @@
 # 261 distinct codes. crop:code has both zero-padded and unpadded variants of some codes; both
 # are listed. There is no crop:name column.
 #
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
+#
 # Excluded (background): permanent, temporary & natural pasture/meadow, forage grasses (ryegrass,
 # Maralfalfa), greenhouse vegetables, fallow; oak montado (cork & holm oak), eucalyptus, forest,
 # shrubs, bamboo; ornamental flowers; and all non-agricultural / infrastructure / landscape
@@ -190,20 +194,22 @@ include:
   - 135  # PINE NUTS
   - 294  # SHORT ROTATION COPPICE
 
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
+  - "067"  # ryegrass
+  - 142  # TEMPORARY MEADOWS
+  - 143  # PERMANENT PASTURES
+  - 288  # FESCUE
+  - 290  # BROME GRASS
+
 exclude:
   # Grassland, pasture, forage grass, greenhouse & fallow
-  - "067"  # ryegrass
   - "077"  # GREENHOUSE VEGETABLES
   - 77  # GREENHOUSE VEGETABLES
   - "089"  # FALLOWING/ INTERCROPPING (INTERRUPTED CULTIVATEN TO MAKE SOI
   - 89  # FALLOWING/ INTERCROPPING (INTERRUPTED CULTIVATEN TO MAKE SOI
-  - 142  # TEMPORARY MEADOWS
-  - 143  # PERMANENT PASTURES
   - 280  # PASTURE WITH BUSHES
   - 283  # COMMON LAND PASTURE
-  - 288  # FESCUE
   - 289  # HALFA GRASS
-  - 290  # BROME GRASS
   - 291  # MARALFALFA
   - 292  # ANAFA
   # Oak montado, forest, eucalyptus, shrubs & ornamentals

@@ -3,6 +3,10 @@
 # column `bnk` (Bodennutzungskategorie). This is a land-use-level filter, not a crop-type
 # filter: arable land (AL) and permanent crops (DK) are field; grassland and woody/other
 # categories are background. Covers de_th year 2026 (the only published edition).
+#
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
 column: ["bnk"]
 
 include:
@@ -10,7 +14,9 @@ include:
   # Permanent and tree crops
   - DK  # Dauerkultur (permanent crop)
 
-exclude:
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
   - GL  # Grünland (grassland)
+
+exclude:
   - AF  # non-arable land-use category (afforestation/agroforestry)
   - GF  # Gehölzfläche (woody area)

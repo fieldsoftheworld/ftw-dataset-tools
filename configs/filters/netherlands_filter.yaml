@@ -4,6 +4,10 @@
 # 2009-2011, then "agricultural nature mixture" from 2016), so codes are ambiguous while the
 # Dutch crop:name is stable and unambiguous. Covers all editions 2009-2026; 580 distinct names.
 #
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
+#
 # Excluded (background): permanent, temporary & natural grassland, pasture, forage grasses and
 # turf (sod); fallow, green fallow, cover / green-manure crops (incl. phacelia, catch crops),
 # field & fauna margins (randen); ornamental flowers & bulbs (tulip, lily, iris, dahlia, crocus,
@@ -459,41 +463,45 @@ include:
   - "Notenbomen, walnoot"
   - "Walnoten"
 
-exclude:
-  # Grassland, pasture, forage grass & turf
-  - "Rietzwenkgras, anders dan voor industriegras"
-  - "Rietzwenkgras, groenbemesting, vanggewas"
-  - "Roodzwenkgras"
-  - "Roodzwenkgras, groenbemesting, vanggewas"
-  - "Festulolium"
-  - "Festulolium, groenbemesting, vanggewas"
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
   - "Engels raaigras"
-  - "Engels raaigras, groenbemesting, vanggewas"
   - "Italiaans raaigras"
-  - "Italiaans raaigras, groenbemesting, vanggewas"
   - "Westerwolds raaigras"
-  - "Westerwolds raaigras, groenbemesting, vanggewas"
-  - "Beemdlangbloem, groenbemesting, vanggewas"
   - "Grasland, blijvend"
   - "Grasland, blijvend "
   - "Grasland, natuurlijk. Hoofdfunctie landbouw."
-  - "Grasland, natuurlijk. Hoofdfunctie natuur."
   - "Grasland, natuurlijk. Met landbouwactiviteiten."
   - "Grasland, natuurlijk. Met landbouwactiviteiten. "
-  - "Grasland, natuurlijk. hoofdfunctie natuur."
   - "Grasland, natuurlijk. met landbouwactiviteiten."
+  - "Grasland, tijdelijk"
+  - "Grasland, tijdelijk "
+  - "Grasland, natuurlijk. Areaal met een natuurbeheertype dat overwegend voor landbouwactiviteiten-GLB wordt gebruikt"
+
+exclude:
+  - "Roodzwenkgras"
+  - "Veldbeemdgras"
+  - "Grasland, natuurlijk"
+  # Grassland, pasture, forage grass & turf
+  - "Rietzwenkgras, anders dan voor industriegras"
+  - "Rietzwenkgras, groenbemesting, vanggewas"
+  - "Roodzwenkgras, groenbemesting, vanggewas"
+  - "Festulolium"
+  - "Festulolium, groenbemesting, vanggewas"
+  - "Engels raaigras, groenbemesting, vanggewas"
+  - "Italiaans raaigras, groenbemesting, vanggewas"
+  - "Westerwolds raaigras, groenbemesting, vanggewas"
+  - "Beemdlangbloem, groenbemesting, vanggewas"
+  - "Grasland, natuurlijk. Hoofdfunctie natuur."
+  - "Grasland, natuurlijk. hoofdfunctie natuur."
   - "Overige gras, groenbemesting, vanggewas"
   - "Rand, grenzend aan blijvend grasland of een blijvende teelt,"
   - "Rand, grenzend aan blijvend grasland of een blijvende teelt, hoofdzakelijk bestaand uit blijvend gras"
   - "Rand, grenzend aan bouwland, hoofdzakelijk bestaand uit blij"
   - "Rand, grenzend aan bouwland, hoofdzakelijk bestaand uit blijvend gras"
-  - "Veldbeemdgras"
   - "Veldbeemdgras, groenbemesting, vanggewas"
   - "Rietland"
   - "Graszoden"
   - "Graszoden "
-  - "Grasland, tijdelijk"
-  - "Grasland, tijdelijk "
   - "Rand, grenzend aan blijvend grasland of een blijvende teelt, hoofdzakelijk bestaand uit tijdelijk gras"
   - "Rand, grenzend aan bouwland, hoofdzakelijk bestaand uit tijd"
   - "Rand, grenzend aan bouwland, hoofdzakelijk bestaand uit tijdelijk gras"
@@ -585,8 +593,6 @@ exclude:
   - "Faunaranden"
   - "Faunaranden, bouwland"
   - "Faunaranden, grasland"
-  - "Grasland, natuurlijk"
-  - "Grasland, natuurlijk. Areaal met een natuurbeheertype dat overwegend voor landbouwactiviteiten-GLB wordt gebruikt"
   - "Groenbemesters, niet-vlinderbloemige"
   - "Groenbemesters, vlinderbloemige"
   - "Iris, bloembollen en -knollen"

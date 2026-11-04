@@ -9,6 +9,10 @@
 # coppice.
 # Covers hr years 2011-2024. Codes are ARKOD land-use categories from the harmonized
 # ftw/harmonized-field-data hr datasets (crop:code); HCAT names shown where mapped.
+#
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
 
 column: ["crop:code", "crop_code"]
 
@@ -25,12 +29,14 @@ include:
   - 451  # Mother block of vines
   - 490  # Mixed perennial crops
 
-exclude:
-  - 210  # Greenhouses on arable land
-  - 220  # Rare code, no HCAT mapping (18 parcels)
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
   - 300  # Permanent grassland (parent category); no HCAT mapping
   - 310  # Meadow
   - 320  # Pasture
+
+exclude:
+  - 210  # Greenhouses on arable land
+  - 220  # Rare code, no HCAT mapping (18 parcels)
   - 321  # Karstic pasture
   - 411  # Grubbed-up vineyard
   - 500  # Homestead / okucnica (no HCAT)

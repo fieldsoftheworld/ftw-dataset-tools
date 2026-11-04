@@ -3,6 +3,10 @@
 # comment. Covers cz years 2019-2026 (union of all editions); 494 codes. This is mainly an
 # arable-crop declaration scheme (the only orchard code is 28, common apple tree).
 #
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
+#
 # Excluded (background): temporary grassland, forage & meadow grasses (ryegrass, fescue, timothy,
 # cocksfoot, bluegrass, bent, brome, Yorkshire fog, reed canary grass, ...) and grass-predominant
 # grass-clover/grass-legume leys; Miscanthus, cup plant & grass-for-energy; phacelia, niger;
@@ -409,46 +413,62 @@ include:
   - "20019"  # Grey alder
   - "40275"  # Hops seedling
 
-exclude:
-  - "12"  # Lacy phacelia
-  - "20"  # marjoram
-  - "49"  # common hollyhock
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
   - "315"  # Phleum bertolonii (grass)
   - "316"  # Timothy grass
-  - "317"  # Festulolium
   - "318"  # hybrid ryegrass
   - "319"  # Italian ryegrass
   - "320"  # ryegrass
   - "321"  # perennial ryegrass
   - "322"  # Red fescue
   - "323"  # Meadow fescue
-  - "324"  # Sheep fescue
   - "325"  # tall fescue
-  - "327"  # wood bluegrass
   - "328"  # Kentucky bluegrass
   - "329"  # Annual meadow grass
-  - "331"  # Yorkshire fog
-  - "332"  # Tufted hairgrass
   - "333"  # bulbous oat grass
-  - "334"  # crested dog's-tail
-  - "335"  # black bent
-  - "336"  # common bent
-  - "337"  # Creeping bentgrass
   - "338"  # meadow foxtail
-  - "339"  # Dactylis polygama
   - "340"  # cat grass
   - "342"  # Yellow Oatgrass
   - "343"  # Bromus inermis
   - "344"  # sweet vernal grass
-  - "345"  # Velvet bentgrass
-  - "347"  # Rough meadow grass
-  - "348"  # Reed canary grass
-  - "349"  # reed canary grass
   - "350"  # Permanent grassland
   - "351"  # Temporary grassland
   - "424"  # Grasses with legumes
   - "425"  # Pasture mixture of grasses
   - "426"  # Grass meadow mix
+  - "537"  # A mixture of grasses of the poaceae family
+  - "545"  # Bromus grass
+  - "546"  # rescuegrass
+  - "40099"  # Bromus inermis
+  - "40150"  # Italian ryegrass
+  - "40151"  # perennial ryegrass
+  - "40159"  # Red fescue
+  - "40284"  # Poaceae grasses except cereals
+  - "50017"  # Clover-grass mix (grass-dominated)
+  - "50035"  # A mixture of grasses with PVN up to 50%
+  - "50036"  # Alfalfa grass mixture (with a predominance of grasses)
+  - "50038"  # A mixture of grasses with low-growing PVN up to 10%
+
+exclude:
+  - "324"  # Sheep fescue
+  - "332"  # Tufted hairgrass
+  - "337"  # Creeping bentgrass
+  - "345"  # Velvet bentgrass
+  - "539"  # hair fescue
+  - "540"  # hard fescue
+  - "12"  # Lacy phacelia
+  - "20"  # marjoram
+  - "49"  # common hollyhock
+  - "317"  # Festulolium
+  - "327"  # wood bluegrass
+  - "331"  # Yorkshire fog
+  - "334"  # crested dog's-tail
+  - "335"  # black bent
+  - "336"  # common bent
+  - "339"  # Dactylis polygama
+  - "347"  # Rough meadow grass
+  - "348"  # Reed canary grass
+  - "349"  # reed canary grass
   - "435"  # Ornamental plants and perennials n.e.c. (more species)
   - "451"  # Fallow without vegetation
   - "453"  # giant miscanthus
@@ -465,11 +485,6 @@ exclude:
   - "473"  # Headland mix
   - "474"  # Mixture for catch crops
   - "522"  # Mixture for erosion belt
-  - "537"  # A mixture of grasses of the poaceae family
-  - "539"  # hair fescue
-  - "540"  # hard fescue
-  - "545"  # Bromus grass
-  - "546"  # rescuegrass
   - "556"  # Lemon grass
   - "577"  # Mixture of improved non-market crops (not elsewhere specified)
   - "604"  # niger
@@ -478,34 +493,25 @@ exclude:
   - "40093"  # Mixture for pollinators
   - "40094"  # Mixture for feed biobelt
   - "40095"  # Mixture for nectar-giving biobelt
-  - "40099"  # Bromus inermis
   - "40103"  # giant miscanthus
   - "40105"  # cup plant
   - "40114"  # Grass mixture for energy use
   - "40115"  # Temporarily ineligible area
   - "40116"  # Arable without a crop
   - "40144"  # Fallow
-  - "40150"  # Italian ryegrass
-  - "40151"  # perennial ryegrass
   - "40156"  # Mixture of improved non-market crops (not elsewhere specified)
-  - "40159"  # Red fescue
   - "40164"  # Cocksfoot
-  - "40284"  # Poaceae grasses except cereals
   - "40286"  # Grasses for protective strips
   - "40304"  # Protective strip mixture
   - "50015"  # Mixture for catch crops to improve soil structure
   - "50016"  # Catch crop mixture against soil compaction
-  - "50017"  # Clover-grass mix (grass-dominated)
   - "50018"  # Mixture for species-rich arable land coverage
   - "50024"  # Mixture of Fallow and growth
   - "50031"  # VAT mixture of non-producing annuals
   - "50032"  # A mixture of PVN non-productive annuals with other crops up to 50%
   - "50033"  # VAT mixture of non-productive perennials
   - "50034"  # A mixture of PVN non-productive perennials with other crops up to 50%
-  - "50035"  # A mixture of grasses with PVN up to 50%
-  - "50036"  # Alfalfa grass mixture (with a predominance of grasses)
   - "50037"  # Mixture for nectar fallow
-  - "50038"  # A mixture of grasses with low-growing PVN up to 10%
   - "50040"  # Blue Curls
   - "50043"  # Headland Mix (Premium)
   - "50044"  # Mixture for erosion belt (premium)

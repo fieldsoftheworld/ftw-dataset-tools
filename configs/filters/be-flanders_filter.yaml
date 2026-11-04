@@ -10,6 +10,10 @@
 # Green-cover mixes grown as main crop (incl. 663, without grass) are background.
 # Covers crop codes across be_vlg years 2018-2026. Codes from EuroCrops be_vlg_2021.csv plus data-only additions:
 # https://raw.githubusercontent.com/maja601/EuroCrops/refs/heads/main/csvs/country_mappings/be_vlg_2021.csv
+#
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
 
 column: ["crop_code", "crop:code"]
 
@@ -275,6 +279,11 @@ include:
   - 9731  # Perennial fruit crops standard (pear)
   - 9827  # Pasture with harvestable standard trees (> 100 trees/ha)
 
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
+  - 60  # Grassland
+  - 63  # Grass herb mixture
+  - 745  # Mixture of grass and leguminous plants (other than grass clover or grass alfalfa)
+
 exclude:
   - 1  # Main buildings
   - 2  # Other stables and buildings
@@ -291,8 +300,6 @@ exclude:
   - 15  # Building i.c.v. widening
   - 16  # Other building
   - 17  # Organic non-agricultural land
-  - 60  # Grassland
-  - 63  # Grass herb mixture
   - 81  # Derelict land with no minimum activity
   - 82  # Derelict land with minimal activity without EAG
   - 85  # Other cover
@@ -307,7 +314,6 @@ exclude:
   - 659  # Mixture of non-leguminous green cover crops (data-only)
   - 662  # Cover mix: fodder radish + yellow mustard
   - 663  # Mengsel van groenbedekkers zonder gras (als hoofdteelt) (green cover mix without grass, as main crop)
-  - 745  # Mixture of grass and leguminous plants (other than grass clover or grass alfalfa)
   - 884  # miscanthus
   - 894  # Afforestation with contract for 2008
   - 895  # Group trees

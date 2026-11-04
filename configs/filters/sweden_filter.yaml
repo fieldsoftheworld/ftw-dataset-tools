@@ -2,6 +2,10 @@
 # grödkod (crop:code); the English HCAT name is shown as a comment. Covers se years 2015-2025;
 # 103 distinct codes. Sweden is grassland-dominated, so much of the area is background.
 #
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
+#
 # Excluded (background): all pasture, meadow & mowing/grazing grassland on arable and non-arable
 # land, mountain & mosaic pasture, grass hay (forage dryer), forage ryegrass, energy grass, turf;
 # fallow; forest grazing; green manure; ornamental horticulture; and non-agricultural /
@@ -96,18 +100,21 @@ include:
   - "78"  # Nurseries with cultivation of permanent crops
   - "83"  # Christmas tree cultivation
 
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
+  - "49"  # Mowing and grazing on arable land with a hay crop that is not approved for environmental compensation and compensation for organic production
+  - "50"  # Mowing and grazing on arable land
+  - "301"  # Westerwolds ryegrass
+  - "57"  # Haymaking in the field (contract with forage dryer)
+
 exclude:
   - "17"  # (unmapped source code)
   - "26"  # (unmapped source code)
-  - "49"  # Mowing and grazing on arable land with a hay crop that is not approved for environmental compensation and compensation for organic production
-  - "50"  # Mowing and grazing on arable land
   - "51"  # (unmapped source code)
   - "52"  # Pasture (not arable)
   - "53"  # Mowing meadow (does not go)
   - "54"  # Forest grazing
   - "55"  # Mountain pasture that does not entitle to farm support and compensation suppor
   - "56"  # Alvar
-  - "57"  # Haymaking in the field (contract with forage dryer)
   - "60"  # Fallow
   - "61"  # Mountain pasture that entitles to farm support and compensation support
   - "63"  # Energy grass
@@ -120,7 +127,6 @@ exclude:
   - "89"  # Mosaic pasture
   - "90"  # Grass-poor lands
   - "95"  # Pasture and hay meadow during restoration
-  - "301"  # Westerwolds ryegrass
   - "304"  # Turf cultivation
   - "310"  # Game field
   - "314"  # Other land use that is not eligible
