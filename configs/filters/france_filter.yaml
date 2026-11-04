@@ -1,7 +1,7 @@
 # Class filter used for France (FR) field boundaries.
 # Codes are the French RPG (Registre Parcellaire Graphique) 3-letter crop:code from the
 # harmonized ftw/harmonized-field-data fr dataset; HCAT English names shown as comments.
-# Covers fr years 2017 and 2019-2024 (2018 is not published). 314 distinct codes.
+# Covers fr years 2017-2024. 330 distinct codes.
 #
 # Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
 # semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
@@ -124,6 +124,7 @@ include:
   - FAG  # Other annual fodder of a different type
   - MH7  # Legume-predominant fodder + grass mix (2017)
   - BVF  # Fodder beet
+  - LU8  # Alfalfa planted for the 2018 harvest
   - LU7  # Alfalfa planted for the 2017 harvest
   - MH6  # Legume-predominant fodder + grass mix (2016)
   - LU6  # Alfalfa planted for the 2016 harvest
@@ -132,13 +133,17 @@ include:
   - MOH  # Foxtail millet
   - VES  # Other vetch
   - FSG  # Another root fodder plant of another type
+  - TR8  # Clover planted for the 2018 harvest
   - TR7  # Clover planted for the 2017 harvest
+  - MC8  # Mixture of predominantly forage legumes planted for the 2018 harvest and cereals and/or oilseeds
   - MC7  # Mixture of predominantly forage legumes planted for the 2017 harvest and cereals and/or oilseeds
   - TR6  # Clover planted for the 2016 harvest
+  - ML8  # Fodder legume mixture planted for the 2018 harvest
   - ML7  # Fodder legume mixture planted for the 2017 harvest
   - FFO  # Other fodder bean
   - PFP  # Other spring feed peas
   - PFH  # Other winter feed peas
+  - SA8  # Sainfoin planted for the 2018 harvest
   - SA7  # Sainfoin planted for the 2017 harvest
   - ML6  # Mixture of forage legumes implanted for the 2016 harvest (among themselves)
   - CHF  # Forage cabbage
@@ -146,16 +151,20 @@ include:
   - TR5  # Clover (recent)
   - SA6  # Sainfoin planted for the 2016 harvest
   - ML5  # Forage legume mix (recent)
+  - FF8  # Faba bean planted for the 2018 harvest
   - FF7  # Feed faba bean planted for the 2017 harvest
   - SA5  # Sainfoin (recent)
   - LOT  # Trefoil
+  - VE8  # Vetch planted for the 2018 harvest
   - VE7  # Vetch planted for the 2017 harvest
   - RDF  # Forage radish
+  - PP8  # Spring fodder pea planted for the 2018 harvest
   - PP7  # Spring fodder pea planted for the 2017 harvest
   - TRD  # Dehydrated clover
   - MC6  # Mixture of predominantly forage legumes planted for the 2016 harvest and cereals
   - MEL  # Other sweet clover
   - SAD  # Dehydrated Sainfoin
+  - PH8  # Winter fodder pea planted for the 2018 harvest
   - PH7  # Winter fodder pea planted for the 2017 harvest
   - GES  # Chickling vetch
   - LEF  # Forage lentil
@@ -164,14 +173,18 @@ include:
   - LFH  # Other winter forage lupine
   - MC5  # Legume-predominant + cereals mix (recent)
   - NVF  # Forage turnip
+  - LP8  # Spring forage lupin planted for the 2018 harvest
   - LP7  # Spring forage lupin planted for 2017 harvest
+  - LH8  # Winter forage lupin planted for the 2018 harvest
   - LH7  # Winter forage lupin planted for the 2017 harvest
   - CAF  # Forage carrot
   - MIN  # Hop clover Medicago
   - JOS  # Vetch/red pea
   - VED  # Dehydrated vetch
+  - LO8  # Trefoil planted for the 2018 harvest
   - LO7  # Trefoil planted for the 2017 harvest
   - VE6  # Vetch planted for the 2016 harvest
+  - ME8  # Melilot planted for the 2018 harvest
   - ME7  # Melilot planted for the 2017 harvest
   - LH6  # Winter forage lupine planted for the 2016 harvest
   - LH5  # Winter forage lupine (recent)
@@ -181,8 +194,11 @@ include:
   - LP6  # Spring forage lupine planted for the 2016 harvest
   - ME6  # Melilot planted for the 2016 harvest
   - JO6  # vetch/red pea planted for the 2016 harvest
+  - MI8  # Hop clover Medicago planted for the 2018 harvest
   - MI7  # Hop clover Medicago planted for the 2017 harvest
+  - SE8  # Serradella planted for the 2018 harvest
   - SE7  # Serradelle planted for the 2017 harvest
+  - JO8  # Vetch/red pea planted for the 2018 harvest
   - JO7  # vetch/red pea  planted for the 2017 harvest
   - JO5  # Vetch/red pea (recent)
   - PH6  # Winter fodder peas planted for the 2016 harvest
