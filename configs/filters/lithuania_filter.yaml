@@ -9,6 +9,10 @@
 # correct Lithuanian characters (e.g. "Žieminiai javai"); those spellings are listed too. ec_lt
 # 2021 holds only 9 crop categories (no grassland/fallow), so all its parcels are field.
 #
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
+#
 # Excluded (background): pastures & meadows, perennial grasses, fallow, landscape elements,
 # ditches, non-supported areas, woods, and wetlands (the 'Ðlapynës' category, mislabelled
 # "Spinach"/spinach in the source HCAT mapping).
@@ -45,14 +49,16 @@ include:
   - "Uogynai"  # Berries
   - "Kiti sodiniai"  # Other plantations
 
-exclude:
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
   - "Ganyklos-pievos virð 5m."  # Pastures-meadows over 5m.
   - "Ganyklos-pievos virð 5 m."  # Pastures-meadows over 5m.
-  - "Kraðtovaizdþio elementai"  # Landscape elements
   - "Ganyklos-pievos iki 5m."  # Pastures-meadows up to 5m.
   - "Ganyklos-pievos iki 5 m."  # Pastures-meadows up to 5m.
-  - "Neremiami plotai"  # Non-supported areas
   - "Daugiametës þolës"  # Perennial grasses
+
+exclude:
+  - "Kraðtovaizdþio elementai"  # Landscape elements
+  - "Neremiami plotai"  # Non-supported areas
   - "Pûdymas"  # Fallow
   - "Miðkai"  # Woods
   - "Ðlapynës"  # wetlands (labelled 'Spinach' in source)

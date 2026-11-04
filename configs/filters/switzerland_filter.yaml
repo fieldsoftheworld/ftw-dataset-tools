@@ -10,6 +10,10 @@
 # Switzerland is grassland-dominated, so most parcels fall in the background class (alpine
 # cantons AI, AR, SG, SZ, UR are below 10% field).
 #
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
+#
 # Excluded (background): all meadows & pastures (permanent, extensive, low-intensity, summering,
 # riverside, hay, communal) and artificial grass leys (Kunstwiesen); forest & wood pastures,
 # hedges/field/riparian shrubs; annual & perennial open-field horticulture (flowers, turf);
@@ -211,13 +215,27 @@ include:
   - 798  # Übrige Flächen mit Dauerkulturen, nicht beitragsberechtigt (Other perennial crop areas not eligible)
   - 909  # Hausgärten (Home gardens)
 
-exclude:
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
   - "Übrige Dauerwiesen (ohne Weiden)"  # Other permanent meadows (without pastures)
   - "Extensiv genutzte Wiesen (ohne Weiden)"  # Extensively used meadows (without pastures)
   - "Extensiv genutzte Weiden"  # Extensively used pastures
   - "Weiden (Heimweiden, übrige Weiden ohne Sömmerungsweiden)"  # Pastures (home pastures others without summering pastures)
   - "Kunstwiesen (ohne Weiden)"  # Artificial meadows (without pastures)
   - "Wenig intensiv genutzte Wiesen (ohne Weiden)"  # Low-intensity meadows (without pastures)
+  - "Übrige Grünfläche (Dauergrünfläche), beitragsberechtigt"  # Other grassland (permanent grassland) eligible
+  - "Übrige Dauerweiden, beitragsberechtigt aggregiert"  # Other permanent pastures eligible aggregated
+  - 601  # Kunstwiesen (ohne Weiden) (Artificial meadows (without pastures))
+  - 611  # Extensiv genutzte Wiesen (ohne Weiden) (Extensively used meadows (without pastures))
+  - 612  # Wenig intensiv genutzte Wiesen (ohne Weiden) (Low-intensity meadows (without pastures))
+  - 613  # Übrige Dauerwiesen (ohne Weiden) (Other permanent meadows (without pastures))
+  - 616  # Weiden (Heimweiden, übrige Weiden ohne Sömmerungsweiden) (Pastures (home pastures others without summering pastures))
+  - 617  # Extensiv genutzte Weiden (Extensively used pastures)
+  - 660  # Übrige Dauerweiden, beitragsberechtigt aggregiert (Other permanent pastures eligible aggregated)
+  - 697  # Übrige Grünfläche (Dauergrünfläche), beitragsberechtigt (Other grassland (permanent grassland) eligible)
+
+exclude:
+  - "Übrige Kunstwiese, beitragsberechtigt (z.B. Schweineweide, Geflügelweide)"  # Other artificial meadow eligible (e.g. pig poultry pasture)
+  - 602  # Übrige Kunstwiese, beitragsberechtigt (z.B. Schweineweide, Geflügelweide) (Other artificial meadow eligible (e.g. pig poultry pasture))
   - "Hecken-, Feld- und Ufergehölze (mit Krautsaum)"  # Hedges field and riparian shrubs (with herb strip)
   - "Sömmerungsweiden"  # Summer pastures
   - "Regionsspezifische Biodiversitätsförderfläche (Grünflächen ohne Weiden)"  # Region-specific biodiversity area (grasslands without pastures)
@@ -235,13 +253,11 @@ exclude:
   - "Wassergräben, Tümpel, Teiche"  # Ditches ponds pools
   - "Saum auf Ackerflächen"  # Field margin on arable land
   - "Nützlingsstreifen auf offener Ackerfläche"  # Beneficial insect strips on arable land
-  - "Übrige Grünfläche (Dauergrünfläche), beitragsberechtigt"  # Other grassland (permanent grassland) eligible
   - "Rotationsbrache"  # Rotational fallow
   - "Heuwiesen im Sömmerungsgebiet, Typ extensiv genutzte Wiese"  # Hay meadows in summering area type extensively used
   - "Unbefestigte, natürliche Wege"  # Unpaved natural tracks
   - "Gemüsekulturen in geschütztem Anbau ohne festes Fundament; im gewachsenen Boden"  # Vegetables protected without foundation in soil
   - "Heuwiesen im Sömmerungsgebiet, Übrige Wiesen"  # Hay meadows in summering area other meadows
-  - "Übrige Kunstwiese, beitragsberechtigt (z.B. Schweineweide, Geflügelweide)"  # Other artificial meadow eligible (e.g. pig poultry pasture)
   - "Ruderalflächen, Steinhaufen und -wälle"  # Ruderal areas stone piles and walls
   - "Einjährige gärtnerische Freilandkulturen (Blumen, Rollrasen usw.)"  # Annual horticultural open-field crops (flowers turf etc.)
   - "Hecken-, Feld- und Ufergehölze (mit Pufferstreifen) (regionsspezifische Biodiversitätsförderfläche)"  # Hedges field and riparian shrubs (with buffers) region-specific biodiversity
@@ -273,7 +289,6 @@ exclude:
   - "Beerenkulturen in Gewächshäusern mit festem Fundament"  # Berry crops in greenhouses with fixed foundation
   - "Pilze (Freiland)"  # Mushrooms (open field)
   - "Pilze in geschütztem Anbau mit festem Fundament"  # Mushrooms in protected cultivation with foundation
-  - "Übrige Dauerweiden, beitragsberechtigt aggregiert"  # Other permanent pastures eligible aggregated
   # Federal LNF crop:code (cantonal ch_* files; same decisions as the crop:name entries)
   - 399  # Nutzung bestimmen / use to be determined
   - 554  # Einjährige gärtnerische Freilandkulturen (Blumen, Rollrasen usw.) (Annual horticultural open-field crops (flowers turf etc.))
@@ -283,23 +298,14 @@ exclude:
   - 572  # Nützlingsstreifen auf offener Ackerfläche (Beneficial insect strips on arable land)
   - 594  # Offene Ackerfläche, beitragsberechtigt (regionsspezifische Biodiversitätsförderfläche) (Open arable land eligible (region-specific biodiversity area))
   - 595  # Übrige offene Ackerfläche, nicht beitragsberechtigt (regionsspezifische Biodiversitätsförderfläche) (Other open arable land not eligible (region-specific biodiversity area))
-  - 601  # Kunstwiesen (ohne Weiden) (Artificial meadows (without pastures))
-  - 602  # Übrige Kunstwiese, beitragsberechtigt (z.B. Schweineweide, Geflügelweide) (Other artificial meadow eligible (e.g. pig poultry pasture))
-  - 611  # Extensiv genutzte Wiesen (ohne Weiden) (Extensively used meadows (without pastures))
-  - 612  # Wenig intensiv genutzte Wiesen (ohne Weiden) (Low-intensity meadows (without pastures))
-  - 613  # Übrige Dauerwiesen (ohne Weiden) (Other permanent meadows (without pastures))
-  - 616  # Weiden (Heimweiden, übrige Weiden ohne Sömmerungsweiden) (Pastures (home pastures others without summering pastures))
-  - 617  # Extensiv genutzte Weiden (Extensively used pastures)
   - 618  # Waldweiden (ohne bewaldete Fläche) (Forest pastures (without forested area))
   - 621  # Heuwiesen im Sömmerungsgebiet, Übrige Wiesen (Hay meadows in summering area other meadows)
   - 622  # Heuwiesen im Sömmerungsgebiet, Typ extensiv genutzte Wiese (Hay meadows in summering area type extensively used)
   - 623  # Heuwiesen im Sömmerungsgebiet, Typ wenig intensiv genutzte Wiese (Hay meadows in summering area type low intensity)
   - 625  # Waldweiden (ohne bewaldete Fläche) (Forest pastures (without forested area))
   - 635  # Uferwiesen (ohne Weiden) (Riverside meadows (without pastures))
-  - 660  # Übrige Dauerweiden, beitragsberechtigt aggregiert (Other permanent pastures eligible aggregated)
   - 693  # Regionsspezifische Biodiversitätsförderflächen (Weiden) (Region-specific biodiversity areas (pastures))
   - 694  # Regionsspezifische Biodiversitätsförderfläche (Grünflächen ohne Weiden) (Region-specific biodiversity area (grasslands without pastures))
-  - 697  # Übrige Grünfläche (Dauergrünfläche), beitragsberechtigt (Other grassland (permanent grassland) eligible)
   - 698  # Übrige Grünfläche (Dauergrünflächen), nicht beitragsberechtigt (Other grassland (permanent) not eligible)
   - 707  # Mehrjährige nachwachsende Rohstoffe (Chinaschilf, usw.) (Perennial renewable resources (miscanthus etc.))
   - 711  # Pilze (Freiland) (Mushrooms (open field))

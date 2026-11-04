@@ -3,6 +3,10 @@
 # each - so this filter is specific to es_cat. Crop names are Catalan (from crop:name_en).
 # Covers es_cat year 2024 (the published edition); 210 codes.
 #
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
+#
 # Excluded (background): forage grasses (agrostis, dactylis, fescue, poa, ryegrass) and pastures;
 # traditional & biodiversity fallow (guaret); cut flowers, garlands & ornamental plants; and
 # mushrooms.
@@ -217,6 +221,9 @@ include:
   - 345  # VIVER - PRODUCTOR MVR
   - 346  # XIRIMOIER
 
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
+  - 127  # PASTURES DE MENYS DE 5 ANYS
+
 exclude:
   - 1  # AGROSTIS
   - 22  # BOLETS
@@ -226,7 +233,6 @@ exclude:
   - 83  # GARLANDA
   - 89  # GUARET / SUP. LLIURE SEMBRA
   - 90  # GUARET BIODIVERSITAT
-  - 127  # PASTURES DE MENYS DE 5 ANYS
   - 136  # PLANTA ORNAMENTAL
   - 137  # POA
   - 147  # RAIGRÀS MULTIFLORUM

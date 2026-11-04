@@ -1,0 +1,35 @@
+# Class filter for the Spanish regions of humid "green Spain" that publish only the coarse
+# SIGPAC land-use code ("uso SIGPAC"), not a crop: es_ga (Galicia), es_cb (Cantabria) and es_pv
+# (País Vasco). Identical to es_uso_filter.yaml except that pasture (PS, pastizal) is field: in
+# these regions PS parcels are small hedge- and wall-bounded meadows, while in the interior
+# regions the same code covers open rangeland (see docs/grassland-review.md). Shrub pasture (PR)
+# and wood pasture (PA) stay background everywhere.
+column: ["crop:code", "crop_code"]
+
+include:
+  - TA  # ARABLE LAND (tierra arable)
+  # Permanent and tree crops
+  - OV  # Olive grove / olivar
+  - VI  # Vineyard / viñedo
+  - FY  # Fruit trees / frutales
+  - FS  # Dried fruits / nut trees (frutos secos)
+  - CI  # Citrus / cítricos
+  - OP  # Other permanent crops
+  - VO  # Vineyard - olive grove association
+  - FL  # Dried fruits and olive groves association
+  - CF  # Citrus - fruit tree association
+  - VF  # Vineyard - fruit tree association
+  - OF  # Olive grove - fruit association
+  - OC  # Olive grove - citrus association
+  # Managed grassland (see docs/grassland-review.md)
+  - PS  # Pasture / pastizal
+  - FV  # Dried fruits and vineyard association
+  - FF  # Fruit trees - nut trees association
+  - CS  # Citrus - peel fruit association
+  - CV  # Citrus - vineyard association
+
+exclude:
+  - PR  # Shrub grass / pasto arbustivo
+  - PA  # Grass with trees (dehesa / wood pasture)
+  - EP  # Landscape element / non-crop (elemento del paisaje)
+  - "\x010"  # data artifact (single record, non-printing code)

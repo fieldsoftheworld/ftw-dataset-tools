@@ -17,6 +17,10 @@
 # Covers fi years 2020-2025 (246 distinct codes across those editions). Codes are the Finnish
 # crop:code from the harmonized ftw/harmonized-field-data fi dataset; HCAT English names (or the
 # Finnish crop:name) shown as comments.
+#
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
 
 column: ["crop:code", "crop_code"]
 
@@ -196,7 +200,19 @@ include:
   - 5441  # Cut greens and conifers for decoration, at least 5 years old
   - 5534  # Nursery for forest trees in fields (Metsäpuiden taimitarhat pellolla)
 
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
+  - 6130  # Forage grass
+  - 6140  # Pasture grass
+  - 9412  # Grassland (grassland and meadow)
+  - 6111  # 1-year dry hay, silage and fresh fodder grass
+  - 6112  # Annual pasture grass
+  - 6121  # Perennial dry hay, silage and fresh fodder grass
+  - 6122  # Perennial pasture grass
+  - 6210  # Permanent dry hay/silage/fresh forage grass (5-10 years)
+  - 6220  # Permanent pasture (5-10 years)
+
 exclude:
+  - 9812  # Perennial environmental grass
   - 4904  # reed canary grass (feed)
   - 4905  # reed canary grass (energy)
   - 5173  # Melon
@@ -205,8 +221,6 @@ exclude:
   - 5854  # Land improvement and renovation plant mixture
   - 6050  # Green manure lawn
   - 6060  # Turf
-  - 6130  # Forage grass
-  - 6140  # Pasture grass
   - 6300  # Natural pasture and meadow
   - 6304  # Natural pasture with targeted interventions (Åland)
   - 6308  # Natural pasture agreement area (Åland)
@@ -214,7 +228,6 @@ exclude:
   - 9403  # Stump fallow
   - 9404  # Open fallow
   - 9409  # Natural management grass
-  - 9412  # Grassland (grassland and meadow)
   - 9415  # Green cover (game, landscape and pollinator)
   - 9425  # Diversity plants, meadow
   - 9426  # Diversity plants, field bird
@@ -236,12 +249,6 @@ exclude:
   - 5852  # Remediation crop (Tagetes) (Saneerauskasvi, samettikukka)
   - 5853  # Remediation crop mixture (Saneerauskasviseos)
   - 6051  # Green manure grass (no environmental commitment)
-  - 6111  # 1-year dry hay, silage and fresh fodder grass
-  - 6112  # Annual pasture grass
-  - 6121  # Perennial dry hay, silage and fresh fodder grass
-  - 6122  # Perennial pasture grass
-  - 6210  # Permanent dry hay/silage/fresh forage grass (5-10 years)
-  - 6220  # Permanent pasture (5-10 years)
   - 6303  # Natural pasture with high nature values (Åland)
   - 6305  # Natural pasture in cultural landscape (Åland)
   - 6307  # Other natural pasture (Åland)
@@ -270,5 +277,4 @@ exclude:
   - 9808  # Environmental agreement area, woodland
   - 9810  # Protection zone grass (agreements before 2015)
   - 9811  # Protection zone (commitment from 2015)
-  - 9812  # Perennial environmental grass
   - 9830  # Landscape feature (Maisemapiirre)

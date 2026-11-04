@@ -11,6 +11,10 @@
 # ornamental greenery, and short-rotation coppice (willow, poplar, alder, incl. EFA variants).
 # Covers dk years 2010-2026 (2008-2009 have no crop column). Codes are Danish afgroedekoder from the
 # harmonized ftw/harmonized-field-data dk datasets (crop:code); HCAT English names shown where mapped.
+#
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
 
 column: ["crop:code", "crop_code"]
 
@@ -276,19 +280,9 @@ include:
   - 605  # EFA - Coppice forest
   - 606  # EFA - Poplar (100-400 other trees per hectare)
 
-exclude:
-  - 0  # (blank)
-  - 44  # (blank)
-  - 95  # (blank)
-  - 130  # (blank)
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
   - 170  # Grass for factory (rotation)
-  - 200  # Fragået mark
-  - 201  # Sammenlagt mark
-  - 202  # fragået mark, prod.skifte
-  - 225  # (blank)
   - 247  # Environmental grass AECM scheme 2 rotation
-  - 248  # Permanent grass by water borehole
-  - 249  # Utilized grass next to water borehole
   - 250  # Permanent grass very low yield
   - 251  # Permanent grass low yield
   - 252  # Permanent grass standard yield
@@ -297,22 +291,38 @@ exclude:
   - 255  # Permanent grass less than 50% clover / alfalfa
   - 256  # Permanent clover grass over 50% clover / alfalfa0
   - 257  # Permanent grass without clover
-  - 258  # Perm. græs, ø-støtte
   - 259  # Permanent grass factory over 6 tons
-  - 269  # Grass rolled sod
-  - 270  # Grass for freerange pigs rotation
-  - 271  # Recreative purpose
   - 272  # Permanent grass for factory
   - 274  # Permanent alfalfa grass over 25% grass for factory
-  - 275  # Permanent rullegræs
   - 276  # Permanent grass and clover grass without norm below 50% clover
   - 278  # Permanent alfalfa and alfalfa grass over 50% alfalfa
   - 279  # Permanent clover grass for factory
   - 286  # Permanent grass and clover grass without norm over 50% clover
-  - 287  # Grass for outdoor pigs permanent
-  - 300  # (blank)
   - 305  # Permanent grass without payment of ecological subsidies
   - 306  # Grass in rotation without payment of organic subsidies
+  - 258  # Perm. græs, ø-støtte
+  - 350  # Miljøgræs med N-kvote
+  - 960  # Græs, udlæg/eftersl. efter grønkorn o.l
+  - 961  # Græs, udlæg/eftersl. eft.helsæd/tidl.frø
+  - 962  # Græs, udlæg/eftersl. eft.korn/sildig frø
+
+exclude:
+  - 0  # (blank)
+  - 44  # (blank)
+  - 95  # (blank)
+  - 130  # (blank)
+  - 200  # Fragået mark
+  - 201  # Sammenlagt mark
+  - 202  # fragået mark, prod.skifte
+  - 225  # (blank)
+  - 248  # Permanent grass by water borehole
+  - 249  # Utilized grass next to water borehole
+  - 269  # Grass rolled sod
+  - 270  # Grass for freerange pigs rotation
+  - 271  # Recreative purpose
+  - 275  # Permanent rullegræs
+  - 287  # Grass for outdoor pigs permanent
+  - 300  # (blank)
   - 308  # EFA-Fallow with summer mowing
   - 309  # Uncultivated area next to water boreholes
   - 310  # Fallow with summer mowing
@@ -351,7 +361,6 @@ exclude:
   - 347  # Brak, forårsslåning (til målrettet kvælstofregulering)
   - 348  # Brak langs vandløb og søer, forårsslåning (til målrettet kvælstofregulering)
   - 349  # Brak langs vandløb og søer, sommerslåning (til målrettet kvælstofregulering)
-  - 350  # Miljøgræs med N-kvote
   - 360  # Vildtafgrøder
   - 361  # Farmland not warranted for subsidies
   - 363  # Paludikultur, permanent græs
@@ -418,9 +427,6 @@ exclude:
   - 910  # Ikke anmeldt mark
   - 920  # Økologisk sommerbrak
   - 921  # Internal code: Bare soil
-  - 960  # Græs, udlæg/eftersl. efter grønkorn o.l
-  - 961  # Græs, udlæg/eftersl. eft.helsæd/tidl.frø
-  - 962  # Græs, udlæg/eftersl. eft.korn/sildig frø
   - 968  # Pligtige efterafgrøder
   - 995  # Slettet mark
   - 997  # Ikke kontrolleret afgrøde (kontrollørkode)

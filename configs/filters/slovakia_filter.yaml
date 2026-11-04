@@ -7,6 +7,10 @@
 # crops and hop gardens. The 2018-2023 editions also split permanent grassland into habitat
 # types A-G, all background.
 #
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
+#
 # Excluded (background): permanent grassland; and within arable land - fallow (incl. honey-plant
 # fallow and "fallow with production"), biostrips, biodiversity islands, grassed-over and
 # afforested arable land, grasses / herbaceous fodder, phacelia, buffer zones & linear landscape
@@ -320,9 +324,15 @@ include:
   - "Topoľ simonov"  # Simon's poplar
   - "Vŕba rakytová"  # Goat willow
 
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
+  - "Trvalý trávny porast"  # Permanent grassland
+  - "Trávy alebo iné bylinné krmoviny"  # Grasses or other herbaceous fodder
+  - "Zatrávnená orná pôda v CHÚ (ekoschéma)"  # Grassed arable land in protected area (eco-scheme)
+  - "Zatrávnená orná pôda (neprojektové opatrenia)"  # Grassed arable land (non-project measures)
+  - "Trávy a iné rastlinné krmivá"  # Grasses and other plant fodder
+
 exclude:
   # Permanent grassland
-  - "Trvalý trávny porast"  # Permanent grassland
   - "Teplomilné a suchomilné trvalé trávne porasty (typ A)"  # Thermophilic and drought-tolerant permanent grassland (type A)
   - "Mezofilné trvalé trávne porasty (typ B)"  # Mesophilic permanent grassland (type B)
   - "Horské kosné lúky (typ C)"  # Mountain mowing meadows (type C)
@@ -332,7 +342,6 @@ exclude:
   - "Vysokohorské trávne porasty (typ G)"  # Alpine grassland (type G)
   # Fallow, biostrips, grassed arable, grasses, cover & buffer/landscape features
   - "Pôda ležiaca úhorom s porastom"  # Fallow land with vegetation
-  - "Trávy alebo iné bylinné krmoviny"  # Grasses or other herbaceous fodder
   - "Pôda ležiaca úhorom pre medonosné plodiny"  # Fallow land for honey plants
   - "Biopás"  # Biostrip
   - "Biopás pre medonosné plodiny"  # Biostrip for honey plants
@@ -340,16 +349,13 @@ exclude:
   - "Biopás tvorený úhorom s porastom"  # Biostrip consisting of fallow with vegetation
   - "Biopás kosený po 31. júli"  # Biostrip mown after July 31
   - "Facélia vratičolistá"  # Phacelia wobbly-leaved
-  - "Zatrávnená orná pôda v CHÚ (ekoschéma)"  # Grassed arable land in protected area (eco-scheme)
   - "Líniový vegetačný prvok"  # Linear vegetation feature
   - "Nárazníková zóna a medza"  # Buffer zone and balk
-  - "Zatrávnená orná pôda (neprojektové opatrenia)"  # Grassed arable land (non-project measures)
   - "Pôda ležiaca úhorom s produkciou bez hnojenia"  # Fallow land with production, without fertilisation
   - "Pôda ležiaca úhorom s produkciou s hnojením"  # Fallow land with production, with fertilisation
   - "Biopás pre medonosné plodiny kosený po 31. júli"  # Biostrip for honey plants mown after July 31
   - "Ostrov biodiverzity"  # Biodiversity island
   - "Ostrov biodiverzity medonosný"  # Melliferous biodiversity island
-  - "Trávy a iné rastlinné krmivá"  # Grasses and other plant fodder
   - "Zalesnená orná pôda"  # Afforested arable land
   # Greenhouse & ornamental (under glass/foil, open ornamentals)
   - "Kvety a okrasné rastliny voľne pestované"  # Flowers and ornamental plants in the wild

@@ -3,6 +3,10 @@
 # harmonized ftw/harmonized-field-data fr dataset; HCAT English names shown as comments.
 # Covers fr years 2017 and 2019-2024 (2018 is not published). 314 distinct codes.
 #
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
+#
 # Excluded (background): permanent & temporary grassland, pasture, meadow, ryegrass, pure
 # forage grasses (fescue, dactylis, timothy, bromus), fallow/set-aside/EFA & temporarily
 # unused agricultural land, vineyard restructuring, greenhouse (off-ground) and open-field
@@ -308,6 +312,19 @@ include:
   - TRU  # Truffle patch (oak grove of mycorrhizal trees)
   - ACP  # Other perennial crop / fallow in banana groves
 
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
+  - PPH  # Permanent pasture - predominantly grass (woody fodder resources absent or scarce)
+  - PRL  # Long rotation meadow (6 years or more)
+  - PTR  # Other temporary grassland 5 years or less
+  - RGA  # Ryegrass 5 years or less
+  - FET  # Fescue 5 years or less
+  - DTY  # Dactylis Orchard grass 5 years or less
+  - GFP  # Other pure forage grass 5 years or less
+  - FLO  # Timothy 5 years or less
+  - PAT  # Other rough blue-grass 5 years or less
+  - BRO  # Bromus grass 5 years or less
+  - XFE  # X-Felium 5 years or younger type of forage
+
 exclude:
   # Fallow / set-aside / EFA / temporarily unused
   - J6S  # Fallow land 6 years or more declared as Ecological Focus Area (EFA)
@@ -320,18 +337,8 @@ exclude:
   - SPL  # Pastoral area - predominant woody fodder resources
   - BOP  # Grazed wood
   # Permanent pasture & long-rotation meadow
-  - PPH  # Permanent pasture - predominantly grass (woody fodder resources absent or scarce)
-  - PRL  # Long rotation meadow (6 years or more)
   # Temporary grassland & ryegrass
-  - PTR  # Other temporary grassland 5 years or less
-  - RGA  # Ryegrass 5 years or less
   # Pure forage grasses (in the fodder group)
-  - FET  # Fescue 5 years or less
-  - DTY  # Dactylis Orchard grass 5 years or less
-  - GFP  # Other pure forage grass 5 years or less
-  - FLO  # Timothy 5 years or less
-  - PAT  # Other rough blue-grass 5 years or less
-  - XFE  # X-Felium 5 years or younger type of forage
   - GAI  # Galium
   # Vineyard restructuring (replanting)
   - RVI  # Restructuring of the vineyard
@@ -362,7 +369,6 @@ exclude:
   - MPA  # Other mixture of nitrogen fixing plants
   - MRS  # Salt marsh
   - ROS  # Reed bed
-  - BRO  # Bromus grass 5 years or less
   - SNU  # Pastoral area, degraded/bare cover
   - SAG  # Reed bed (roseliere)
   - NYG  # Nyger

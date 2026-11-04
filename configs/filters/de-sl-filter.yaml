@@ -6,6 +6,10 @@
 # allow it. Covers de_sl year 2026 (the only published edition).
 # Ackerfutter (arable fodder) is field: its clover-grass and grass leys sit in arable
 # rotation, like the leys in the Estonia filter, and the group cannot be split anyway.
+#
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
 column: ["name"]
 
 include:
@@ -20,8 +24,10 @@ include:
   # Permanent and tree crops
   - Dauerkulturen  # permanent crops (orchards, vineyards, nurseries)
 
-exclude:
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
   - Dauergrünland  # permanent grassland
+
+exclude:
   - Aus der Produktion genommen  # taken out of production (fallow)
   - Stilllegung/ Aufforstung  # set-aside / afforestation
   - Greening/Greening-Landschaftselemente  # greening landscape elements

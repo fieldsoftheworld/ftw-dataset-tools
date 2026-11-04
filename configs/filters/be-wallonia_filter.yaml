@@ -8,6 +8,10 @@
 # permanent & tree crops: orchards (low- and high-stem), fruit & nut trees, vineyards, raspberries,
 # fruit/ornamental & forest nurseries, Christmas trees and short-rotation coppice.
 # HCAT taxonomy and crop codes from be_wal.parquet (EuroCrops).
+#
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
 
 column: ["crop:code", "crop_code"]
 
@@ -133,8 +137,10 @@ include:
   - 9741  # Cultures fruitière pluriannuelles-basses tiges
   - 9742  # Cultures fruitière pluriannuelles-hautes tiges
 
-exclude:
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
   - 6  # Prairie et fourrage
+
+exclude:
   - 80  # Jachère
   - 85  # Autres couverts semés
   - 96  # Cultures horticoles non-comestibles

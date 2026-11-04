@@ -3,6 +3,10 @@
 # English (or Latvian) crop labels shown as comments. Covers both LV editions that share the
 # native Latvian code scheme: lv (years 2015-2026) and ec_lv (2021, EuroCrops); 194 distinct codes.
 #
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
+#
 # Excluded (background): permanent grassland and pure grass leys sown on arable land,
 # grasses not elsewhere specified, phacelia (grown as cover / nectar / green manure),
 # fallow & green-manure fallow, agricultural land ineligible for support, energy grasses
@@ -202,6 +206,11 @@ include:
   - 645  # Willow
   - 646  # White alder
 
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
+  - 710  # Permanent grasslands
+  - 713  # Grasses not elsewhere specified or included
+  - 720  # Mixture of grasses or fodder grasses sown on arable land
+
 exclude:
   # Fallow, green-manure fallow, unused agricultural land
   - "0"  # unlabelled
@@ -212,11 +221,8 @@ exclude:
   - 641  # Reed canary grass
   - 642  # Switch grass
   # Permanent grassland, pure grass leys, phacelia (cover/nectar), semi-natural
-  - 710  # Permanent grasslands
-  - 713  # Grasses not elsewhere specified or included
   - 715  # Phacelia
   - 716  # Phacelia with legume sowing
-  - 720  # Mixture of grasses or fodder grasses sown on arable land
   - 792  # Area where the proportion of naturally sown plants exceeds 40% the num
   # Nectar-plant mixtures
   - 940  # Nektāraugi savstarpējos maisījumos vai citur nemin

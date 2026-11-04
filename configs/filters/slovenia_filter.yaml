@@ -3,6 +3,10 @@
 # years 2019-2024) and ec_si (crop_type_class, 2021, EuroCrops). English crop names shown as
 # comments. 184 distinct codes; NULL codes are treated as background.
 #
+# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
+# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
+# exclusion described elsewhere in this header. See docs/grassland-review.md.
+#
 # Excluded (background): permanent grassland, grass leys on arable land, grass turf / green
 # cover; fallow (incl. GAEC set-aside), cover crops, phacelia, niger and honey/pollinator
 # mixtures; snail-farming mixtures; Miscanthus, ornamental plants & roses; nurseries not in the
@@ -182,6 +186,11 @@ include:
   - 721  # Other short rotation coppices
   - 800  # Olive
 
+  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
+  - 201  # Grass on arable land
+  - 203  # Grass clover mixture
+  - 204  # Permanent grassland
+
 exclude:
   - "000"  # Not known
   - "026"  # Fallow land
@@ -193,10 +202,7 @@ exclude:
   - "062"  # Green cover
   - "063"  # Fallow land for GAEC 7 and GAEC 8
   - 115  # Niger (Guizotia abyssinica)
-  - 201  # Grass on arable land
   - 202  # Green cover (grass turf)
-  - 203  # Grass clover mixture
-  - 204  # Permanent grassland
   - 219  # Lacy phacelia
   - 333  # Not mantained because of technical obstacle
   - 444  # Production not in the soil
