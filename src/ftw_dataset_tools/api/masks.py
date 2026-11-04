@@ -289,27 +289,98 @@ def _cached_bbox_covering(path: Path, geom_col: str) -> dict[str, str] | None:
     return _COVERING_CACHE[key]
 
 
-def _bbox_covering(path: Path, geom_col: str) -> dict[str, str] | None:
-    """SQL for each bbox side the file's GeoParquet metadata declares as ``geom_col``'s covering.
+_BBOX_SIDES = ("xmin", "ymin", "xmax", "ymax")
 
-    Returns None when the file declares no bbox covering (or one that isn't a struct
-    column), so callers fall back to the plain spatial predicate.
+# Rows checked to confirm a bbox column holds its geometry's envelope before it is trusted.
+_BBOX_CHECK_ROWS = 2000
+
+
+def _declared_covering(schema, geom_col: str) -> dict[str, list[str]] | None:
+    """The ``{side: [column, field]}`` bbox covering the GeoParquet metadata declares, if any."""
+    try:
+        geo = json.loads((schema.metadata or {}).get(b"geo", b"{}"))
+        covering = geo["columns"][geom_col]["covering"]["bbox"]
+        parts = {side: covering[side] for side in _BBOX_SIDES}
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(isinstance(p, list) and len(p) == 2 for p in parts.values()):
+        return None
+    return parts
+
+
+def _struct_has_fields(schema, column: str, fields: set[str]) -> bool:
+    import pyarrow as pa
+
+    if column not in schema.names:
+        return False
+    kind = schema.field(column).type
+    return pa.types.is_struct(kind) and {f.name for f in kind} >= fields
+
+
+def _bbox_matches_geometry(path: Path, geom_col: str, sides: dict[str, str]) -> bool:
+    """Whether the bbox columns contain each sampled geometry's envelope.
+
+    Guards against a covering left stale by a reprojection (still in the source CRS),
+    which would otherwise make every chip's query come back empty without an error.
+    """
+    conn = duckdb.connect(":memory:")
+    try:
+        ensure_spatial_loaded(conn)
+        g = '"' + geom_col.replace('"', '""') + '"'
+        # Covers float rounding of a correct bbox, not a different CRS.
+        tol = "1e-6 * (1 + abs({v}))"
+        outside = " OR ".join(
+            f"{sides[s]} {op} {fn}({g}) {sign} " + tol.format(v=f"{fn}({g})")
+            for s, op, fn, sign in (
+                ("xmin", ">", "ST_XMin", "+"),
+                ("ymin", ">", "ST_YMin", "+"),
+                ("xmax", "<", "ST_XMax", "-"),
+                ("ymax", "<", "ST_YMax", "-"),
+            )
+        )
+        bad, total = conn.execute(
+            f"""SELECT count(*) FILTER (WHERE {outside}), count(*)
+                FROM (SELECT * FROM '{sql_path(path)}' WHERE {g} IS NOT NULL
+                      LIMIT {_BBOX_CHECK_ROWS})"""
+        ).fetchone()
+    except duckdb.Error:
+        return False
+    finally:
+        conn.close()
+    return total > 0 and bad == 0
+
+
+def _bbox_covering(path: Path, geom_col: str) -> dict[str, str] | None:
+    """SQL for each side of a bbox column that holds ``geom_col``'s envelope, or None.
+
+    Tries the covering the GeoParquet metadata declares, then a plain ``bbox`` struct
+    column (what ``add_bbox`` writes; a reprojection recomputes it but can leave another
+    declared covering in the old CRS). Each candidate must exist as a struct with all four
+    sides and match a sample of geometries; otherwise callers fall back to ``ST_Intersects``
+    alone, which is slower but correct.
     """
     import pyarrow.parquet as pq
 
-    metadata = pq.read_schema(path).metadata or {}
-    try:
-        geo = json.loads(metadata.get(b"geo", b"{}"))
-        covering = geo["columns"][geom_col]["covering"]["bbox"]
-    except (KeyError, TypeError, ValueError):
-        return None
-    sides = {}
-    for side in ("xmin", "ymin", "xmax", "ymax"):
-        parts = covering.get(side)
-        if not isinstance(parts, list) or len(parts) != 2:
-            return None
-        sides[side] = ".".join('"' + str(p).replace('"', '""') + '"' for p in parts)
-    return sides
+    schema = pq.read_schema(path)
+    candidates = []
+    declared = _declared_covering(schema, geom_col)
+    if declared is not None:
+        candidates.append(declared)
+    candidates.append({side: ["bbox", side] for side in _BBOX_SIDES})
+    for parts in candidates:
+        column = parts["xmin"][0]
+        fields = {p[1] for p in parts.values()}
+        if any(p[0] != column for p in parts.values()) or not _struct_has_fields(
+            schema, column, fields
+        ):
+            continue
+        sides = {
+            side: ".".join('"' + str(p).replace('"', '""') + '"' for p in parts[side])
+            for side in _BBOX_SIDES
+        }
+        if _bbox_matches_geometry(path, geom_col, sides):
+            return sides
+    return None
 
 
 def _bbox_prefilter(

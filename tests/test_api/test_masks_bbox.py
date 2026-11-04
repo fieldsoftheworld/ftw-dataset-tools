@@ -26,9 +26,7 @@ POLYGONS = {
     # Its bbox overlaps the query but the shape itself does not.
     "bbox_only": shapely.Polygon([(11, 9), (12, 9), (12, 12), (9, 12), (11, 11)]),
 }
-COVERING = {
-    "bbox": {side: ["bbox", side] for side in ("xmin", "ymin", "xmax", "ymax")}
-}
+COVERING = {"bbox": {side: ["bbox", side] for side in ("xmin", "ymin", "xmax", "ymax")}}
 
 
 def _write(path: Path, covering: dict | None = COVERING, bbox: dict | None = None) -> Path:
@@ -59,11 +57,42 @@ def _ids(path: Path) -> list[str]:
     return sorted(r[0] for r in rows)
 
 
+def _stale_copy(tmp_path: Path) -> Path:
+    """Like _write, plus a declared ``geometry_bbox`` covering still in another CRS."""
+    path = _write(tmp_path / "fresh.parquet")
+    table = pq.read_table(path)
+    stale = [
+        {"xmin": 5e5, "ymin": 5e6, "xmax": 5e5 + 10, "ymax": 5e6 + 10}
+        for _ in range(table.num_rows)
+    ]
+    table = table.append_column("geometry_bbox", pa.array(stale))
+    geo = json.loads(table.schema.metadata[b"geo"])
+    geo["columns"]["geometry"]["covering"] = {
+        "bbox": {side: ["geometry_bbox", side] for side in ("xmin", "ymin", "xmax", "ymax")}
+    }
+    out = tmp_path / "stale.parquet"
+    pq.write_table(
+        table.replace_schema_metadata({b"geo": json.dumps(geo).encode()}), out, row_group_size=1
+    )
+    return out
+
+
+EXPECTED = ["inside", "straddles", "touches"]
+
+
 class TestBboxPrefilter:
-    def test_same_rows_with_and_without_covering(self, tmp_path) -> None:
-        with_cover = _ids(_write(tmp_path / "a.parquet"))
-        without = _ids(_write(tmp_path / "b.parquet", covering=None))
-        assert with_cover == without == ["inside", "straddles", "touches"]
+    def test_same_rows_with_and_without_prefilter(self, tmp_path) -> None:
+        path = _write(tmp_path / "a.parquet")
+        assert masks._bbox_prefilter(path, "geometry", BOUNDS)
+        assert _ids(path) == EXPECTED
+        # The same data with no bbox column at all takes the plain ST_Intersects path.
+        table = pq.read_table(path).drop_columns(["bbox"])
+        geo = json.loads(table.schema.metadata[b"geo"])
+        del geo["columns"]["geometry"]["covering"]
+        plain = tmp_path / "plain.parquet"
+        pq.write_table(table.replace_schema_metadata({b"geo": json.dumps(geo).encode()}), plain)
+        assert masks._bbox_prefilter(plain, "geometry", BOUNDS) == ""
+        assert _ids(plain) == EXPECTED
 
     def test_uses_the_declared_columns(self, tmp_path) -> None:
         clause = masks._bbox_prefilter(_write(tmp_path / "a.parquet"), "geometry", BOUNDS)
@@ -71,18 +100,38 @@ class TestBboxPrefilter:
         assert '"bbox"."ymin" <= 10.0' in clause
         assert clause.endswith(" AND ")
 
-    def test_no_covering_means_no_prefilter(self, tmp_path) -> None:
+    def test_undeclared_bbox_column_is_used_when_it_matches(self, tmp_path) -> None:
         path = _write(tmp_path / "a.parquet", covering=None)
+        assert '"bbox"."xmin"' in masks._bbox_prefilter(path, "geometry", BOUNDS)
+        assert _ids(path) == EXPECTED
+
+    def test_stale_declared_covering_falls_back_to_bbox(self, tmp_path) -> None:
+        """A covering left in the source CRS by a reprojection must not empty the masks."""
+        path = _stale_copy(tmp_path)
+        clause = masks._bbox_prefilter(path, "geometry", BOUNDS)
+        assert "geometry_bbox" not in clause
+        assert '"bbox"."xmin"' in clause
+        assert _ids(path) == EXPECTED
+
+    def test_bbox_that_does_not_hold_the_geometry_is_not_trusted(self, tmp_path) -> None:
+        far = dict.fromkeys(POLYGONS, (50.0, 50.0, 51.0, 51.0))
+        path = _write(tmp_path / "a.parquet", bbox=far)
         assert masks._bbox_prefilter(path, "geometry", BOUNDS) == ""
+        assert _ids(path) == EXPECTED
+
+    def test_covering_naming_a_missing_column_is_ignored(self, tmp_path) -> None:
+        missing = {"bbox": {side: ["nope", side] for side in ("xmin", "ymin", "xmax", "ymax")}}
+        path = _write(tmp_path / "a.parquet", covering=missing)
+        assert "nope" not in masks._bbox_prefilter(path, "geometry", BOUNDS)
+        assert _ids(path) == EXPECTED
+
+    def test_malformed_covering_is_ignored(self, tmp_path) -> None:
+        path = _write(tmp_path / "a.parquet", covering={"bbox": {"xmin": ["bbox"]}})
+        assert _ids(path) == EXPECTED
 
     def test_other_geometry_column_has_no_prefilter(self, tmp_path) -> None:
         path = _write(tmp_path / "a.parquet")
         assert masks._bbox_prefilter(path, "geom", BOUNDS) == ""
-
-    def test_malformed_covering_is_ignored(self, tmp_path) -> None:
-        path = _write(tmp_path / "a.parquet", covering={"bbox": {"xmin": ["bbox"]}})
-        assert masks._bbox_prefilter(path, "geometry", BOUNDS) == ""
-        assert _ids(path) == ["inside", "straddles", "touches"]
 
     def test_missing_file_has_no_prefilter(self, tmp_path) -> None:
         assert masks._bbox_prefilter(tmp_path / "nope.parquet", "geometry", BOUNDS) == ""
@@ -90,17 +139,60 @@ class TestBboxPrefilter:
     def test_rewritten_file_is_read_again(self, tmp_path) -> None:
         path = _write(tmp_path / "a.parquet")
         assert masks._bbox_prefilter(path, "geometry", BOUNDS)
-        _write(path, covering=None)
+        far = dict.fromkeys(POLYGONS, (50.0, 50.0, 51.0, 51.0))
+        _write(path, bbox=far)
         stat = path.stat()
         os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
         assert masks._bbox_prefilter(path, "geometry", BOUNDS) == ""
 
-    def test_prefilter_is_what_selects_rows(self, tmp_path) -> None:
-        """A declared covering is trusted: rows whose bbox misses the query are skipped."""
-        far = {n: (50.0, 50.0, 51.0, 51.0) for n in POLYGONS}
-        assert _ids(_write(tmp_path / "a.parquet", bbox=far)) == []
-        assert _ids(_write(tmp_path / "b.parquet", covering=None, bbox=far)) == [
-            "inside",
-            "straddles",
-            "touches",
-        ]
+
+class TestReprojectedSource:
+    """ftwd's own reproject -> default CRS -> boundaries path, from a GDAL-style source."""
+
+    def test_masks_find_fields_after_reprojection(self, tmp_path) -> None:
+        import pyproj
+
+        from ftw_dataset_tools.api import boundaries
+        from ftw_dataset_tools.api.geo import reproject
+        from ftw_dataset_tools.api.pipeline import _drop_declared_crs
+
+        box = shapely.box(500000, 5000000, 500100, 5000100)  # UTM 33N, near 15E 45.1N
+        sides = ("xmin", "ymin", "xmax", "ymax")
+        table = pa.table(
+            {
+                "id": ["f1"],
+                "geometry": [shapely.to_wkb(box)],
+                "geometry_bbox": [dict(zip(sides, box.bounds, strict=True))],
+            }
+        )
+        geo = {
+            "version": "1.1.0",
+            "primary_column": "geometry",
+            "columns": {
+                "geometry": {
+                    "encoding": "WKB",
+                    "geometry_types": ["Polygon"],
+                    "crs": pyproj.CRS("EPSG:32633").to_json_dict(),
+                    "covering": {"bbox": {s: ["geometry_bbox", s] for s in sides}},
+                }
+            },
+        }
+        source = tmp_path / "source.parquet"
+        pq.write_table(table.replace_schema_metadata({b"geo": json.dumps(geo).encode()}), source)
+        fields = tmp_path / "fields.parquet"
+        reproject(str(source), str(fields), target_crs="EPSG:4326")
+        _drop_declared_crs(fields)
+        result = boundaries.create_boundaries(
+            input_path=str(fields), output_dir=str(tmp_path), output_prefix="bl_"
+        )
+        lines = result.files_processed[0].output_path
+
+        lon, lat = pyproj.Transformer.from_crs(32633, 4326, always_xy=True).transform(
+            500050, 5000050
+        )
+        bounds = (lon - 0.01, lat - 0.01, lon + 0.01, lat + 0.01)
+        conn = duckdb.connect(":memory:")
+        ensure_spatial_loaded(conn)
+        for path in (fields, lines):
+            assert "geometry_bbox" not in masks._bbox_prefilter(path, "geometry", bounds)
+            assert len(masks._get_geometries_in_bounds(conn, path, "geometry", bounds)) == 1
