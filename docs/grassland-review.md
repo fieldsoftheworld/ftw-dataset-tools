@@ -70,10 +70,22 @@ Only the managed part of it moved.
 already field), lithuania 2021 (`ec_lt`, no grassland in that edition), es_cn (1.5%: grazing on
 non-agricultural land only).
 
-**Unchanged, not reviewed:** spain (national `es`). Every sample landed on the Canaries or on
-parcels without mosaic coverage, so there was nothing to judge. Its permanent pastures (62, 39%
-of area) and young pastures (63) stay background until it is reviewed. it_tuscany: the source
-file was missing at review time.
+**Spain national (`es`), reviewed separately:** the first attempt sampled before filtering,
+so every sample landed on the Canaries. Re-sampled by region, permanent (62) and young (63)
+pasture split by landscape:
+
+- In Galicia, Asturias, Cantabria and País Vasco they are small meadows bounded by hedges and
+  trees.
+- In Castilla y León they are mostly large parcels over wooded and scrubby pasture.
+- In Extremadura they are dehesa enclosures.
+- In Andalucía they are drove-road and riverside strips or scrubland.
+- In Soria and Guadalajara they outline slopes, scrub and forest.
+
+`spain_filter.yaml` keeps them background, because one rule has to hold for the whole country.
+The Spain 2025 union (`es_merged_filter.yaml`) counts them as field in the four Atlantic
+regions only. That matches the regional `es_uso_north` decision.
+
+**Unchanged, not reviewed:** it_tuscany. The source file was missing at review time.
 
 ## Reproducing
 
