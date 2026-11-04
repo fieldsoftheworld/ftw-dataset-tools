@@ -2,8 +2,7 @@
 # crop:code representation is inconsistent across editions (e.g. "124.0" in 2022/2024 vs "124" in
 # 2023). Covers ie years 2022-2024; 167 distinct crop names. The HCAT group is shown as a comment.
 #
-# Excluded (background): permanent, extensively-grazed & low-input grassland, hay meadows, grass
-# leys (Grass Year 1-5) and grass silage/grassmeal, reed canary grass; fallow; forestry, woodland,
+# Excluded (background): reed canary grass; fallow; forestry, woodland,
 # Miscanthus, scrub, foliage, tree belts; daffodils & cut-flower/bulb crops; glasshouse crops;
 # riparian & planted buffer zones, bird-food & wildlife-cover plots, designated habitats, bog,
 # farmyards, roads, buildings, quarries, recreational & water areas and other non-crop/unknown land.
@@ -13,7 +12,9 @@
 # soya, protein/cereal mixes; clover, alfalfa/lucerne; fodder & sugar beet, potatoes and all field
 # vegetables & roots; herbs; arable silage (non-grass) & mixed cropping; grass grown for seed;
 # strawberries; and permanent & tree crops: orchards, fruit, berries & grapes, nurseries, Christmas
-# trees, short-rotation coppice and willow.
+# trees, short-rotation coppice and willow; and grassland: permanent, extensively-grazed &
+# low-input pasture, hay meadows, grass leys (Grass Year 1-5) and grass silage/grassmeal, which
+# cover ~90% of declared area and most hedge-bounded fields.
 
 column: ["crop:name", "crop_name"]
 
@@ -123,40 +124,46 @@ include:
   - "Pears"  # pears
   - "Christmas Trees"  # other_tree_wood_forest
 
-exclude:
+  # Grassland: pastures, hay meadows, grass leys and grass silage
   - "Permanent Pasture"  # pasture_meadow_grassland_grass
   - "Extensively Grazed Pasture"  # pasture_meadow_grassland_grass
   - "Low Input Grassland"  # pasture_meadow_grassland_grass
   - "Low Input Permanent Pasture"  # pasture_meadow_grassland_grass
-  - "Riparian Buffer Zone - Grassland"  # pasture_meadow_grassland_grass
-  - "Forestry Eligible"  # tree_wood_forest
   - "Traditional Hay Meadow"  # pasture_meadow_grassland_grass
   - "Grass Year 1"  # temporary_grass
-  - "Wild Bird Cover"  # not_known_and_other
   - "Grass Year 2"  # temporary_grass
-  - "Winter Bird Food Plot"  # not_known_and_other
-  - "Grass Year 5"  # temporary_grass
-  - "Grass Year 4"  # temporary_grass
   - "Grass Year 3"  # temporary_grass
-  - "Riparian Buffer Zone - Arable"  # not_known_and_other
-  - "Designated Habitat"  # not_known_and_other
-  - "Fallow"  # fallow_land_not_crop
+  - "Grass Year 4"  # temporary_grass
+  - "Grass Year 5"  # temporary_grass
   - "Permanent Pasture (MSS Measure)"  # pasture_meadow_grassland_grass
   - "Permanent Pasture (MSS)"  # pasture_meadow_grassland_grass
   - "Management of intensive grassland next to a watercourse"  # pasture_meadow_grassland_grass
-  - "Environmental Management Of Arable Fallow"  # fallow_land_not_crop
   - "Low Input Peat Grassland"  # pasture_meadow_grassland_grass
   - "Arable Silage (Grass)"  # pasture_meadow_grassland_grass
-  - "Riparian Zone"  # not_known_and_other
   - "Grass Year 1 (MSS Measure)"  # temporary_grass
   - "Grass Year 1 (MSS)"  # temporary_grass
   - "Grass Year 2 (MSS)"  # temporary_grass
+  - "Grass Year 3 (MSS)"  # temporary_grass
+  - "Permanent Pasture (MSS Eco-Scheme 2023)"  # pasture_meadow_grassland_grass
+  - "Grass Year 1 (MSS Eco-Scheme)"  # temporary_grass
+  - "Grass Year 5 (MSS)"  # temporary_grass
+  - "Grass Year 4 (MSS)"  # temporary_grass
+  - "Grassmeal"  # temporary_grass
+
+exclude:
+  - "Riparian Buffer Zone - Grassland"  # pasture_meadow_grassland_grass
+  - "Forestry Eligible"  # tree_wood_forest
+  - "Wild Bird Cover"  # not_known_and_other
+  - "Winter Bird Food Plot"  # not_known_and_other
+  - "Riparian Buffer Zone - Arable"  # not_known_and_other
+  - "Designated Habitat"  # not_known_and_other
+  - "Fallow"  # fallow_land_not_crop
+  - "Environmental Management Of Arable Fallow"  # fallow_land_not_crop
+  - "Riparian Zone"  # not_known_and_other
   - "Miscanthus Sinensis"  # miscanthus_silvergrass
   - "Tree belts for ammonia capture from farmyards"  # tree_wood_forest
   - "Foliage"  # tree_wood_forest
-  - "Grass Year 3 (MSS)"  # temporary_grass
   - "Building"  # not_known_and_other
-  - "Permanent Pasture (MSS Eco-Scheme 2023)"  # pasture_meadow_grassland_grass
   - "Daffodils"  # narcissus_daffodil
   - "Bog"  # not_known_and_other
   - "Glasshouse"  # greenhouse_foil_film
@@ -168,13 +175,9 @@ exclude:
   - "Inactive"  # not_known_and_other
   - "Arable Habitat"  # arable_crops
   - "Reed Canary Grass"  # poaceae_grasses
-  - "Grass Year 1 (MSS Eco-Scheme)"  # temporary_grass
   - "Rocky Outcrop"  # not_known_and_other
   - "Woodland"  # tree_wood_forest
-  - "Grass Year 5 (MSS)"  # temporary_grass
   - "Access Road / Roadways"  # not_known_and_other
-  - "Grass Year 4 (MSS)"  # temporary_grass
-  - "Grassmeal"  # temporary_grass
   - "Farm Road"  # not_known_and_other
   - "Lake / Waterway / Pond"  # not_known_and_other
   - "Forestry Setaside"  # tree_wood_forest
