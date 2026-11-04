@@ -277,6 +277,63 @@ def mask_run_summary_lines(results: Iterable[CreateMasksResult]) -> list[str]:
     return lines
 
 
+# (path, mtime_ns, geometry column) -> _bbox_covering's answer. Per process: each mask worker
+# reads a file's footer once instead of once per chip; a rewritten file gets a new mtime.
+_COVERING_CACHE: dict[tuple[str, int, str], dict[str, str] | None] = {}
+
+
+def _cached_bbox_covering(path: Path, geom_col: str) -> dict[str, str] | None:
+    key = (str(path), path.stat().st_mtime_ns, geom_col)
+    if key not in _COVERING_CACHE:
+        _COVERING_CACHE[key] = _bbox_covering(path, geom_col)
+    return _COVERING_CACHE[key]
+
+
+def _bbox_covering(path: Path, geom_col: str) -> dict[str, str] | None:
+    """SQL for each bbox side the file's GeoParquet metadata declares as ``geom_col``'s covering.
+
+    Returns None when the file declares no bbox covering (or one that isn't a struct
+    column), so callers fall back to the plain spatial predicate.
+    """
+    import pyarrow.parquet as pq
+
+    metadata = pq.read_schema(path).metadata or {}
+    try:
+        geo = json.loads(metadata.get(b"geo", b"{}"))
+        covering = geo["columns"][geom_col]["covering"]["bbox"]
+    except (KeyError, TypeError, ValueError):
+        return None
+    sides = {}
+    for side in ("xmin", "ymin", "xmax", "ymax"):
+        parts = covering.get(side)
+        if not isinstance(parts, list) or len(parts) != 2:
+            return None
+        sides[side] = ".".join('"' + str(p).replace('"', '""') + '"' for p in parts)
+    return sides
+
+
+def _bbox_prefilter(
+    file_path: Path, geom_col: str, bounds: tuple[float, float, float, float]
+) -> str:
+    """A bbox-column overlap test to AND before ``ST_Intersects``, or "" when there's none.
+
+    The bbox columns carry Parquet row-group statistics, so DuckDB skips every row group
+    that cannot overlap ``bounds`` and only decodes geometry for nearby rows. Without it
+    each chip's query decodes the whole file (8 s vs 0.12 s per chip on Japan's 30M fields).
+    """
+    path = Path(file_path)
+    if not path.is_file():
+        return ""
+    sides = _cached_bbox_covering(path, geom_col)
+    if sides is None:
+        return ""
+    minx, miny, maxx, maxy = bounds
+    return (
+        f"{sides['xmax']} >= {minx} AND {sides['xmin']} <= {maxx} AND "
+        f"{sides['ymax']} >= {miny} AND {sides['ymin']} <= {maxy} AND "
+    )
+
+
 def _get_geometries_in_bounds(
     conn: duckdb.DuckDBPyConnection,
     file_path: Path,
@@ -303,7 +360,7 @@ def _get_geometries_in_bounds(
     query = f"""
         SELECT {select_cols}
         FROM '{sql_path(file_path)}'
-        WHERE ST_Intersects(
+        WHERE {_bbox_prefilter(file_path, geom_col, bounds)}ST_Intersects(
             "{geom_col}",
             ST_GeomFromText('POLYGON(({minx} {miny}, {maxx} {miny}, {maxx} {maxy}, {minx} {maxy}, {minx} {miny}))')
         )
