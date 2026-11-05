@@ -1,0 +1,460 @@
+# Class filter for the Spain 2025 union (es_2025): Spain's national declarations plus the
+# regional SIGPAC parcels that fill the national edition's gaps. The merged file is built by
+# tools/merge_es_2025.py in the benchmark-data-catalog repository, which writes the ftw:class
+# column this filter reads:
+#
+#   es:<crop code>            a national parcel. Field or background exactly as in
+#                             spain_filter.yaml.
+#   es:<62|63>:atlantic       national permanent or young pasture in Galicia, Asturias,
+#                             Cantabria or País Vasco (provinces 15, 27, 32, 36, 33, 39, 01, 20,
+#                             48): field. There, pasture parcels are hedge-bounded meadows; in
+#                             the rest of Spain they are dehesa, rangeland, scrub and drove-road
+#                             strips, so es:62 and es:63 stay background (2026-11 visual review,
+#                             see docs/grassland-review.md).
+#   <region>:<land use>       a regional SIGPAC parcel of at least 0.1 ha that no national
+#                             parcel covers, in Cantabria or País Vasco (es_cb, es_pv). Field or
+#                             background as in es_uso_north_filter.yaml.
+#
+# Used by both Spain 2025 datasets. es_2025 (wall-to-wall) has the national parcels outside
+# Andalucía, Castilla y León and Galicia plus the Cantabria and País Vasco gap parcels.
+# es_po_2025 (presence-only masks) has the national parcels of those three regions only:
+# their gap parcels were strips, scrub patches and overgrown micro-plots, and without them too
+# many visible fields are unlabelled for wall-to-wall masks (2026-11 visual review).
+#
+# Generated from spain_filter.yaml and es_uso_north_filter.yaml; change those
+# and regenerate rather than editing this list by hand.
+
+column: ["ftw:class"]
+
+include:
+  - "es:1"  # SOFT WHEAT
+  - "es:2"  # SPELT
+  - "es:3"  # Durum
+  - "es:4"  # Corn
+  - "es:5"  # BARLEY
+  - "es:6"  # RYE
+  - "es:7"  # SORGHUM
+  - "es:8"  # OAT
+  - "es:9"  # BUCKWHEAT
+  - "es:10"  # Millet
+  - "es:11"  # Canary Grass
+  - "es:12"  # Meslin
+  - "es:13"  # TRITICALE
+  - "es:14"  # TRITORDEUM
+  - "es:19"  # Teff
+  - "es:33"  # SUNFLOWER
+  - "es:34"  # SOY
+  - "es:35"  # RAPE
+  - "es:36"  # CAMELINA
+  - "es:40"  # PEA
+  - "es:41"  # Broad Bean
+  - "es:43"  # WHITE LUPINE
+  - "es:49"  # BEAN
+  - "es:50"  # CHICKPEA
+  - "es:51"  # LENTIL
+  - "es:52"  # Vetches
+  - "es:53"  # Vetches
+  - "es:60"  # ALFALFA
+  - "es:61"  # Fenugreek/lucerne
+  - "es:67"  # sainfoin
+  - "es:76"  # Sulla coronaria
+  - "es:77"  # CLOVER
+  - "es:80"  # RICE
+  - "es:81"  # COTTON
+  - "es:82"  # Beetroot
+  - "es:83"  # TOBACCO
+  - "es:84"  # HOP
+  - "es:85"  # LINEN
+  - "es:86"  # HEMP
+  - "es:87"  # PEANUT
+  - "es:88"  # safflower
+  - "es:89"  # CHUFA
+  - "es:90"  # Licorice
+  - "es:92"  # Romanesco
+  - "es:96"  # HERBACEOUS AROMATIC SPECIES
+  - "es:99"  # POTATO
+  - "es:118"  # Woody Aromatic Plants (rosemary, lavender, etc)
+  - "es:121"  # SWEET POTATO
+  - "es:138"  # POPPY
+  - "es:141"  # Deccan Hemp
+  - "es:151"  # LEEK
+  - "es:152"  # Pepper (Bell pepper)
+  - "es:153"  # Melon
+  - "es:154"  # BROCCOLI
+  - "es:155"  # Lettuce
+  - "es:156"  # WATERMELON
+  - "es:157"  # ONION
+  - "es:158"  # CELERY
+  - "es:159"  # kohlrabi
+  - "es:160"  # CAULIFLOWER
+  - "es:162"  # EGGPLANT
+  - "es:163"  # Zucchini
+  - "es:164"  # ARTICHOKE
+  - "es:165"  # CUCUMBER
+  - "es:166"  # CHARD
+  - "es:167"  # SPRING ONION
+  - "es:169"  # GARLIC
+  - "es:171"  # PARSNIP
+  - "es:172"  # CABBAGE
+  - "es:173"  # RED OR LOMBARD CABBAGE
+  - "es:174"  # Savoy Cabbage
+  - "es:175"  # Collard
+  - "es:176"  # BRUSSELS SPROUTS
+  - "es:177"  # Cichorium Endivia
+  - "es:178"  # CARROT
+  - "es:179"  # TURNIP
+  - "es:181"  # CHICORY
+  - "es:182"  # CHILLI
+  - "es:183"  # SPINACH
+  - "es:184"  # THISTLE
+  - "es:185"  # Winter Squash
+  - "es:186"  # Bottle Gourd
+  - "es:187"  # BORAGE
+  - "es:189"  # ENDIVE
+  - "es:190"  # RADISH
+  - "es:191"  # WATERCRESS
+  - "es:193"  # VEGETABLE GARDEN
+  - "es:197"  # TOMATO
+  - "es:219"  # STRAWBERRY
+  - "es:220"  # SUGAR CANE
+  - "es:222"  # QUINOA
+  - "es:238"  # YELLOW LUPINE
+  - "es:239"  # Lathyrus sativus (Pea)
+  - "es:240"  # Lathyrus cicera (red pea)
+  - "es:241"  # Oat-vetches mixture
+  - "es:242"  # TRITICALE-vetches MIXTURE
+  - "es:243"  # Wheat-vetches mixture
+  - "es:244"  # Barley-vetches mixture
+  - "es:245"  # Oat Sweet tvetch mixture
+  - "es:246"  # Barley sweet vetch mixture
+  - "es:247"  # Mixed Crops of the Pratense (clover) species
+  - "es:249"  # Pea
+  - "es:250"  # Chickpea
+  - "es:251"  # SAVORY
+  - "es:252"  # CILANTRO
+  - "es:253"  # SWEET ANISE
+  - "es:254"  # DILL
+  - "es:256"  # VALERIAN
+  - "es:257"  # Ambrosia Peruviana
+  - "es:259"  # HYSSOP
+  - "es:260"  # FENNEL
+  - "es:261"  # PARSLEY
+  - "es:262"  # SAFFRON
+  - "es:263"  # THYME
+  - "es:264"  # BASIL
+  - "es:265"  # Lemon balm
+  - "es:266"  # MINT
+  - "es:267"  # OREGANO
+  - "es:268"  # SAGE
+  - "es:270"  # TARRAGON
+  - "es:271"  # Majoran
+  - "es:272"  # CALENDULA
+  - "es:274"  # STEVIA
+  - "es:275"  # St John’s Wort
+  - "es:276"  # PEPPERMINT
+  - "es:279"  # ASPARAGUS
+  - "es:281"  # LAVENDER
+  - "es:282"  # LAVENDER
+  - "es:283"  # Caper
+  - "es:284"  # Artemisia
+  - "es:285"  # LAVENDER
+  - "es:288"  # ROSEMARY
+  - "es:289"  # SANTOLINA
+  - "es:290"  # ALOE VERA
+  - "es:298"  # BARLEY-PEA MIXTURE
+  - "es:299"  # OAT-PEA MIXTURE
+  - "es:304"  # CHINESE CABBAGE
+  - "es:305"  # OAT-WHEAT MIXTURE
+  - "es:306"  # OATS-BARLEY MIXTURE
+  - "es:307"  # OAT-TRITICALE MIXTURE
+  - "es:308"  # AGRIMONY
+  - "es:309"  # BURDOCK
+  - "es:310"  # DANDELION
+  - "es:312"  # Coneflowers
+  - "es:313"  # GINSENG
+  - "es:315"  # Broadleaf PLANTAIN/Plantago Major
+  - "es:316"  # MARSHMALLOW
+  - "es:317"  # BITTER CHAMOMILE
+  - "es:318"  # SWEET CHAMOMILE
+  - "es:467"  # LEMONGRASS
+  - "es:319"  # YARROW
+  - "es:322"  # Lepidium latifolium
+  - "es:323"  # Common Knotgrass
+  - "es:324"  # GOLDEN ROD
+  - "es:325"  # Khorasan Wheat
+  - "es:328"  # Sorghum x drummondii
+  - "es:329"  # AMARANTH
+  - "es:332"  # MUSTARD
+  - "es:339"  # Oat vetch mixture
+  - "es:340"  # BARLEY-Vetches MIXTURE
+  - "es:390"  # Field Beans
+  - "es:392"  # BEAN-CORN MIXTURE
+  - "es:393"  # Emmer
+  - "es:394"  # Spelt
+  - "es:395"  # Maiz
+  - "es:397"  # SCARLET Runner BEAN
+  - "es:399"  # SESAME
+  - "es:401"  # CHIVE
+  - "es:403"  # STAR ANISE
+  - "es:412"  # COMMON MALLOW
+  - "es:416"  # Jerusalem artichoke
+  - "es:417"  # Lambs lettuce
+  - "es:420"  # RHUBARB
+  - "es:423"  # TOMATILLO
+  - "es:424"  # Chinese artichoke
+  - "es:426"  # Parsley
+  - "es:428"  # Lima Bea
+  - "es:429"  # Bladder campion
+  - "es:445"  # Curly kale
+  - "es:446"  # SERRADELLA
+  - "es:447"  # CEREAL-RYEGRASS MIXTURE
+  - "es:448"  # OAT-CORN MIXTURE
+  - "es:449"  # BEAN-VETCHES MIXTURE
+  - "es:450"  # BARLEY-WHEAT MIXTURE
+  - "es:451"  # RYE-WHEAT MIXTURE
+  - "es:452"  # OAT-CORN-VETCHES MIXTURE
+  - "es:453"  # BARLEY-CORN-VETCHES MIXTURE
+  - "es:454"  # LUPINE-OATS MIXTURE
+  - "es:455"  # OAT-RYE MIXTURE
+  - "es:456"  # RYE-CORN MIXTURE
+  - "es:457"  # CORN-SORGHUM MIXTURE
+  - "es:460"  # Black-eyed pea
+  - "es:461"  # YELLOW SWEET CLOVER
+  - "es:463"  # CHOISUM
+  - "es:464"  # Kai-lan
+  - "es:465"  # Water spinach
+  - "es:466"  # CHINESE CHIVES
+  - "es:468"  # MALABAR SPINACH
+  - "es:469"  # LUFFA
+  - "es:470"  # Lablab purpureus
+  - "es:471"  # BITTER GOURD
+  - "es:472"  # Armenian cucumber
+  - "es:473"  # Wax gourd
+  - "es:475"  # Wild radish
+  - "es:478"  # SWEDE
+  - "es:482"  # Blue Lupin
+  - "es:483"  # Hairy vetch
+  - "es:484"  # Rapini
+  - "es:486"  # HUNGARIAN PEA
+  - "es:490"  # MEDICAGO
+  - "es:492"  # True indigo
+  - "es:493"  # Chinese indigo
+  - "es:497"  # CELERIAC
+  - "es:498"  # BROCCOLINI
+  - "es:904"  # Sunn Hemp
+  - "es:913"  # BUDDHA HAND
+  - "es:916"  # KALE
+  - "es:926"  # SWEET POTATO
+  - "es:927"  # OKRA
+  - "es:928"  # PHYSALIS
+  - "es:929"  # ARUGULA
+  - "es:933"  # YAM
+  - "es:937"  # Birds foot trefoil
+  - "es:938"  # STRAWBERRY
+  - "es:945"  # OAT-BEAN MIXTURE
+  - "es:946"  # OATS-BARLEY-Vetches MIXTURE
+  - "es:950"  # TURMERIC
+  - "es:952"  # POINTED CABBAGE
+  - "es:953"  # MEADOW MIXTURE WITH PREDOMINANT NITROGEN-FIXING CROPS
+  - "es:954"  # VETCH-PEA-CLOVER MIXTURE
+  - "es:956"  # TRITICALE-PEA MIXTURE
+  - "es:957"  # MUNG BEAN
+  - "es:958"  # TRITICALE-BARLEY MIXTURE
+  - "es:101"  # OLIVE
+  - "es:102"  # VINEYARD
+  - "es:104"  # ALMOND
+  - "es:105"  # PEACH TREE
+  - "es:106"  # NECTARINE
+  - "es:107"  # APRICOT
+  - "es:108"  # PEAR TREE
+  - "es:109"  # APPLE TREE
+  - "es:110"  # CHERRY
+  - "es:111"  # PLUM TREE
+  - "es:112"  # WALNUT
+  - "es:113"  # OTHER FRUIT TREES
+  - "es:116"  # Populus
+  - "es:117"  # CHESTNUT
+  - "es:119"  # Nursery
+  - "es:120"  # VINEYARD - OLIVE GROVE
+  - "es:122"  # CAROB TREE
+  - "es:123"  # HAZEL
+  - "es:124"  # PISTACHIO
+  - "es:125"  # NUTS
+  - "es:149"  # blackberry
+  - "es:192"  # RASPBERRY
+  - "es:200"  # Paulownia
+  - "es:201"  # Peach
+  - "es:202"  # Flat Peach
+  - "es:203"  # blackthorn
+  - "es:204"  # CLEMENTINE
+  - "es:205"  # SATSUMA
+  - "es:206"  # ORANGE TREE
+  - "es:207"  # LEMON TREE
+  - "es:208"  # GRAPEFRUIT
+  - "es:209"  # MANDARIN
+  - "es:210"  # HYBRID MANDARIN
+  - "es:211"  # QUINCE
+  - "es:212"  # KIWI
+  - "es:213"  # PERSIMMON
+  - "es:214"  # Loquat
+  - "es:215"  # GOOSEBERRY
+  - "es:216"  # BLUEBERRY
+  - "es:217"  # POMEGRANATE
+  - "es:218"  # FIG TREE
+  - "es:225"  # EUCALYPTUS
+  - "es:226"  # Prickly Pear
+  - "es:227"  # WILLOW
+  - "es:228"  # Acacia
+  - "es:248"  # CAROB TREE
+  - "es:278"  # Berry
+  - "es:280"  # TRUFFLE
+  - "es:287"  # Lemon Verbena
+  - "es:331"  # MORINGA
+  - "es:333"  # GRAPEVINE ROOTSTOCKS
+  - "es:336"  # CAROB-OAT MIXTURE
+  - "es:337"  # CAROB-BARLEY MIXTURE
+  - "es:343"  # AVOCADO
+  - "es:344"  # MANGO
+  - "es:345"  # cherimoya
+  - "es:346"  # PAPAYA
+  - "es:347"  # MULBERRY
+  - "es:348"  # VINEYARD - FRUIT
+  - "es:349"  # OLIVE - FRUIT
+  - "es:351"  # HYBRID CITRUS-KHAKI
+  - "es:352"  # ORANGE-AVOCADO
+  - "es:353"  # CHERRY-OLIVE TREE
+  - "es:354"  # CHERRY-CAROB
+  - "es:356"  # BITTER ORANGE
+  - "es:430"  # Bergamot
+  - "es:436"  # Mediterranean Medlar (crataegus azarolus)
+  - "es:437"  # Sour Cherry
+  - "es:442"  # Osier
+  - "es:481"  # Kola nut
+  - "es:485"  # GOJI BERRIES
+  - "es:501"  # PECAN
+  - "es:905"  # Banana
+  - "es:906"  # PINEAPPLE
+  - "es:907"  # JUjube
+  - "es:909"  # NASHI
+  - "es:910"  # Lychee
+  - "es:911"  # KUMQUAT
+  - "es:912"  # LIMEQUAT
+  - "es:914"  # CITRUS CAVIAR/ FINGER LIME
+  - "es:915"  # Lime
+  - "es:918"  # Argan
+  - "es:919"  # Dragonfruit
+  - "es:923"  # Guava
+  - "es:924"  # Sapote
+  - "es:936"  # Tree Lucerne
+  - "es:939"  # ALMOND-OLIVE
+  - "es:940"  # ORANGE.KAKI
+  - "es:941"  # ORANGE-MANDARIN
+  - "es:942"  # MEDLAR-KAKI
+  - "es:943"  # DATE PALM
+  - "es:944"  # PASSION FRUIT
+  - "es:947"  # JOJOBA
+  - "es:948"  # CLEMENTINE-KAKI
+  - "es:949"  # SATSUMA-KHAKI
+  - "es:955"  # YUZU
+  - "es:364"  # POPLAR
+  - "es:62:atlantic"  # PERMANENT PASTURES OF 5 OR MORE YEARS, in Galicia, Asturias, Cantabria or País Vasco
+  - "es:63:atlantic"  # PASTURES LESS THAN 5 YEARS OLD, in Galicia, Asturias, Cantabria or País Vasco
+  - "es_cb:TA"  # ARABLE LAND (tierra arable) (regional gap parcel)
+  - "es_cb:OV"  # Olive grove / olivar (regional gap parcel)
+  - "es_cb:VI"  # Vineyard / viñedo (regional gap parcel)
+  - "es_cb:FY"  # Fruit trees / frutales (regional gap parcel)
+  - "es_cb:FS"  # Dried fruits / nut trees (frutos secos) (regional gap parcel)
+  - "es_cb:CI"  # Citrus / cítricos (regional gap parcel)
+  - "es_cb:OP"  # Other permanent crops (regional gap parcel)
+  - "es_cb:VO"  # Vineyard - olive grove association (regional gap parcel)
+  - "es_cb:FL"  # Dried fruits and olive groves association (regional gap parcel)
+  - "es_cb:CF"  # Citrus - fruit tree association (regional gap parcel)
+  - "es_cb:VF"  # Vineyard - fruit tree association (regional gap parcel)
+  - "es_cb:OF"  # Olive grove - fruit association (regional gap parcel)
+  - "es_cb:OC"  # Olive grove - citrus association (regional gap parcel)
+  - "es_cb:PS"  # Pasture / pastizal (regional gap parcel)
+  - "es_cb:FV"  # Dried fruits and vineyard association (regional gap parcel)
+  - "es_cb:FF"  # Fruit trees - nut trees association (regional gap parcel)
+  - "es_cb:CS"  # Citrus - peel fruit association (regional gap parcel)
+  - "es_cb:CV"  # Citrus - vineyard association (regional gap parcel)
+  - "es_pv:TA"  # ARABLE LAND (tierra arable) (regional gap parcel)
+  - "es_pv:OV"  # Olive grove / olivar (regional gap parcel)
+  - "es_pv:VI"  # Vineyard / viñedo (regional gap parcel)
+  - "es_pv:FY"  # Fruit trees / frutales (regional gap parcel)
+  - "es_pv:FS"  # Dried fruits / nut trees (frutos secos) (regional gap parcel)
+  - "es_pv:CI"  # Citrus / cítricos (regional gap parcel)
+  - "es_pv:OP"  # Other permanent crops (regional gap parcel)
+  - "es_pv:VO"  # Vineyard - olive grove association (regional gap parcel)
+  - "es_pv:FL"  # Dried fruits and olive groves association (regional gap parcel)
+  - "es_pv:CF"  # Citrus - fruit tree association (regional gap parcel)
+  - "es_pv:VF"  # Vineyard - fruit tree association (regional gap parcel)
+  - "es_pv:OF"  # Olive grove - fruit association (regional gap parcel)
+  - "es_pv:OC"  # Olive grove - citrus association (regional gap parcel)
+  - "es_pv:PS"  # Pasture / pastizal (regional gap parcel)
+  - "es_pv:FV"  # Dried fruits and vineyard association (regional gap parcel)
+  - "es_pv:FF"  # Fruit trees - nut trees association (regional gap parcel)
+  - "es_pv:CS"  # Citrus - peel fruit association (regional gap parcel)
+  - "es_pv:CV"  # Citrus - vineyard association (regional gap parcel)
+
+exclude:
+  - "es:0"  # UNKNOWN PRODUCT
+  - "es:20"  # TRADITIONAL FALLOW
+  - "es:23"  # ENVIRONMENTAL FALLOW
+  - "es:62"  # PERMANENT PASTURES OF 5 OR MORE YEARS
+  - "es:63"  # PASTURES LESS THAN 5 YEARS OLD
+  - "es:68"  # Fescue
+  - "es:69"  # PERENNIAL RYEGRASS
+  - "es:70"  # Bent grass
+  - "es:72"  # Cat grass
+  - "es:73"  # Timothy
+  - "es:74"  # Poa grass
+  - "es:78"  # Ryegrass annual
+  - "es:91"  # FLOWERS
+  - "es:97"  # MUSHROOMS
+  - "es:139"  # Reed Canary Grass
+  - "es:147"  # HOLM OAK
+  - "es:194"  # MUSHROOM
+  - "es:223"  # MISCANTHUS
+  - "es:286"  # Strawflower
+  - "es:293"  # OAK
+  - "es:295"  # Cork Oat
+  - "es:296"  # Fir
+  - "es:297"  # JUNIPER
+  - "es:300"  # Sabina (type of Junipers)
+  - "es:334"  # BIODIVERSITY FALLOW (INCLUDING MELLIFERS)
+  - "es:335"  # PERMANENT CROP HEADLAND AND BORDERS
+  - "es:338"  # Ryegrass Vetch mixture
+  - "es:358"  # FOREST MIX
+  - "es:360"  # BIRCH
+  - "es:361"  # DOUGLAS FIR
+  - "es:362"  # Christmas HOLLY
+  - "es:363"  # Wild Olive
+  - "es:367"  # Adler
+  - "es:370"  # MAPLE
+  - "es:372"  # CEDAR
+  - "es:373"  # Kermes Oak
+  - "es:375"  # CYPRESS
+  - "es:376"  # ASH TREE
+  - "es:377"  # Strawberry Tree
+  - "es:378"  # ELM
+  - "es:381"  # Portuguese oak
+  - "es:383"  # RETAMA
+  - "es:385"  # Tamarix
+  - "es:387"  # Tilia tree
+  - "es:389"  # PINE TREE
+  - "es:391"  # Mahaleb Cherrz
+  - "es:443"  # BAMBOO
+  - "es:444"  # SUMAC
+  - "es:489"  # Scutch grass
+  - "es:491"  # Soft brome
+  - "es:494"  # (unlabelled source code)
+  - "es:495"  # (unlabelled source code)
+  - "es:496"  # RYEGRASS-CLOVER MIXTURE
+  - "es:932"  # ORNAMENTAL PLANTS
+  - "es:959"  # RYEGRASS MIXTURE
+  - "es_cb:PR"  # Shrub grass / pasto arbustivo (regional gap parcel)
+  - "es_cb:PA"  # Grass with trees (dehesa / wood pasture) (regional gap parcel)
+  - "es_cb:EP"  # Landscape element / non-crop (elemento del paisaje) (regional gap parcel)
+  - "es_pv:PR"  # Shrub grass / pasto arbustivo (regional gap parcel)
+  - "es_pv:PA"  # Grass with trees (dehesa / wood pasture) (regional gap parcel)
+  - "es_pv:EP"  # Landscape element / non-crop (elemento del paisaje) (regional gap parcel)
