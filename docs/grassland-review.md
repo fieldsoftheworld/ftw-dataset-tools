@@ -91,7 +91,13 @@ metres around villages. Even above 0.1 ha, many sit under tree cover with no ope
 visible: registered plots that have been abandoned and grown over. The national edition
 alone leaves about half of Galicia's farmland unlabelled, so neither source makes clean
 chips there. Every `es_ga` year is excluded, and the union leaves Galicia out, national
-parcels included. In the other four regions the union adds gap parcels of at least 0.1 ha.
+parcels included.
+
+**Spain 2025 union, other regions:** the union adds gap parcels of at least 0.1 ha only in
+Cantabria and País Vasco, where the national edition alone leaves about a quarter of the
+farmland unlabelled and the gap parcels read as meadows. Andalucía and Castilla y León keep
+only their national parcels, which cover 86% and 94% of their farmland; their gap parcels
+included strips along roads, canals and railways and patches in scrub.
 
 **Unchanged, not reviewed:** it_tuscany. The source file was missing at review time.
 
