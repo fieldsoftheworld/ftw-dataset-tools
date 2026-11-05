@@ -225,8 +225,30 @@ class TestAddMaskClassification:
         add_mask_classification(asset, "semantic_2class", background_value=3)
 
         classes = asset.extra_fields["raster:bands"][0]["classification:classes"]
-        assert [(c["value"], c["name"]) for c in classes] == [(3, "unknown"), (1, "field")]
-        assert "presence-only" in classes[0]["description"]
+        assert [(c["value"], c["name"]) for c in classes] == [
+            (0, "background"),
+            (3, "unknown"),
+            (1, "field"),
+        ]
+        assert "presence-only" in classes[1]["description"]
+        assert "boundary line" in classes[0]["description"]
+
+    def test_presence_only_3class_has_no_zero_class(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import add_mask_classification, add_raster_bands
+
+        p = tmp_path / "m3.tif"
+        _write_cog(p, np.array([[3, 1], [2, 3]], dtype=np.uint8))
+        _, asset = _item_with_asset(p, ["labels"])
+        add_raster_bands(asset, p)
+
+        add_mask_classification(asset, "semantic_3class", background_value=3)
+
+        classes = asset.extra_fields["raster:bands"][0]["classification:classes"]
+        assert [(c["value"], c["name"]) for c in classes] == [
+            (3, "unknown"),
+            (1, "field"),
+            (2, "boundary"),
+        ]
 
     def test_presence_only_decode_boundary_keeps_background(self, tmp_path: Path) -> None:
         """DECODE layers fold presence-only into 0, so 0 stays named background there."""
