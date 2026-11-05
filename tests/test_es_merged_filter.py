@@ -10,7 +10,6 @@ from ftw_dataset_tools.api.config import ClassFilter
 
 FILTERS = Path(__file__).resolve().parent.parent / "configs" / "filters"
 REGIONS = {
-    "es_cb": "es_uso_north_filter.yaml",
     "es_pv": "es_uso_north_filter.yaml",
 }
 

@@ -94,11 +94,13 @@ chips there. Every `es_ga` year is excluded. Galicia's national 2025 parcels go 
 presence-only dataset `es_po_2025`, where unlabelled land counts as unknown, not background.
 
 **Spain 2025 union, other regions:** the union adds gap parcels of at least 0.1 ha only in
-Cantabria and País Vasco, where the national edition alone leaves about a quarter of the
-farmland unlabelled and the gap parcels read as meadows. Andalucía and Castilla y León get
-no gap parcels (they included strips along roads, canals and railways and patches in scrub);
-their national parcels go to `es_po_2025` with Galicia's, since around villages many visible
-fields have no national parcel.
+País Vasco, where the national edition alone leaves about a quarter of the farmland
+unlabelled and the gap parcels read as meadows. Cantabria's gap parcels looked as good, but
+its SIGPAC data is not CC-BY, so they are left out to keep es_2025 under CC-BY-4.0.
+Andalucía and Castilla y León get no gap parcels (they included strips along roads, canals
+and railways and patches in scrub). The national parcels of Andalucía, Castilla y León and
+Cantabria go to `es_po_2025` with Galicia's, since without gap parcels many visible fields
+there have no label.
 
 **Unchanged, not reviewed:** it_tuscany. The source file was missing at review time.
 

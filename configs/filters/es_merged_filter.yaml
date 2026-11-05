@@ -11,15 +11,15 @@
 #                             the rest of Spain they are dehesa, rangeland, scrub and drove-road
 #                             strips, so es:62 and es:63 stay background (2026-11 visual review,
 #                             see docs/grassland-review.md).
-#   <region>:<land use>       a regional SIGPAC parcel of at least 0.1 ha that no national
-#                             parcel covers, in Cantabria or País Vasco (es_cb, es_pv). Field or
-#                             background as in es_uso_north_filter.yaml.
+#   es_pv:<land use>          a País Vasco SIGPAC parcel of at least 0.1 ha that no national
+#                             parcel covers. Field or background as in es_uso_north_filter.yaml.
 #
 # Used by both Spain 2025 datasets. es_2025 (wall-to-wall) has the national parcels outside
-# Andalucía, Castilla y León and Galicia plus the Cantabria and País Vasco gap parcels.
-# es_po_2025 (presence-only masks) has the national parcels of those three regions only:
-# their gap parcels were strips, scrub patches and overgrown micro-plots, and without them too
-# many visible fields are unlabelled for wall-to-wall masks (2026-11 visual review).
+# Andalucía, Castilla y León, Galicia and Cantabria plus the País Vasco gap parcels.
+# es_po_2025 (presence-only masks) has the national parcels of those four regions only:
+# their gap parcels were strips, scrub patches and overgrown micro-plots, or (Cantabria) carry
+# a non-CC-BY license, and without them too many visible fields are unlabelled for wall-to-wall
+# masks (2026-11 visual review).
 #
 # Generated from spain_filter.yaml and es_uso_north_filter.yaml; change those
 # and regenerate rather than editing this list by hand.
@@ -359,24 +359,6 @@ include:
   - "es:364"  # POPLAR
   - "es:62:atlantic"  # PERMANENT PASTURES OF 5 OR MORE YEARS, in Galicia, Asturias, Cantabria or País Vasco
   - "es:63:atlantic"  # PASTURES LESS THAN 5 YEARS OLD, in Galicia, Asturias, Cantabria or País Vasco
-  - "es_cb:TA"  # ARABLE LAND (tierra arable) (regional gap parcel)
-  - "es_cb:OV"  # Olive grove / olivar (regional gap parcel)
-  - "es_cb:VI"  # Vineyard / viñedo (regional gap parcel)
-  - "es_cb:FY"  # Fruit trees / frutales (regional gap parcel)
-  - "es_cb:FS"  # Dried fruits / nut trees (frutos secos) (regional gap parcel)
-  - "es_cb:CI"  # Citrus / cítricos (regional gap parcel)
-  - "es_cb:OP"  # Other permanent crops (regional gap parcel)
-  - "es_cb:VO"  # Vineyard - olive grove association (regional gap parcel)
-  - "es_cb:FL"  # Dried fruits and olive groves association (regional gap parcel)
-  - "es_cb:CF"  # Citrus - fruit tree association (regional gap parcel)
-  - "es_cb:VF"  # Vineyard - fruit tree association (regional gap parcel)
-  - "es_cb:OF"  # Olive grove - fruit association (regional gap parcel)
-  - "es_cb:OC"  # Olive grove - citrus association (regional gap parcel)
-  - "es_cb:PS"  # Pasture / pastizal (regional gap parcel)
-  - "es_cb:FV"  # Dried fruits and vineyard association (regional gap parcel)
-  - "es_cb:FF"  # Fruit trees - nut trees association (regional gap parcel)
-  - "es_cb:CS"  # Citrus - peel fruit association (regional gap parcel)
-  - "es_cb:CV"  # Citrus - vineyard association (regional gap parcel)
   - "es_pv:TA"  # ARABLE LAND (tierra arable) (regional gap parcel)
   - "es_pv:OV"  # Olive grove / olivar (regional gap parcel)
   - "es_pv:VI"  # Vineyard / viñedo (regional gap parcel)
@@ -452,9 +434,6 @@ exclude:
   - "es:496"  # RYEGRASS-CLOVER MIXTURE
   - "es:932"  # ORNAMENTAL PLANTS
   - "es:959"  # RYEGRASS MIXTURE
-  - "es_cb:PR"  # Shrub grass / pasto arbustivo (regional gap parcel)
-  - "es_cb:PA"  # Grass with trees (dehesa / wood pasture) (regional gap parcel)
-  - "es_cb:EP"  # Landscape element / non-crop (elemento del paisaje) (regional gap parcel)
   - "es_pv:PR"  # Shrub grass / pasto arbustivo (regional gap parcel)
   - "es_pv:PA"  # Grass with trees (dehesa / wood pasture) (regional gap parcel)
   - "es_pv:EP"  # Landscape element / non-crop (elemento del paisaje) (regional gap parcel)
