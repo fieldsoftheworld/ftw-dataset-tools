@@ -74,9 +74,9 @@ MASK_CLASSES: dict[str, list[tuple[int, str, str]]] = {
 # Presence-only masks mark every unlabelled pixel with this value: it may be a field or not.
 PRESENCE_ONLY_VALUE = 3
 PRESENCE_ONLY_DESCRIPTION = (
-    "Unknown: not labelled, may or may not be a field (presence-only labels); in the 2-class "
-    "mask also the boundary lines between fields"
+    "Unknown: not labelled, may or may not be a field (presence-only labels)"
 )
+PRESENCE_ONLY_LINE_DESCRIPTION = "Field boundary line of a labelled field (not a field)"
 
 # Mask kinds that are continuous or id-valued: described, never classified.
 MASK_DESCRIPTIONS: dict[str, str] = {
@@ -90,6 +90,30 @@ MASK_DESCRIPTIONS: dict[str, str] = {
 }
 
 _BACKGROUND_SUBSTITUTED_KINDS = frozenset({"semantic_2class", "semantic_3class"})
+
+
+def _class_spec(
+    mask_kind: str, spec: list[tuple[int, str, str]], background_value: int
+) -> list[tuple[int, str, str]]:
+    """The (value, name, description) classes one mask actually contains.
+
+    Semantic masks move background to ``background_value``. With the presence-only
+    value that class is ``unknown`` instead, and the 2-class mask keeps a 0 class for
+    the field boundary lines it still burns as 0.
+    """
+    if mask_kind not in _BACKGROUND_SUBSTITUTED_KINDS:
+        return spec
+    if background_value != PRESENCE_ONLY_VALUE:
+        return [(background_value if n == "background" else v, n, d) for v, n, d in spec]
+    out = [
+        (PRESENCE_ONLY_VALUE, "unknown", PRESENCE_ONLY_DESCRIPTION)
+        if n == "background"
+        else (v, n, d)
+        for v, n, d in spec
+    ]
+    if mask_kind == "semantic_2class":
+        out.insert(0, (0, "background", PRESENCE_ONLY_LINE_DESCRIPTION))
+    return out
 
 
 def multihash_sha256(path: Path) -> str:
@@ -275,19 +299,11 @@ def add_mask_classification(asset: pystac.Asset, mask_kind: str, background_valu
     except KeyError as err:
         raise ValueError(f"Unknown mask kind: {mask_kind}") from err
 
-    substitute = mask_kind in _BACKGROUND_SUBSTITUTED_KINDS
     classes = [
         Classification.create(
-            value=background_value if (substitute and name == "background") else value,
-            name=name,
-            description=description,
-            color_hint=LABEL_COLORS.get(name),
+            value=value, name=name, description=description, color_hint=LABEL_COLORS.get(name)
         )
-        if not (substitute and name == "background" and background_value == PRESENCE_ONLY_VALUE)
-        else Classification.create(
-            value=background_value, name="unknown", description=PRESENCE_ONLY_DESCRIPTION
-        )
-        for value, name, description in spec
+        for value, name, description in _class_spec(mask_kind, spec, background_value)
     ]
     ClassificationExtension.ext(band, add_if_missing=True).classes = classes
     owner = asset.owner

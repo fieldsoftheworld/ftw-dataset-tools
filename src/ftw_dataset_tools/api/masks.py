@@ -738,8 +738,10 @@ def _rasterize_mask(
 
     if boundary_lines:
         # 3-class keeps the lines as their own class; every other type burns them
-        # as background, which is what separates two adjacent fields.
-        line_value = 2 if mask_type == MaskType.SEMANTIC_3_CLASS else background_class_value
+        # as background (0), which is what separates two adjacent fields. The lines
+        # come from the labels, so they are known even in presence-only masks, where
+        # only unlabelled pixels take the unknown value.
+        line_value = 2 if mask_type == MaskType.SEMANTIC_3_CLASS else 0
         features.rasterize(
             [(line, line_value) for line in shapes_of([wkt for (wkt,) in boundary_lines])],
             out=mask,

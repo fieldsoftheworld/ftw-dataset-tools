@@ -872,6 +872,42 @@ class TestDecodeMaskTypes:
         assert data.max() == 1.0
         assert (data == 0).sum() > (data > 0).sum()
 
+    def test_presence_only_2_class_keeps_lines_as_background(self, tmp_path) -> None:
+        """Presence-only: unlabelled pixels are 3, but the labelled field edges stay 0."""
+        import rasterio
+
+        from ftw_dataset_tools.api.masks import MaskType
+
+        path = self._create(tmp_path, MaskType.SEMANTIC_2_CLASS, background_class_value=3)
+        with rasterio.open(path) as src:
+            data = src.read(1)
+
+        assert set(np.unique(data)) == {0, 1, 3}
+        # Every 0 pixel is a burned field edge: within two pixels of a field interior
+        # (the lines are burned all_touched, so they can be two pixels wide).
+        field = np.pad(data == 1, 2)
+        near_field = np.zeros_like(data, dtype=bool)
+        for dy in range(-2, 3):
+            for dx in range(-2, 3):
+                near_field |= field[
+                    2 + dy : 2 + dy + data.shape[0], 2 + dx : 2 + dx + data.shape[1]
+                ]
+        assert near_field[data == 0].all()
+        # The chip corner is far from both fields: unknown.
+        assert data[0, 0] == 3
+
+    def test_presence_only_3_class_lines_are_boundary(self, tmp_path) -> None:
+        """Presence-only 3-class masks keep lines as class 2 and unlabelled pixels as 3."""
+        import rasterio
+
+        from ftw_dataset_tools.api.masks import MaskType
+
+        path = self._create(tmp_path, MaskType.SEMANTIC_3_CLASS, background_class_value=3)
+        with rasterio.open(path) as src:
+            data = src.read(1)
+
+        assert set(np.unique(data)) == {1, 2, 3}
+
     def test_chip_with_no_fields_writes_empty_layers(self, tmp_path) -> None:
         """A chip whose cell contains no fields still writes valid, all-zero rasters."""
         import geopandas as gpd

@@ -343,7 +343,7 @@ Semantic mask assets add `classification:classes`
 
 | Mask | Classes |
 |------|---------|
-| `semantic_2class_mask` | 0 background, 1 field. With `presence_only`, 3 `unknown` replaces 0 (unlabelled pixels, and the boundary lines between fields) |
+| `semantic_2class_mask` | 0 background, 1 field. With `presence_only`, 3 `unknown` marks unlabelled pixels; the field boundary lines stay 0 |
 | `semantic_3class_mask` | 0 background, 1 field, 2 boundary. With `presence_only`, 3 `unknown` replaces 0 (unlabelled pixels) |
 | `instance_mask` | no class list; 0 marks non-field pixels (also when `presence_only` is set) and is the band's `nodata`; other values are instance ids |
 | | Field ids that are float-like (e.g. `'111205887.0'`) or otherwise non-numeric are coerced to integers, or replaced with sequential ids (1..n) for that chip when any id in it can't be coerced. |
