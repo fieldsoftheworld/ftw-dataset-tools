@@ -73,7 +73,10 @@ MASK_CLASSES: dict[str, list[tuple[int, str, str]]] = {
 
 # Presence-only masks mark every unlabelled pixel with this value: it may be a field or not.
 PRESENCE_ONLY_VALUE = 3
-PRESENCE_ONLY_DESCRIPTION = "Not labelled: may or may not be a field (presence-only labels)"
+PRESENCE_ONLY_DESCRIPTION = (
+    "Unknown: not labelled, may or may not be a field (presence-only labels); in the 2-class "
+    "mask also the boundary lines between fields"
+)
 
 # Mask kinds that are continuous or id-valued: described, never classified.
 MASK_DESCRIPTIONS: dict[str, str] = {
