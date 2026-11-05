@@ -11,10 +11,13 @@
 #                             the rest of Spain they are dehesa, rangeland, scrub and drove-road
 #                             strips, so es:62 and es:63 stay background (2026-11 visual review,
 #                             see docs/grassland-review.md).
-#   <region>:<land use>       a regional SIGPAC parcel no national parcel covers (es_an, es_cb,
-#                             es_cl, es_ga, es_pv). Field or background as in that region's
-#                             filter: es_uso_filter.yaml for es_an and es_cl,
-#                             es_uso_north_filter.yaml for es_cb, es_ga and es_pv.
+#   <region>:<land use>       a regional SIGPAC parcel of at least 0.1 ha that no national
+#                             parcel covers (es_an, es_cb, es_cl, es_pv). Field or background as
+#                             in that region's filter: es_uso_filter.yaml for es_an and es_cl,
+#                             es_uso_north_filter.yaml for es_cb and es_pv.
+#
+# Galicia is not in the union, national parcels included: its SIGPAC parcels are mostly
+# micro-plots and overgrown plots under tree cover (2026-11 visual review).
 #
 # Generated from spain_filter.yaml, es_uso_filter.yaml and es_uso_north_filter.yaml; change those
 # and regenerate rather than editing this list by hand.
@@ -406,24 +409,6 @@ include:
   - "es_cl:FF"  # Fruit trees - nut trees association (regional gap parcel)
   - "es_cl:CS"  # Citrus - peel fruit association (regional gap parcel)
   - "es_cl:CV"  # Citrus - vineyard association (regional gap parcel)
-  - "es_ga:TA"  # ARABLE LAND (tierra arable) (regional gap parcel)
-  - "es_ga:OV"  # Olive grove / olivar (regional gap parcel)
-  - "es_ga:VI"  # Vineyard / viñedo (regional gap parcel)
-  - "es_ga:FY"  # Fruit trees / frutales (regional gap parcel)
-  - "es_ga:FS"  # Dried fruits / nut trees (frutos secos) (regional gap parcel)
-  - "es_ga:CI"  # Citrus / cítricos (regional gap parcel)
-  - "es_ga:OP"  # Other permanent crops (regional gap parcel)
-  - "es_ga:VO"  # Vineyard - olive grove association (regional gap parcel)
-  - "es_ga:FL"  # Dried fruits and olive groves association (regional gap parcel)
-  - "es_ga:CF"  # Citrus - fruit tree association (regional gap parcel)
-  - "es_ga:VF"  # Vineyard - fruit tree association (regional gap parcel)
-  - "es_ga:OF"  # Olive grove - fruit association (regional gap parcel)
-  - "es_ga:OC"  # Olive grove - citrus association (regional gap parcel)
-  - "es_ga:PS"  # Pasture / pastizal (regional gap parcel)
-  - "es_ga:FV"  # Dried fruits and vineyard association (regional gap parcel)
-  - "es_ga:FF"  # Fruit trees - nut trees association (regional gap parcel)
-  - "es_ga:CS"  # Citrus - peel fruit association (regional gap parcel)
-  - "es_ga:CV"  # Citrus - vineyard association (regional gap parcel)
   - "es_pv:TA"  # ARABLE LAND (tierra arable) (regional gap parcel)
   - "es_pv:OV"  # Olive grove / olivar (regional gap parcel)
   - "es_pv:VI"  # Vineyard / viñedo (regional gap parcel)
@@ -510,9 +495,6 @@ exclude:
   - "es_cl:PS"  # Pasture / pastizal (regional gap parcel)
   - "es_cl:PA"  # Grass with trees (dehesa / wood pasture) (regional gap parcel)
   - "es_cl:EP"  # Landscape element / non-crop (elemento del paisaje) (regional gap parcel)
-  - "es_ga:PR"  # Shrub grass / pasto arbustivo (regional gap parcel)
-  - "es_ga:PA"  # Grass with trees (dehesa / wood pasture) (regional gap parcel)
-  - "es_ga:EP"  # Landscape element / non-crop (elemento del paisaje) (regional gap parcel)
   - "es_pv:PR"  # Shrub grass / pasto arbustivo (regional gap parcel)
   - "es_pv:PA"  # Grass with trees (dehesa / wood pasture) (regional gap parcel)
   - "es_pv:EP"  # Landscape element / non-crop (elemento del paisaje) (regional gap parcel)

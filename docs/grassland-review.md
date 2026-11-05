@@ -85,6 +85,14 @@ pasture split by landscape:
 The Spain 2025 union (`es_merged_filter.yaml`) counts them as field in the four Atlantic
 regions only. That matches the regional `es_uso_north` decision.
 
+**Galicia (`es_ga`), excluded:** a second review of the union's gap parcels (regional parcels
+the national edition doesn't cover) found Galicia's to be mostly plots of a few hundred square
+metres around villages. Even above 0.1 ha, many sit under tree cover with no open field
+visible: registered plots that have been abandoned and grown over. The national edition
+alone leaves about half of Galicia's farmland unlabelled, so neither source makes clean
+chips there. Every `es_ga` year is excluded, and the union leaves Galicia out, national
+parcels included. In the other four regions the union adds gap parcels of at least 0.1 ha.
+
 **Unchanged, not reviewed:** it_tuscany. The source file was missing at review time.
 
 ## Reproducing

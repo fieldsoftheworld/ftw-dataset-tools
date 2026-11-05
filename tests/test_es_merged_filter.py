@@ -13,7 +13,6 @@ REGIONS = {
     "es_an": "es_uso_filter.yaml",
     "es_cb": "es_uso_north_filter.yaml",
     "es_cl": "es_uso_filter.yaml",
-    "es_ga": "es_uso_north_filter.yaml",
     "es_pv": "es_uso_north_filter.yaml",
 }
 
@@ -53,6 +52,8 @@ class TestEsMergedFilter:
         expected |= {"es:62:atlantic", "es:63:atlantic"}
         for region, source in REGIONS.items():
             regional = ClassFilter.from_file(FILTERS / source)
-            expected |= {f"{region}:{v}" for v in _printable([*regional.include, *regional.exclude])}
+            expected |= {
+                f"{region}:{v}" for v in _printable([*regional.include, *regional.exclude])
+            }
         assert set(merged.include) | set(merged.exclude) == expected
         assert not set(merged.include) & set(merged.exclude)
