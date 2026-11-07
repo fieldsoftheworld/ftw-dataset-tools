@@ -15,6 +15,7 @@ from ftw_dataset_tools.api import config as config_module
 from ftw_dataset_tools.api.config import ConfigError, DatasetConfig
 from ftw_dataset_tools.api.label_extent import (
     LABEL_EXTENT_COLUMN,
+    LABEL_EXTENT_SHA_COLUMN,
     LabelExtentError,
     apply_label_extent,
     load_label_extent,
@@ -29,6 +30,14 @@ def _write_extent(path: Path, geometries: list, crs: str = "EPSG:4326") -> Path:
         {"tile": list(range(len(geometries)))}, geometry=geometries, crs=crs
     ).to_parquet(path)
     return path
+
+
+def _applied(pct: float, extent: Path | None = None) -> dict:
+    """Chips columns the chips stage adds when it applies ``extent``."""
+    from ftw_dataset_tools.api.label_extent import extent_fingerprint
+
+    sha = extent_fingerprint(extent) if extent is not None else "0" * 64
+    return {LABEL_EXTENT_COLUMN: [pct], LABEL_EXTENT_SHA_COLUMN: [sha]}
 
 
 class TestLoadLabelExtent:
@@ -363,6 +372,76 @@ class TestLabelExtentOnUtmGrid:
         extent = load_label_extent(_write_extent(tmp_path / "e.parquet", [box(0, 0, 1, 1)]))
         assert extent_pieces(extent, (5, 5, 5.01, 5.01)) == []
 
+    def test_antimeridian_bounds_are_split(self, tmp_path: Path) -> None:
+        """A UTM grid snapped past 180 gives minx > maxx; both sides are clipped."""
+        from ftw_dataset_tools.api.label_extent import extent_pieces
+
+        extent = load_label_extent(
+            _write_extent(
+                tmp_path / "e.parquet",
+                [box(179.5, -17.5, 180, -16.5), box(-180, -17.5, -179.5, -16.5)],
+            )
+        )
+        pieces = extent_pieces(extent, (179.9848, -17.0, -179.99976, -16.99))
+        sides = sorted(round(piece.bounds[0]) for piece in pieces)
+        assert sides == [-180, 180]
+
+    def test_antimeridian_chip_gets_a_mask(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        chips = tmp_path / "chips.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["c1"], "field_coverage_pct": [50.0]},
+            geometry=[box(179.99, -17.0, 180.0, -16.99)],
+            crs="EPSG:4326",
+        ).to_parquet(chips)
+        field = box(179.992, -16.998, 179.995, -16.995)
+        fields = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame({"id": [1]}, geometry=[field], crs="EPSG:4326").to_parquet(fields)
+        lines = tmp_path / "lines.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1]}, geometry=[LineString(field.exterior.coords)], crs="EPSG:4326"
+        ).to_parquet(lines)
+        extent = _write_extent(tmp_path / "e.parquet", [box(179.5, -17.5, 180, -16.5)])
+
+        result = create_masks(
+            chips_file=chips,
+            boundaries_file=fields,
+            boundary_lines_file=lines,
+            output_dir=tmp_path / "out",
+            mask_types=[MaskType.SEMANTIC_3_CLASS],
+            num_workers=1,
+            min_coverage=0,
+            label_extent_file=extent,
+        )[MaskType.SEMANTIC_3_CLASS]
+
+        assert result.total_created == 1, result.masks_skipped
+        with rasterio.open(result.masks_created[0].output_path) as src:
+            data = src.read(1)
+        # The chip is wholly inside; only grid pixels snapped past 180 may be unknown.
+        assert 0 < (data == 3).mean() < 0.05
+
+    def test_repair_leftover_lines_are_not_inside(self, tmp_path: Path) -> None:
+        """A spike that ST_MakeValid turns into a line must not burn as inside."""
+        from rasterio.transform import from_bounds
+        from shapely import wkt
+
+        from ftw_dataset_tools.api.label_extent import extent_pieces
+        from ftw_dataset_tools.api.masks import _burn_label_extent
+
+        spike = wkt.loads("POLYGON((0 0, 0.5 0, 0.5 0.5, 0.9 0.9, 0.5 0.5, 0.5 1, 0 1, 0 0))")
+        extent = load_label_extent(_write_extent(tmp_path / "spike.parquet", [spike]))
+        bounds = (0, 0, 1, 1)
+
+        pieces = extent_pieces(extent, bounds)
+        assert {piece.geom_type for piece in pieces} == {"Polygon"}
+
+        mask = np.zeros((10, 10), np.uint8)
+        _burn_label_extent(mask, extent, bounds, from_bounds(*bounds, 10, 10), None)
+        # The east half (where the spike runs to 0.9, 0.9) is outside: no 0 pixels there.
+        assert (mask[:, 5:] == 3).all()
+        assert (mask[:, :5] == 0).all()
+
 
 class TestApplyLabelExtentToChips:
     """Chip selection and the label_extent_pct column."""
@@ -517,7 +596,7 @@ class TestLabelExtentPipeline:
         ctx = self._ctx(tmp_path, sample_geoparquet_4326, extent, mask_types=["semantic_3_class"])
         cell = box(18.0, 40.0, 18.01, 40.01)
         gpd.GeoDataFrame(
-            {"id": ["cell_001"], "field_coverage_pct": [20.0], LABEL_EXTENT_COLUMN: [50.0]},
+            {"id": ["cell_001"], "field_coverage_pct": [20.0], **_applied(50.0, extent)},
             geometry=[cell],
             crs="EPSG:4326",
         ).to_parquet(ctx.chips_path)
@@ -562,7 +641,7 @@ class TestLabelExtentPipeline:
         extent = _write_extent(tmp_path / "extent.parquet", [box(0, 0, 1, 1)])
         ctx = self._ctx(tmp_path, sample_geoparquet_4326, extent)
         gpd.GeoDataFrame(
-            {"id": ["a"], LABEL_EXTENT_COLUMN: [100.0]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326"
+            {"id": ["a"], **_applied(100.0, extent)}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326"
         ).to_parquet(ctx.chips_path)
         ctx.output_fields_path.write_bytes(b"")
         ctx.boundary_lines_path.write_bytes(b"")
@@ -581,8 +660,9 @@ class TestLabelExtentStageGuard:
         from ftw_dataset_tools.api import pipeline
 
         masks: dict = {"workers": 1}
+        extent = _write_extent(tmp_path / "e.parquet", [box(0, 0, 1, 1)])
         if configured:
-            masks["label_extent"] = str(_write_extent(tmp_path / "e.parquet", [box(0, 0, 1, 1)]))
+            masks["label_extent"] = str(extent)
         config = DatasetConfig.from_dict(
             {
                 "fields_file": str(fields),
@@ -596,7 +676,7 @@ class TestLabelExtentStageGuard:
         ctx.chips_base_dir.mkdir()
         columns: dict = {"id": ["a"], "field_coverage_pct": [50.0]}
         if applied:
-            columns[LABEL_EXTENT_COLUMN] = [100.0]
+            columns.update(_applied(100.0, extent))
         gpd.GeoDataFrame(columns, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(
             ctx.chips_path
         )
@@ -661,3 +741,111 @@ class TestRunSummary:
 
         output = CliRunner().invoke(show).output
         assert "Label extent: kept 4 of 10 chips (6 wholly outside dropped)" in output
+
+
+class TestLabelExtentFingerprint:
+    """Chips and masks record which extent file they were built from."""
+
+    def test_chips_record_the_extent_sha(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.label_extent import chips_fingerprint, extent_fingerprint
+
+        chips = TestApplyLabelExtentToChips()._chips(tmp_path)
+        assert chips_fingerprint(chips) is None
+        extent = _write_extent(tmp_path / "e.parquet", [box(-1, -1, 9, 2)])
+
+        apply_label_extent(chips, extent)
+
+        assert chips_fingerprint(chips) == extent_fingerprint(extent)
+
+    @pytest.mark.parametrize("stage", ["masks", "stac"])
+    def test_rewritten_extent_is_refused(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, stage
+    ) -> None:
+        """Chips from the old extent file don't pass for the rewritten one."""
+        from ftw_dataset_tools.api import pipeline
+        from ftw_dataset_tools.api.pipeline import StageInputError
+
+        ctx = TestLabelExtentStageGuard._ctx(
+            tmp_path, sample_geoparquet_4326, configured=True, applied=True
+        )
+        _write_extent(tmp_path / "e.parquet", [box(0, 0, 0.5, 1)])
+        stage_func = {"masks": pipeline.stage_masks, "stac": pipeline.stage_stac}[stage]
+
+        with pytest.raises(StageInputError, match=r"different extent file.*'chips'"):
+            stage_func(ctx)
+
+
+class TestLabelExtentSkipExisting:
+    """skip_existing reuses a semantic mask only when it was burned with this run's extent."""
+
+    @staticmethod
+    def _run(tmp_path: Path, extent: Path | None):
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        chips, boundaries, lines = TestLabelExtentMasks()._build_inputs(tmp_path)
+        types = [MaskType.SEMANTIC_2_CLASS, MaskType.SEMANTIC_3_CLASS, MaskType.INSTANCE]
+        results = create_masks(
+            chips_file=chips,
+            boundaries_file=boundaries,
+            boundary_lines_file=lines,
+            output_dir=tmp_path / "out",
+            field_dataset="test",
+            mask_types=types,
+            num_workers=1,
+            skip_existing=True,
+            label_extent_file=extent,
+        )
+        reused = {t: results[t].masks_existing for t in types}
+        path = (tmp_path / "out").rglob("*_semantic_3_class.tif").__next__()
+        with rasterio.open(path) as src:
+            return reused, src.tags().get("FTW_LABEL_EXTENT"), src.read(1)
+
+    def _extent(self, tmp_path: Path, name: str, east: float) -> Path:
+        return _write_extent(
+            tmp_path / name,
+            [box(4000000, 3000000, east, 3001000)],
+            crs=TestLabelExtentMasks.CRS,
+        )
+
+    def test_default_build_unchanged(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.masks import MaskType
+
+        _, tag, data = self._run(tmp_path, None)
+        assert tag is None
+        assert 3 not in data
+        reused, tag, _ = self._run(tmp_path, None)
+        assert tag is None
+        assert reused == dict.fromkeys(reused, 1)
+        assert MaskType.INSTANCE in reused
+
+    def test_adding_an_extent_rebuilds_semantic_masks(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.label_extent import extent_fingerprint
+        from ftw_dataset_tools.api.masks import MaskType
+
+        self._run(tmp_path, None)
+        extent = self._extent(tmp_path, "e.parquet", 4000500)
+
+        reused, tag, data = self._run(tmp_path, extent)
+
+        assert reused[MaskType.SEMANTIC_2_CLASS] == reused[MaskType.SEMANTIC_3_CLASS] == 0
+        # The instance mask does not depend on the extent, so it is kept.
+        assert reused[MaskType.INSTANCE] == 1
+        assert tag == extent_fingerprint(extent)
+        assert 3 in data
+
+        reused, _, _ = self._run(tmp_path, extent)
+        assert reused[MaskType.SEMANTIC_3_CLASS] == 1
+
+    def test_changed_or_removed_extent_rebuilds(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.masks import MaskType
+
+        self._run(tmp_path, self._extent(tmp_path, "e.parquet", 4000500))
+        other = self._extent(tmp_path, "other.parquet", 4000800)
+
+        reused, _, _ = self._run(tmp_path, other)
+        assert reused[MaskType.SEMANTIC_3_CLASS] == 0
+
+        reused, tag, data = self._run(tmp_path, None)
+        assert reused[MaskType.SEMANTIC_3_CLASS] == 0
+        assert tag is None
+        assert 3 not in data

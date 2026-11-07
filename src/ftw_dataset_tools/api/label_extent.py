@@ -15,6 +15,7 @@ masks stage burns the extent per chip (see ``masks._burn_label_extent``).
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +25,7 @@ import duckdb
 import pyproj
 import shapely
 
-from ftw_dataset_tools.api.chips_io import select_excluding, write_chips
+from ftw_dataset_tools.api.chips_io import parquet_columns, select_excluding, write_chips
 from ftw_dataset_tools.api.geo import (
     detect_crs,
     detect_geometry_column,
@@ -42,6 +43,10 @@ logger = get_logger(__name__)
 #: of a chip, 0-100, that lies inside the label extent.
 LABEL_EXTENT_COLUMN = "label_extent_pct"
 
+#: Chips column holding the sha256 of the extent file the chips were selected with, so
+#: later stages can tell the chips came from the extent they are configured with.
+LABEL_EXTENT_SHA_COLUMN = "label_extent_sha256"
+
 #: Semantic mask value for an unlabelled pixel outside the extent: the same
 #: "unknown" class presence-only labels use.
 OUTSIDE_EXTENT_VALUE = 3
@@ -58,6 +63,9 @@ _CLIP_MARGIN = 0.05
 #: for a 200-pixel chip).
 _DENSIFY_STEPS = 2048
 
+#: shapely type id of a single Polygon.
+_POLYGON_TYPE_ID = 3
+
 
 class LabelExtentError(ValueError):
     """A label extent file is missing, unreadable, or not polygons in the expected CRS."""
@@ -73,6 +81,8 @@ class LabelExtent:
 
     path: str
     geom_col: str
+    #: sha256 of the file's bytes; tags the chips and masks built from it.
+    fingerprint: str = ""
 
 
 @dataclass
@@ -184,7 +194,39 @@ def load_label_extent(path: str | Path, expected_crs: str | None = None) -> Labe
             extent_path,
             f"label_extent {extent_path} must hold polygons only, found {', '.join(other)}",
         )
-    return LabelExtent(path=str(extent_path), geom_col=geom_col)
+    return LabelExtent(
+        path=str(extent_path), geom_col=geom_col, fingerprint=extent_fingerprint(extent_path)
+    )
+
+
+def extent_fingerprint(path: str | Path) -> str:
+    """sha256 of a label extent file's bytes."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def chips_fingerprint(chips_file: str | Path) -> str | None:
+    """The extent fingerprint a chips file was built with, or None if built without one.
+
+    A chips file carrying ``label_extent_pct`` but no fingerprint (an older build) gives
+    ``"unknown"``, which matches no configured extent.
+    """
+    chips_path = Path(chips_file)
+    columns = parquet_columns(chips_path)
+    if LABEL_EXTENT_SHA_COLUMN not in columns:
+        return "unknown" if LABEL_EXTENT_COLUMN in columns else None
+    conn = duckdb.connect(":memory:")
+    try:
+        rows = conn.execute(
+            f'SELECT DISTINCT "{LABEL_EXTENT_SHA_COLUMN}" '
+            f"FROM read_parquet('{sql_path(chips_path)}')"
+        ).fetchall()
+    finally:
+        conn.close()
+    return rows[0][0] if len(rows) == 1 else "unknown"
 
 
 @functools.lru_cache(maxsize=4)
@@ -200,7 +242,7 @@ def _extent_index(
     column = geom_col.replace('"', '""')
     try:
         rows = conn.execute(
-            f'SELECT ST_AsWKB(ST_MakeValid("{column}")) '
+            f'SELECT ST_AsWKB(ST_CollectionExtract(ST_MakeValid("{column}"), 3)) '
             f"FROM read_parquet('{sql_path(path)}') WHERE \"{column}\" IS NOT NULL"
         ).fetchall()
     finally:
@@ -209,23 +251,52 @@ def _extent_index(
     return geometries, shapely.STRtree(geometries)
 
 
+def _clip_windows(
+    bounds: tuple[float, float, float, float],
+) -> tuple[list[tuple[float, float, float, float]], float]:
+    """Rectangles to clip the extent to around ``bounds``, and the bounds' larger side.
+
+    Bounds whose ``minx`` exceeds ``maxx`` cross the antimeridian (a UTM grid snapped
+    past 180 degrees): they are split into the parts east and west of it.
+    """
+    minx, miny, maxx, maxy = bounds
+    crosses = minx > maxx
+    width = (maxx + 360.0 - minx) if crosses else (maxx - minx)
+    span = max(width, maxy - miny)
+    pad = span * _CLIP_MARGIN
+    south, north = miny - pad, maxy + pad
+    if crosses:
+        windows = [(minx - pad, south, 180.0, north), (-180.0, south, maxx + pad, north)]
+    else:
+        windows = [(minx - pad, south, maxx + pad, north)]
+    return [w for w in windows if w[0] < w[2] and w[1] < w[3]], span
+
+
+def _polygon_parts(geometries: np.ndarray) -> np.ndarray:
+    """The polygons with area inside ``geometries``, dropping any line or point leftovers."""
+    parts = shapely.get_parts(geometries)
+    polygonal = shapely.get_type_id(parts) == _POLYGON_TYPE_ID
+    return parts[polygonal & (shapely.area(parts) > 0)]
+
+
 def extent_pieces(extent: LabelExtent, bounds: tuple[float, float, float, float]) -> list:
     """The extent's polygons near ``bounds``, clipped to them and densified.
 
     In the extent's (= the chips') CRS, ready to reproject onto a chip's raster grid.
     Each worker loads the extent once and keeps it indexed, so a chip only touches the
     polygons it overlaps, and only their part under it, however detailed they are.
+    Only polygons come back: a line left over by repairing or clipping a polygon would
+    otherwise be burned as inside.
     """
     stat = Path(extent.path).stat()
     geometries, tree = _extent_index(extent.path, extent.geom_col, (stat.st_mtime_ns, stat.st_size))
-    minx, miny, maxx, maxy = bounds
-    span = max(maxx - minx, maxy - miny)
-    pad = span * _CLIP_MARGIN
-    window = (minx - pad, miny - pad, maxx + pad, maxy + pad)
-    hits = tree.query(shapely.box(*window))
-    clipped = shapely.clip_by_rect(geometries[hits], *window)
-    clipped = clipped[shapely.area(clipped) > 0]
-    return list(shapely.segmentize(clipped, span / _DENSIFY_STEPS))
+    windows, span = _clip_windows(bounds)
+    pieces: list = []
+    for window in windows:
+        hits = tree.query(shapely.box(*window))
+        clipped = _polygon_parts(shapely.clip_by_rect(geometries[hits], *window))
+        pieces.extend(shapely.segmentize(clipped, span / _DENSIFY_STEPS))
+    return pieces
 
 
 def _extent_query(chips_sql: str, extent: LabelExtent, chips_geom_col: str) -> str:
@@ -236,7 +307,7 @@ def _extent_query(chips_sql: str, extent: LabelExtent, chips_geom_col: str) -> s
     extent along an edge has nothing inside and is dropped with the rest.
     """
     chip_geom = f'ST_MakeValid(c."{chips_geom_col}")'
-    extent_geom = f'ST_MakeValid(e."{extent.geom_col}")'
+    extent_geom = f'ST_CollectionExtract(ST_MakeValid(e."{extent.geom_col}"), 3)'
     return f"""
         WITH chips AS ({chips_sql}),
         numbered AS (SELECT row_number() OVER () AS __chip_row, * FROM chips),
@@ -248,7 +319,8 @@ def _extent_query(chips_sql: str, extent: LabelExtent, chips_geom_col: str) -> s
             GROUP BY c.__chip_row
         )
         SELECT c.* EXCLUDE (__chip_row),
-            ROUND(100.0 * ST_Area(i.geom) / ST_Area({chip_geom}), 2) AS "{LABEL_EXTENT_COLUMN}"
+            ROUND(100.0 * ST_Area(i.geom) / ST_Area({chip_geom}), 2) AS "{LABEL_EXTENT_COLUMN}",
+            '{extent.fingerprint}' AS "{LABEL_EXTENT_SHA_COLUMN}"
         FROM numbered c
         JOIN inside i ON c.__chip_row = i.__chip_row
         WHERE ST_Area(i.geom) > 0
@@ -273,7 +345,7 @@ def apply_label_extent(chips_file: str | Path, extent_file: str | Path) -> Label
     conn = duckdb.connect(":memory:")
     ensure_spatial_loaded(conn)
     try:
-        chips_sql = select_excluding(chips_path, [LABEL_EXTENT_COLUMN])
+        chips_sql = select_excluding(chips_path, [LABEL_EXTENT_COLUMN, LABEL_EXTENT_SHA_COLUMN])
         (total,) = conn.execute(f"SELECT count(*) FROM ({chips_sql})").fetchone()
         conn.execute(f"CREATE TABLE kept AS {_extent_query(chips_sql, extent, chips_geom_col)}")
         (kept,) = conn.execute("SELECT count(*) FROM kept").fetchone()

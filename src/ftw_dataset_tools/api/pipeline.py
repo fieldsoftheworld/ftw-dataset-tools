@@ -41,7 +41,6 @@ from ftw_dataset_tools.api import (
     tiles,
 )
 from ftw_dataset_tools.api import config as config_module
-from ftw_dataset_tools.api.chips_io import parquet_columns
 from ftw_dataset_tools.api.config import DOWNLOAD_MODE_PREVIEW
 from ftw_dataset_tools.api.geo import (
     CRSInfo,
@@ -463,21 +462,30 @@ def _require(path: Path, *, stage: str, produced_by: str) -> None:
         )
 
 
-def _require_label_extent_match(ctx: PipelineContext, *, stage: str) -> None:
-    """Ensure the chips file was built with the label extent setting this run has.
+def _label_extent_mismatch(configured: str | None, built: str | None) -> str:
+    """Why chips built with extent fingerprint ``built`` don't fit the ``configured`` one."""
+    if configured is None:
+        return "is not set, but {chips} was built with one"
+    if built is None:
+        return "is set, but {chips} was built without one"
+    return "is set, but {chips} was built from a different extent file (or an older version of it)"
 
-    The extent drops chips and adds ``label_extent_pct`` in the chips stage only, so a
-    run starting later (``--from masks``) after the setting changed would mix the two.
+
+def _require_label_extent_match(ctx: PipelineContext, *, stage: str) -> None:
+    """Ensure the chips file was built with the label extent this run is configured with.
+
+    The extent drops chips and records ``label_extent_pct`` in the chips stage only, so
+    a run starting later (``--from masks``) after the setting or the extent file changed
+    would mix the two. The chips file records the extent file's sha256 for this check.
     """
-    configured = ctx.config.stages.masks.label_extent is not None
-    applied = label_extent.LABEL_EXTENT_COLUMN in parquet_columns(ctx.chips_path)
-    if configured == applied:
+    extent_file = ctx.config.stages.masks.label_extent
+    configured = label_extent.extent_fingerprint(extent_file) if extent_file else None
+    built = label_extent.chips_fingerprint(ctx.chips_path)
+    if configured == built:
         return
-    state = "is set" if configured else "is not set"
-    built = "without" if configured else "with"
+    reason = _label_extent_mismatch(configured, built).format(chips=ctx.chips_path.name)
     raise StageInputError(
-        f"Stage '{stage}': stages.masks.label_extent {state}, but {ctx.chips_path.name} was "
-        f"built {built} one. Rerun from the 'chips' stage."
+        f"Stage '{stage}': stages.masks.label_extent {reason}. Rerun from the 'chips' stage."
     )
 
 

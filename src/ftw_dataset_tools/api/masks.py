@@ -820,6 +820,33 @@ def _burn_label_extent(
     mask[inside == 0] = OUTSIDE_EXTENT_VALUE
 
 
+# GDAL metadata tag on the semantic masks of a label-extent build, holding the extent
+# file's sha256, so a skip_existing rerun can tell which extent (if any) a mask was
+# burned with. Absent on every other mask, which keeps default builds unchanged.
+LABEL_EXTENT_TAG = "FTW_LABEL_EXTENT"
+
+# The masks the label extent changes; the instance and DECODE layers come out the same.
+_EXTENT_TAGGED_TYPES = frozenset({MaskType.SEMANTIC_2_CLASS, MaskType.SEMANTIC_3_CLASS})
+
+
+def _extent_tag(mask_type: MaskType, label_extent: LabelExtent | None) -> str | None:
+    """The ``LABEL_EXTENT_TAG`` value a ``mask_type`` raster carries, or None for none."""
+    if label_extent is None or mask_type not in _EXTENT_TAGGED_TYPES:
+        return None
+    return label_extent.fingerprint
+
+
+def _output_layer(
+    mask_type: MaskType, source: np.ndarray, label_extent: LabelExtent | None
+) -> tuple[np.ndarray, dict[str, str]]:
+    """The array to write for ``mask_type`` from the burned ``source``, and its raster tags."""
+    if mask_type in _DERIVED_MASK_TYPES:
+        # Both derivations copy before mutating, so `source` stays reusable.
+        return _derive_decode_layer(mask_type, source)
+    tag = _extent_tag(mask_type, label_extent)
+    return source, ({LABEL_EXTENT_TAG: tag} if tag is not None else {})
+
+
 def _derive_decode_layer(
     mask_type: MaskType,
     source: np.ndarray,
@@ -994,12 +1021,7 @@ def _create_masks_for_cell(
     results: list[tuple[MaskType, MaskResult]] = []
     for mask_type, output_path in outputs:
         try:
-            tags: dict[str, str] = {}
-            if mask_type in _DERIVED_MASK_TYPES:
-                # Both derivations copy before mutating, so `source` stays reusable.
-                mask, tags = _derive_decode_layer(mask_type, source)
-            else:
-                mask = source
+            mask, tags = _output_layer(mask_type, source, label_extent)
 
             # Instance ids are arbitrary and often global, so a viewer needs the chip's own
             # id range to stretch over: keeping the background out of the embedded statistics
@@ -1398,11 +1420,13 @@ def _outputs_to_write(
     existing: dict[MaskType, int],
     crop_column: str | None = None,
     grid: Callable[[], tuple[CRS, Affine, int, int]] | None = None,
+    label_extent: LabelExtent | None = None,
 ) -> list[tuple[MaskType, str]]:
     """The (mask type, path) outputs of one cell's group that still need writing.
 
     ``grid`` gives the grid this run writes the cell on; a mask already on disk is
-    kept only when it matches it.
+    kept only when it matches it, and when it was burned with this run's label extent
+    (or, without one, with none).
     """
     outputs: list[tuple[MaskType, str]] = []
     for mask_type in group:
@@ -1427,7 +1451,7 @@ def _outputs_to_write(
             and mask_path.exists()
             and mask_path.stat().st_size > 0
             and (mask_type != MaskType.INSTANCE or _lookup_matches(mask_path, crop_column))
-            and (grid is None or _on_grid(mask_path, grid()))
+            and _reusable(mask_path, grid, _extent_tag(mask_type, label_extent))
         ):
             existing[mask_type] += 1
             continue
@@ -1436,22 +1460,34 @@ def _outputs_to_write(
     return outputs
 
 
-def _on_grid(mask_path: Path, grid: tuple[CRS, Affine, int, int]) -> bool:
-    """Whether a mask already on disk was written on ``grid`` (CRS, transform, size).
+def _reusable(
+    mask_path: Path,
+    grid: Callable[[], tuple[CRS, Affine, int, int]] | None,
+    extent_tag: str | None,
+) -> bool:
+    """Whether a mask already on disk can stand for the one this run would write.
 
-    A rerun with ``skip_existing`` must not keep a mask from a build on another grid:
-    lon/lat instead of UTM or the reverse, another resolution, or another origin.
+    A rerun with ``skip_existing`` must not keep a mask from a build on another grid
+    (lon/lat instead of UTM or the reverse, another resolution, another origin), nor
+    one burned with another label extent, or with one where this run has none.
     """
-    crs, transform, width, height = grid
     try:
         with rasterio.open(mask_path) as src:
-            return (
-                src.crs == crs
-                and (src.width, src.height) == (width, height)
-                and src.transform.almost_equals(transform)
-            )
+            if src.tags().get(LABEL_EXTENT_TAG) != extent_tag:
+                return False
+            return grid is None or _on_grid(src, grid())
     except rasterio.errors.RasterioIOError:
         return False
+
+
+def _on_grid(src: rasterio.DatasetReader, grid: tuple[CRS, Affine, int, int]) -> bool:
+    """Whether an open raster was written on ``grid`` (CRS, transform, size)."""
+    crs, transform, width, height = grid
+    return (
+        src.crs == crs
+        and (src.width, src.height) == (width, height)
+        and src.transform.almost_equals(transform)
+    )
 
 
 def _build_work_items(
@@ -1693,6 +1729,7 @@ def create_masks(
         skip_existing=skip_existing,
         existing=existing,
         crop_column=crop_column,
+        label_extent=extent,
     )
 
     # Announce (and count progress against) the work that is actually queued:

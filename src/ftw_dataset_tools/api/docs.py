@@ -103,6 +103,7 @@ CHIP_COLUMN_NOTES = {
     "field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
     "label_extent_pct": "percent of the chip's area inside the label extent, where "
     "unlabelled pixels are background rather than unknown",
+    "label_extent_sha256": "sha256 of the label extent file the chips were selected with",
     "field_count": "number of field polygons intersecting the chip",
     "scale_score": "stable hash score of the chip's 3x3 block; a scale keeps scores below it",
     **_HCAT_NOTES,

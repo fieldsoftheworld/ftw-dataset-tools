@@ -256,8 +256,11 @@ unlabelled pixels are 0, the same as background, so they cannot tell "no field" 
 "not labelled" there (as with `presence_only`). Mask those pixels with the semantic mask's
 3 when training on them.
 
-Changing `label_extent` changes the chips, so rerun from the `chips` stage: the `masks` and
-`stac` stages refuse a chips file built with a different setting.
+Changing `label_extent` (or rewriting the extent file) changes the chips, so rerun from the
+`chips` stage: the chips file records the extent file's sha256 (`label_extent_sha256`), and
+the `masks` and `stac` stages refuse a chips file built from another extent or none.
+Semantic masks built with an extent carry the same sha256 in an `FTW_LABEL_EXTENT` GeoTIFF
+tag, so `skip_existing` rebuilds any whose extent differs from the current one.
 
 See [`configs/examples/config.yaml`](configs/examples/config.yaml) for a fully documented config.
 A minimal config:
