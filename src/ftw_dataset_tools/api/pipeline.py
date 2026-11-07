@@ -31,6 +31,7 @@ from ftw_dataset_tools.api import (
     crop_stats,
     docs,
     field_stats,
+    label_extent,
     land_cover,
     masks,
     scale,
@@ -180,6 +181,7 @@ class PipelineContext:
     source_crs: str | None = None
     chips_result: field_stats.FieldStatsResult | None = None
     crop_stats_result: crop_stats.CropStatsResult | None = None
+    label_extent_result: label_extent.LabelExtentChipsResult | None = None
     scale_result: scale.ScaleResult | None = None
     land_cover_result: land_cover.LandCoverResult | None = None
     splits_result: splits.CreateSplitsResult | None = None
@@ -625,6 +627,9 @@ def stage_chips(ctx: PipelineContext) -> None:
         f"Created chips: {ctx.chips_result.total_cells:,} cells, "
         f"{ctx.chips_result.cells_with_coverage:,} with coverage"
     )
+    extent_file = ctx.config.stages.masks.label_extent
+    if extent_file is not None:
+        ctx.label_extent_result = label_extent.apply_label_extent(ctx.chips_path, extent_file)
     if ctx.config.stages.chips.crop_stats:
         # chips and field_polygons_path share a CRS: chips derive from the same
         # (reprojected, class-filtered) fields used here, so no reprojection is needed.
@@ -782,6 +787,7 @@ def stage_masks(ctx: PipelineContext) -> None:
         skip_existing=masks_cfg.skip_existing,
         crop_column=masks_cfg.crop_column,
         utm=masks_cfg.utm,
+        label_extent_file=masks_cfg.label_extent,
         on_progress=ctx.on_mask_progress,
         on_start=ctx.on_mask_start,
     )
@@ -837,6 +843,7 @@ def stage_stac(ctx: PipelineContext) -> None:
         checksums=ctx.config.stages.stac.checksums,
         crop_calendar=ctx.config.stages.stac.crop_calendar,
         background_class_value=3 if ctx.config.stages.masks.presence_only else 0,
+        label_extent=ctx.config.stages.masks.label_extent is not None,
         config=ctx.config,
     )
     n = ctx.stac_result.total_items

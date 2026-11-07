@@ -250,6 +250,58 @@ class TestAddMaskClassification:
             (2, "boundary"),
         ]
 
+    def test_label_extent_2class_has_background_and_unknown(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import add_mask_classification, add_raster_bands
+
+        p = tmp_path / "m.tif"
+        _write_cog(p, np.array([[0, 1], [3, 0]], dtype=np.uint8))
+        _, asset = _item_with_asset(p, ["labels"])
+        add_raster_bands(asset, p)
+
+        add_mask_classification(asset, "semantic_2class", label_extent=True)
+
+        classes = asset.extra_fields["raster:bands"][0]["classification:classes"]
+        assert [(c["value"], c["name"]) for c in classes] == [
+            (0, "background"),
+            (1, "field"),
+            (3, "unknown"),
+        ]
+        assert "inside the label extent" in classes[0]["description"]
+        assert "boundary line" in classes[0]["description"]
+        assert "outside the label extent" in classes[2]["description"]
+
+    def test_label_extent_3class_has_all_four_classes(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.assets import add_mask_classification, add_raster_bands
+
+        p = tmp_path / "m3.tif"
+        _write_cog(p, np.array([[0, 1], [2, 3]], dtype=np.uint8))
+        _, asset = _item_with_asset(p, ["labels"])
+        add_raster_bands(asset, p)
+
+        add_mask_classification(asset, "semantic_3class", label_extent=True)
+
+        classes = asset.extra_fields["raster:bands"][0]["classification:classes"]
+        assert [(c["value"], c["name"]) for c in classes] == [
+            (0, "background"),
+            (1, "field"),
+            (2, "boundary"),
+            (3, "unknown"),
+        ]
+
+    def test_label_extent_leaves_decode_boundary_alone(self, tmp_path: Path) -> None:
+        """DECODE layers fold unknown into 0, so they keep their own two classes."""
+        from ftw_dataset_tools.api.assets import add_mask_classification, add_raster_bands
+
+        p = tmp_path / "d.tif"
+        _write_cog(p, np.array([[0, 1], [1, 0]], dtype=np.uint8))
+        _, asset = _item_with_asset(p, ["labels"])
+        add_raster_bands(asset, p)
+
+        add_mask_classification(asset, "decode_boundary", label_extent=True)
+
+        classes = asset.extra_fields["raster:bands"][0]["classification:classes"]
+        assert [(c["value"], c["name"]) for c in classes] == [(0, "background"), (1, "boundary")]
+
     def test_presence_only_decode_boundary_keeps_background(self, tmp_path: Path) -> None:
         """DECODE layers fold presence-only into 0, so 0 stays named background there."""
         from ftw_dataset_tools.api.assets import add_mask_classification, add_raster_bands

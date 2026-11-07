@@ -229,6 +229,28 @@ same filter is reused across datasets that name the column differently:
 column: [crop_code, "crop:code"]   # use whichever one the fields file has
 ```
 
+#### Label extent (optional)
+
+Some label sets are complete only inside their own sample tiles: every field inside a
+tile is drawn, nothing outside it is. Give the area where the labels are complete as
+polygons (GeoParquet, EPSG:4326) under `stages.masks.label_extent` (path relative to the
+config file):
+
+```yaml
+stages:
+  masks:
+    label_extent: sample_tiles.parquet
+```
+
+Inside the extent an unlabelled pixel is background (0); outside it, unknown (3, the value
+`presence_only` uses). A pixel is inside when its centre is. Field pixels and boundary
+lines are burned as usual wherever they fall, and the instance mask keeps 0 everywhere.
+Chips wholly outside the extent are dropped in the chips stage; the rest get a
+`label_extent_pct` column (share of the chip inside, 0-100), published as
+`ftw:label_extent_pct`, and the collection gets `ftw:label_extent: true`. It cannot be
+combined with `presence_only: true`. `min_coverage` still applies, so set it to 0 to keep
+chips inside the extent that hold no fields.
+
 See [`configs/examples/config.yaml`](configs/examples/config.yaml) for a fully documented config.
 A minimal config:
 

@@ -357,6 +357,7 @@ def _get_dataset_bounds(file_path: Path, geom_col: str = "geometry") -> list[flo
 OPTIONAL_CHIP_COLUMNS = {
     "split": "ftw:split",
     "field_coverage_pct": "ftw:field_coverage_pct",
+    "label_extent_pct": "ftw:label_extent_pct",
     "hcat_dominant_code": "ftw:hcat_dominant_code",
     "hcat_dominant_name_en": "ftw:hcat_dominant_name_en",
     "hcat_dominant_pct": "ftw:hcat_dominant_pct",
@@ -372,6 +373,7 @@ _OPTIONAL_COLUMN_CASTS = {
     "hcat_dominant_code": "BIGINT",
     "hcat_dominant_pct": "DOUBLE",
     "field_coverage_pct": "DOUBLE",
+    "label_extent_pct": "DOUBLE",
     "landcover_year": "INTEGER",
     "landcover_year_exact": "BOOLEAN",
     "landcover_dominant_code": "BIGINT",
@@ -521,6 +523,8 @@ def _collection_ftw_properties(config: DatasetConfig) -> dict:
         "ftw:presence_only": stages.masks.presence_only,
         "ftw:min_coverage_pct": stages.chips.min_coverage,
     }
+    if stages.masks.label_extent is not None:
+        props["ftw:label_extent"] = True
     if stages.scale.percent < 100:
         props.update(
             {
@@ -847,6 +851,7 @@ def _create_chip_item(
     chip_dir: Path,
     checksums: bool = False,
     background_class_value: int = 0,
+    label_extent: bool = False,
 ) -> Item | None:
     """
     Create a STAC Item for a single chip.
@@ -858,6 +863,8 @@ def _create_chip_item(
         checksums: Compute file:checksum (multihash sha256) for every mask asset.
         background_class_value: Pixel value used for background in masks
             (3 for presence-only).
+        label_extent: The dataset has a label extent, so its semantic masks hold
+            unknown (3) outside it as well as background 0.
 
     Returns:
         pystac Item, or None if no mask files exist
@@ -918,7 +925,10 @@ def _create_chip_item(
         add_file_info(asset, mask_path, checksum=checksums)
         add_raster_bands(asset, mask_path)
         add_mask_classification(
-            asset, key.removesuffix("_mask"), background_value=background_class_value
+            asset,
+            key.removesuffix("_mask"),
+            background_value=background_class_value,
+            label_extent=label_extent,
         )
         if key == "instance_mask":
             labels_path = instance_labels_path(mask_path)
@@ -1023,6 +1033,7 @@ def _build_chip_items(
     crop_calendar: bool,
     checksums: bool,
     background_class_value: int,
+    label_extent: bool = False,
 ) -> tuple[list[pystac.Item], dict[str, str]]:
     """One item per chip that has a mask directory, and the MGRS square of each item."""
     logger.info("Creating STAC items...")
@@ -1057,6 +1068,7 @@ def _build_chip_items(
             chip_dir=chip_dir,
             checksums=checksums,
             background_class_value=background_class_value,
+            label_extent=label_extent,
         )
         if item:
             item.properties.update(calendar)
@@ -1160,6 +1172,7 @@ def generate_stac_catalog(
     config: DatasetConfig | None = None,
     checksums: bool = False,
     background_class_value: int = 0,
+    label_extent: bool = False,
     crop_calendar: bool = True,
 ) -> STACGenerationResult:
     """
@@ -1191,6 +1204,8 @@ def generate_stac_catalog(
             written on the collection.
         checksums: Compute file:checksum (multihash sha256) for every asset. Slow; default False.
         background_class_value: Pixel value used for background in masks (3 for presence-only).
+        label_extent: The masks were built with a label extent (background 0 inside it,
+            unknown 3 outside), so the semantic masks are classified with both.
         crop_calendar: Record both WorldCereal seasons' planting and harvest days on
             every chip item (``ftw:<season>_<stage>_day``), and date each year-tagged
             chip by its summer season (planting to harvest) rather than the dataset
@@ -1236,6 +1251,7 @@ def generate_stac_catalog(
         crop_calendar=crop_calendar,
         checksums=checksums,
         background_class_value=background_class_value,
+        label_extent=label_extent,
     )
 
     # A southern-hemisphere harvest falls in the following year.

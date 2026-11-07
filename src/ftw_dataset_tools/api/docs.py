@@ -101,6 +101,8 @@ CHIP_COLUMN_NOTES = {
     "bbox": "bounding box of the chip footprint",
     "split": "which benchmark split the chip belongs to (train / val / test)",
     "field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
+    "label_extent_pct": "percent of the chip's area inside the label extent, where "
+    "unlabelled pixels are background rather than unknown",
     "field_count": "number of field polygons intersecting the chip",
     "scale_score": "stable hash score of the chip's 3x3 block; a scale keeps scores below it",
     **_HCAT_NOTES,
@@ -140,6 +142,8 @@ ITEM_PROPERTY_NOTES = {
     "ftw:nodata_pct": "share of the chip (0-100) the quarter's mosaic has no data for",
     "ftw:buffer_days": "half-width of the search window around the target day, in days",
     "ftw:field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
+    "ftw:label_extent_pct": "percent of the chip's area inside the label extent, where "
+    "unlabelled pixels are background rather than unknown",
     **{f"ftw:{name}": note for name, note in _HCAT_NOTES.items()},
     **{f"ftw:{name}": note for name, note in _LANDCOVER_NOTES.items()},
 }

@@ -117,6 +117,11 @@ stages:
     workers: null
     # Presence-only labels: background class value becomes 3 instead of 0.
     presence_only: false
+    # Optional label extent: path (relative to THIS config file) to EPSG:4326
+    # polygons (GeoParquet) inside which the labels are complete. Unlabelled
+    # pixels inside are background (0), outside unknown (3); chips wholly outside
+    # are dropped. An alternative to presence_only, not combinable with it.
+    # label_extent: sample_tiles.parquet
     # When true, a mask file that already exists (and is non-empty) is left
     # alone instead of being recreated - useful for filling gaps from a prior
     # run without a full rebuild.

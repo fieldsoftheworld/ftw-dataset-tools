@@ -25,6 +25,7 @@ from rasterio.warp import transform_bounds
 from ftw_dataset_tools.api import decode, field_stats
 from ftw_dataset_tools.api.chip_grid import reprojector, utm_grid_for_cell
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
+from ftw_dataset_tools.api.label_extent import OUTSIDE_EXTENT_VALUE, LabelExtent, load_label_extent
 from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 
 if TYPE_CHECKING:
@@ -626,6 +627,10 @@ class _MaskTask:
     # The cell polygon (UTM mode), so the grid covers the chip itself rather than
     # its lon/lat bounding box.
     cell_wkt: str | None = None
+    # Where the labels are complete; the semantic masks mark unlabelled pixels
+    # outside it as unknown. The path, not the geometry: each worker queries the
+    # chip's own piece of it.
+    label_extent: LabelExtent | None = None
 
 
 def _grid_raster_geometry(
@@ -672,11 +677,15 @@ def _rasterize_mask(
     crop_column: str | None = None,
     instance_labels: list[dict] | None = None,
     to_raster_crs: Callable | None = None,
+    label_extent: LabelExtent | None = None,
 ) -> np.ndarray:
     """Burn field polygons and boundary lines into a label array.
 
     ``to_raster_crs`` (see ``chip_grid.reprojector``) reprojects the geometries from the
     source files' CRS into the raster's, for masks on a grid in another CRS.
+
+    With a ``label_extent``, the semantic masks start as unknown outside it, before
+    fields and lines are burned over it; the instance mask ignores it.
     """
 
     def shapes_of(wkts: list[str]) -> list:
@@ -685,16 +694,21 @@ def _rasterize_mask(
             return geometries
         return list(shapely.transform(np.array(geometries, dtype=object), to_raster_crs))
 
-    # Set data type based on mask type
-    dtype = np.uint32 if mask_type == MaskType.INSTANCE else np.uint8
-
     # Instance ids are always positive, so 0 is the only background that cannot
     # collide with one; presence-only is carried by the ftw:presence_only property.
     if mask_type == MaskType.INSTANCE:
         background_class_value = 0
 
-    # Initialize mask with background value
-    mask = np.full((height, width), background_class_value, dtype=dtype)
+    mask = _blank_mask(
+        conn,
+        (height, width),
+        mask_type,
+        background_class_value,
+        label_extent,
+        bounds=bounds,
+        transform=transform,
+        shapes_of=shapes_of,
+    )
 
     # Get boundaries within bounds
     if mask_type == MaskType.INSTANCE and (id_col or crop_column is not None):
@@ -753,6 +767,50 @@ def _rasterize_mask(
         visible = set(np.unique(mask)) - {background_class_value}
         instance_labels[:] = [r for r in instance_labels if r["instance_value"] in visible]
     return mask
+
+
+def _blank_mask(
+    conn: duckdb.DuckDBPyConnection,
+    shape: tuple[int, int],
+    mask_type: MaskType,
+    background_class_value: int,
+    label_extent: LabelExtent | None,
+    *,
+    bounds: tuple[float, float, float, float],
+    transform: Affine,
+    shapes_of: Callable[[list[str]], list],
+) -> np.ndarray:
+    """The label array before any field is burned: background, and unknown outside the extent.
+
+    Instance masks are uint32 ids on 0 and never take the unknown value.
+    """
+    if mask_type == MaskType.INSTANCE:
+        return np.zeros(shape, dtype=np.uint32)
+    mask = np.full(shape, background_class_value, dtype=np.uint8)
+    if label_extent is not None:
+        _burn_label_extent(conn, mask, label_extent, bounds, transform, shapes_of)
+    return mask
+
+
+def _burn_label_extent(
+    conn: duckdb.DuckDBPyConnection,
+    mask: np.ndarray,
+    label_extent: LabelExtent,
+    bounds: tuple[float, float, float, float],
+    transform: Affine,
+    shapes_of: Callable[[list[str]], list],
+) -> None:
+    """Set every pixel whose centre lies outside the label extent to unknown, in place.
+
+    ``all_touched=False``: a pixel is inside only if its centre is, so a pixel the
+    extent edge merely clips is unknown rather than claimed as background.
+    """
+    rows = _get_geometries_in_bounds(conn, Path(label_extent.path), label_extent.geom_col, bounds)
+    inside = np.zeros(mask.shape, dtype=np.uint8)
+    if rows:
+        shapes = [(geometry, 1) for geometry in shapes_of([wkt for (wkt,) in rows])]
+        features.rasterize(shapes, out=inside, transform=transform, all_touched=False)
+    mask[inside == 0] = OUTSIDE_EXTENT_VALUE
 
 
 def _derive_decode_layer(
@@ -887,6 +945,7 @@ def _create_masks_for_cell(
     crop_column: str | None = None,
     utm: bool = True,
     cell_wkt: str | None = None,
+    label_extent: LabelExtent | None = None,
 ) -> list[tuple[MaskType, MaskResult]]:
     """Rasterize ``source_type`` once for a grid cell and write every output from it.
 
@@ -922,6 +981,7 @@ def _create_masks_for_cell(
         crop_column=crop_column,
         instance_labels=instance_labels if crop_column is not None else None,
         to_raster_crs=to_raster_crs,
+        label_extent=label_extent,
     )
 
     results: list[tuple[MaskType, MaskResult]] = []
@@ -1017,6 +1077,7 @@ def _create_masks_with_retry(
                 crop_column=task.crop_column,
                 utm=task.utm,
                 cell_wkt=task.cell_wkt,
+                label_extent=task.label_extent,
             )
             return (results, None)
         except _PartialCellFailure as exc:
@@ -1456,6 +1517,7 @@ def create_masks(
     on_start: Callable[[int, int, int], None] | None = None,
     crop_column: str | None = None,
     utm: bool = True,
+    label_extent_file: str | Path | None = None,
 ) -> dict[MaskType, CreateMasksResult]:
     """
     Create raster masks from vector boundaries for each grid cell.
@@ -1469,6 +1531,10 @@ def create_masks(
             chip gets the same shape. Otherwise the shape varies by a pixel with where
             the chip sits on the lattice. False rasterizes in the chips file's
             CRS instead, where ``resolution`` metres become degrees on both axes.
+        label_extent_file: Optional polygons (GeoParquet, in the chips file's CRS) inside
+            which the labels are complete. The semantic masks mark unlabelled pixels
+            outside it as unknown (3); fields and lines are burned as usual. Use it
+            with ``background_class_value`` 0.
         boundaries_file: Path to boundaries GeoParquet file (polygons)
         boundary_lines_file: Path to boundary lines GeoParquet file
         output_dir: Output directory for masks (default: ./masks)
@@ -1576,6 +1642,13 @@ def create_masks(
     finally:
         conn.close()
 
+    # Validated once here; each worker then queries only its own chip's piece.
+    extent = (
+        load_label_extent(label_extent_file, expected_crs=crs.to_wkt())
+        if label_extent_file is not None
+        else None
+    )
+
     # Determine number of workers, and each one's DuckDB memory budget so a
     # many-worker run can't oversubscribe the machine's RAM (see
     # _run_work_items for why that matters).
@@ -1604,6 +1677,7 @@ def create_masks(
             "background_class_value": background_class_value,
             "memory_limit_mb": memory_limit_mb,
             "utm": utm,
+            "label_extent": extent,
         },
         chip_dirs=chip_dirs,
         output_path=output_path,
