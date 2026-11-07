@@ -78,6 +78,20 @@ PRESENCE_ONLY_DESCRIPTION = (
 )
 PRESENCE_ONLY_LINE_DESCRIPTION = "Field boundary line of a labelled field (not a field)"
 
+# Masks built with a label extent keep background 0 inside it and add the presence-only
+# value for unlabelled pixels outside it.
+LABEL_EXTENT_UNKNOWN_DESCRIPTION = (
+    "Unknown: outside the label extent and not labelled, may or may not be a field"
+)
+# Colour hint for that unknown class, given only in label-extent datasets: there the
+# render hides background 0, so the unknown area outside the extent is drawn and needs
+# a defined colour. Presence-only renders hide 3 instead and keep no hint. Okabe-Ito grey.
+LABEL_EXTENT_UNKNOWN_COLOR = "999999"
+LABEL_EXTENT_BACKGROUND_DESCRIPTION = {
+    "semantic_2class": "Not a field (inside the label extent), or a field boundary line",
+    "semantic_3class": "Not a field (inside the label extent)",
+}
+
 # Mask kinds that are continuous or id-valued: described, never classified.
 MASK_DESCRIPTIONS: dict[str, str] = {
     "instance": (
@@ -92,17 +106,35 @@ MASK_DESCRIPTIONS: dict[str, str] = {
 _BACKGROUND_SUBSTITUTED_KINDS = frozenset({"semantic_2class", "semantic_3class"})
 
 
+def _label_extent_spec(
+    mask_kind: str, spec: list[tuple[int, str, str]]
+) -> list[tuple[int, str, str]]:
+    """Classes of a semantic mask built with a label extent: background 0 plus unknown."""
+    out = [
+        (v, n, LABEL_EXTENT_BACKGROUND_DESCRIPTION[mask_kind] if n == "background" else d)
+        for v, n, d in spec
+    ]
+    out.append((PRESENCE_ONLY_VALUE, "unknown", LABEL_EXTENT_UNKNOWN_DESCRIPTION))
+    return out
+
+
 def _class_spec(
-    mask_kind: str, spec: list[tuple[int, str, str]], background_value: int
+    mask_kind: str,
+    spec: list[tuple[int, str, str]],
+    background_value: int,
+    label_extent: bool = False,
 ) -> list[tuple[int, str, str]]:
     """The (value, name, description) classes one mask actually contains.
 
     Semantic masks move background to ``background_value``. With the presence-only
     value that class is ``unknown`` instead, and the 2-class mask keeps a 0 class for
-    the field boundary lines it still burns as 0.
+    the field boundary lines it still burns as 0. With a label extent the semantic
+    masks hold both: background 0 inside the extent and ``unknown`` outside it.
     """
     if mask_kind not in _BACKGROUND_SUBSTITUTED_KINDS:
         return spec
+    if label_extent:
+        return _label_extent_spec(mask_kind, spec)
     if background_value != PRESENCE_ONLY_VALUE:
         return [(background_value if n == "background" else v, n, d) for v, n, d in spec]
     out = [
@@ -277,10 +309,14 @@ def add_raster_bands(asset: pystac.Asset, path: Path) -> None:
     RasterExtension.ext(asset, add_if_missing=True).bands = bands
 
 
-def add_mask_classification(asset: pystac.Asset, mask_kind: str, background_value: int = 0) -> None:
+def add_mask_classification(
+    asset: pystac.Asset, mask_kind: str, background_value: int = 0, *, label_extent: bool = False
+) -> None:
     """Describe the classes of a mask asset on its first raster band.
 
     ``mask_kind`` is a key of ``MASK_CLASSES`` or ``MASK_DESCRIPTIONS``.
+    ``label_extent`` marks a dataset built with a label extent, whose semantic masks
+    hold an ``unknown`` class (3) outside it alongside background 0.
     Requires ``add_raster_bands`` to have run first.
     """
     raster = RasterExtension.ext(asset)
@@ -299,11 +335,14 @@ def add_mask_classification(asset: pystac.Asset, mask_kind: str, background_valu
     except KeyError as err:
         raise ValueError(f"Unknown mask kind: {mask_kind}") from err
 
+    colors = (
+        {**LABEL_COLORS, "unknown": LABEL_EXTENT_UNKNOWN_COLOR} if label_extent else LABEL_COLORS
+    )
     classes = [
         Classification.create(
-            value=value, name=name, description=description, color_hint=LABEL_COLORS.get(name)
+            value=value, name=name, description=description, color_hint=colors.get(name)
         )
-        for value, name, description in _class_spec(mask_kind, spec, background_value)
+        for value, name, description in _class_spec(mask_kind, spec, background_value, label_extent)
     ]
     ClassificationExtension.ext(band, add_if_missing=True).classes = classes
     owner = asset.owner

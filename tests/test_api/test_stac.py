@@ -392,6 +392,7 @@ def build_catalog(
     fields_path: Path | None = None,
     background_class_value: int = 0,
     crop_calendar: bool = True,
+    label_extent: bool = False,
 ):
     """Build a one-chip STAC catalog in ``tmp_path``; safe to call again on the same tree."""
     import geopandas as gpd
@@ -444,6 +445,7 @@ def build_catalog(
         provenance=provenance,
         background_class_value=background_class_value,
         crop_calendar=crop_calendar,
+        label_extent=label_extent,
     )
 
 
@@ -1390,6 +1392,31 @@ class TestRendersOnCatalog:
         coll = json.loads(result.collection_path.read_text())
         assert coll["renders"]["semantic_2class_mask"]["nodata"] == 3
         assert coll["renders"]["instance_mask"]["nodata"] == 0
+
+    def test_label_extent_classes_and_renders(self, tmp_path: Path) -> None:
+        """With a label extent the 2-class mask lists unknown; the render still hides 0."""
+        import json
+
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"masks": {"label_extent": "e.parquet"}}}
+        )
+        result = build_catalog(tmp_path, config=config, label_extent=True)
+        item_path = tmp_path / "chips" / "33UXP" / CHIP_ID / f"{CHIP_ID}.json"
+
+        item = json.loads(item_path.read_text())
+        band = item["assets"]["semantic_2class_mask"]["raster:bands"][0]
+        assert [(c["value"], c["name"]) for c in band["classification:classes"]] == [
+            (0, "background"),
+            (1, "field"),
+            (3, "unknown"),
+        ]
+        assert item["properties"]["renders"]["semantic_2class"]["nodata"] == 0
+        coll = json.loads(result.collection_path.read_text())
+        assert coll["ftw:label_extent"] is True
+        assert coll["ftw:presence_only"] is False
+        assert coll["renders"]["semantic_2class_mask"]["nodata"] == 0
 
     def test_collection_renders_keyed_by_asset_name(self, tmp_path: Path) -> None:
         import json

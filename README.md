@@ -229,6 +229,39 @@ same filter is reused across datasets that name the column differently:
 column: [crop_code, "crop:code"]   # use whichever one the fields file has
 ```
 
+#### Label extent (optional)
+
+Some label sets are complete only inside their own sample tiles: every field inside a
+tile is drawn, nothing outside it is. Give the area where the labels are complete as
+polygons (GeoParquet, EPSG:4326) under `stages.masks.label_extent` (path relative to the
+config file):
+
+```yaml
+stages:
+  masks:
+    label_extent: sample_tiles.parquet
+```
+
+Inside the extent an unlabelled pixel is background (0); outside it, unknown (3, the value
+`presence_only` uses). A pixel is inside when its centre is. Field pixels and boundary
+lines are burned as usual wherever they fall. Chips wholly outside the extent are dropped
+in the chips stage; the rest get a `label_extent_pct` column (share of the chip inside,
+0-100), published as `ftw:label_extent_pct`, and the collection gets
+`ftw:label_extent: true`. It cannot be combined with `presence_only: true`. `min_coverage`
+still applies, so set it to 0 to keep chips inside the extent that hold no fields.
+
+Only the semantic masks (`semantic_2_class`, `semantic_3_class`) carry the unknown class.
+The instance mask and the DECODE layers have no unknown value: outside the extent their
+unlabelled pixels are 0, the same as background, so they cannot tell "no field" from
+"not labelled" there (as with `presence_only`). Mask those pixels with the semantic mask's
+3 when training on them.
+
+Changing `label_extent` (or rewriting the extent file) changes the chips, so rerun from the
+`chips` stage: the chips file records the extent file's sha256 (`label_extent_sha256`), and
+the `masks` and `stac` stages refuse a chips file built from another extent or none.
+Semantic masks built with an extent carry the same sha256 in an `FTW_LABEL_EXTENT` GeoTIFF
+tag, so `skip_existing` rebuilds any whose extent differs from the current one.
+
 See [`configs/examples/config.yaml`](configs/examples/config.yaml) for a fully documented config.
 A minimal config:
 

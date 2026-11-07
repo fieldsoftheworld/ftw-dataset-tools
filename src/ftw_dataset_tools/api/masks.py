@@ -25,6 +25,12 @@ from rasterio.warp import transform_bounds
 from ftw_dataset_tools.api import decode, field_stats
 from ftw_dataset_tools.api.chip_grid import reprojector, utm_grid_for_cell
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
+from ftw_dataset_tools.api.label_extent import (
+    OUTSIDE_EXTENT_VALUE,
+    LabelExtent,
+    extent_pieces,
+    load_label_extent,
+)
 from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 
 if TYPE_CHECKING:
@@ -626,6 +632,10 @@ class _MaskTask:
     # The cell polygon (UTM mode), so the grid covers the chip itself rather than
     # its lon/lat bounding box.
     cell_wkt: str | None = None
+    # Where the labels are complete; the semantic masks mark unlabelled pixels
+    # outside it as unknown. The path, not the geometry: each worker queries the
+    # chip's own piece of it.
+    label_extent: LabelExtent | None = None
 
 
 def _grid_raster_geometry(
@@ -672,11 +682,15 @@ def _rasterize_mask(
     crop_column: str | None = None,
     instance_labels: list[dict] | None = None,
     to_raster_crs: Callable | None = None,
+    label_extent: LabelExtent | None = None,
 ) -> np.ndarray:
     """Burn field polygons and boundary lines into a label array.
 
     ``to_raster_crs`` (see ``chip_grid.reprojector``) reprojects the geometries from the
     source files' CRS into the raster's, for masks on a grid in another CRS.
+
+    With a ``label_extent``, the semantic masks start as unknown outside it, before
+    fields and lines are burned over it; the instance mask ignores it.
     """
 
     def shapes_of(wkts: list[str]) -> list:
@@ -685,16 +699,20 @@ def _rasterize_mask(
             return geometries
         return list(shapely.transform(np.array(geometries, dtype=object), to_raster_crs))
 
-    # Set data type based on mask type
-    dtype = np.uint32 if mask_type == MaskType.INSTANCE else np.uint8
-
     # Instance ids are always positive, so 0 is the only background that cannot
     # collide with one; presence-only is carried by the ftw:presence_only property.
     if mask_type == MaskType.INSTANCE:
         background_class_value = 0
 
-    # Initialize mask with background value
-    mask = np.full((height, width), background_class_value, dtype=dtype)
+    mask = _blank_mask(
+        (height, width),
+        mask_type,
+        background_class_value,
+        label_extent,
+        bounds=bounds,
+        transform=transform,
+        to_raster_crs=to_raster_crs,
+    )
 
     # Get boundaries within bounds
     if mask_type == MaskType.INSTANCE and (id_col or crop_column is not None):
@@ -753,6 +771,80 @@ def _rasterize_mask(
         visible = set(np.unique(mask)) - {background_class_value}
         instance_labels[:] = [r for r in instance_labels if r["instance_value"] in visible]
     return mask
+
+
+def _blank_mask(
+    shape: tuple[int, int],
+    mask_type: MaskType,
+    background_class_value: int,
+    label_extent: LabelExtent | None,
+    *,
+    bounds: tuple[float, float, float, float],
+    transform: Affine,
+    to_raster_crs: Callable | None,
+) -> np.ndarray:
+    """The label array before any field is burned: background, and unknown outside the extent.
+
+    Instance masks are uint32 ids on 0 and never take the unknown value.
+    """
+    if mask_type == MaskType.INSTANCE:
+        return np.zeros(shape, dtype=np.uint32)
+    mask = np.full(shape, background_class_value, dtype=np.uint8)
+    if label_extent is not None:
+        _burn_label_extent(mask, label_extent, bounds, transform, to_raster_crs)
+    return mask
+
+
+def _burn_label_extent(
+    mask: np.ndarray,
+    label_extent: LabelExtent,
+    bounds: tuple[float, float, float, float],
+    transform: Affine,
+    to_raster_crs: Callable | None,
+) -> None:
+    """Set every pixel whose centre lies outside the label extent to unknown, in place.
+
+    ``all_touched=False``: a pixel is inside only if its centre is, so a pixel the
+    extent edge merely clips is unknown rather than claimed as background. The pieces
+    come clipped and densified (``label_extent.extent_pieces``), so a long straight
+    lon/lat edge keeps its place when reprojected onto the chip's UTM grid.
+    """
+    pieces = extent_pieces(label_extent, bounds)
+    inside = np.zeros(mask.shape, dtype=np.uint8)
+    if pieces:
+        if to_raster_crs is not None:
+            pieces = list(shapely.transform(np.array(pieces, dtype=object), to_raster_crs))
+        features.rasterize(
+            [(piece, 1) for piece in pieces], out=inside, transform=transform, all_touched=False
+        )
+    mask[inside == 0] = OUTSIDE_EXTENT_VALUE
+
+
+# GDAL metadata tag on the semantic masks of a label-extent build, holding the extent
+# file's sha256, so a skip_existing rerun can tell which extent (if any) a mask was
+# burned with. Absent on every other mask, which keeps default builds unchanged.
+LABEL_EXTENT_TAG = "FTW_LABEL_EXTENT"
+
+# The masks the label extent changes; the instance and DECODE layers come out the same.
+_EXTENT_TAGGED_TYPES = frozenset({MaskType.SEMANTIC_2_CLASS, MaskType.SEMANTIC_3_CLASS})
+
+
+def _extent_tag(mask_type: MaskType, label_extent: LabelExtent | None) -> str | None:
+    """The ``LABEL_EXTENT_TAG`` value a ``mask_type`` raster carries, or None for none."""
+    if label_extent is None or mask_type not in _EXTENT_TAGGED_TYPES:
+        return None
+    return label_extent.fingerprint
+
+
+def _output_layer(
+    mask_type: MaskType, source: np.ndarray, label_extent: LabelExtent | None
+) -> tuple[np.ndarray, dict[str, str]]:
+    """The array to write for ``mask_type`` from the burned ``source``, and its raster tags."""
+    if mask_type in _DERIVED_MASK_TYPES:
+        # Both derivations copy before mutating, so `source` stays reusable.
+        return _derive_decode_layer(mask_type, source)
+    tag = _extent_tag(mask_type, label_extent)
+    return source, ({LABEL_EXTENT_TAG: tag} if tag is not None else {})
 
 
 def _derive_decode_layer(
@@ -887,6 +979,7 @@ def _create_masks_for_cell(
     crop_column: str | None = None,
     utm: bool = True,
     cell_wkt: str | None = None,
+    label_extent: LabelExtent | None = None,
 ) -> list[tuple[MaskType, MaskResult]]:
     """Rasterize ``source_type`` once for a grid cell and write every output from it.
 
@@ -922,17 +1015,13 @@ def _create_masks_for_cell(
         crop_column=crop_column,
         instance_labels=instance_labels if crop_column is not None else None,
         to_raster_crs=to_raster_crs,
+        label_extent=label_extent,
     )
 
     results: list[tuple[MaskType, MaskResult]] = []
     for mask_type, output_path in outputs:
         try:
-            tags: dict[str, str] = {}
-            if mask_type in _DERIVED_MASK_TYPES:
-                # Both derivations copy before mutating, so `source` stays reusable.
-                mask, tags = _derive_decode_layer(mask_type, source)
-            else:
-                mask = source
+            mask, tags = _output_layer(mask_type, source, label_extent)
 
             # Instance ids are arbitrary and often global, so a viewer needs the chip's own
             # id range to stretch over: keeping the background out of the embedded statistics
@@ -1017,6 +1106,7 @@ def _create_masks_with_retry(
                 crop_column=task.crop_column,
                 utm=task.utm,
                 cell_wkt=task.cell_wkt,
+                label_extent=task.label_extent,
             )
             return (results, None)
         except _PartialCellFailure as exc:
@@ -1330,11 +1420,13 @@ def _outputs_to_write(
     existing: dict[MaskType, int],
     crop_column: str | None = None,
     grid: Callable[[], tuple[CRS, Affine, int, int]] | None = None,
+    label_extent: LabelExtent | None = None,
 ) -> list[tuple[MaskType, str]]:
     """The (mask type, path) outputs of one cell's group that still need writing.
 
     ``grid`` gives the grid this run writes the cell on; a mask already on disk is
-    kept only when it matches it.
+    kept only when it matches it, and when it was burned with this run's label extent
+    (or, without one, with none).
     """
     outputs: list[tuple[MaskType, str]] = []
     for mask_type in group:
@@ -1359,7 +1451,7 @@ def _outputs_to_write(
             and mask_path.exists()
             and mask_path.stat().st_size > 0
             and (mask_type != MaskType.INSTANCE or _lookup_matches(mask_path, crop_column))
-            and (grid is None or _on_grid(mask_path, grid()))
+            and _reusable(mask_path, grid, _extent_tag(mask_type, label_extent))
         ):
             existing[mask_type] += 1
             continue
@@ -1368,22 +1460,34 @@ def _outputs_to_write(
     return outputs
 
 
-def _on_grid(mask_path: Path, grid: tuple[CRS, Affine, int, int]) -> bool:
-    """Whether a mask already on disk was written on ``grid`` (CRS, transform, size).
+def _reusable(
+    mask_path: Path,
+    grid: Callable[[], tuple[CRS, Affine, int, int]] | None,
+    extent_tag: str | None,
+) -> bool:
+    """Whether a mask already on disk can stand for the one this run would write.
 
-    A rerun with ``skip_existing`` must not keep a mask from a build on another grid:
-    lon/lat instead of UTM or the reverse, another resolution, or another origin.
+    A rerun with ``skip_existing`` must not keep a mask from a build on another grid
+    (lon/lat instead of UTM or the reverse, another resolution, another origin), nor
+    one burned with another label extent, or with one where this run has none.
     """
-    crs, transform, width, height = grid
     try:
         with rasterio.open(mask_path) as src:
-            return (
-                src.crs == crs
-                and (src.width, src.height) == (width, height)
-                and src.transform.almost_equals(transform)
-            )
+            if src.tags().get(LABEL_EXTENT_TAG) != extent_tag:
+                return False
+            return grid is None or _on_grid(src, grid())
     except rasterio.errors.RasterioIOError:
         return False
+
+
+def _on_grid(src: rasterio.DatasetReader, grid: tuple[CRS, Affine, int, int]) -> bool:
+    """Whether an open raster was written on ``grid`` (CRS, transform, size)."""
+    crs, transform, width, height = grid
+    return (
+        src.crs == crs
+        and (src.width, src.height) == (width, height)
+        and src.transform.almost_equals(transform)
+    )
 
 
 def _build_work_items(
@@ -1456,6 +1560,7 @@ def create_masks(
     on_start: Callable[[int, int, int], None] | None = None,
     crop_column: str | None = None,
     utm: bool = True,
+    label_extent_file: str | Path | None = None,
 ) -> dict[MaskType, CreateMasksResult]:
     """
     Create raster masks from vector boundaries for each grid cell.
@@ -1469,6 +1574,10 @@ def create_masks(
             chip gets the same shape. Otherwise the shape varies by a pixel with where
             the chip sits on the lattice. False rasterizes in the chips file's
             CRS instead, where ``resolution`` metres become degrees on both axes.
+        label_extent_file: Optional polygons (GeoParquet, in the chips file's CRS) inside
+            which the labels are complete. The semantic masks mark unlabelled pixels
+            outside it as unknown (3); fields and lines are burned as usual. Use it
+            with ``background_class_value`` 0.
         boundaries_file: Path to boundaries GeoParquet file (polygons)
         boundary_lines_file: Path to boundary lines GeoParquet file
         output_dir: Output directory for masks (default: ./masks)
@@ -1576,6 +1685,13 @@ def create_masks(
     finally:
         conn.close()
 
+    # Validated once here; each worker then queries only its own chip's piece.
+    extent = (
+        load_label_extent(label_extent_file, expected_crs=crs.to_wkt())
+        if label_extent_file is not None
+        else None
+    )
+
     # Determine number of workers, and each one's DuckDB memory budget so a
     # many-worker run can't oversubscribe the machine's RAM (see
     # _run_work_items for why that matters).
@@ -1604,6 +1720,7 @@ def create_masks(
             "background_class_value": background_class_value,
             "memory_limit_mb": memory_limit_mb,
             "utm": utm,
+            "label_extent": extent,
         },
         chip_dirs=chip_dirs,
         output_path=output_path,
@@ -1612,6 +1729,7 @@ def create_masks(
         skip_existing=skip_existing,
         existing=existing,
         crop_column=crop_column,
+        label_extent=extent,
     )
 
     # Announce (and count progress against) the work that is actually queued:

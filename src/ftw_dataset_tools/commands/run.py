@@ -6,7 +6,15 @@ import sys
 
 import click
 
-from ftw_dataset_tools.api import assets, crop_stats, land_cover, masks, pipeline, source
+from ftw_dataset_tools.api import (
+    assets,
+    crop_stats,
+    label_extent,
+    land_cover,
+    masks,
+    pipeline,
+    source,
+)
 from ftw_dataset_tools.api import config as config_module
 from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
 from ftw_dataset_tools.api.imagery.summary import imagery_summary_line, selection_summary_lines
@@ -184,6 +192,8 @@ def _print_summary(ctx: pipeline.PipelineContext) -> None:
 
     if ctx.chips_result:
         click.echo(f"  Grid cells with coverage: {ctx.chips_result.cells_with_coverage:,}")
+    if isinstance(ctx.label_extent_result, label_extent.LabelExtentChipsResult):
+        click.echo(f"  {label_extent.label_extent_summary(ctx.label_extent_result)}")
     if ctx.splits_result:
         click.echo(
             f"  Splits: {ctx.splits_result.train_count} train, "

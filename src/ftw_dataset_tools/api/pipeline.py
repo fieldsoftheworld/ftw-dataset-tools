@@ -31,6 +31,7 @@ from ftw_dataset_tools.api import (
     crop_stats,
     docs,
     field_stats,
+    label_extent,
     land_cover,
     masks,
     scale,
@@ -180,6 +181,7 @@ class PipelineContext:
     source_crs: str | None = None
     chips_result: field_stats.FieldStatsResult | None = None
     crop_stats_result: crop_stats.CropStatsResult | None = None
+    label_extent_result: label_extent.LabelExtentChipsResult | None = None
     scale_result: scale.ScaleResult | None = None
     land_cover_result: land_cover.LandCoverResult | None = None
     splits_result: splits.CreateSplitsResult | None = None
@@ -460,6 +462,33 @@ def _require(path: Path, *, stage: str, produced_by: str) -> None:
         )
 
 
+def _label_extent_mismatch(configured: str | None, built: str | None) -> str:
+    """Why chips built with extent fingerprint ``built`` don't fit the ``configured`` one."""
+    if configured is None:
+        return "is not set, but {chips} was built with one"
+    if built is None:
+        return "is set, but {chips} was built without one"
+    return "is set, but {chips} was built from a different extent file (or an older version of it)"
+
+
+def _require_label_extent_match(ctx: PipelineContext, *, stage: str) -> None:
+    """Ensure the chips file was built with the label extent this run is configured with.
+
+    The extent drops chips and records ``label_extent_pct`` in the chips stage only, so
+    a run starting later (``--from masks``) after the setting or the extent file changed
+    would mix the two. The chips file records the extent file's sha256 for this check.
+    """
+    extent_file = ctx.config.stages.masks.label_extent
+    configured = label_extent.extent_fingerprint(extent_file) if extent_file else None
+    built = label_extent.chips_fingerprint(ctx.chips_path)
+    if configured == built:
+        return
+    reason = _label_extent_mismatch(configured, built).format(chips=ctx.chips_path.name)
+    raise StageInputError(
+        f"Stage '{stage}': stages.masks.label_extent {reason}. Rerun from the 'chips' stage."
+    )
+
+
 # ---- stage implementations ----------------------------------------------
 
 
@@ -625,6 +654,9 @@ def stage_chips(ctx: PipelineContext) -> None:
         f"Created chips: {ctx.chips_result.total_cells:,} cells, "
         f"{ctx.chips_result.cells_with_coverage:,} with coverage"
     )
+    extent_file = ctx.config.stages.masks.label_extent
+    if extent_file is not None:
+        ctx.label_extent_result = label_extent.apply_label_extent(ctx.chips_path, extent_file)
     if ctx.config.stages.chips.crop_stats:
         # chips and field_polygons_path share a CRS: chips derive from the same
         # (reprojected, class-filtered) fields used here, so no reprojection is needed.
@@ -748,6 +780,7 @@ def stage_masks(ctx: PipelineContext) -> None:
     _require(ctx.chips_path, stage="masks", produced_by="chips")
     _require(ctx.field_polygons_path, stage="masks", produced_by=ctx.field_polygons_producer)
     _require(ctx.boundary_lines_path, stage="masks", produced_by="boundaries")
+    _require_label_extent_match(ctx, stage="masks")
 
     chip_dirs = _build_chip_dirs(ctx)
     logger.info(f"Created {len(chip_dirs)} chip directories")
@@ -782,6 +815,7 @@ def stage_masks(ctx: PipelineContext) -> None:
         skip_existing=masks_cfg.skip_existing,
         crop_column=masks_cfg.crop_column,
         utm=masks_cfg.utm,
+        label_extent_file=masks_cfg.label_extent,
         on_progress=ctx.on_mask_progress,
         on_start=ctx.on_mask_start,
     )
@@ -807,6 +841,7 @@ def stage_stac(ctx: PipelineContext) -> None:
     _require(ctx.boundary_lines_path, stage="stac", produced_by="boundaries")
     if ctx.config.class_filter is not None:
         _require(ctx.field_polygons_path, stage="stac", produced_by="filter")
+    _require_label_extent_match(ctx, stage="stac")
 
     # The chips stage drops the composition columns when the step is off, but a run
     # starting at or after splits never reaches it, so a chips file left by an earlier
@@ -837,6 +872,7 @@ def stage_stac(ctx: PipelineContext) -> None:
         checksums=ctx.config.stages.stac.checksums,
         crop_calendar=ctx.config.stages.stac.crop_calendar,
         background_class_value=3 if ctx.config.stages.masks.presence_only else 0,
+        label_extent=ctx.config.stages.masks.label_extent is not None,
         config=ctx.config,
     )
     n = ctx.stac_result.total_items

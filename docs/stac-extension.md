@@ -132,6 +132,7 @@ independently of imagery:
 |----------|------|-------------|
 | `ftw:split` | string | Train/val/test split assignment: "train", "val", or "test" |
 | `ftw:field_coverage_pct` | number | Percentage of the chip covered by field polygons |
+| `ftw:label_extent_pct` | number | Percentage of the chip inside the label extent (present only for datasets built with `label_extent`) |
 | `ftw:hcat_dominant_code` | integer | HCAT code with the largest area share in the chip |
 | `ftw:hcat_dominant_name_en` | string | English name of the dominant HCAT code |
 | `ftw:hcat_dominant_pct` | number | Area share (0-100) of the dominant HCAT code |
@@ -217,6 +218,7 @@ describing how the whole dataset was built:
 | `ftw:mask_types` | string[] | Mask types generated for the dataset |
 | `ftw:mask_resolution_m` | number | Mask pixel resolution in meters |
 | `ftw:presence_only` | boolean | Whether labels are presence-only (semantic mask background is 3 instead of 0) |
+| `ftw:label_extent` | boolean | `true` when the labels are complete only inside a label extent: semantic masks use 0 inside it and 3 (unknown) outside it. Absent otherwise |
 | `ftw:min_coverage_pct` | number | Minimum field-coverage percentage required to keep a grid cell |
 | `ftw:scale_percent` | number | Percent of 3x3 chip blocks kept (present only for scaled datasets) |
 | `ftw:scale_min_blocks_per_square` | integer | Blocks always kept per MGRS 100 km square (present only for scaled datasets) |
@@ -345,7 +347,8 @@ Semantic mask assets add `classification:classes`
 |------|---------|
 | `semantic_2class_mask` | 0 background, 1 field. With `presence_only`, 3 `unknown` marks unlabelled pixels; the field boundary lines stay 0 |
 | `semantic_3class_mask` | 0 background, 1 field, 2 boundary. With `presence_only`, 3 `unknown` replaces 0 (unlabelled pixels) |
-| `instance_mask` | no class list; 0 marks non-field pixels (also when `presence_only` is set) and is the band's `nodata`; other values are instance ids |
+| | With `label_extent`, both semantic masks keep 0 background inside the extent and add 3 `unknown` for unlabelled pixels outside it (`color_hint` `999999`); fields, boundaries (and the 2-class mask's 0 lines) are burned as usual everywhere. The instance mask and the DECODE layers have no unknown class: outside the extent their unlabelled pixels are 0, indistinguishable from background, so use the semantic mask's 3 to mask them |
+| `instance_mask` | no class list; 0 marks non-field pixels (also when `presence_only` or `label_extent` is set, including unlabelled pixels outside the extent) and is the band's `nodata`; other values are instance ids |
 | | Field ids that are float-like (e.g. `'111205887.0'`) or otherwise non-numeric are coerced to integers, or replaced with sequential ids (1..n) for that chip when any id in it can't be coerced. |
 | `decode_boundary_mask` | 0 background, 1 boundary |
 | `decode_distance_mask` | no class list; float32 normalized distance in [0, 1], with a `decode_distance_max_px` dataset tag |
@@ -410,7 +413,9 @@ gets a true-colour render per season:
 
 `nodata` is the dataset's background pixel value — 0 normally, **3** when
 `presence_only` is set — for the semantic masks (`semantic_2class`, `semantic_3class`).
-The DECODE layers and the instance mask always use 0.
+The DECODE layers and the instance mask always use 0. With `label_extent` it stays 0, so
+the `unknown` area outside the extent is drawn, in the grey `color_hint` its class carries
+only in label-extent datasets.
 
 Instance ids are global rather than per-chip, so the instance mask's background is excluded
 from its embedded statistics: the render then stretches from the chip's smallest field id

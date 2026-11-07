@@ -28,6 +28,7 @@ from ftw_dataset_tools.api.imagery.slots import (
     InvalidImageryModeError,
     normalize_imagery_modes,
 )
+from ftw_dataset_tools.api.label_extent import LabelExtentError, load_label_extent
 from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -335,6 +336,11 @@ class MasksConfig:
     # Rasterize each chip on its own UTM zone's grid (square pixels, one shape per
     # chip size). False rasterizes in the chips file's CRS (lon/lat), as before.
     utm: bool = True
+    # Path to EPSG:4326 polygons (GeoParquet, resolved relative to the config file)
+    # inside which the labels are complete. Inside, unlabelled pixels are background
+    # (0); outside, unknown (3). Chips wholly outside are dropped. Optional; an
+    # alternative to presence_only.
+    label_extent: str | None = None
 
 
 @dataclass
@@ -798,6 +804,8 @@ class DatasetConfig:
         if not isinstance(self.stages.masks.utm, bool):
             raise ConfigError("stages.masks.utm must be true or false")
 
+        self._validate_label_extent()
+
         crop_column = self.stages.masks.crop_column
         if crop_column is not None and (
             not isinstance(crop_column, str)
@@ -806,6 +814,19 @@ class DatasetConfig:
         ):
             raise ConfigError(
                 "stages.masks.crop_column requires a column name and mask_types: [instance]"
+            )
+
+    def _validate_label_extent(self) -> None:
+        extent = self.stages.masks.label_extent
+        if extent is None:
+            return
+        if not isinstance(extent, str) or not extent.strip():
+            raise ConfigError("stages.masks.label_extent must be a path to a GeoParquet file")
+        if self.stages.masks.presence_only:
+            raise ConfigError(
+                "stages.masks.label_extent and presence_only are alternatives: presence_only "
+                "makes every unlabelled pixel unknown, label_extent only those outside the "
+                "extent. Set one of them."
             )
 
     def _validate_imagery_mode(self) -> None:
@@ -839,6 +860,9 @@ class DatasetConfig:
         data["stages"]["select_images"]["imagery_mode"] = (
             modes[0] if len(modes) == 1 else list(modes)
         )
+        # Written only when set, so a config without one resolves exactly as before.
+        if self.stages.masks.label_extent is None:
+            del data["stages"]["masks"]["label_extent"]
         return data
 
     def provenance_dict(self, generated_at: datetime | None = None) -> dict[str, Any]:
@@ -890,7 +914,24 @@ def load_config(path: str | Path) -> DatasetConfig:
             grid_path = (config_path.parent / grid_path).resolve()
         config.stages.chips.grid_file = str(grid_path)
 
+    _resolve_label_extent(config, config_path)
+
     return config
+
+
+def _resolve_label_extent(config: DatasetConfig, config_path: Path) -> None:
+    """Resolve stages.masks.label_extent against the config file's directory and validate it."""
+    extent_ref = config.stages.masks.label_extent
+    if extent_ref is None:
+        return
+    extent_path = Path(extent_ref)
+    if not extent_path.is_absolute():
+        extent_path = (config_path.parent / extent_path).resolve()
+    try:
+        load_label_extent(extent_path)
+    except LabelExtentError as err:
+        raise ConfigError(f"stages.masks.{err}") from err
+    config.stages.masks.label_extent = str(extent_path)
 
 
 def write_provenance_file(
