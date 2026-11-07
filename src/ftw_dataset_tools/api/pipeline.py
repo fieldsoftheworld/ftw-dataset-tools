@@ -41,6 +41,7 @@ from ftw_dataset_tools.api import (
     tiles,
 )
 from ftw_dataset_tools.api import config as config_module
+from ftw_dataset_tools.api.chips_io import parquet_columns
 from ftw_dataset_tools.api.config import DOWNLOAD_MODE_PREVIEW
 from ftw_dataset_tools.api.geo import (
     CRSInfo,
@@ -462,6 +463,24 @@ def _require(path: Path, *, stage: str, produced_by: str) -> None:
         )
 
 
+def _require_label_extent_match(ctx: PipelineContext, *, stage: str) -> None:
+    """Ensure the chips file was built with the label extent setting this run has.
+
+    The extent drops chips and adds ``label_extent_pct`` in the chips stage only, so a
+    run starting later (``--from masks``) after the setting changed would mix the two.
+    """
+    configured = ctx.config.stages.masks.label_extent is not None
+    applied = label_extent.LABEL_EXTENT_COLUMN in parquet_columns(ctx.chips_path)
+    if configured == applied:
+        return
+    state = "is set" if configured else "is not set"
+    built = "without" if configured else "with"
+    raise StageInputError(
+        f"Stage '{stage}': stages.masks.label_extent {state}, but {ctx.chips_path.name} was "
+        f"built {built} one. Rerun from the 'chips' stage."
+    )
+
+
 # ---- stage implementations ----------------------------------------------
 
 
@@ -753,6 +772,7 @@ def stage_masks(ctx: PipelineContext) -> None:
     _require(ctx.chips_path, stage="masks", produced_by="chips")
     _require(ctx.field_polygons_path, stage="masks", produced_by=ctx.field_polygons_producer)
     _require(ctx.boundary_lines_path, stage="masks", produced_by="boundaries")
+    _require_label_extent_match(ctx, stage="masks")
 
     chip_dirs = _build_chip_dirs(ctx)
     logger.info(f"Created {len(chip_dirs)} chip directories")
@@ -813,6 +833,7 @@ def stage_stac(ctx: PipelineContext) -> None:
     _require(ctx.boundary_lines_path, stage="stac", produced_by="boundaries")
     if ctx.config.class_filter is not None:
         _require(ctx.field_polygons_path, stage="stac", produced_by="filter")
+    _require_label_extent_match(ctx, stage="stac")
 
     # The chips stage drops the composition columns when the step is off, but a run
     # starting at or after splits never reaches it, so a chips file left by an earlier

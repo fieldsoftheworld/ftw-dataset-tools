@@ -14,11 +14,15 @@ masks stage burns the extent per chip (see ``masks._burn_label_extent``).
 
 from __future__ import annotations
 
+import functools
+import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import duckdb
 import pyproj
+import shapely
 
 from ftw_dataset_tools.api.chips_io import select_excluding, write_chips
 from ftw_dataset_tools.api.geo import (
@@ -28,6 +32,9 @@ from ftw_dataset_tools.api.geo import (
     sql_path,
 )
 from ftw_dataset_tools.api.logging_config import get_logger
+
+if TYPE_CHECKING:
+    import numpy as np
 
 logger = get_logger(__name__)
 
@@ -41,6 +48,15 @@ OUTSIDE_EXTENT_VALUE = 3
 
 _POLYGON_TYPES = frozenset({"POLYGON", "MULTIPOLYGON"})
 _WGS84 = "EPSG:4326"
+
+#: Extent pieces are clipped to a chip's bounds widened by this share of its size, so
+#: the clip's own edges fall outside the raster.
+_CLIP_MARGIN = 0.05
+
+#: Pieces are densified to this many vertices per chip width before reprojection, so a
+#: straight edge in the extent's CRS stays where it is on a UTM grid (well under a pixel
+#: for a 200-pixel chip).
+_DENSIFY_STEPS = 2048
 
 
 class LabelExtentError(ValueError):
@@ -71,6 +87,33 @@ class LabelExtentChipsResult:
         return self.total_chips - self.kept_chips
 
 
+def label_extent_summary(result: LabelExtentChipsResult) -> str:
+    """One line for a run summary."""
+    return (
+        f"Label extent: kept {result.kept_chips:,} of {result.total_chips:,} chips "
+        f"({result.dropped_chips:,} wholly outside dropped)"
+    )
+
+
+def _crs_is_explicit_null(path: Path, geom_col: str) -> bool:
+    """Whether the GeoParquet metadata sets ``crs: null``: an unknown CRS, not WGS84.
+
+    The GeoParquet spec defaults a *missing* ``crs`` key to OGC:CRS84, but an explicit
+    null means the CRS is undefined, so it cannot be trusted to line up with the chips.
+    """
+    conn = duckdb.connect(":memory:")
+    try:
+        row = conn.execute(
+            "SELECT value FROM parquet_kv_metadata(?) WHERE key = 'geo'", [str(path)]
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return False
+    column = json.loads(row[0]).get("columns", {}).get(geom_col, {})
+    return "crs" in column and column["crs"] is None
+
+
 def _crs_of(path: Path, geom_col: str) -> pyproj.CRS:
     """The file's CRS; GeoParquet without one is WGS84 by definition."""
     info = detect_crs(path, geom_col)
@@ -79,6 +122,10 @@ def _crs_of(path: Path, geom_col: str) -> pyproj.CRS:
 
 
 def _check_crs(path: Path, geom_col: str, expected: pyproj.CRS) -> None:
+    if _crs_is_explicit_null(path, geom_col):
+        raise LabelExtentError(
+            path, f"label_extent {path} declares no CRS (crs: null); write it in EPSG:4326"
+        )
     try:
         actual = _crs_of(path, geom_col)
     except pyproj.exceptions.CRSError as err:
@@ -138,6 +185,47 @@ def load_label_extent(path: str | Path, expected_crs: str | None = None) -> Labe
             f"label_extent {extent_path} must hold polygons only, found {', '.join(other)}",
         )
     return LabelExtent(path=str(extent_path), geom_col=geom_col)
+
+
+@functools.lru_cache(maxsize=4)
+def _extent_index(
+    path: str, geom_col: str, _stamp: tuple[int, int]
+) -> tuple[np.ndarray, shapely.STRtree]:
+    """The extent's geometries and a spatial index, read once per process.
+
+    ``_stamp`` (mtime, size) makes a rewritten file a cache miss.
+    """
+    conn = duckdb.connect(":memory:")
+    ensure_spatial_loaded(conn)
+    column = geom_col.replace('"', '""')
+    try:
+        rows = conn.execute(
+            f'SELECT ST_AsWKB(ST_MakeValid("{column}")) '
+            f"FROM read_parquet('{sql_path(path)}') WHERE \"{column}\" IS NOT NULL"
+        ).fetchall()
+    finally:
+        conn.close()
+    geometries = shapely.from_wkb([bytes(row[0]) for row in rows])
+    return geometries, shapely.STRtree(geometries)
+
+
+def extent_pieces(extent: LabelExtent, bounds: tuple[float, float, float, float]) -> list:
+    """The extent's polygons near ``bounds``, clipped to them and densified.
+
+    In the extent's (= the chips') CRS, ready to reproject onto a chip's raster grid.
+    Each worker loads the extent once and keeps it indexed, so a chip only touches the
+    polygons it overlaps, and only their part under it, however detailed they are.
+    """
+    stat = Path(extent.path).stat()
+    geometries, tree = _extent_index(extent.path, extent.geom_col, (stat.st_mtime_ns, stat.st_size))
+    minx, miny, maxx, maxy = bounds
+    span = max(maxx - minx, maxy - miny)
+    pad = span * _CLIP_MARGIN
+    window = (minx - pad, miny - pad, maxx + pad, maxy + pad)
+    hits = tree.query(shapely.box(*window))
+    clipped = shapely.clip_by_rect(geometries[hits], *window)
+    clipped = clipped[shapely.area(clipped) > 0]
+    return list(shapely.segmentize(clipped, span / _DENSIFY_STEPS))
 
 
 def _extent_query(chips_sql: str, extent: LabelExtent, chips_geom_col: str) -> str:

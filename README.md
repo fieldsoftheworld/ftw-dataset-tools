@@ -244,12 +244,20 @@ stages:
 
 Inside the extent an unlabelled pixel is background (0); outside it, unknown (3, the value
 `presence_only` uses). A pixel is inside when its centre is. Field pixels and boundary
-lines are burned as usual wherever they fall, and the instance mask keeps 0 everywhere.
-Chips wholly outside the extent are dropped in the chips stage; the rest get a
-`label_extent_pct` column (share of the chip inside, 0-100), published as
-`ftw:label_extent_pct`, and the collection gets `ftw:label_extent: true`. It cannot be
-combined with `presence_only: true`. `min_coverage` still applies, so set it to 0 to keep
-chips inside the extent that hold no fields.
+lines are burned as usual wherever they fall. Chips wholly outside the extent are dropped
+in the chips stage; the rest get a `label_extent_pct` column (share of the chip inside,
+0-100), published as `ftw:label_extent_pct`, and the collection gets
+`ftw:label_extent: true`. It cannot be combined with `presence_only: true`. `min_coverage`
+still applies, so set it to 0 to keep chips inside the extent that hold no fields.
+
+Only the semantic masks (`semantic_2_class`, `semantic_3_class`) carry the unknown class.
+The instance mask and the DECODE layers have no unknown value: outside the extent their
+unlabelled pixels are 0, the same as background, so they cannot tell "no field" from
+"not labelled" there (as with `presence_only`). Mask those pixels with the semantic mask's
+3 when training on them.
+
+Changing `label_extent` changes the chips, so rerun from the `chips` stage: the `masks` and
+`stac` stages refuse a chips file built with a different setting.
 
 See [`configs/examples/config.yaml`](configs/examples/config.yaml) for a fully documented config.
 A minimal config:

@@ -83,6 +83,10 @@ PRESENCE_ONLY_LINE_DESCRIPTION = "Field boundary line of a labelled field (not a
 LABEL_EXTENT_UNKNOWN_DESCRIPTION = (
     "Unknown: outside the label extent and not labelled, may or may not be a field"
 )
+# Colour hint for that unknown class, given only in label-extent datasets: there the
+# render hides background 0, so the unknown area outside the extent is drawn and needs
+# a defined colour. Presence-only renders hide 3 instead and keep no hint. Okabe-Ito grey.
+LABEL_EXTENT_UNKNOWN_COLOR = "999999"
 LABEL_EXTENT_BACKGROUND_DESCRIPTION = {
     "semantic_2class": "Not a field (inside the label extent), or a field boundary line",
     "semantic_3class": "Not a field (inside the label extent)",
@@ -331,9 +335,12 @@ def add_mask_classification(
     except KeyError as err:
         raise ValueError(f"Unknown mask kind: {mask_kind}") from err
 
+    colors = (
+        {**LABEL_COLORS, "unknown": LABEL_EXTENT_UNKNOWN_COLOR} if label_extent else LABEL_COLORS
+    )
     classes = [
         Classification.create(
-            value=value, name=name, description=description, color_hint=LABEL_COLORS.get(name)
+            value=value, name=name, description=description, color_hint=colors.get(name)
         )
         for value, name, description in _class_spec(mask_kind, spec, background_value, label_extent)
     ]

@@ -25,7 +25,12 @@ from rasterio.warp import transform_bounds
 from ftw_dataset_tools.api import decode, field_stats
 from ftw_dataset_tools.api.chip_grid import reprojector, utm_grid_for_cell
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
-from ftw_dataset_tools.api.label_extent import OUTSIDE_EXTENT_VALUE, LabelExtent, load_label_extent
+from ftw_dataset_tools.api.label_extent import (
+    OUTSIDE_EXTENT_VALUE,
+    LabelExtent,
+    extent_pieces,
+    load_label_extent,
+)
 from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 
 if TYPE_CHECKING:
@@ -700,14 +705,13 @@ def _rasterize_mask(
         background_class_value = 0
 
     mask = _blank_mask(
-        conn,
         (height, width),
         mask_type,
         background_class_value,
         label_extent,
         bounds=bounds,
         transform=transform,
-        shapes_of=shapes_of,
+        to_raster_crs=to_raster_crs,
     )
 
     # Get boundaries within bounds
@@ -770,7 +774,6 @@ def _rasterize_mask(
 
 
 def _blank_mask(
-    conn: duckdb.DuckDBPyConnection,
     shape: tuple[int, int],
     mask_type: MaskType,
     background_class_value: int,
@@ -778,7 +781,7 @@ def _blank_mask(
     *,
     bounds: tuple[float, float, float, float],
     transform: Affine,
-    shapes_of: Callable[[list[str]], list],
+    to_raster_crs: Callable | None,
 ) -> np.ndarray:
     """The label array before any field is burned: background, and unknown outside the extent.
 
@@ -788,28 +791,32 @@ def _blank_mask(
         return np.zeros(shape, dtype=np.uint32)
     mask = np.full(shape, background_class_value, dtype=np.uint8)
     if label_extent is not None:
-        _burn_label_extent(conn, mask, label_extent, bounds, transform, shapes_of)
+        _burn_label_extent(mask, label_extent, bounds, transform, to_raster_crs)
     return mask
 
 
 def _burn_label_extent(
-    conn: duckdb.DuckDBPyConnection,
     mask: np.ndarray,
     label_extent: LabelExtent,
     bounds: tuple[float, float, float, float],
     transform: Affine,
-    shapes_of: Callable[[list[str]], list],
+    to_raster_crs: Callable | None,
 ) -> None:
     """Set every pixel whose centre lies outside the label extent to unknown, in place.
 
     ``all_touched=False``: a pixel is inside only if its centre is, so a pixel the
-    extent edge merely clips is unknown rather than claimed as background.
+    extent edge merely clips is unknown rather than claimed as background. The pieces
+    come clipped and densified (``label_extent.extent_pieces``), so a long straight
+    lon/lat edge keeps its place when reprojected onto the chip's UTM grid.
     """
-    rows = _get_geometries_in_bounds(conn, Path(label_extent.path), label_extent.geom_col, bounds)
+    pieces = extent_pieces(label_extent, bounds)
     inside = np.zeros(mask.shape, dtype=np.uint8)
-    if rows:
-        shapes = [(geometry, 1) for geometry in shapes_of([wkt for (wkt,) in rows])]
-        features.rasterize(shapes, out=inside, transform=transform, all_touched=False)
+    if pieces:
+        if to_raster_crs is not None:
+            pieces = list(shapely.transform(np.array(pieces, dtype=object), to_raster_crs))
+        features.rasterize(
+            [(piece, 1) for piece in pieces], out=inside, transform=transform, all_touched=False
+        )
     mask[inside == 0] = OUTSIDE_EXTENT_VALUE
 
 

@@ -231,6 +231,8 @@ class TestAddMaskClassification:
             (1, "field"),
         ]
         assert "presence-only" in classes[1]["description"]
+        # Presence-only renders hide 3, so unknown keeps no colour there.
+        assert "color_hint" not in classes[1]
         assert "boundary line" in classes[0]["description"]
 
     def test_presence_only_3class_has_no_zero_class(self, tmp_path: Path) -> None:
@@ -269,6 +271,9 @@ class TestAddMaskClassification:
         assert "inside the label extent" in classes[0]["description"]
         assert "boundary line" in classes[0]["description"]
         assert "outside the label extent" in classes[2]["description"]
+        # Background is hidden by the render; the unknown area is drawn, so it is coloured.
+        assert "color_hint" not in classes[0]
+        assert classes[2]["color_hint"] == "999999"
 
     def test_label_extent_3class_has_all_four_classes(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.assets import add_mask_classification, add_raster_bands

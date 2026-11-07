@@ -58,6 +58,37 @@ class TestLoadLabelExtent:
         path = _write_extent(tmp_path / "extent.parquet", [box(0, 0, 1, 1)], crs="EPSG:3035")
         assert load_label_extent(path, expected_crs="EPSG:3035").geom_col == "geometry"
 
+    def test_rejects_explicit_null_crs(self, tmp_path: Path) -> None:
+        """``crs: null`` means unknown in GeoParquet, unlike a missing key."""
+        path = tmp_path / "nocrs.parquet"
+        gpd.GeoDataFrame({"tile": [0]}, geometry=[box(0, 0, 1, 1)]).to_parquet(path)
+        with pytest.raises(LabelExtentError, match="no CRS"):
+            load_label_extent(path)
+
+    def test_missing_crs_key_means_wgs84(self, tmp_path: Path) -> None:
+        import json
+
+        import pyarrow.parquet as pq
+
+        path = _write_extent(tmp_path / "e.parquet", [box(0, 0, 1, 1)])
+        table = pq.read_table(path)
+        geo = json.loads(table.schema.metadata[b"geo"])
+        del geo["columns"]["geometry"]["crs"]
+        meta = {**table.schema.metadata, b"geo": json.dumps(geo).encode()}
+        pq.write_table(table.replace_schema_metadata(meta), path)
+
+        assert load_label_extent(path).geom_col == "geometry"
+
+    def test_accepts_crs84(self, tmp_path: Path) -> None:
+        path = _write_extent(tmp_path / "e.parquet", [box(0, 0, 1, 1)], crs="OGC:CRS84")
+        assert load_label_extent(path).geom_col == "geometry"
+
+    def test_summary_line(self) -> None:
+        from ftw_dataset_tools.api.label_extent import LabelExtentChipsResult, label_extent_summary
+
+        line = label_extent_summary(LabelExtentChipsResult(total_chips=1200, kept_chips=57))
+        assert line == "Label extent: kept 57 of 1,200 chips (1,143 wholly outside dropped)"
+
     def test_rejects_plain_parquet(self, tmp_path: Path) -> None:
         import pyarrow as pa
         import pyarrow.parquet as pq
@@ -253,6 +284,86 @@ class TestLabelExtentMasks:
             )
 
 
+class TestLabelExtentOnUtmGrid:
+    """Lon/lat extents much larger than a chip, burned on the chip's UTM grid."""
+
+    CELL = box(12.0, 45.995, 12.01, 46.005)
+
+    def _unknown_share(self, tmp_path: Path, extent_box) -> tuple[float, float]:
+        """(label_extent_pct of the chip, share of its 3-class pixels that are 3)."""
+        from ftw_dataset_tools.api.masks import MaskType, create_masks
+
+        chips = tmp_path / "chips.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["c1"], "field_coverage_pct": [50.0]}, geometry=[self.CELL], crs="EPSG:4326"
+        ).to_parquet(chips)
+        field = box(12.001, 45.996, 12.002, 45.997)
+        fields = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame({"id": [1]}, geometry=[field], crs="EPSG:4326").to_parquet(fields)
+        lines = tmp_path / "lines.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1]}, geometry=[LineString(field.exterior.coords)], crs="EPSG:4326"
+        ).to_parquet(lines)
+        extent = _write_extent(tmp_path / "extent.parquet", [extent_box])
+
+        apply_label_extent(chips, extent)
+        pct = TestApplyLabelExtentToChips._read(chips)["c1"]
+        result = create_masks(
+            chips_file=chips,
+            boundaries_file=fields,
+            boundary_lines_file=lines,
+            output_dir=tmp_path / "out",
+            mask_types=[MaskType.SEMANTIC_3_CLASS],
+            num_workers=1,
+            min_coverage=0,
+            label_extent_file=extent,
+        )[MaskType.SEMANTIC_3_CLASS]
+        with rasterio.open(result.masks_created[0].output_path) as src:
+            assert src.crs.to_epsg() == 32633
+            data = src.read(1)
+        return pct, float((data == 3).mean())
+
+    def test_long_edge_stays_put(self, tmp_path: Path) -> None:
+        """A 1-degree edge at lat 46 splits the chip in half, not a 120 m chord off it."""
+        pct, unknown = self._unknown_share(tmp_path, box(11.5, 45, 12.5, 46))
+        assert pct == 50.0
+        assert unknown == pytest.approx(0.5, abs=0.03)
+
+    def test_very_long_edge_stays_put(self, tmp_path: Path) -> None:
+        """An edge 12 degrees long, whose raw chord would miss the chip entirely."""
+        pct, unknown = self._unknown_share(tmp_path, box(6, 40, 18, 46))
+        assert pct == 50.0
+        assert unknown == pytest.approx(0.5, abs=0.03)
+
+    def test_unknown_share_matches_label_extent_pct(self, tmp_path: Path) -> None:
+        """Outside share of the mask tracks 100 - label_extent_pct for a corner overlap."""
+        pct, unknown = self._unknown_share(tmp_path, box(11, 45, 12.0025, 46.0025))
+        assert 0 < pct < 100
+        assert unknown == pytest.approx(1 - pct / 100, abs=0.03)
+
+    def test_detailed_extent_is_clipped_per_chip(self, tmp_path: Path) -> None:
+        """Only the piece of a large polygon under the chip comes back, densified."""
+        import shapely
+
+        from ftw_dataset_tools.api.label_extent import extent_pieces
+
+        big = shapely.segmentize(box(0, 0, 50, 50), 0.001)  # ~200k vertices
+        extent = load_label_extent(_write_extent(tmp_path / "big.parquet", [big]))
+
+        (piece,) = extent_pieces(extent, (49.99, 10.0, 50.01, 10.02))
+
+        _minx, miny, maxx, maxy = piece.bounds
+        assert maxx == pytest.approx(50.0)
+        assert (miny, maxy) == pytest.approx((9.999, 10.021))
+        assert shapely.get_num_coordinates(piece) < 20_000
+
+    def test_no_pieces_far_from_the_extent(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.label_extent import extent_pieces
+
+        extent = load_label_extent(_write_extent(tmp_path / "e.parquet", [box(0, 0, 1, 1)]))
+        assert extent_pieces(extent, (5, 5, 5.01, 5.01)) == []
+
+
 class TestApplyLabelExtentToChips:
     """Chip selection and the label_extent_pct column."""
 
@@ -406,7 +517,9 @@ class TestLabelExtentPipeline:
         ctx = self._ctx(tmp_path, sample_geoparquet_4326, extent, mask_types=["semantic_3_class"])
         cell = box(18.0, 40.0, 18.01, 40.01)
         gpd.GeoDataFrame(
-            {"id": ["cell_001"], "field_coverage_pct": [20.0]}, geometry=[cell], crs="EPSG:4326"
+            {"id": ["cell_001"], "field_coverage_pct": [20.0], LABEL_EXTENT_COLUMN: [50.0]},
+            geometry=[cell],
+            crs="EPSG:4326",
         ).to_parquet(ctx.chips_path)
         fields = [box(18.002, 40.002, 18.004, 40.004)]
         gpd.GeoDataFrame({"id": [1]}, geometry=fields, crs="EPSG:4326").to_parquet(
@@ -448,9 +561,9 @@ class TestLabelExtentPipeline:
         monkeypatch.setattr(stac, "generate_stac_catalog", fake_generate)
         extent = _write_extent(tmp_path / "extent.parquet", [box(0, 0, 1, 1)])
         ctx = self._ctx(tmp_path, sample_geoparquet_4326, extent)
-        gpd.GeoDataFrame({"id": ["a"]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(
-            ctx.chips_path
-        )
+        gpd.GeoDataFrame(
+            {"id": ["a"], LABEL_EXTENT_COLUMN: [100.0]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326"
+        ).to_parquet(ctx.chips_path)
         ctx.output_fields_path.write_bytes(b"")
         ctx.boundary_lines_path.write_bytes(b"")
 
@@ -458,3 +571,93 @@ class TestLabelExtentPipeline:
 
         assert captured["label_extent"] is True
         assert captured["background_class_value"] == 0
+
+
+class TestLabelExtentStageGuard:
+    """masks and stac refuse a chips file built with a different label_extent setting."""
+
+    @staticmethod
+    def _ctx(tmp_path: Path, fields: Path, *, configured: bool, applied: bool):
+        from ftw_dataset_tools.api import pipeline
+
+        masks: dict = {"workers": 1}
+        if configured:
+            masks["label_extent"] = str(_write_extent(tmp_path / "e.parquet", [box(0, 0, 1, 1)]))
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(fields),
+                "output_dir": str(tmp_path / "out"),
+                "year": 2024,
+                "stages": {"masks": masks},
+            }
+        )
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        ctx.chips_base_dir.mkdir()
+        columns: dict = {"id": ["a"], "field_coverage_pct": [50.0]}
+        if applied:
+            columns[LABEL_EXTENT_COLUMN] = [100.0]
+        gpd.GeoDataFrame(columns, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(
+            ctx.chips_path
+        )
+        for path in (ctx.field_polygons_path, ctx.output_fields_path, ctx.boundary_lines_path):
+            path.write_bytes(b"")
+        return ctx
+
+    @pytest.mark.parametrize("stage", ["masks", "stac"])
+    @pytest.mark.parametrize(
+        ("configured", "applied", "message"),
+        [(True, False, "is set, but .* without one"), (False, True, "is not set, but .* with one")],
+    )
+    def test_mismatch_raises(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, stage, configured, applied, message
+    ) -> None:
+        from ftw_dataset_tools.api import pipeline
+        from ftw_dataset_tools.api.pipeline import StageInputError
+
+        ctx = self._ctx(tmp_path, sample_geoparquet_4326, configured=configured, applied=applied)
+        stage_func = {"masks": pipeline.stage_masks, "stac": pipeline.stage_stac}[stage]
+
+        with pytest.raises(StageInputError, match=f"Stage '{stage}': .*{message}.*'chips'"):
+            stage_func(ctx)
+
+    @pytest.mark.parametrize("configured", [True, False])
+    def test_matching_setting_passes(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, configured
+    ) -> None:
+        from ftw_dataset_tools.api.pipeline import _require_label_extent_match
+
+        ctx = self._ctx(tmp_path, sample_geoparquet_4326, configured=configured, applied=configured)
+        _require_label_extent_match(ctx, stage="masks")
+
+
+class TestRunSummary:
+    def test_summary_reports_the_extent_drop(self, tmp_path: Path) -> None:
+        from unittest.mock import Mock
+
+        import click
+        from click.testing import CliRunner
+
+        from ftw_dataset_tools.api.label_extent import LabelExtentChipsResult
+        from ftw_dataset_tools.commands import run
+
+        ctx = Mock()
+        ctx.output_dir = tmp_path
+        for name in (
+            "chips_result",
+            "splits_result",
+            "masks_results",
+            "stac_result",
+            "selection_result",
+            "download_result",
+            "docs_result",
+        ):
+            setattr(ctx, name, None)
+        ctx.label_extent_result = LabelExtentChipsResult(total_chips=10, kept_chips=4)
+
+        @click.command()
+        def show() -> None:
+            run._print_summary(ctx)
+
+        output = CliRunner().invoke(show).output
+        assert "Label extent: kept 4 of 10 chips (6 wholly outside dropped)" in output
