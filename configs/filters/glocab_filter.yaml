@@ -1,0 +1,13 @@
+# Class filter used for GloCAB (University of Maryland) field boundaries.
+# GloCAB has no crop classes worth filtering on: every polygon was digitised as cropland. Where fields
+# were too small to identify, the analyst drew one outline around several fields and set `no_area`;
+# those outlines are not field boundaries, so they are background. Every other polygon is a field.
+# The column is boolean; values are compared as text ("true" / "false").
+
+column: "no_area"
+
+include:
+  - "false"  # a single field
+
+exclude:
+  - "true"  # an outline around several fields too small to identify
