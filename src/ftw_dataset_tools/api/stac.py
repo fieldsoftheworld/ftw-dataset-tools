@@ -609,18 +609,25 @@ def _group_items_by_square(items: list[Item], squares: dict[str, str]) -> dict[s
     return {square: groups[square] for square in sorted(groups)}
 
 
-def _build_item_assets(imagery_modes: Sequence[str] = ()) -> dict[str, ItemAssetDefinition]:
+def _build_item_assets(
+    imagery_modes: Sequence[str] = (), mask_types: Sequence[str] | None = None
+) -> dict[str, ItemAssetDefinition]:
     """Declare the assets a chip item may carry (core ``item_assets`` collection field).
 
     Imagery slots are declared only for ``imagery_modes``, the modes the build
     selects, so a mosaics-only collection does not advertise planting/harvest scenes.
+    Masks are declared only for ``mask_types`` (``MaskType`` values), the masks the
+    build writes, so a presence-only collection does not advertise instance or
+    DECODE masks; None declares every mask type.
     """
     # Imported here: api.imagery's package init imports this module back.
     from ftw_dataset_tools.api.imagery.slots import MOSAIC_SLOTS, SCENE_SLOTS
     from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_MEDIA_TYPE
 
     defs: dict[str, ItemAssetDefinition] = {}
-    for mask_name in _MASK_TYPE_BY_ASSET_NAME:
+    for mask_name, mask_type in _MASK_TYPE_BY_ASSET_NAME.items():
+        if mask_types is not None and mask_type.value not in mask_types:
+            continue
         defs[f"{mask_name}_mask"] = ItemAssetDefinition(
             {"type": MEDIA_TYPE_COG, "roles": ["labels"], "title": _MASK_TITLES[mask_name]}
         )
@@ -765,6 +772,7 @@ def _create_collection(
     checksums: bool = False,
     background_class_value: int = 0,
     imagery_modes: Sequence[str] = (),
+    mask_types: Sequence[str] | None = None,
 ) -> Collection:
     """
     Create the single dataset collection with source-data and chip-definition assets.
@@ -823,10 +831,10 @@ def _create_collection(
         checksums=checksums,
     )
 
-    collection.item_assets = _build_item_assets(imagery_modes)
+    collection.item_assets = _build_item_assets(imagery_modes, mask_types)
     # A Collection carries renders at its top level (the schema's Collection branch).
     collection.extra_fields["renders"] = build_collection_renders(
-        background_value=background_class_value
+        background_value=background_class_value, mask_types=mask_types
     )
     add_render_schema(collection)
 
@@ -1258,6 +1266,7 @@ def generate_stac_catalog(
         checksums=checksums,
         background_class_value=background_class_value,
         imagery_modes=_declared_imagery_modes(config, items),
+        mask_types=config.stages.masks.mask_types if config is not None else None,
     )
 
     _apply_collection_context(collection, config, metadata, previous, provenance)
