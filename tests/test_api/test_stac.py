@@ -693,6 +693,25 @@ class TestSingleCollectionLayout:
         )
         assert "q1_image" not in scenes
 
+    def test_item_assets_declare_only_the_built_masks(self) -> None:
+        """A presence-only build writes the semantic masks only, so only those are declared."""
+        from ftw_dataset_tools.api.stac import _build_item_assets
+
+        masks = {
+            k
+            for k in _build_item_assets((), ["semantic_2_class", "semantic_3_class"])
+            if k.endswith("_mask")
+        }
+        assert masks == {"semantic_2class_mask", "semantic_3class_mask"}
+        every = {k for k in _build_item_assets(()) if k.endswith("_mask")}
+        assert every == {
+            "instance_mask",
+            "semantic_2class_mask",
+            "semantic_3class_mask",
+            "decode_boundary_mask",
+            "decode_distance_mask",
+        }
+
     def test_declared_modes_are_the_configured_ones_plus_any_held(self) -> None:
         from types import SimpleNamespace
 

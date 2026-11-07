@@ -194,6 +194,14 @@ class TestBuildCollectionRenders:
         assert renders["instance_mask"]["nodata"] == 0
         assert renders["decode_distance_mask"]["rescale"] == [[0, 1]]
 
+    def test_only_the_built_masks_get_a_render(self) -> None:
+        """A presence-only collection must not offer renders for masks no chip has."""
+        from ftw_dataset_tools.api.renders import build_collection_renders
+
+        renders = build_collection_renders(mask_types=["semantic_2_class", "semantic_3_class"])
+
+        assert set(renders) == {"semantic_2class_mask", "semantic_3class_mask"}
+
     def test_instance_has_no_global_stretch(self) -> None:
         """There is no meaningful collection-wide instance id range, so no rescale."""
         from ftw_dataset_tools.api.renders import build_collection_renders

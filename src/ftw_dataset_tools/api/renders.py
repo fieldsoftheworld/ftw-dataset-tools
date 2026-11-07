@@ -24,6 +24,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import pystac
 
 RENDER_SCHEMA_URI = "https://stac-extensions.github.io/render/v2.0.0/schema.json"
@@ -50,6 +52,15 @@ _RENDER_ASSETS = {
     "decode_boundary": "decode_boundary_mask",
     "decode_distance": "decode_distance_mask",
     "instance": "instance_mask",
+}
+
+# The ``MaskType`` value behind each render key (render keys drop the class underscore).
+_RENDER_MASK_TYPES = {
+    "semantic_2class": "semantic_2_class",
+    "semantic_3class": "semantic_3_class",
+    "decode_boundary": "decode_boundary",
+    "decode_distance": "decode_distance",
+    "instance": "instance",
 }
 
 _RENDER_TITLES = {
@@ -385,7 +396,9 @@ def build_item_renders(item: pystac.Item, background_value: int = _DEFAULT_BACKG
     return renders
 
 
-def build_collection_renders(background_value: int = _DEFAULT_BACKGROUND) -> dict:
+def build_collection_renders(
+    background_value: int = _DEFAULT_BACKGROUND, mask_types: Sequence[str] | None = None
+) -> dict:
     """Build collection-level ``renders``, keyed by the asset name each one draws.
 
     Per-item band statistics are not available here, so the instance render omits
@@ -393,10 +406,13 @@ def build_collection_renders(background_value: int = _DEFAULT_BACKGROUND) -> dic
 
     Args:
         background_value: Pixel value the semantic masks use for background.
+        mask_types: The ``MaskType`` values the build writes; only their masks get a
+            render, so a viewer is not offered a mask no chip has. None renders all.
     """
     return {
         asset_key: _render_for(render_key, asset_key, None, background_value)
         for render_key, asset_key in _RENDER_ASSETS.items()
+        if mask_types is None or _RENDER_MASK_TYPES[render_key] in mask_types
     }
 
 
