@@ -239,6 +239,39 @@ class TestCreateChipsCommand:
         assert "Total grid cells: 2" in result.output
         assert "undersized" not in result.output.lower()
 
+    def test_summary_reports_malformed_ids(self, tmp_path: Path) -> None:
+        """Grid cells whose MGRS id lost its digits are dropped and counted."""
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        cells = [box(10.0 + i * 0.02, 50.0, 10.02 + i * 0.02, 50.02) for i in range(2)]
+        grid = tmp_path / "grid.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["ftw-44RJM", "ftw-44RKM0002"]}, geometry=cells, crs="EPSG:4326"
+        ).to_parquet(grid)
+        fields = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame(
+            {"fid": [0]}, geometry=[box(10.0, 50.0, 10.04, 50.02)], crs="EPSG:4326"
+        ).to_parquet(fields)
+
+        result = CliRunner().invoke(
+            cli,
+            [
+                "create-chips",
+                str(fields),
+                "--grid-file",
+                str(grid),
+                "-o",
+                str(tmp_path / "chips.parquet"),
+                "--min-chip-area",
+                "0",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Malformed chip ids dropped: 1" in result.output
+        assert "Total grid cells: 1" in result.output
+
     @pytest.mark.parametrize("bad", ["150", "-1"])
     def test_min_chip_area_outside_percentage_range_rejected(
         self, sample_fields_geoparquet: Path, tmp_path: Path, bad: str

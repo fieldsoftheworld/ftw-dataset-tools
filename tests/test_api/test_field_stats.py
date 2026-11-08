@@ -974,3 +974,113 @@ class TestSizeFilterAtUtmSeam:
         """Documented limit: below the default, the seam counts as a cluster edge."""
         lost, _ = self._interior_border_drops(tmp_path, 1)
         assert lost > 0
+
+
+def _mgrs_id_grid(path: Path, ids: list[str], size: float = 0.02) -> Path:
+    """A one-row grid with the given ids, one cell each, left to right."""
+    cells = [
+        box(10.0 + i * size, 50.0, 10.0 + (i + 1) * size, 50.0 + size) for i in range(len(ids))
+    ]
+    gpd.GeoDataFrame({"id": ids}, geometry=cells, crs="EPSG:4326").to_parquet(path)
+    return path
+
+
+class TestMalformedChipIds:
+    """The FTW grid has a few cells on UTM zone seams whose id lost its digits
+    (ftw-44RJM at 78°E). The splits stage cannot place them, so they are dropped."""
+
+    def test_drops_mgrs_ids_without_easting_northing(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from ftw_dataset_tools.api.blocks import chip_block_ids
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        ids = ["ftw-44RJM", "ftw-44RJM123", "ftw-44RKM0002", "ftw-44RKM0202"]
+        grid = _mgrs_id_grid(tmp_path / "grid.parquet", ids)
+        fields = _covering_fields(tmp_path / "fields.parquet", lo=0, hi=4)
+        out = tmp_path / "chips.parquet"
+
+        result = add_field_stats(grid_file=grid, fields_file=fields, output_file=out)
+
+        kept = _chip_ids(out)
+        assert kept == ["ftw-44RKM0002", "ftw-44RKM0202"]
+        assert result.cells_dropped_malformed == 2
+        assert result.total_cells == 2
+        assert any("ftw-44RJM, ftw-44RJM123" in msg for msg in caplog.messages)
+        chip_block_ids(gpd.pd.Series(kept), km_size=2)  # the splits stage accepts them
+
+    def test_custom_ids_are_left_alone(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        grid = _mgrs_id_grid(tmp_path / "grid.parquet", ["ftw-0100", "cell-a", "ftw-0200"])
+        fields = _covering_fields(tmp_path / "fields.parquet", lo=0, hi=3)
+
+        result = add_field_stats(
+            grid_file=grid, fields_file=fields, output_file=tmp_path / "chips.parquet"
+        )
+
+        assert result.cells_dropped_malformed == 0
+        assert result.total_cells == 3
+
+    def test_no_malformed_ids_is_a_no_op(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from ftw_dataset_tools.api.field_stats import add_field_stats
+
+        grid = _mgrs_id_grid(tmp_path / "grid.parquet", ["ftw-44RKM0002", "ftw-44RKM0202"])
+        fields = _covering_fields(tmp_path / "fields.parquet", lo=0, hi=2)
+
+        result = add_field_stats(
+            grid_file=grid, fields_file=fields, output_file=tmp_path / "chips.parquet"
+        )
+
+        assert result.cells_dropped_malformed == 0
+        assert not any("easting/northing" in msg for msg in caplog.messages)
+
+
+def _remote_grid_with_malformed_cell(path: Path) -> Path:
+    """The stand-in remote grid plus one cell whose id lost its digits (as at 78°E)."""
+    grid = _ftw_grid_source(path)
+    gdf = gpd.read_parquet(grid)
+    bad = gdf.iloc[[4]].copy()  # the middle cell, under the field
+    bad["id"] = "ftw-33UXP"
+    gdf = gpd.GeoDataFrame(
+        gpd.pd.concat([gdf, bad], ignore_index=True), geometry="geometry", crs=gdf.crs
+    )
+    gdf.drop(columns="bbox", errors="ignore").to_parquet(path)
+    gpio.read(str(path)).add_bbox().write(str(path))
+    return path
+
+
+class TestMalformedChipIdsRemoteGrid:
+    """A remote grid is checked before it is cut: cut_grid rejects malformed ids."""
+
+    @pytest.mark.parametrize(
+        ("km_size", "expected"),
+        [
+            (2.0, ["ftw-33UXP0202"]),
+            (0.5, [f"ftw-33UXP{e:03d}{n:03d}" for e in (20, 25, 30, 35) for n in (20, 25, 30, 35)]),
+        ],
+    )
+    def test_malformed_cell_dropped_at_any_chip_size(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        km_size: float,
+        expected: list[str],
+    ) -> None:
+        from ftw_dataset_tools.api import field_stats
+
+        monkeypatch.setattr(field_stats, "configure_source_coop_s3", lambda _conn: None)
+        result = field_stats.add_field_stats(
+            fields_file=_middle_field(tmp_path / "fields.parquet"),
+            grid_source=str(_remote_grid_with_malformed_cell(tmp_path / "grid.parquet")),
+            output_file=tmp_path / "chips.parquet",
+            min_chip_area=99.5,
+            km_size=km_size,
+        )
+
+        assert sorted(_chip_ids(result.output_path)) == expected
+        assert result.cells_dropped_malformed == 1
+        assert any("ftw-33UXP" in msg and "easting/northing" in msg for msg in caplog.messages)

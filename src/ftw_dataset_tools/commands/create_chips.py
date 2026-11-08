@@ -191,6 +191,8 @@ def create_chips_cmd(
         click.echo(f"  Maximum coverage: {result.max_coverage}%")
         if result.cells_dropped_undersized:
             click.echo(f"  Undersized chips dropped: {result.cells_dropped_undersized:,}")
+        if result.cells_dropped_malformed:
+            click.echo(f"  Malformed chip ids dropped: {result.cells_dropped_malformed:,}")
         click.echo(f"\nOutput written to: {result.output_path}")
 
         click.echo(click.style("Done!", fg="green"))
