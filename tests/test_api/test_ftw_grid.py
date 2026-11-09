@@ -435,6 +435,53 @@ class TestCoordinateFallback:
         with pytest.raises(ValueError, match="No files were successfully processed"):
             create_ftw_grid(bad, tmp_path / "out", km_size=2)
 
+    def test_simple_format_falls_back_on_null_and_empty(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
+
+        src = _mgrs_cells(
+            tmp_path, list(self.MGRS), ["0", "", "0", None, "2"], ["0", "", "1", None, "0"]
+        )
+        out = tmp_path / "grid.parquet"
+        create_ftw_grid(src, out, km_size=2)
+
+        assert _read_grid(out) == [("ftw-32UPE0000", 0.0004), ("ftw-32UPE0200", 0.0001)]
+
+    @pytest.mark.parametrize("bad", ["32UPE12345678", "32UPE-1-1", "32UPE 1 1", "32UPE+1+1"])
+    def test_malformed_mgrs_codes_are_not_misread(self, tmp_path: Path, bad: str) -> None:
+        from ftw_dataset_tools.api.ftw_grid import MGRSCoordinateError, create_ftw_grid
+
+        src = _mgrs_cells(tmp_path, ["32UPE0000", bad], [None, None], [None, None])
+
+        with pytest.raises(MGRSCoordinateError) as exc_info:
+            create_ftw_grid(src, tmp_path / "grid.parquet", km_size=2)
+        assert exc_info.value.example == bad
+
+    def test_out_of_range_columns_raise(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.ftw_grid import MGRSCoordinateError, create_ftw_grid
+
+        src = _mgrs_cells(tmp_path, ["32UPE0000"], ["120"], ["0"])
+
+        with pytest.raises(MGRSCoordinateError):
+            create_ftw_grid(src, tmp_path / "grid.parquet", km_size=2)
+
+    def test_partitioned_writes_good_file_and_lists_bad_one(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
+
+        good, bad = tmp_path / "in" / "good", tmp_path / "in" / "bad"
+        good.mkdir(parents=True)
+        bad.mkdir()
+        _mgrs_cells(good, list(self.MGRS), [None] * 5, [None] * 5)
+        _mgrs_cells(bad, ["32UPE"], [None], [None])
+
+        result = create_ftw_grid(tmp_path / "in", tmp_path / "out", km_size=2)
+
+        assert result.gzd_count == 1
+        assert result.skipped_files == [str(bad / "mgrs_1km.parquet")]
+        assert _read_grid(tmp_path / "out" / "gzd=32U" / "ftw_32U.parquet") == [
+            ("ftw-32UPE0000", 0.0004),
+            ("ftw-32UPE0200", 0.0001),
+        ]
+
 
 class TestOutputGeometry:
     """Grid output stores WKB that readers can parse."""

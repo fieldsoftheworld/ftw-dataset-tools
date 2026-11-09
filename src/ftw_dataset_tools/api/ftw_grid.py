@@ -69,7 +69,7 @@ class MGRSCoordinateError(ValueError):
         self.count = count
         self.example = example
         super().__init__(
-            f"{count:,} 1km cell(s) have no easting/northing in EASTING/NORTHING or in "
+            f"{count:,} 1km cell(s) have no valid easting/northing in EASTING/NORTHING or in "
             f"their MGRS code (e.g. {example!r})"
         )
 
@@ -405,6 +405,20 @@ def _create_ftw_grid_single_internal(
     return gzd, total_cells, conn
 
 
+def _mgrs_digits(gzd_col: str, mgrs_col: str, offset: int) -> str:
+    """SQL for two digits of a 1km MGRS code (``<gzd><square><ee><nn>``), else NULL.
+
+    Only a code of exactly that length with four digits after the square counts, so
+    codes at another precision or with signs or spaces are not misread.
+    """
+    start = f'LENGTH("{gzd_col}") + 3'
+    return (
+        f'CASE WHEN LENGTH("{mgrs_col}") = LENGTH("{gzd_col}") + 6 '
+        f"AND regexp_full_match(SUBSTRING(\"{mgrs_col}\", {start}, 4), '[0-9]{{4}}') "
+        f'THEN CAST(SUBSTRING("{mgrs_col}", LENGTH("{gzd_col}") + {offset}, 2) AS INT) END'
+    )
+
+
 def _coordinate_exprs(
     conn: duckdb.DuckDBPyConnection,
     gzd_col: str,
@@ -420,8 +434,7 @@ def _coordinate_exprs(
     Source Coop MGRS grid ship with those columns empty, so trusting them alone collapses
     every 100km square into one cell with no digits in its id.
     """
-    mgrs_e = f'TRY_CAST(SUBSTRING("{mgrs_col}", LENGTH("{gzd_col}") + 3, 2) AS INT)'
-    mgrs_n = f'TRY_CAST(SUBSTRING("{mgrs_col}", LENGTH("{gzd_col}") + 5, 2) AS INT)'
+    mgrs_e, mgrs_n = (_mgrs_digits(gzd_col, mgrs_col, offset) for offset in (3, 5))
     if not (easting_col and northing_col):
         logger.log(level, "Parsing easting/northing from MGRS code")
         return mgrs_e, mgrs_n
@@ -439,22 +452,23 @@ def _coordinate_exprs(
             level, "Detected full coordinate format (e.g., '706000mE'), extracting 1km indices"
         )
         col_e, col_n = (
-            f"(CAST(REGEXP_REPLACE(\"{col}\", '[^0-9]', '', 'g') AS BIGINT) // 1000) % 100"
+            f"(TRY_CAST(REGEXP_REPLACE(\"{col}\", '[^0-9]', '', 'g') AS BIGINT) // 1000) % 100"
             for col in (easting_col, northing_col)
         )
     else:
         logger.log(level, "Detected simple index format")
-        col_e, col_n = (f'CAST("{col}" AS INT)' for col in (easting_col, northing_col))
+        col_e, col_n = (f'TRY_CAST("{col}" AS INT)' for col in (easting_col, northing_col))
     return f"COALESCE({col_e}, {mgrs_e})", f"COALESCE({col_n}, {mgrs_n})"
 
 
 def _check_coordinates(
     conn: duckdb.DuckDBPyConnection, mgrs_col: str, easting_expr: str, northing_expr: str
 ) -> None:
-    """Refuse input where some cells have no easting/northing from either source."""
+    """Refuse input where some cells have no easting/northing (0-99) from either source."""
     count, example = conn.execute(
         f'SELECT COUNT(*), ANY_VALUE("{mgrs_col}") FROM mgrs_1km '
-        f"WHERE ({easting_expr}) IS NULL OR ({northing_expr}) IS NULL"
+        f"WHERE ({easting_expr}) IS NULL OR ({northing_expr}) IS NULL "
+        f"OR ({easting_expr}) NOT BETWEEN 0 AND 99 OR ({northing_expr}) NOT BETWEEN 0 AND 99"
     ).fetchone()
     if count:
         raise MGRSCoordinateError(count, example)
