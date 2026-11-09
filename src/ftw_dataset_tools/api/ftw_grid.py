@@ -69,8 +69,8 @@ class MGRSCoordinateError(ValueError):
         self.count = count
         self.example = example
         super().__init__(
-            f"{count:,} 1km cell(s) have no valid easting/northing in EASTING/NORTHING or in "
-            f"their MGRS code (e.g. {example!r})"
+            f"{count:,} 1km cell(s) have no valid 100km square or easting/northing in their "
+            f"columns or MGRS code (e.g. {example!r})"
         )
 
 
@@ -461,13 +461,39 @@ def _coordinate_exprs(
     return f"COALESCE({col_e}, {mgrs_e})", f"COALESCE({col_n}, {mgrs_n})"
 
 
+def _square_exprs(
+    gzd_col: str, mgrs_col: str, kmsq_col: str | None, mgrs_10km_col: str | None
+) -> tuple[str, str]:
+    """SQL for each 1km cell's 100km square letters and 10km MGRS code.
+
+    Taken from the kmSQ_ID/MGRS_10km columns where filled, else from the 1km MGRS code
+    (``<gzd><square><ee><nn>``): the square is the two letters after the GZD, the 10km code
+    is the GZD, the square and the first digit of each of easting and northing.
+    """
+    gzd_len = f'LENGTH("{gzd_col}")'
+    code_square = f'SUBSTRING("{mgrs_col}", {gzd_len} + 1, 2)'
+    code_10km = (
+        f'SUBSTRING("{mgrs_col}", 1, {gzd_len} + 3) || SUBSTRING("{mgrs_col}", {gzd_len} + 5, 1)'
+    )
+    square = f'COALESCE(CAST("{kmsq_col}" AS VARCHAR), {code_square})' if kmsq_col else code_square
+    tenkm = (
+        f'COALESCE(CAST("{mgrs_10km_col}" AS VARCHAR), {code_10km})' if mgrs_10km_col else code_10km
+    )
+    return square, tenkm
+
+
 def _check_coordinates(
-    conn: duckdb.DuckDBPyConnection, mgrs_col: str, easting_expr: str, northing_expr: str
+    conn: duckdb.DuckDBPyConnection,
+    mgrs_col: str,
+    kmsq_expr: str,
+    easting_expr: str,
+    northing_expr: str,
 ) -> None:
-    """Refuse input where some cells have no easting/northing (0-99) from either source."""
+    """Refuse cells without a two-letter square and an easting/northing (0-99)."""
     count, example = conn.execute(
         f'SELECT COUNT(*), ANY_VALUE("{mgrs_col}") FROM mgrs_1km '
-        f"WHERE ({easting_expr}) IS NULL OR ({northing_expr}) IS NULL "
+        f"WHERE NOT COALESCE(regexp_full_match({kmsq_expr}, '[A-Z]{{2}}'), FALSE) "
+        f"OR ({easting_expr}) IS NULL OR ({northing_expr}) IS NULL "
         f"OR ({easting_expr}) NOT BETWEEN 0 AND 99 OR ({northing_expr}) NOT BETWEEN 0 AND 99"
     ).fetchone()
     if count:
@@ -491,25 +517,11 @@ def _build_and_execute_query(
     ``level`` is the log level for progress lines; per-file runs pass DEBUG.
     """
 
-    # Determine how to get kmsq_id - from column or parse from MGRS
-    if kmsq_col:
-        kmsq_expr = f'"{kmsq_col}"'
-    else:
-        # Parse from MGRS code - characters 3-4 (0-indexed) after the GZD
-        # MGRS format: GZD (2-3 chars) + 100km square (2 chars) + coordinates
-        kmsq_expr = f'SUBSTRING("{mgrs_col}", LENGTH("{gzd_col}") + 1, 2)'
-
-    # Determine how to get MGRS_10km - from column or derive
-    if mgrs_10km_col:
-        mgrs_10km_expr = f'"{mgrs_10km_col}"'
-    else:
-        # Take first 7 characters of MGRS for 10km precision (GZD + 100km + 2 digits)
-        mgrs_10km_expr = f'SUBSTRING("{mgrs_col}", 1, LENGTH("{gzd_col}") + 4)'
-
+    kmsq_expr, mgrs_10km_expr = _square_exprs(gzd_col, mgrs_col, kmsq_col, mgrs_10km_col)
     easting_expr, northing_expr = _coordinate_exprs(
         conn, gzd_col, mgrs_col, easting_col, northing_col, level
     )
-    _check_coordinates(conn, mgrs_col, easting_expr, northing_expr)
+    _check_coordinates(conn, mgrs_col, kmsq_expr, easting_expr, northing_expr)
 
     # Build bbox expressions if input has bbox
     bbox_parsed = ""
