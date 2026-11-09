@@ -483,6 +483,61 @@ class TestCoordinateFallback:
         ]
 
 
+class TestSquareFallback:
+    """The 100km square and 10km code come from the MGRS code where their columns are empty."""
+
+    @staticmethod
+    def _cells(tmp_path: Path, kmsq: list, tenkm: list | None) -> Path:
+        mgrs = ["32UPE5284", "32UPE5384"]
+        cols = {"MGRS": mgrs, "GZD": ["32U", "32U"], "kmSQ_ID": pd.Series(kmsq, dtype="object")}
+        if tenkm is not None:
+            cols["MGRS_10km"] = pd.Series(tenkm, dtype="object")
+        path = tmp_path / "mgrs_1km.parquet"
+        gpd.GeoDataFrame(
+            cols,
+            geometry=[box(9.0, 48.0, 9.01, 48.01), box(9.01, 48.0, 9.02, 48.01)],
+            crs="EPSG:4326",
+        ).to_parquet(path)
+        return path
+
+    @staticmethod
+    def _ids_and_10km(path: Path) -> list[tuple]:
+        conn = duckdb.connect()
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        return conn.execute(f"SELECT id, mgrs_10km FROM '{path}' ORDER BY id").fetchall()
+
+    def test_empty_square_and_10km_columns(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
+
+        out = tmp_path / "grid.parquet"
+        create_ftw_grid(self._cells(tmp_path, [None, None], [None, None]), out, km_size=2)
+
+        assert self._ids_and_10km(out) == [("ftw-32UPE5284", "32UPE58")]
+
+    def test_10km_derived_without_column(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
+
+        out = tmp_path / "grid.parquet"
+        create_ftw_grid(self._cells(tmp_path, ["PE", None], None), out, km_size=2)
+
+        assert self._ids_and_10km(out) == [("ftw-32UPE5284", "32UPE58")]
+
+    def test_10km_column_is_ignored(self, tmp_path: Path) -> None:
+        """The source column drops leading zeros in some GZDs, so the code decides."""
+        from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
+
+        out = tmp_path / "grid.parquet"
+        create_ftw_grid(self._cells(tmp_path, ["PE", "PE"], ["32UPE54", "32UPE5"]), out, km_size=2)
+
+        assert self._ids_and_10km(out) == [("ftw-32UPE5284", "32UPE58")]
+
+    def test_bad_square_raises(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.ftw_grid import MGRSCoordinateError, create_ftw_grid
+
+        with pytest.raises(MGRSCoordinateError):
+            create_ftw_grid(self._cells(tmp_path, ["P1", "PE"], None), tmp_path / "g.parquet")
+
+
 class TestOutputGeometry:
     """Grid output stores WKB that readers can parse."""
 

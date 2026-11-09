@@ -98,7 +98,7 @@ class TestCreateFTWGridBadCoordinates:
         result = CliRunner().invoke(cli, ["create-ftw-grid", str(src), "-o", str(tmp_path / "o")])
 
         assert result.exit_code == 1
-        assert "no valid easting/northing" in result.output
+        assert "no valid 100km square or easting/northing" in result.output
         assert "Traceback" not in result.output
 
     def test_folder_lists_skipped_files(self, tmp_path: Path) -> None:
