@@ -15,6 +15,8 @@ from ftw_dataset_tools.api.logging_config import get_logger
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    import pyarrow as pa
+
 logger = get_logger(__name__)
 
 # Valid km sizes that divide 100 evenly
@@ -26,6 +28,7 @@ REQUIRED_COLUMNS = {"gzd", "mgrs"}
 __all__ = [
     "CreateFTWGridResult",
     "InvalidKmSizeError",
+    "MGRSCoordinateError",
     "MultipleGZDError",
     "create_ftw_grid",
 ]
@@ -53,6 +56,21 @@ class MultipleGZDError(Exception):
             gzd_list += f", ... ({gzd_count} total)"
         super().__init__(
             f"Input file must contain exactly one GZD, but found {gzd_count}: {gzd_list}"
+        )
+
+
+class MGRSCoordinateError(ValueError):
+    """Raised when 1km cells have no easting/northing in their columns or MGRS code.
+
+    Grouping them anyway would give 2km cells whose id has no digits.
+    """
+
+    def __init__(self, count: int, example: str | None) -> None:
+        self.count = count
+        self.example = example
+        super().__init__(
+            f"{count:,} 1km cell(s) have no valid easting/northing in EASTING/NORTHING or in "
+            f"their MGRS code (e.g. {example!r})"
         )
 
 
@@ -279,8 +297,7 @@ def _create_ftw_grid_partitioned(
             gzd_folder.mkdir(parents=True, exist_ok=True)
             out_file = gzd_folder / f"ftw_{gzd}.parquet"
 
-            # Get result as Arrow table and write with gpio
-            arrow_table = conn.execute("SELECT * FROM ftw_grid").fetch_arrow_table()
+            arrow_table = _grid_arrow_table(conn)
             conn.close()
 
             # Create gpio.Table and write with bbox if needed
@@ -388,6 +405,75 @@ def _create_ftw_grid_single_internal(
     return gzd, total_cells, conn
 
 
+def _mgrs_digits(gzd_col: str, mgrs_col: str, offset: int) -> str:
+    """SQL for two digits of a 1km MGRS code (``<gzd><square><ee><nn>``), else NULL.
+
+    Only a code of exactly that length with four digits after the square counts, so
+    codes at another precision or with signs or spaces are not misread.
+    """
+    start = f'LENGTH("{gzd_col}") + 3'
+    return (
+        f'CASE WHEN LENGTH("{mgrs_col}") = LENGTH("{gzd_col}") + 6 '
+        f"AND regexp_full_match(SUBSTRING(\"{mgrs_col}\", {start}, 4), '[0-9]{{4}}') "
+        f'THEN CAST(SUBSTRING("{mgrs_col}", LENGTH("{gzd_col}") + {offset}, 2) AS INT) END'
+    )
+
+
+def _coordinate_exprs(
+    conn: duckdb.DuckDBPyConnection,
+    gzd_col: str,
+    mgrs_col: str,
+    easting_col: str | None,
+    northing_col: str | None,
+    level: int,
+) -> tuple[str, str]:
+    """SQL for each 1km cell's easting/northing index within its 100km square.
+
+    Uses the EASTING/NORTHING columns where they are filled and falls back to the digits
+    of the MGRS code (``<gzd><square><ee><nn>``) where they are null. Some GZDs of the
+    Source Coop MGRS grid ship with those columns empty, so trusting them alone collapses
+    every 100km square into one cell with no digits in its id.
+    """
+    mgrs_e, mgrs_n = (_mgrs_digits(gzd_col, mgrs_col, offset) for offset in (3, 5))
+    if not (easting_col and northing_col):
+        logger.log(level, "Parsing easting/northing from MGRS code")
+        return mgrs_e, mgrs_n
+
+    sample = conn.execute(
+        f'SELECT "{easting_col}" FROM mgrs_1km WHERE "{easting_col}" IS NOT NULL LIMIT 1'
+    ).fetchone()
+    if sample is None:
+        logger.log(level, "EASTING/NORTHING are empty; parsing them from the MGRS code")
+        return mgrs_e, mgrs_n
+
+    logger.log(level, f"Sample EASTING value: {sample[0]}")
+    if "m" in str(sample[0]).lower():
+        logger.log(
+            level, "Detected full coordinate format (e.g., '706000mE'), extracting 1km indices"
+        )
+        col_e, col_n = (
+            f"(TRY_CAST(REGEXP_REPLACE(\"{col}\", '[^0-9]', '', 'g') AS BIGINT) // 1000) % 100"
+            for col in (easting_col, northing_col)
+        )
+    else:
+        logger.log(level, "Detected simple index format")
+        col_e, col_n = (f'TRY_CAST("{col}" AS INT)' for col in (easting_col, northing_col))
+    return f"COALESCE({col_e}, {mgrs_e})", f"COALESCE({col_n}, {mgrs_n})"
+
+
+def _check_coordinates(
+    conn: duckdb.DuckDBPyConnection, mgrs_col: str, easting_expr: str, northing_expr: str
+) -> None:
+    """Refuse input where some cells have no easting/northing (0-99) from either source."""
+    count, example = conn.execute(
+        f'SELECT COUNT(*), ANY_VALUE("{mgrs_col}") FROM mgrs_1km '
+        f"WHERE ({easting_expr}) IS NULL OR ({northing_expr}) IS NULL "
+        f"OR ({easting_expr}) NOT BETWEEN 0 AND 99 OR ({northing_expr}) NOT BETWEEN 0 AND 99"
+    ).fetchone()
+    if count:
+        raise MGRSCoordinateError(count, example)
+
+
 def _build_and_execute_query(
     conn: duckdb.DuckDBPyConnection,
     km_size: int,
@@ -420,27 +506,10 @@ def _build_and_execute_query(
         # Take first 7 characters of MGRS for 10km precision (GZD + 100km + 2 digits)
         mgrs_10km_expr = f'SUBSTRING("{mgrs_col}", 1, LENGTH("{gzd_col}") + 4)'
 
-    # Determine easting/northing expressions
-    if easting_col and northing_col:
-        # Check format of EASTING
-        sample_easting = conn.execute(f'SELECT "{easting_col}" FROM mgrs_1km LIMIT 1').fetchone()[0]
-        logger.log(level, f"Sample EASTING value: {sample_easting}")
-
-        if "m" in str(sample_easting).lower():
-            easting_expr = f"(CAST(REGEXP_REPLACE(\"{easting_col}\", '[^0-9]', '', 'g') AS BIGINT) // 1000) % 100"
-            northing_expr = f"(CAST(REGEXP_REPLACE(\"{northing_col}\", '[^0-9]', '', 'g') AS BIGINT) // 1000) % 100"
-            logger.log(
-                level, "Detected full coordinate format (e.g., '706000mE'), extracting 1km indices"
-            )
-        else:
-            easting_expr = f'CAST("{easting_col}" AS INT)'
-            northing_expr = f'CAST("{northing_col}" AS INT)'
-            logger.log(level, "Detected simple index format")
-    else:
-        # Parse from MGRS code - last 4 digits are easting (2) + northing (2) for 1km
-        easting_expr = f'CAST(SUBSTRING("{mgrs_col}", LENGTH("{gzd_col}") + 3, 2) AS INT)'
-        northing_expr = f'CAST(SUBSTRING("{mgrs_col}", LENGTH("{gzd_col}") + 5, 2) AS INT)'
-        logger.log(level, "Parsing easting/northing from MGRS code")
+    easting_expr, northing_expr = _coordinate_exprs(
+        conn, gzd_col, mgrs_col, easting_col, northing_col, level
+    )
+    _check_coordinates(conn, mgrs_col, easting_expr, northing_expr)
 
     # Build bbox expressions if input has bbox
     bbox_parsed = ""
@@ -519,6 +588,17 @@ def _build_and_execute_query(
     return total_cells, kmsq_count
 
 
+def _grid_arrow_table(conn: duckdb.DuckDBPyConnection) -> pa.Table:
+    """The ftw_grid table as Arrow, with the geometry as WKB.
+
+    DuckDB hands GEOMETRY to Arrow in its own internal encoding, which readers then fail
+    to parse as WKB, so convert it explicitly.
+    """
+    return conn.execute(
+        "SELECT * REPLACE (ST_AsWKB(geometry) AS geometry) FROM ftw_grid"
+    ).fetch_arrow_table()
+
+
 def _write_output(
     conn: duckdb.DuckDBPyConnection,
     out_path: Path,
@@ -530,8 +610,7 @@ def _write_output(
     logger.info(f"Writing output to: {out_path}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Get result as Arrow table
-    arrow_table = conn.execute("SELECT * FROM ftw_grid").fetch_arrow_table()
+    arrow_table = _grid_arrow_table(conn)
 
     # Create gpio.Table and write with bbox if needed
     table = gpio.Table(arrow_table)

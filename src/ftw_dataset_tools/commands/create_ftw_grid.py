@@ -100,6 +100,10 @@ def create_ftw_grid_cmd(
         click.echo(f"  Grid cell size: {result.km_size}x{result.km_size}km")
         click.echo(f"  Total cells: {result.total_cells:,}")
         click.echo(f"\nOutput written to: {result.output_path}")
+        if result.skipped_files:
+            click.echo(click.style(f"\nSkipped {len(result.skipped_files)} file(s):", fg="yellow"))
+            for skipped in result.skipped_files:
+                click.echo(f"  {skipped}")
         click.echo(click.style("Done!", fg="green"))
 
     except (ftw_grid.InvalidKmSizeError, ftw_grid.MultipleGZDError, ValueError) as e:
