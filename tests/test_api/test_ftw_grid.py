@@ -522,11 +522,12 @@ class TestSquareFallback:
 
         assert self._ids_and_10km(out) == [("ftw-32UPE5284", "32UPE58")]
 
-    def test_filled_columns_win(self, tmp_path: Path) -> None:
+    def test_10km_column_is_ignored(self, tmp_path: Path) -> None:
+        """The source column drops leading zeros in some GZDs, so the code decides."""
         from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
 
         out = tmp_path / "grid.parquet"
-        create_ftw_grid(self._cells(tmp_path, ["PE", "PE"], ["32UPE58", None]), out, km_size=2)
+        create_ftw_grid(self._cells(tmp_path, ["PE", "PE"], ["32UPE54", "32UPE5"]), out, km_size=2)
 
         assert self._ids_and_10km(out) == [("ftw-32UPE5284", "32UPE58")]
 

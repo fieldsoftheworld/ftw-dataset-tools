@@ -195,7 +195,6 @@ def _create_ftw_grid_single(
 
     # Check for optional columns
     kmsq_col = _get_column(col_map, "kmSQ_ID") if "kmsq_id" in col_map else None
-    mgrs_10km_col = _get_column(col_map, "MGRS_10km") if "mgrs_10km" in col_map else None
     easting_col = _get_column(col_map, "EASTING") if "easting" in col_map else None
     northing_col = _get_column(col_map, "NORTHING") if "northing" in col_map else None
 
@@ -222,7 +221,6 @@ def _create_ftw_grid_single(
         gzd_col,
         mgrs_col,
         kmsq_col,
-        mgrs_10km_col,
         easting_col,
         northing_col,
         bbox_col,
@@ -368,7 +366,6 @@ def _create_ftw_grid_single_internal(
 
     # Check for optional columns
     kmsq_col = _get_column(col_map, "kmSQ_ID") if "kmsq_id" in col_map else None
-    mgrs_10km_col = _get_column(col_map, "MGRS_10km") if "mgrs_10km" in col_map else None
     easting_col = _get_column(col_map, "EASTING") if "easting" in col_map else None
     northing_col = _get_column(col_map, "NORTHING") if "northing" in col_map else None
 
@@ -395,7 +392,6 @@ def _create_ftw_grid_single_internal(
         gzd_col,
         mgrs_col,
         kmsq_col,
-        mgrs_10km_col,
         easting_col,
         northing_col,
         bbox_col,
@@ -461,24 +457,21 @@ def _coordinate_exprs(
     return f"COALESCE({col_e}, {mgrs_e})", f"COALESCE({col_n}, {mgrs_n})"
 
 
-def _square_exprs(
-    gzd_col: str, mgrs_col: str, kmsq_col: str | None, mgrs_10km_col: str | None
-) -> tuple[str, str]:
+def _square_exprs(gzd_col: str, mgrs_col: str, kmsq_col: str | None) -> tuple[str, str]:
     """SQL for each 1km cell's 100km square letters and 10km MGRS code.
 
-    Taken from the kmSQ_ID/MGRS_10km columns where filled, else from the 1km MGRS code
-    (``<gzd><square><ee><nn>``): the square is the two letters after the GZD, the 10km code
-    is the GZD, the square and the first digit of each of easting and northing.
+    The square comes from kmSQ_ID where filled, else from the 1km MGRS code
+    (``<gzd><square><ee><nn>``). The 10km code is always the GZD, the square and the first
+    digit of each of easting and northing from that code: the Source Coop MGRS grid's own
+    MGRS_10km column is wrong in some GZDs (it drops the leading zero of small northings
+    near the equator, and has an extra digit in 03X).
     """
     gzd_len = f'LENGTH("{gzd_col}")'
     code_square = f'SUBSTRING("{mgrs_col}", {gzd_len} + 1, 2)'
-    code_10km = (
+    tenkm = (
         f'SUBSTRING("{mgrs_col}", 1, {gzd_len} + 3) || SUBSTRING("{mgrs_col}", {gzd_len} + 5, 1)'
     )
     square = f'COALESCE(CAST("{kmsq_col}" AS VARCHAR), {code_square})' if kmsq_col else code_square
-    tenkm = (
-        f'COALESCE(CAST("{mgrs_10km_col}" AS VARCHAR), {code_10km})' if mgrs_10km_col else code_10km
-    )
     return square, tenkm
 
 
@@ -506,7 +499,6 @@ def _build_and_execute_query(
     gzd_col: str,
     mgrs_col: str,
     kmsq_col: str | None,
-    mgrs_10km_col: str | None,
     easting_col: str | None,
     northing_col: str | None,
     bbox_col: str | None,
@@ -517,7 +509,7 @@ def _build_and_execute_query(
     ``level`` is the log level for progress lines; per-file runs pass DEBUG.
     """
 
-    kmsq_expr, mgrs_10km_expr = _square_exprs(gzd_col, mgrs_col, kmsq_col, mgrs_10km_col)
+    kmsq_expr, mgrs_10km_expr = _square_exprs(gzd_col, mgrs_col, kmsq_col)
     easting_expr, northing_expr = _coordinate_exprs(
         conn, gzd_col, mgrs_col, easting_col, northing_col, level
     )
