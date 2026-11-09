@@ -33,9 +33,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Default FTW grid source on Source Cooperative
+# Default FTW grid source on Source Cooperative. v0.2 fills GZDs 02R, 32R, 44R, 50R and 07X,
+# which v0.1 left nearly empty, and corrects mgrs_10km in 39 more; every v0.1 cell elsewhere is
+# unchanged.
 DEFAULT_FTW_GRID_SOURCE = (
-    "s3://us-west-2.opendata.source.coop/ftw/ftw-grid/v0.1/partitioned/by_gzd/gzd=*/*.parquet"
+    "s3://us-west-2.opendata.source.coop/ftw/ftw-grid/v0.2/partitioned/by_gzd/gzd=*/*.parquet"
 )
 
 # Column holding the chip id. The written row order is pinned to it so that the
@@ -46,7 +48,8 @@ CHIP_ID_COLUMN = "id"
 # An id naming an MGRS 100 km square, with or without digits after it. Those that do
 # not also match chip_grid.CHIP_ID_PATTERN (an even count of 4 to 10 digits) have no
 # easting/northing, so no 3x3 block can hold them and the splits stage rejects them.
-# The published FTW grid has a few such cells on UTM zone seams (ftw-44RJM at 78°E).
+# FTW grid v0.1 had 265 such cells (ftw-44RJM at 78°E); v0.2 has none, but local copies
+# of v0.1 may still be in use.
 # Ids that do not start with an MGRS square, as in custom grids, are left alone.
 _MGRS_SQUARE_ID_PATTERN = r"^ftw-\d{1,2}[A-Z]{3}\d*$"
 
