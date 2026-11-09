@@ -29,5 +29,6 @@ exclude:
   - UV      # Ufervegetation (riverside vegetation)
   - SO      # Sondernutzung (not used / special use)
   - WA      # Wald (forest)
+  - Wa      # Wald, as the code list spells it (fiboa-cli after fiboa/cli#352)
   - AF-AFS  # Ackerfläche - Agroforststreifen (agroforestry strip on arable)
   - 32A     # Article 32 arable land (1307/2013), non-productive eligible area

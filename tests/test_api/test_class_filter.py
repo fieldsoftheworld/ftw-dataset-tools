@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import duckdb
 import geopandas as gpd
@@ -12,9 +12,6 @@ from shapely.geometry import box
 
 from ftw_dataset_tools.api import class_filter as cf_module
 from ftw_dataset_tools.api.config import ClassFilter, ClassFilterError
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 @pytest.fixture
@@ -208,3 +205,14 @@ class TestCropNameColumn:
         cf_module.write_filtered_fields(fields_crop_name, out, cf, column="crop:name")
         rows = duckdb.connect().execute(f"SELECT DISTINCT \"crop:name\" FROM '{out}'").fetchall()
         assert {r[0] for r in rows} == {'kartul "Ando"', "suvinisu", "kõrvits"}  # rohumaa dropped
+
+
+class TestBundledFilters:
+    def test_de_mv_accepts_both_spellings_of_forest(self) -> None:
+        """MV's service writes WA; fiboa-cli after fiboa/cli#352 writes the code list's Wa."""
+        path = Path(__file__).resolve().parents[2] / "configs" / "filters" / "de-mv-filter.yaml"
+        cf = ClassFilter.from_file(path)
+        cf.validate_against({"AF", "WA"})  # no raise
+        cf.validate_against({"AF", "Wa"})  # no raise
+        assert "Wa" in cf.exclude
+        assert "WA" in cf.exclude
