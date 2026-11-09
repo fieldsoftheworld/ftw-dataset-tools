@@ -5,6 +5,7 @@ from pathlib import Path
 
 import duckdb
 import geopandas as gpd
+import pandas as pd
 import pytest
 from shapely.geometry import box
 
@@ -337,3 +338,129 @@ class TestMissingRequiredColumns:
 
         with pytest.raises(ValueError, match=r"Missing required columns.*GZD"):
             create_ftw_grid(input_file)
+
+
+def _mgrs_cells(tmp_path: Path, mgrs: list[str], easting: list, northing: list) -> Path:
+    """Write 1km cells in 32U PE laid out by their MGRS digits, with the given columns."""
+    boxes = [
+        box(
+            9.0 + int(m[5:7]) * 0.01,
+            48.0 + int(m[7:9]) * 0.01,
+            9.01 + int(m[5:7]) * 0.01,
+            48.01 + int(m[7:9]) * 0.01,
+        )
+        if m[5:9].isdigit()
+        else box(9.0, 48.0, 9.01, 48.01)
+        for m in mgrs
+    ]
+    gdf = gpd.GeoDataFrame(
+        {
+            "MGRS": mgrs,
+            "GZD": ["32U"] * len(mgrs),
+            "kmSQ_ID": ["PE"] * len(mgrs),
+            "EASTING": pd.Series(easting, dtype="object"),
+            "NORTHING": pd.Series(northing, dtype="object"),
+        },
+        geometry=boxes,
+        crs="EPSG:4326",
+    )
+    path = tmp_path / "mgrs_1km.parquet"
+    gdf.to_parquet(path)
+    return path
+
+
+def _read_grid(path: Path) -> list[tuple]:
+    """(id, area) per cell, reading the geometry back as WKB GeoParquet."""
+    conn = duckdb.connect()
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    return conn.execute(
+        f"SELECT id, round(ST_Area(geometry), 8) FROM '{path}' ORDER BY id"
+    ).fetchall()
+
+
+class TestCoordinateFallback:
+    """Easting/northing come from the MGRS code where EASTING/NORTHING are empty."""
+
+    MGRS = ("32UPE0000", "32UPE0100", "32UPE0001", "32UPE0101", "32UPE0200")
+
+    def test_empty_columns_parse_mgrs(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
+
+        src = _mgrs_cells(tmp_path, list(self.MGRS), [None] * 5, [None] * 5)
+        out = tmp_path / "grid.parquet"
+        create_ftw_grid(src, out, km_size=2)
+
+        assert _read_grid(out) == [("ftw-32UPE0000", 0.0004), ("ftw-32UPE0200", 0.0001)]
+
+    def test_partly_empty_columns_fill_from_mgrs(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
+
+        src = _mgrs_cells(
+            tmp_path, list(self.MGRS), ["0", None, "0", "1", None], ["0", None, "1", "1", None]
+        )
+        out = tmp_path / "grid.parquet"
+        create_ftw_grid(src, out, km_size=2)
+
+        assert _read_grid(out) == [("ftw-32UPE0000", 0.0004), ("ftw-32UPE0200", 0.0001)]
+
+    def test_full_coordinate_format_with_gaps(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
+
+        src = _mgrs_cells(
+            tmp_path,
+            list(self.MGRS),
+            [None, "501000mE", "500000mE", None, "502000mE"],
+            [None, "5300000mN", "5301000mN", None, "5300000mN"],
+        )
+        out = tmp_path / "grid.parquet"
+        create_ftw_grid(src, out, km_size=2)
+
+        assert _read_grid(out) == [("ftw-32UPE0000", 0.0004), ("ftw-32UPE0200", 0.0001)]
+
+    def test_no_coordinates_anywhere_raises(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.ftw_grid import MGRSCoordinateError, create_ftw_grid
+
+        src = _mgrs_cells(tmp_path, ["32UPE0000", "32UPE"], [None, None], [None, None])
+
+        with pytest.raises(MGRSCoordinateError, match="32UPE") as exc_info:
+            create_ftw_grid(src, tmp_path / "grid.parquet", km_size=2)
+        assert exc_info.value.count == 1
+
+    def test_partitioned_skips_file_without_coordinates(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
+
+        bad = tmp_path / "bad"
+        bad.mkdir()
+        _mgrs_cells(bad, ["32UPE"], [None], [None])
+        with pytest.raises(ValueError, match="No files were successfully processed"):
+            create_ftw_grid(bad, tmp_path / "out", km_size=2)
+
+
+class TestOutputGeometry:
+    """Grid output stores WKB that readers can parse."""
+
+    def test_single_file_output_reads_back(
+        self, sample_mgrs_1km_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
+
+        out = tmp_path / "grid.parquet"
+        create_ftw_grid(sample_mgrs_1km_geoparquet, out, km_size=2)
+
+        assert _read_grid(out) == [("ftw-32UPE0000", 0.0004)]
+
+    def test_partitioned_output_reads_back(
+        self, sample_mgrs_1km_geoparquet: Path, tmp_path: Path
+    ) -> None:
+        import shutil
+
+        from ftw_dataset_tools.api.ftw_grid import create_ftw_grid
+
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        shutil.copy(sample_mgrs_1km_geoparquet, input_dir / "32U.parquet")
+        create_ftw_grid(input_dir, tmp_path / "out", km_size=2)
+
+        assert _read_grid(tmp_path / "out" / "gzd=32U" / "ftw_32U.parquet") == [
+            ("ftw-32UPE0000", 0.0004)
+        ]
