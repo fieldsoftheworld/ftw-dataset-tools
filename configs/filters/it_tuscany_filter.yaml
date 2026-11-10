@@ -1,8 +1,7 @@
 # Class filter used for Tuscany, Italy (it_1) field boundaries. Codes are the regional crop:code
 # from the harmonized ftw/harmonized-field-data it_1 dataset; the English HCAT name is shown as a
-# comment. Written from it_1 year 2023 (the published edition) and extended to cover every code
-# of the 2016, 2018, 2019, 2020 and 2022 editions. Tuscany is dominated by olive groves,
-# vineyards and woodland.
+# comment. Covers every code of the published editions (2016, 2018, 2019, 2020 and 2022; latest
+# is 2022). Tuscany is dominated by olive groves, vineyards and woodland.
 #
 # Excluded (background): woodland, hedges, tree rows/groups, oak/pine/fir/cypress and other
 # forest & ornamental trees; wooded pasture, pasture with exposed rock, natural and arid
@@ -272,7 +271,7 @@ include:
   - "369"  # Ryegrass (Lolium x boucheanum)
   - "899"  # PASTURE
   - "1464"  # forage grass less than a year
-  # Codes of the 2016-2022 editions missing from 2023.
+  # Codes added to cover the 2016, 2018, 2020 and 2022 editions.
   - "88"  # Cowpea
   - "149"  # SESAME
   - "202"  # MANDARIN
@@ -382,7 +381,7 @@ exclude:
   - "1906"  # Multifloral Pasture with Exposed Rock  TARE 50%
   - "2706"  # non agricultural area
   - "7001"  # Buildings
-  # Codes of the 2016-2022 editions missing from 2023.
+  # Codes added to cover the 2016, 2018, 2020 and 2022 editions.
   - "31"  # PEONY
   - "33"  # PHILODENDRON
   - "99"  # DAISY
