@@ -1,19 +1,22 @@
 # Class filter used for Tuscany, Italy (it_1) field boundaries. Codes are the regional crop:code
 # from the harmonized ftw/harmonized-field-data it_1 dataset; the English HCAT name is shown as a
-# comment. Covers it_1 year 2023 (the published edition); 320 codes. Tuscany is dominated by
-# olive groves, vineyards and woodland.
+# comment. Written from it_1 year 2023 (the published edition) and extended to cover every code
+# of the 2016, 2018, 2019, 2020 and 2022 editions. Tuscany is dominated by olive groves,
+# vineyards and woodland.
 #
 # Excluded (background): woodland, hedges, tree rows/groups, oak/pine/fir/cypress and other
-# forest & ornamental trees; permanent & multifloral
-# pasture/meadow, wooded pasture, forage grasses, ryegrass, fescue, bamboo, giant reed, turf;
+# forest & ornamental trees; wooded pasture, pasture with exposed rock, natural and arid
+# grasslands, pasture with traditional practices, bamboo, giant reed, turf, Miscanthus;
 # ornamental flowers & plants/shrubs, iris, lilies, roses, greenhouses; wild shrubs (hawthorn,
 # blackthorn, dog rose, cistus, juniper), phacelia, Silphium, meadow truffle & mushrooms; land
-# withdrawn from production, field margins/edges, buffer strips, and non-agricultural areas.
+# withdrawn from production, field margins/edges, buffer strips, quarries and non-agricultural
+# areas.
 #
 # Notable inclusions: all cereals & pseudocereals, maize, sorghum, millet; oilseeds (sunflower,
 # rape, mustard, flax, safflower, poppy, castor), hemp, tobacco, saffron; legumes & pulses,
 # fodder legumes (alfalfa, clovers, sainfoin, vetches, trefoil, galega, lupin) & nitrogen-fixing
-# mixes; potatoes, all field & horticultural vegetables; culinary/medicinal/aromatic herbs
+# mixes; managed grassland (multifloral meadow and pasture, pasture, forage grasses, ryegrass,
+# fescue); potatoes, all field & horticultural vegetables; culinary/medicinal/aromatic herbs
 # (lavender, rosemary, sage, thyme, helichrysum, chamomile, echinacea, ...); hops; family gardens;
 # strawberries; and permanent & tree crops: olive groves, vineyards, orchards, fruit trees,
 # citrus, nuts, chestnuts, berries, specialized/mixed tree crops, truffle plantations, ginkgo,
@@ -257,6 +260,48 @@ include:
   - "669"  # ROBINIA
   - "500"  # ARBORICULTURE
   - "310"  # GINKGO BILOBA
+  # Managed grassland: mown meadow, pasture on farmland and forage grasses (grassland review,
+  # 2026-11; sample masks of it_1 2019 checked by eye). Hill pasture (899, 65) is partly rough
+  # grazing, but it is kept as field everywhere, like the lowland parcels.
+  - "46"  # PERENNIAL RYEGRASS
+  - "47"  # RYEGRASS PERENNIAL
+  - "65"  # Multifloral Pasture
+  - "336"  # Multifloral Meadow
+  - "359"  # Tall fescue
+  - "361"  # Meadow Fescue
+  - "369"  # Ryegrass (Lolium x boucheanum)
+  - "899"  # PASTURE
+  - "1464"  # forage grass less than a year
+  # Codes of the 2016-2022 editions missing from 2023.
+  - "88"  # Cowpea
+  - "149"  # SESAME
+  - "202"  # MANDARIN
+  - "216"  # LICORICE
+  - "221"  # DILL
+  - "244"  # TRITORDEUM
+  - "245"  # Lesser calamint
+  - "261"  # false oat-grass
+  - "291"  # ARNICA
+  - "293"  # CUMIN - CUMIN ROMAN
+  - "321"  # Feijoa
+  - "325"  # ROMAN CHAMOMILE
+  - "381"  # Clover (specifically Hybrid Clover)
+  - "393"  # feverfew
+  - "395"  # Parsnip
+  - "399"  # Pilosella
+  - "417"  # Common Verbena
+  - "432"  # BERGAMOT
+  - "435"  # LIMES
+  - "438"  # BLACK MUSTARD
+  - "498"  # NASTURTIUM
+  - "543"  # Motherwort
+  - "546"  # hedge mustard
+  - "619"  # PERMANENT TREE CROPS along water courses (no fertiliser or treatment)
+  - "675"  # CANARY GRASS
+  - "688"  # Oriental PERSIMMON
+  - "956"  # CELERIAC
+  - "968"  # CAPER
+  - "998"  # CAMELINA
 
 exclude:
   - "7"  # ARALIA
@@ -264,11 +309,8 @@ exclude:
   - "23"  # HYDRANGEA
   - "35"  # ROSE
   - "43"  # Butcher's Broom
-  - "46"  # PERENNIAL RYEGRASS
-  - "47"  # RYEGRASS PERENNIAL
   - "48"  # VIBURNUM
   - "60"  # CEDAR
-  - "65"  # Multifloral Pasture
   - "80"  # CHRYSANTHEMUM
   - "92"  # LILY
   - "150"  # MEADOW TRUFFLE
@@ -296,12 +338,8 @@ exclude:
   - "320"  # grey-leaved cistus
   - "329"  # inula
   - "332"  # phacelia
-  - "336"  # Multifloral Meadow
   - "338"  # Iris
   - "340"  # White Iris
-  - "359"  # Tall fescue
-  - "361"  # Meadow Fescue
-  - "369"  # Ryegrass (Lolium x boucheanum)
   - "380"  # Natural Permanent Grasslands with Environmental Constraints - Tare 20%
   - "382"  # Natural Permanent Grasslands with Environmental Constraints - Tare 50%
   - "386"  # Edges of Arable Fields
@@ -335,14 +373,30 @@ exclude:
   - "792"  # NON-RIPARIAN BUFFER STRIPS
   - "793"  # TREES ISOLATED
   - "826"  # DOMESTIC PINE
-  - "899"  # PASTURE
   - "967"  # ASH
   - "1095"  # Woodland
   - "1172"  # Wooded Pasture - Shrubby Tare 20%
   - "1173"  # Wooded Pasture - Tare 50%
-  - "1464"  # forage grass less than a year
   - "1700"  # Land withdrawn from production
   - "1905"  # Multifloral Pasture with Exposed Rock - Tare 20%
   - "1906"  # Multifloral Pasture with Exposed Rock  TARE 50%
   - "2706"  # non agricultural area
   - "7001"  # Buildings
+  # Codes of the 2016-2022 editions missing from 2023.
+  - "31"  # PEONY
+  - "33"  # PHILODENDRON
+  - "99"  # DAISY
+  - "112"  # CHINESE silver grass (MISCANTHUS SINENSIS)
+  - "155"  # STATICE (limonium)
+  - "181"  # HORNBEAM
+  - "198"  # MARITIME PINE
+  - "302"  # aspen
+  - "303"  # BEECH
+  - "375"  # Kentucky Bluegrass
+  - "419"  # wild pansy
+  - "460"  # Arid Grasslands - Herbaceous Formations with Orchids
+  - "505"  # STONE QUARRIES
+  - "667"  # WILLOW
+  - "734"  # Edible Flowers
+  - "969"  # Hawthorn
+  - "971"  # Hozuki (similar to groundcherry but purely ornamental)

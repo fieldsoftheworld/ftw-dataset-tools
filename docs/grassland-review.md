@@ -60,6 +60,7 @@ Only the managed part of it moved.
 | sweden | se_2025 | 46% | 49% | include mowing and grazing on arable land (49, 50), field haymaking (57) and Westerwolds ryegrass (301) | pasture not on arable land (52), forest and mountain grazing, mosaic pasture, restoration areas, energy grass |
 | slovakia | sk_2025 | 66% | 27% | include permanent grassland, grassed arable land and fodder grasses | semi-natural habitat types A–G |
 | slovenia | si_2024 | 38% | 61% | include permanent grassland (204), grass on arable land (201), grass-clover (203) | green cover/turf (202), silvergrass (722) |
+| it_tuscany | it_1_2019 | 61% | 16% | include multifloral meadow (336), multifloral pasture (65), pasture (899), forage grass and leys (1464, 46, 47, 359, 361, 369) | wooded pasture (1172, 1173), pasture with exposed rock (1905, 1906), natural and arid grassland (380, 382, 391, 460), traditional grazing (218), land withdrawn from production (1700) |
 | czechia | cz_2025 | 94% | 3% | include permanent and temporary grassland, forage grasses and grass mixtures | energy grasses, protective strips, reed canary grass, lemon grass, turf and seed grasses (bentgrasses, sheep/hair/hard fescue, tufted hairgrass, wood bluegrass, rough meadow grass) |
 | es_cat | es_cat_2024 | 90% | 2% | include pastures under 5 years (127) | — |
 | es_uso_north (new) | es_ga_2025, es_cb_2025, es_pv_2025 | 6–43% | 57–95% | Galicia, Cantabria and País Vasco: include pasture (PS), mostly small bounded meadows | shrub pasture (PR), wood pasture (PA) |
@@ -102,7 +103,12 @@ and railways and patches in scrub). The national parcels of Andalucía, Castilla
 Cantabria go to `es_po_2025` with Galicia's, since without gap parcels many visible fields
 there have no label.
 
-**Unchanged, not reviewed:** it_tuscany. The source file was missing at review time.
+**Tuscany (`it_tuscany`), reviewed later:** the source file was missing at the first review.
+Sample masks of 38 it_1 2019 chips, with the old and the wider filter side by side, showed
+meadow and forage grass inside arable blocks, where the old mask left holes. Pasture (899, 65)
+on plains and valley floors reads as fields; in the hills much of it is rough grazing between
+woods and scrub. It counts as field everywhere, one rule for the region; the split of pasture
+area between lowland and hill was not measured. The field share of 2019 goes from 61% to 76%.
 
 ## Reproducing
 
