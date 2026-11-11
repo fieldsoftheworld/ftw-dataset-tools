@@ -570,6 +570,10 @@ class DatasetConfig:
             Optional.
         class_filter: Resolved class filter (loaded from stages.masks.class_filter).
             Not set directly from YAML; populated by load_config / create_dataset.
+        written_paths: The file references load_config resolved against the config
+            file's directory, as the config wrote them, keyed by their place under
+            ``stages`` (e.g. ``"masks.label_extent"``). The resolved paths are this
+            machine's own; the provenance records these instead.
     """
 
     fields_file: str
@@ -581,6 +585,7 @@ class DatasetConfig:
     stages: StagesConfig = field(default_factory=StagesConfig)
     metadata: MetadataConfig | None = None
     class_filter: ClassFilter | None = None
+    written_paths: dict[str, str] = field(default_factory=dict, repr=False)
 
     # ---- construction ---------------------------------------------------
 
@@ -863,6 +868,7 @@ class DatasetConfig:
         # Written only when set, so a config without one resolves exactly as before.
         if self.stages.masks.label_extent is None:
             del data["stages"]["masks"]["label_extent"]
+        _record_written_paths(data, self.written_paths, self.stages.masks.class_filter)
         return data
 
     def provenance_dict(self, generated_at: datetime | None = None) -> dict[str, Any]:
@@ -909,6 +915,7 @@ def load_config(path: str | Path) -> DatasetConfig:
     # Resolve an optional local grid file relative to the config file's directory.
     grid_ref = config.stages.chips.grid_file
     if grid_ref is not None:
+        config.written_paths["chips.grid_file"] = grid_ref
         grid_path = Path(grid_ref)
         if not grid_path.is_absolute():
             grid_path = (config_path.parent / grid_path).resolve()
@@ -931,7 +938,25 @@ def _resolve_label_extent(config: DatasetConfig, config_path: Path) -> None:
         load_label_extent(extent_path)
     except LabelExtentError as err:
         raise ConfigError(f"stages.masks.{err}") from err
+    config.written_paths["masks.label_extent"] = extent_ref
     config.stages.masks.label_extent = str(extent_path)
+
+
+def _record_written_paths(
+    data: dict[str, Any], written_paths: dict[str, str], class_filter_ref: str | None
+) -> None:
+    """Put the config's own file references into ``data`` in place of the resolved paths.
+
+    A provenance record that names the paths a builder resolved (``/home/ubuntu/...``)
+    can't be followed anywhere else; the references as the config wrote them can,
+    next to the config file.
+    """
+    del data["written_paths"]
+    for key, ref in written_paths.items():
+        stage, name = key.split(".")
+        data["stages"][stage][name] = ref
+    if data["class_filter"] is not None and class_filter_ref is not None:
+        data["class_filter"]["source"] = class_filter_ref
 
 
 def write_provenance_file(

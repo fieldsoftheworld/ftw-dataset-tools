@@ -527,6 +527,53 @@ class TestLoadConfig:
         config = config_module.load_config(config_path)
         assert config.stages.chips.grid_file == str((tmp_path / "grid.parquet").resolve())
 
+    def test_provenance_records_paths_as_written(self, tmp_path: Path) -> None:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        (tmp_path / "filters").mkdir()
+        (tmp_path / "filters" / "crops.yaml").write_text(
+            yaml.safe_dump({"column": "crop", "include": ["wheat"], "exclude": []})
+        )
+        (tmp_path / "work").mkdir()
+        gpd.GeoDataFrame(geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(
+            tmp_path / "work" / "extent.parquet"
+        )
+        recipes = tmp_path / "datasets"
+        recipes.mkdir()
+        config_path = recipes / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "fields_file": "f.parquet",
+                    "year": 2023,
+                    "stages": {
+                        "chips": {"grid_file": "../grid.parquet"},
+                        "masks": {
+                            "class_filter": "../filters/crops.yaml",
+                            "label_extent": "../work/extent.parquet",
+                        },
+                    },
+                }
+            )
+        )
+        config = config_module.load_config(config_path)
+        # The stages read the resolved paths ...
+        assert config.stages.chips.grid_file == str((tmp_path / "grid.parquet").resolve())
+        assert config.stages.masks.label_extent == str(
+            (tmp_path / "work" / "extent.parquet").resolve()
+        )
+        assert config.class_filter is not None
+        assert config.class_filter.source == str((tmp_path / "filters" / "crops.yaml").resolve())
+        # ... the provenance records the config's own references, and no machine path.
+        recorded = config.provenance_dict()["config"]
+        assert recorded["stages"]["chips"]["grid_file"] == "../grid.parquet"
+        assert recorded["stages"]["masks"]["label_extent"] == "../work/extent.parquet"
+        assert recorded["stages"]["masks"]["class_filter"] == "../filters/crops.yaml"
+        assert recorded["class_filter"]["source"] == "../filters/crops.yaml"
+        assert "written_paths" not in recorded
+        assert str(tmp_path) not in yaml.safe_dump(recorded)
+
     def test_grid_source_passthrough(self) -> None:
         config = DatasetConfig.from_dict(
             {"fields_file": "f.parquet", "stages": {"chips": {"grid_source": "s3://x/*.parquet"}}}
