@@ -601,15 +601,15 @@ class TestLoadConfig:
         assert "label_extent" not in recorded["masks"]
 
     def test_provenance_keeps_absolute_reference(self, tmp_path: Path) -> None:
-        grid = tmp_path / "grid.parquet"
+        # The doubled slash is collapsed when loading, so only the record keeps it.
+        grid = f"{tmp_path}//grid.parquet"
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
-            yaml.safe_dump(
-                {"fields_file": "f.parquet", "stages": {"chips": {"grid_file": str(grid)}}}
-            )
+            yaml.safe_dump({"fields_file": "f.parquet", "stages": {"chips": {"grid_file": grid}}})
         )
         config = config_module.load_config(config_path)
-        assert config.config_dict()["stages"]["chips"]["grid_file"] == str(grid)
+        assert config.stages.chips.grid_file == str(tmp_path / "grid.parquet")
+        assert config.config_dict()["stages"]["chips"]["grid_file"] == grid
 
     def test_grid_source_passthrough(self) -> None:
         config = DatasetConfig.from_dict(
