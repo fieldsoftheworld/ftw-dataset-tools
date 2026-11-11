@@ -574,6 +574,43 @@ class TestLoadConfig:
         assert "written_paths" not in recorded
         assert str(tmp_path) not in yaml.safe_dump(recorded)
 
+    def test_provenance_records_paths_set_after_load(self, tmp_path: Path) -> None:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        gpd.GeoDataFrame(geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(
+            tmp_path / "extent.parquet"
+        )
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "fields_file": "f.parquet",
+                    "stages": {
+                        "chips": {"grid_file": "grid.parquet"},
+                        "masks": {"label_extent": "extent.parquet"},
+                    },
+                }
+            )
+        )
+        config = config_module.load_config(config_path)
+        config.stages.chips.grid_file = "/data/other_grid.parquet"
+        config.stages.masks.label_extent = None
+        recorded = config.config_dict()["stages"]
+        assert recorded["chips"]["grid_file"] == "/data/other_grid.parquet"
+        assert "label_extent" not in recorded["masks"]
+
+    def test_provenance_keeps_absolute_reference(self, tmp_path: Path) -> None:
+        grid = tmp_path / "grid.parquet"
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {"fields_file": "f.parquet", "stages": {"chips": {"grid_file": str(grid)}}}
+            )
+        )
+        config = config_module.load_config(config_path)
+        assert config.config_dict()["stages"]["chips"]["grid_file"] == str(grid)
+
     def test_grid_source_passthrough(self) -> None:
         config = DatasetConfig.from_dict(
             {"fields_file": "f.parquet", "stages": {"chips": {"grid_source": "s3://x/*.parquet"}}}

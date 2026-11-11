@@ -229,7 +229,7 @@ describing how the whole dataset was built:
 | `ftw:buffer_days` | integer | Search buffer in days around crop calendar dates (present only when scene selection is configured) |
 | `ftw:num_buffer_expansions` | integer | Number of times to expand the buffer if no cloud-free scenes are found (present only when scene selection is configured) |
 | `ftw:buffer_expansion_size` | integer | Days added to the buffer on each expansion (present only when scene selection is configured) |
-| `ftw:config` | object | Resolved config provenance for the run that produced the dataset |
+| `ftw:config` | object | Config provenance for the run that produced the dataset (defaults resolved; file references as the config wrote them) |
 
 `license`, `providers`, `keywords`, `version` (from the
 [version extension](https://github.com/stac-extensions/version)) and `updated` are not
@@ -243,7 +243,9 @@ upstream collection:
 {"rel": "via", "href": "https://.../collection.json", "type": "application/json", "title": "Source field boundary collection"}
 ```
 
-`ftw:config` (the resolved config, embedded verbatim) additionally carries two
+`ftw:config` (the config with every default resolved; file references such as
+`stages.masks.class_filter`, `stages.masks.label_extent` and `stages.chips.grid_file`
+are recorded as the config wrote them, relative to the config file) additionally carries two
 provenance keys describing where the input fields file came from:
 
 | Key | Type | Description |
