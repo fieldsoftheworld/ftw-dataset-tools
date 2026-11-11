@@ -132,8 +132,10 @@ class TestLabelExtentConfig:
 
         expected = str((tmp_path / "extent.parquet").resolve())
         assert config.stages.masks.label_extent == expected
-        resolved = config.provenance_dict()["config"]["stages"]["masks"]
-        assert resolved["label_extent"] == expected
+        # The provenance keeps the config's own reference, not this machine's path; the
+        # chips record the extent's sha256, which identifies the file wherever it is.
+        recorded = config.provenance_dict()["config"]["stages"]["masks"]
+        assert recorded["label_extent"] == "extent.parquet"
 
     def test_missing_file_is_config_error(self, tmp_path: Path) -> None:
         config_path = self._write_config(tmp_path, {"label_extent": "nope.parquet"})

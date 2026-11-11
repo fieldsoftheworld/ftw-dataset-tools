@@ -83,9 +83,10 @@ def run_cmd(
 ) -> None:
     """Run the dataset creation pipeline from a YAML config file.
 
-    The config captures every setting for the build, and a fully-resolved copy is
-    written to the output directory (``ftwd-config.resolved.yaml``) and embedded in
-    the STAC catalog for provenance.
+    The config captures every setting for the build, and a copy with every default
+    resolved is written to the output directory (``ftwd-config.resolved.yaml``) and
+    embedded in the STAC catalog for provenance. File references in it stay as the
+    config wrote them.
 
     \b
     CONFIG_FILE: Path to a YAML config file (see configs/examples/config.yaml).
