@@ -492,6 +492,82 @@ class TestAssignSplits:
         # Chip 2: 1 train vs 1 test -> tie-break to train
         assert split_map["ftw-36NXF0001"] == "train"
 
+    def test_predefined_reads_fields_without_crs(self, tmp_path: Path) -> None:
+        """A fields file that states no CRS (GeoParquet's OGC:CRS84 default) still splits."""
+        import duckdb
+
+        chips_file = tmp_path / "chips.parquet"
+        fields_file = tmp_path / "fields.parquet"
+
+        gpd.GeoDataFrame(
+            {
+                "id": ["ftw-36NXF0000", "ftw-36NXF0001"],
+                "geometry": [box(0, 0, 1, 1), box(2, 0, 3, 1)],
+            },
+            crs="EPSG:4326",
+        ).to_parquet(chips_file)
+
+        # DuckDB writes GeoParquet geometry with no crs key, as the harmonized collections are.
+        con = duckdb.connect()
+        con.install_extension("spatial")
+        con.load_extension("spatial")
+        con.execute(
+            "COPY (SELECT * FROM (VALUES "
+            "('train', ST_GeomFromText('POLYGON((0.1 0.1, 0.2 0.1, 0.2 0.2, 0.1 0.2, 0.1 0.1))')), "
+            "('test', ST_GeomFromText('POLYGON((2.1 0.1, 2.2 0.1, 2.2 0.2, 2.1 0.2, 2.1 0.1))'))"
+            ") AS t(split, geometry)) "
+            f"TO '{fields_file}' (FORMAT parquet)"
+        )
+
+        result = assign_splits(
+            chips_file=chips_file,
+            split_type="predefined",
+            split_percents=(80, 10, 10),
+            random_seed=42,
+            fields_file=fields_file,
+        )
+
+        split_map = dict(
+            zip(
+                gpd.read_parquet(chips_file)["id"],
+                gpd.read_parquet(chips_file)["split"],
+                strict=True,
+            )
+        )
+        assert split_map == {"ftw-36NXF0000": "train", "ftw-36NXF0001": "test"}
+        assert result.test_count == 1
+
+    def test_predefined_refuses_fields_with_unknown_crs(self, tmp_path: Path) -> None:
+        """An explicit null CRS (GeoParquet's 'unknown') is refused, not read as lon/lat."""
+        import json
+
+        import pyarrow.parquet as pq
+
+        chips_file = tmp_path / "chips.parquet"
+        fields_file = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["ftw-36NXF0000"], "geometry": [box(0, 0, 1, 1)]}, crs="EPSG:4326"
+        ).to_parquet(chips_file)
+        gpd.GeoDataFrame(
+            {"split": ["train"], "geometry": [box(0.1, 0.1, 0.2, 0.2)]}, crs="EPSG:4326"
+        ).to_parquet(fields_file)
+        table = pq.read_table(fields_file)
+        geo = json.loads(table.schema.metadata[b"geo"])
+        geo["columns"]["geometry"]["crs"] = None
+        pq.write_table(
+            table.replace_schema_metadata({**table.schema.metadata, b"geo": json.dumps(geo)}),
+            fields_file,
+        )
+
+        with pytest.raises(ValueError, match="unknown CRS"):
+            assign_splits(
+                chips_file=chips_file,
+                split_type="predefined",
+                split_percents=(80, 10, 10),
+                random_seed=42,
+                fields_file=fields_file,
+            )
+
     def test_predefined_creates_validation_when_missing(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:

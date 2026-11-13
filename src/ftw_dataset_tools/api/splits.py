@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
 
     import geopandas as gpd
     import pandas as pd
+    import pyproj
 
 logger = get_logger(__name__)
 
@@ -332,18 +334,41 @@ def _validate_fields_file(fields_file: str | Path | None) -> Path:
 def _load_and_validate_fields(fields_path: Path) -> gpd.GeoDataFrame:
     import geopandas as gpd
     import geoparquet_io as gpio
+    import shapely
 
     table = gpio.read(str(fields_path))
-    fields_gdf = gpd.GeoDataFrame.from_arrow(
-        table.to_arrow(),
-        geometry=table.geometry_column,
-    )
-    if "split" not in fields_gdf.columns:
+    if "split" not in table.column_names:
         raise ValueError(
             "Fields file must contain a 'split' column when split_type is 'predefined'. "
-            f"Found columns: {list(fields_gdf.columns)}"
+            f"Found columns: {list(table.column_names)}"
         )
-    return fields_gdf
+    # Decode the WKB here rather than with GeoDataFrame.from_arrow: gpio tags the column
+    # as geoarrow.wkb only when the file states a CRS, and GeoParquet allows leaving it
+    # out (DuckDB and the harmonized collections do), meaning OGC:CRS84.
+    arrow = table.to_arrow()
+    wkb = arrow[table.geometry_column].to_numpy(zero_copy_only=False)
+    return gpd.GeoDataFrame(
+        {"split": arrow["split"].to_pandas()},
+        geometry=shapely.from_wkb(wkb),
+        crs=_geoparquet_crs(fields_path, table.geometry_column),
+    )
+
+
+def _geoparquet_crs(path: Path, column: str) -> pyproj.CRS | str:
+    """The CRS a GeoParquet file's ``geo`` metadata gives ``column``; OGC:CRS84 when absent.
+
+    Read from the file rather than ``gpio.Table.crs``, which is a PROJJSON dict for some
+    files and a ``'ProjJsonCrs(...)'`` string for others (geoparquet-io 0.9.0).
+    """
+    import pyarrow.parquet as pq
+    import pyproj
+
+    metadata = pq.read_schema(path).metadata or {}
+    geo = json.loads(metadata.get(b"geo", b"{}"))
+    crs = geo.get("columns", {}).get(column, {}).get("crs", "OGC:CRS84")
+    if crs is None:  # GeoParquet: an explicit null means the CRS is unknown
+        raise ValueError(f"Fields file {path} declares an unknown CRS (crs: null).")
+    return pyproj.CRS.from_json_dict(crs) if isinstance(crs, dict) else pyproj.CRS(crs)
 
 
 def _normalize_and_validate_splits(fields_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
