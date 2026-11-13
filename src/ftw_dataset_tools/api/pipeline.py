@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 import duckdb
 
 from ftw_dataset_tools.api import (
+    admin_names,
     boundaries,
     class_filter,
     crop_stats,
@@ -665,6 +666,15 @@ def stage_chips(ctx: PipelineContext) -> None:
         # Never publish a previous run's composition when the step is turned off.
         crop_stats.drop_crop_stats(ctx.chips_path)
     _add_land_cover(ctx)
+    _add_admin_names(ctx)
+
+
+def _add_admin_names(ctx: PipelineContext) -> None:
+    """Run the admin names step, or clear a previous run's columns when it is off."""
+    if not ctx.config.stages.chips.admin_names:
+        admin_names.drop_admin_names(ctx.chips_path)
+        return
+    admin_names.add_admin_names(ctx.chips_path)
 
 
 def _add_land_cover(ctx: PipelineContext) -> None:
@@ -855,6 +865,11 @@ def stage_stac(ctx: PipelineContext) -> None:
         logger.info(
             "Dropped land cover columns from the chips file "
             "(set stages.chips.land_cover: true to publish them)"
+        )
+    if not ctx.config.stages.chips.admin_names and admin_names.drop_admin_names(ctx.chips_path):
+        logger.info(
+            "Dropped admin name columns from the chips file "
+            "(set stages.chips.admin_names: true to publish them)"
         )
 
     logger.info("Generating STAC catalog...")

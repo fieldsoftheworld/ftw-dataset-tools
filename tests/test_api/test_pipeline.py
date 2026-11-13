@@ -1620,6 +1620,81 @@ class TestStacStageStaleLandCover:
         assert "landcover_year" in gpd.read_parquet(ctx.chips_path).columns
 
 
+def _admin_ctx(tmp_path: Path, monkeypatch, *, on: bool) -> pipeline.PipelineContext:
+    """A context whose chips stage writes one chip already carrying admin name columns."""
+    fields = tmp_path / "fields.parquet"
+    gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(fields)
+    config = _config(
+        fields,
+        tmp_path / "out",
+        year=2024,
+        stages={"chips": {"crop_stats": False, "admin_names": on}},
+    )
+    ctx = pipeline.build_context(config)
+    ctx.output_dir.mkdir()
+    gpd.read_parquet(fields).to_parquet(ctx.field_polygons_path)
+
+    def write_chips(path: Path) -> None:
+        gpd.GeoDataFrame(
+            {"id": ["ftw-33UXP0001"], "field_coverage_pct": [50.0], "admin0_name": ["Old"]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(path)
+
+    def fake_field_stats(**kwargs):
+        write_chips(Path(kwargs["output_file"]))
+        return field_stats.FieldStatsResult(
+            output_path=Path(kwargs["output_file"]),
+            total_cells=1,
+            cells_with_coverage=1,
+            average_coverage=50.0,
+            max_coverage=50.0,
+        )
+
+    monkeypatch.setattr(field_stats, "add_field_stats", fake_field_stats)
+    write_chips(ctx.chips_path)
+    return ctx
+
+
+class TestChipsStageAdminNames:
+    def test_enabled_runs_on_the_chips(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import admin_names
+
+        ctx = _admin_ctx(tmp_path, monkeypatch, on=True)
+        calls: list[Path] = []
+        monkeypatch.setattr(admin_names, "add_admin_names", lambda p, **_: calls.append(Path(p)))
+
+        pipeline.stage_chips(ctx)
+
+        assert calls == [ctx.chips_path]
+
+    def test_disabled_drops_stale_columns(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import admin_names
+
+        ctx = _admin_ctx(tmp_path, monkeypatch, on=False)
+
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError("called")
+
+        monkeypatch.setattr(admin_names, "add_admin_names", fail_if_called)
+
+        pipeline.stage_chips(ctx)
+
+        assert "admin0_name" not in gpd.read_parquet(ctx.chips_path).columns
+
+    def test_stac_stage_drops_them_when_disabled(
+        self, tmp_path: Path, monkeypatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level("INFO")
+        ctx = _admin_ctx(tmp_path, monkeypatch, on=False)
+        TestStacStageStaleLandCover()._stub_stac(tmp_path, monkeypatch, ctx)
+
+        pipeline.stage_stac(ctx)
+
+        assert "admin0_name" not in gpd.read_parquet(ctx.chips_path).columns
+        assert any("stages.chips.admin_names: true" in m for m in caplog.messages)
+
+
 class TestDocsStage:
     """Tests for the final docs stage: tiles, styles, README/AGENTS, registration."""
 
