@@ -1278,6 +1278,62 @@ class TestChipProperties:
         assert not [key for key in props if key.startswith("ftw:landcover_")]
 
 
+class TestAdminNames:
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_gaul_link(self, tmp_path: Path, enabled: bool) -> None:
+        import json
+
+        from ftw_dataset_tools.api import admin_names
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        config = DatasetConfig.from_dict(
+            {"fields_file": "unused.parquet", "stages": {"chips": {"admin_names": enabled}}}
+        )
+        result = build_catalog(tmp_path, config=config)
+
+        coll = json.loads(result.collection_path.read_text())
+        derived = [link for link in coll["links"] if link["rel"] == "derived_from"]
+        if enabled:
+            assert [link["href"] for link in derived] == [admin_names.GAUL_URL]
+            assert "CC-BY-4.0" in derived[0]["title"]
+        else:
+            assert derived == []
+
+    def test_names_on_items(self, tmp_path: Path) -> None:
+        import json
+
+        import duckdb
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        chips_path = tmp_path / "ds_chips.parquet"
+        gpd.GeoDataFrame(
+            {
+                "id": ["ftw-33UXP0410"],
+                "field_coverage_pct": [50.0],
+                "admin0_iso3": ["BRA"],
+                "admin0_name": ["Brazil"],
+                "admin1_name": ["Mato Grosso"],
+                "admin2_name": [None],
+            },
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(chips_path)
+
+        result = build_catalog(tmp_path, chips_path=chips_path)
+
+        item_path = tmp_path / "chips" / "33UXP" / "ftw-33UXP0410_2024" / "ftw-33UXP0410_2024.json"
+        props = json.loads(item_path.read_text())["properties"]
+        assert props["ftw:admin0_iso3"] == "BRA"
+        assert props["ftw:admin0_name"] == "Brazil"
+        assert props["ftw:admin1_name"] == "Mato Grosso"
+        assert "ftw:admin2_name" not in props
+        row = duckdb.sql(
+            f"SELECT \"ftw:admin1_name\" FROM read_parquet('{result.items_parquet_path}')"
+        ).fetchone()
+        assert row == ("Mato Grosso",)
+
+
 class TestChipsPathEscaping:
     def test_path_containing_a_single_quote(self, tmp_path: Path) -> None:
         """A quote in the output path must not break out of the SQL string literal."""

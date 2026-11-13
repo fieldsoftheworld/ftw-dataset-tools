@@ -741,6 +741,20 @@ class TestSchemaNotes:
         assert "see the item JSON" not in agents
         assert "the nearest year was used" in agents
 
+    def test_admin_columns_and_properties_have_notes(self) -> None:
+        from ftw_dataset_tools.api import admin_names
+        from ftw_dataset_tools.api.docs import render_agents
+
+        stats = _stats(
+            chip_columns=list(admin_names.OUTPUT_COLUMNS),
+            item_properties=[f"ftw:{col}" for col in admin_names.OUTPUT_COLUMNS],
+        )
+
+        agents = render_agents({"title": "T", "links": []}, stats, [])
+
+        assert "carried through from the source dataset" not in agents
+        assert "FAO GAUL 2024" in agents
+
 
 class TestLicenseLink:
     """README/AGENTS license mentions link out when there is somewhere to link to."""

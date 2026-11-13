@@ -93,6 +93,15 @@ _LANDCOVER_NOTES = {
     ),
 }
 
+_ADMIN_NOTES = {
+    "admin0_iso3": "ISO 3166-1 alpha-3 code of the country the chip's centre is in (FAO GAUL 2024)",
+    "admin0_name": "country the chip's centre is in (FAO GAUL 2024)",
+    "admin1_name": "first-level administrative unit (state, province, region) the chip's "
+    "centre is in (FAO GAUL 2024)",
+    "admin2_name": "second-level administrative unit (district, county, department) the "
+    "chip's centre is in (FAO GAUL 2024)",
+}
+
 # Plain-language meanings for the columns and item properties FTW writes. Anything
 # not listed is carried through from the source dataset and described as such.
 CHIP_COLUMN_NOTES = {
@@ -108,6 +117,7 @@ CHIP_COLUMN_NOTES = {
     "scale_score": "stable hash score of the chip's 3x3 block; a scale keeps scores below it",
     **_HCAT_NOTES,
     **_LANDCOVER_NOTES,
+    **_ADMIN_NOTES,
     "gzd": "MGRS grid zone designator of the chip's grid cell",
     "mgrs_10km": "MGRS 100 km square plus 10 km cell identifier the chip belongs to",
     "grid_id": "identifier of the FTW grid cell the chip was cut from",
@@ -147,6 +157,7 @@ ITEM_PROPERTY_NOTES = {
     "unlabelled pixels are background rather than unknown",
     **{f"ftw:{name}": note for name, note in _HCAT_NOTES.items()},
     **{f"ftw:{name}": note for name, note in _LANDCOVER_NOTES.items()},
+    **{f"ftw:{name}": note for name, note in _ADMIN_NOTES.items()},
 }
 
 ASSET_NOTES = {

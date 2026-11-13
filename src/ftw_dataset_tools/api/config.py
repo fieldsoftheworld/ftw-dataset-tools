@@ -297,6 +297,9 @@ class ChipsConfig:
     # Per-chip land cover from the Impact Observatory annual maps on Planetary
     # Computer. Off by default: it reads remote rasters for every chip.
     land_cover: bool = False
+    # Per-chip country, first- and second-level unit names from FAO GAUL 2024 on
+    # Source Cooperative. Off by default: it reads remote boundaries.
+    admin_names: bool = False
     # Grid cells per coverage batch. Lower it when the coverage step runs the
     # machine out of memory on a dense, country-sized input.
     coverage_batch_size: int = field_stats.DEFAULT_COVERAGE_BATCH_SIZE
@@ -722,6 +725,8 @@ class DatasetConfig:
             raise ConfigError("stages.chips.crop_stats must be true or false")
         if not isinstance(self.stages.chips.land_cover, bool):
             raise ConfigError("stages.chips.land_cover must be true or false")
+        if not isinstance(self.stages.chips.admin_names, bool):
+            raise ConfigError("stages.chips.admin_names must be true or false")
 
         batch_size = self.stages.chips.coverage_batch_size
         if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
