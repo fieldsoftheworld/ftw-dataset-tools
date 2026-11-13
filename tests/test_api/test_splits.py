@@ -579,7 +579,7 @@ def _write_chips(path: Path) -> None:
 
 
 def _write_duckdb_fields(
-    path: Path, geom_col: str = "geometry", crs: dict | None = None, to_crs: str | None = None
+    path: Path, geom_col: str = "geometry", crs: dict | str | None = None, to_crs: str | None = None
 ) -> None:
     """Fields as DuckDB writes them: untagged WKB, no crs key unless ``crs`` is given."""
     import json
@@ -665,6 +665,31 @@ class TestPredefinedFieldsFormats:
             {"split": ["train", "test"], "geometry": [TRAIN_BOX, TEST_BOX]}, crs="EPSG:4326"
         ).to_parquet(tmp_path / "fields.parquet", geometry_encoding="geoarrow")
         assert _split_map(tmp_path / "chips.parquet", tmp_path / "fields.parquet") == EXPECTED
+
+    def test_geoarrow_with_other_column_name(self, tmp_path: Path) -> None:
+        """A tagged geometry column not named 'geometry' is renamed for the join."""
+        _write_chips(tmp_path / "chips.parquet")
+        gpd.GeoDataFrame(
+            {"split": ["train", "test"], "geom": [TRAIN_BOX, TEST_BOX]},
+            geometry="geom",
+            crs="EPSG:4326",
+        ).to_parquet(tmp_path / "fields.parquet")
+        assert _split_map(tmp_path / "chips.parquet", tmp_path / "fields.parquet") == EXPECTED
+
+    def test_untagged_wkb_with_wkt1_crs(self, tmp_path: Path) -> None:
+        """A WKT1 crs is read whole, not by its first inner AUTHORITY (the ellipsoid's)."""
+        import pyproj
+
+        _write_chips(tmp_path / "chips.parquet")
+        wkt = pyproj.CRS("EPSG:32631").to_wkt("WKT1_GDAL")
+        _write_duckdb_fields(tmp_path / "fields.parquet", crs=wkt, to_crs="EPSG:32631")
+        assert _split_map(tmp_path / "chips.parquet", tmp_path / "fields.parquet") == EXPECTED
+
+    def test_untagged_wkb_with_unreadable_crs(self, tmp_path: Path) -> None:
+        _write_chips(tmp_path / "chips.parquet")
+        _write_duckdb_fields(tmp_path / "fields.parquet", crs="not a crs")
+        with pytest.raises(ValueError, match="unreadable CRS"):
+            _split_map(tmp_path / "chips.parquet", tmp_path / "fields.parquet")
 
     def test_untagged_non_wkb_is_refused(self, tmp_path: Path) -> None:
         """Native encoding without its GeoArrow type cannot be decoded, so it is refused."""

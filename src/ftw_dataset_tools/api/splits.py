@@ -370,12 +370,14 @@ def _is_geoarrow(field: pa.Field) -> bool:
 
     if isinstance(field.type, pa.ExtensionType):
         return field.type.extension_name.startswith("geoarrow.")
-    return bool(field.metadata) and b"ARROW:extension:name" in field.metadata
+    name = (field.metadata or {}).get(b"ARROW:extension:name", b"")
+    return name.startswith(b"geoarrow.")
 
 
 def _fields_from_wkb(arrow: pa.Table, fields_path: Path, geom_col: str) -> gpd.GeoDataFrame:
     """Decode an untagged geometry column, which GeoParquet stores as WKB or not at all."""
     import geopandas as gpd
+    import pyproj
     import shapely
 
     encoding = (geoparquet_column_metadata(fields_path, geom_col) or {}).get("encoding", "WKB")
@@ -384,10 +386,14 @@ def _fields_from_wkb(arrow: pa.Table, fields_path: Path, geom_col: str) -> gpd.G
             f"Fields file {fields_path}: geometry column '{geom_col}' is {encoding}-encoded "
             "without a GeoArrow type; rewrite it as WKB."
         )
+    try:
+        crs = geoparquet_crs(fields_path, geom_col)
+    except pyproj.exceptions.CRSError as err:
+        raise ValueError(f"Fields file {fields_path}: unreadable CRS ({err})") from err
     return gpd.GeoDataFrame(
         {"split": arrow["split"].to_pandas()},
         geometry=shapely.from_wkb(arrow[geom_col].to_numpy(zero_copy_only=False)),
-        crs=geoparquet_crs(fields_path, geom_col),
+        crs=crs,
     )
 
 
@@ -424,9 +430,11 @@ def _ensure_crs_alignment(
     if fields_gdf.crs is None:
         raise ValueError("Fields file has no CRS information; cannot align with chips CRS.")
 
-    if not fields_gdf.crs.equals(gdf.crs, ignore_axis_order=True):
-        logger.info("Reprojecting fields to match chips CRS for predefined splits...")
-        fields_gdf = fields_gdf.to_crs(gdf.crs)
+    if fields_gdf.crs.equals(gdf.crs, ignore_axis_order=True):
+        # e.g. OGC:CRS84 against EPSG:4326: same coordinates, so relabel, don't reproject.
+        return fields_gdf.set_crs(gdf.crs, allow_override=True)
+    logger.info("Reprojecting fields to match chips CRS for predefined splits...")
+    fields_gdf = fields_gdf.to_crs(gdf.crs)
 
     return fields_gdf
 
