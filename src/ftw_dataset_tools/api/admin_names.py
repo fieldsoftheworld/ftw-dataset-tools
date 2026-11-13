@@ -7,7 +7,12 @@ the lowest ``gaul2_code`` wins, so a rerun gives the same names.
 
 The names are written back into the chips GeoParquet (``OUTPUT_COLUMNS``) and published
 on every chip's STAC item as ``ftw:<column>``. GAUL marks units it has no name for as
-"Administrative Unit Not Available"; those are left empty.
+"Administrative Unit Not Available" (once "Not Available"); those are left empty.
+
+``admin0_iso3`` is GAUL's ``iso3_code``: ISO 3166-1 alpha-3 for countries, but GAUL gives
+disputed areas and some territories its own codes starting with "x" (``xJK`` Jammu and
+Kashmir, ``xxx`` disputed areas), with the area's name as ``admin0_name``. They are kept
+as GAUL has them.
 
 GAUL 2024 is published by FAO under CC BY 4.0. ftwd reads the GeoParquet copy on Source
 Cooperative (nlebovits/gaul-l2-admin), one file per country with a bbox column, so only
@@ -36,6 +41,7 @@ from ftw_dataset_tools.api.geo import (
     sql_path,
 )
 from ftw_dataset_tools.api.logging_config import get_logger
+from ftw_dataset_tools.api.source import SourceFetchError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -58,15 +64,15 @@ SOURCE_COLUMNS = {
 }
 OUTPUT_COLUMNS: tuple[str, ...] = tuple(SOURCE_COLUMNS)
 
-#: GAUL's placeholder for a unit without a name.
-UNNAMED = "Administrative Unit Not Available"
+#: GAUL's placeholders for a unit without a name.
+UNNAMED = ("Administrative Unit Not Available", "Not Available")
 
 #: Degrees added around the chips' bbox when selecting units, so a unit whose float32
 #: bbox was rounded inwards is not missed.
 BBOX_MARGIN = 0.01
 
 
-class AdminNamesError(Exception):
+class AdminNamesError(ValueError):
     """The chips cannot be given admin names (wrong CRS, or no id column)."""
 
     def __init__(self, path: Path, message: str) -> None:
@@ -125,34 +131,54 @@ def _load_units(con: duckdb.DuckDBPyConnection, source: str) -> None:
         "SELECT min(ST_XMin(geom)), min(ST_YMin(geom)), max(ST_XMax(geom)), max(ST_YMax(geom)) "
         "FROM _chips"
     ).fetchone()
+    placeholders = ", ".join(f"'{p}'" for p in UNNAMED)
     names = ", ".join(
-        f"nullif({src}, '{UNNAMED}') AS {out}" for out, src in SOURCE_COLUMNS.items()
+        f"CASE WHEN {src} IN ({placeholders}) THEN NULL ELSE {src} END AS {out}"
+        for out, src in SOURCE_COLUMNS.items()
     )
     m = BBOX_MARGIN
-    con.execute(f"""
-        CREATE TEMP TABLE _units AS
-        SELECT {names}, gaul2_code, geometry AS geom
-        FROM read_parquet('{sql_path(source)}')
-        WHERE geometry_bbox.xmax >= {xmin - m} AND geometry_bbox.xmin <= {xmax + m}
-          AND geometry_bbox.ymax >= {ymin - m} AND geometry_bbox.ymin <= {ymax + m}""")
+    try:
+        con.execute(f"""
+            CREATE TEMP TABLE _units AS
+            SELECT {names}, gaul2_code, geometry AS geom
+            FROM read_parquet('{sql_path(source)}')
+            WHERE geometry_bbox.xmax >= {xmin - m} AND geometry_bbox.xmin <= {xmax + m}
+              AND geometry_bbox.ymax >= {ymin - m} AND geometry_bbox.ymin <= {ymax + m}""")
+    except (duckdb.IOException, duckdb.HTTPException) as err:
+        raise SourceFetchError(
+            f"Could not read the GAUL admin boundaries ({source}): {err}"
+        ) from err
 
 
 def _match(con: duckdb.DuckDBPyConnection) -> None:
-    """Table ``_named``: per chip id, its unit's names and how it was matched."""
+    """Table ``_named``: per chip id, its unit's names and how it was matched.
+
+    Only unit codes go through the spatial joins: carrying the names or geometries into
+    the per-chip ranking copies a GAUL polygon onto every chip row (tens of GB for
+    France). The names are joined on the winning code afterwards.
+    """
+    con.execute("""
+        CREATE TEMP TABLE _picked AS
+        SELECT c.id, min(u.gaul2_code) AS code, 'centre' AS how
+        FROM _chips c JOIN (SELECT gaul2_code, geom FROM _units) u
+          ON ST_Contains(u.geom, c.centre)
+        GROUP BY c.id""")
+    con.execute("""
+        INSERT INTO _picked
+        WITH todo AS (
+            SELECT id, geom FROM _chips c
+            WHERE NOT EXISTS (SELECT 1 FROM _picked p WHERE p.id = c.id)),
+        hits AS (
+            SELECT t.id, u.gaul2_code AS code, ST_Area(ST_Intersection(u.geom, t.geom)) AS area
+            FROM todo t JOIN (SELECT gaul2_code, geom FROM _units) u
+              ON ST_Intersects(u.geom, t.geom))
+        SELECT id, arg_min(code, (-area, code)), 'overlap' FROM hits GROUP BY id""")
     cols = ", ".join(f"u.{c}" for c in OUTPUT_COLUMNS)
     con.execute(f"""
         CREATE TEMP TABLE _named AS
-        SELECT c.id, {cols}, 'centre' AS how
-        FROM _chips c JOIN _units u ON ST_Contains(u.geom, c.centre)
-        QUALIFY row_number() OVER (PARTITION BY c.id ORDER BY u.gaul2_code) = 1""")
-    con.execute(f"""
-        INSERT INTO _named
-        SELECT c.id, {cols}, 'overlap'
-        FROM _chips c JOIN _units u ON ST_Intersects(u.geom, c.geom)
-        WHERE c.id NOT IN (SELECT id FROM _named)
-        QUALIFY row_number() OVER (
-            PARTITION BY c.id ORDER BY ST_Area(ST_Intersection(u.geom, c.geom)) DESC,
-            u.gaul2_code) = 1""")
+        SELECT p.id, {cols}, p.how
+        FROM _picked p JOIN (SELECT DISTINCT ON (gaul2_code) * FROM _units) u
+          ON u.gaul2_code = p.code""")
 
 
 def name_chips(
@@ -171,8 +197,9 @@ def name_chips(
     con.execute(f"""
         CREATE OR REPLACE TEMP TABLE _chips AS
         SELECT "{id_col}" AS id, "{geom_col}" AS geom, ST_Centroid("{geom_col}") AS centre
-        FROM ({chips_query})""")
-    for table in ("_units", "_named"):
+        FROM ({chips_query})
+        WHERE "{id_col}" IS NOT NULL AND "{geom_col}" IS NOT NULL""")
+    for table in ("_units", "_picked", "_named"):
         con.execute(f"DROP TABLE IF EXISTS {table}")
     if con.execute("SELECT count(*) FROM _chips").fetchone()[0] == 0:
         con.execute(
@@ -214,24 +241,29 @@ def add_admin_names(
     try:
         base = select_excluding(chips_path, OUTPUT_COLUMNS)
         con.execute(f"CREATE TABLE chips_table AS {base}")
-        name_chips(con, "SELECT * FROM chips_table", geom_col=geom_col,
-                   id_col=chips_id_col, source=source)
+        name_chips(
+            con, "SELECT * FROM chips_table", geom_col=geom_col, id_col=chips_id_col, source=source
+        )
         cols = ", ".join(f"n.{c}" for c in OUTPUT_COLUMNS)
-        write_chips(chips_path, con, f"""
+        write_chips(
+            chips_path,
+            con,
+            f"""
             SELECT t.*, {cols} FROM chips_table t
-            LEFT JOIN _named n ON t."{chips_id_col}" = n.id""")
-        result = _result(con)
+            LEFT JOIN _named n ON t."{chips_id_col}" = n.id""",
+        )
+        result = _result(con, total=con.execute("SELECT count(*) FROM chips_table").fetchone()[0])
     finally:
         con.close()
     logger.info(admin_names_summary(result))
     return result
 
 
-def _result(con: duckdb.DuckDBPyConnection) -> AdminNamesResult:
-    total = con.execute("SELECT count(*) FROM _chips").fetchone()[0]
+def _result(con: duckdb.DuckDBPyConnection, *, total: int) -> AdminNamesResult:
     how = dict(con.execute("SELECT how, count(*) FROM _named GROUP BY how").fetchall())
     countries: Sequence[str] = [
-        c for (c,) in con.execute(
+        c
+        for (c,) in con.execute(
             "SELECT DISTINCT admin0_name FROM _named WHERE admin0_name IS NOT NULL ORDER BY 1"
         ).fetchall()
     ]

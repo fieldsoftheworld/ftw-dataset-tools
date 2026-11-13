@@ -94,7 +94,8 @@ _LANDCOVER_NOTES = {
 }
 
 _ADMIN_NOTES = {
-    "admin0_iso3": "ISO 3166-1 alpha-3 code of the country the chip's centre is in (FAO GAUL 2024)",
+    "admin0_iso3": "ISO 3166-1 alpha-3 code of the country the chip's centre is in "
+    "(FAO GAUL 2024; GAUL's own x-prefixed codes for disputed areas such as xJK)",
     "admin0_name": "country the chip's centre is in (FAO GAUL 2024)",
     "admin1_name": "first-level administrative unit (state, province, region) the chip's "
     "centre is in (FAO GAUL 2024)",

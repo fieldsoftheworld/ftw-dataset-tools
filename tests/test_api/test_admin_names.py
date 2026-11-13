@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import duckdb
 import geopandas as gpd
@@ -15,15 +15,21 @@ from ftw_dataset_tools.api.admin_names import (
     AdminNamesError,
     add_admin_names,
     admin_names_summary,
+    connect,
     drop_admin_names,
+    name_chips,
 )
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded, write_geoparquet
+from ftw_dataset_tools.api.source import SourceFetchError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # Two countries side by side along x = 10; B has two level-2 units split at y = 5.
 UNITS = [
     ("AAA", "Aland", "North A", "A one", 1, box(0, 0, 10, 10)),
     ("BBB", "Bland", "North B", "B low", 2, box(10, 0, 20, 5)),
-    ("BBB", "Bland", "North B", UNNAMED, 3, box(10, 5, 20, 10)),
+    ("BBB", "Bland", "North B", UNNAMED[0], 3, box(10, 5, 20, 10)),
 ]
 
 
@@ -159,3 +165,103 @@ class TestAddAdminNames:
         assert drop_admin_names(chips) is True
         assert not set(OUTPUT_COLUMNS) & set(gpd.read_parquet(chips).columns)
         assert drop_admin_names(chips) is False
+
+
+class TestMatching:
+    def test_overlap_picks_the_larger_share(self, tmp_path: Path) -> None:
+        gaul = write_gaul(tmp_path / "gaul.parquet")
+        # The chip spans y 4-8 across B's east edge (x 20): it covers "B low" (y < 5)
+        # by 1 and B's unnamed unit (y > 5) by 3; its centre (20.5, 6) is outside both.
+        chips = write_chips(tmp_path / "chips.parquet", {"c": box(19, 4, 22, 8)})
+
+        add_admin_names(chips, source=str(gaul))
+
+        assert read_names(chips)["c"] == ("BBB", "Bland", "North B", None)
+
+    def test_overlap_tie_picks_the_lowest_code(self, tmp_path: Path) -> None:
+        units = [
+            ("AAA", "Aland", "R", "high", 7, box(0, 0, 10, 5)),
+            ("AAA", "Aland", "R", "low", 6, box(0, 5, 10, 10)),
+        ]
+        gaul = write_gaul(tmp_path / "gaul.parquet", units)
+        # Centre (11, 5) is outside both; the chip overlaps each by the same area.
+        chips = write_chips(tmp_path / "chips.parquet", {"c": box(9, 3, 13, 7)})
+
+        add_admin_names(chips, source=str(gaul))
+
+        assert read_names(chips)["c"][3] == "low"
+
+    def test_not_available_placeholder(self, tmp_path: Path) -> None:
+        units = [("COL", "Colombia", "Not Available", "Area", 1, box(0, 0, 10, 10))]
+        gaul = write_gaul(tmp_path / "gaul.parquet", units)
+        chips = write_chips(tmp_path / "chips.parquet", {"c": box(1, 1, 2, 2)})
+
+        add_admin_names(chips, source=str(gaul))
+
+        assert read_names(chips)["c"] == ("COL", "Colombia", None, "Area")
+
+    def test_null_geometry_and_null_id_are_skipped(self, tmp_path: Path) -> None:
+        gaul = write_gaul(tmp_path / "gaul.parquet")
+        chips = tmp_path / "chips.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["a", None, "nogeom", "off"]},
+            geometry=[box(1, 1, 2, 2), box(1, 1, 2, 2), None, box(19, 1, 22, 3)],
+            crs="EPSG:4326",
+        ).to_parquet(chips)
+
+        result = add_admin_names(chips, source=str(gaul))
+
+        names = read_names(chips)
+        assert names["a"][3] == "A one"
+        assert names["off"][3] == "B low"  # a NULL id must not block the overlap step
+        assert names["nogeom"] == (None, None, None, None)
+        assert (result.total_chips, result.by_centre, result.by_overlap) == (4, 1, 1)
+
+    def test_all_null_geometry(self, tmp_path: Path) -> None:
+        gaul = write_gaul(tmp_path / "gaul.parquet")
+        chips = tmp_path / "chips.parquet"
+        gpd.GeoDataFrame({"id": ["a"]}, geometry=[None], crs="EPSG:4326").to_parquet(chips)
+
+        result = add_admin_names(chips, source=str(gaul))
+
+        assert result.unnamed == 1
+
+
+class TestNameChips:
+    def test_custom_columns_and_bbox_prefilter(self, tmp_path: Path) -> None:
+        units = [
+            *UNITS,
+            ("FAR", "Farland", "F", "far", 9, box(100, 50, 110, 60)),
+            ("NEA", "Nearland", "N", "near", 8, box(-5, 0, -0.005, 10)),
+        ]
+        gaul = write_gaul(tmp_path / "gaul.parquet", units)
+        chips = tmp_path / "chips.parquet"
+        gpd.GeoDataFrame(
+            {"chip": ["c1"]}, geometry=gpd.GeoSeries([box(0, 1, 1, 2)]), crs="EPSG:4326"
+        ).rename_geometry("geom").to_parquet(chips)
+
+        con = connect(str(gaul))
+        name_chips(
+            con, f"SELECT * FROM '{chips}'", geom_col="geom", id_col="chip", source=str(gaul)
+        )
+
+        loaded = {r[0] for r in con.execute("SELECT admin0_iso3 FROM _units").fetchall()}
+        # Units within the margin of the chips' bbox are read; far ones are not.
+        assert loaded == {"AAA", "NEA"}
+        assert con.execute("SELECT id, admin2_name, how FROM _named").fetchall() == [
+            ("c1", "A one", "centre")
+        ]
+        con.close()
+
+    def test_missing_source_is_a_fetch_error(self, tmp_path: Path) -> None:
+        chips = write_chips(tmp_path / "chips.parquet", {"c": box(1, 1, 2, 2)})
+
+        with pytest.raises(SourceFetchError, match="GAUL"):
+            add_admin_names(chips, source=str(tmp_path / "missing" / "*.parquet"))
+
+    def test_chips_without_the_id_column_are_refused(self, tmp_path: Path) -> None:
+        gaul = write_gaul(tmp_path / "gaul.parquet")
+        chips = write_chips(tmp_path / "chips.parquet", {"c": box(1, 1, 2, 2)})
+
+        with pytest.raises(AdminNamesError, match="no 'chip_id' column"):
+            add_admin_names(chips, source=str(gaul), chips_id_col="chip_id")
