@@ -398,6 +398,47 @@ def detect_crs(
     return CRSInfo(authority=None, code=None, wkt=None, projjson=None)
 
 
+def geoparquet_column_metadata(path: str | Path, geom_col: str) -> dict | None:
+    """The ``geo`` metadata entry for ``geom_col``; None when the file has no ``geo`` key."""
+    conn = duckdb.connect(":memory:")
+    try:
+        row = conn.execute(
+            "SELECT value FROM parquet_kv_metadata(?) WHERE key = 'geo'", [str(path)]
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return json.loads(row[0]).get("columns", {}).get(geom_col, {})
+
+
+def crs_is_explicit_null(path: str | Path, geom_col: str) -> bool:
+    """Whether the GeoParquet metadata sets ``crs: null``: an unknown CRS, not WGS84.
+
+    The GeoParquet spec defaults a *missing* ``crs`` key to OGC:CRS84, but an explicit
+    null means the CRS is undefined, so it cannot be trusted to line up with the chips.
+    """
+    column = geoparquet_column_metadata(path, geom_col) or {}
+    return "crs" in column and column["crs"] is None
+
+
+def geoparquet_crs(path: str | Path, geom_col: str) -> pyproj.CRS:
+    """The file's CRS; GeoParquet without one is WGS84 by definition."""
+    import pyproj
+
+    info = detect_crs(path, geom_col)
+    definition = info.projjson or info.wkt
+    if definition:
+        # The full definition first: detect_crs's code for WKT is the first AUTHORITY
+        # anywhere in it, often an inner datum's or ellipsoid's, not the CRS's own.
+        try:
+            return pyproj.CRS.from_user_input(definition)
+        except pyproj.exceptions.CRSError:
+            if not info.authority_code:  # a minimal PROJJSON of just an id falls through
+                raise
+    return pyproj.CRS.from_user_input(info.authority_code or "EPSG:4326")
+
+
 def validate_crs_match(
     file1: str | Path,
     file2: str | Path,

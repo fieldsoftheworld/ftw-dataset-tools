@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import functools
 import hashlib
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -27,9 +26,10 @@ import shapely
 
 from ftw_dataset_tools.api.chips_io import parquet_columns, select_excluding, write_chips
 from ftw_dataset_tools.api.geo import (
-    detect_crs,
+    crs_is_explicit_null,
     detect_geometry_column,
     ensure_spatial_loaded,
+    geoparquet_crs,
     sql_path,
 )
 from ftw_dataset_tools.api.logging_config import get_logger
@@ -105,39 +105,13 @@ def label_extent_summary(result: LabelExtentChipsResult) -> str:
     )
 
 
-def _crs_is_explicit_null(path: Path, geom_col: str) -> bool:
-    """Whether the GeoParquet metadata sets ``crs: null``: an unknown CRS, not WGS84.
-
-    The GeoParquet spec defaults a *missing* ``crs`` key to OGC:CRS84, but an explicit
-    null means the CRS is undefined, so it cannot be trusted to line up with the chips.
-    """
-    conn = duckdb.connect(":memory:")
-    try:
-        row = conn.execute(
-            "SELECT value FROM parquet_kv_metadata(?) WHERE key = 'geo'", [str(path)]
-        ).fetchone()
-    finally:
-        conn.close()
-    if row is None:
-        return False
-    column = json.loads(row[0]).get("columns", {}).get(geom_col, {})
-    return "crs" in column and column["crs"] is None
-
-
-def _crs_of(path: Path, geom_col: str) -> pyproj.CRS:
-    """The file's CRS; GeoParquet without one is WGS84 by definition."""
-    info = detect_crs(path, geom_col)
-    candidate = info.authority_code or info.projjson or info.wkt
-    return pyproj.CRS.from_user_input(candidate or _WGS84)
-
-
 def _check_crs(path: Path, geom_col: str, expected: pyproj.CRS) -> None:
-    if _crs_is_explicit_null(path, geom_col):
+    if crs_is_explicit_null(path, geom_col):
         raise LabelExtentError(
             path, f"label_extent {path} declares no CRS (crs: null); write it in EPSG:4326"
         )
     try:
-        actual = _crs_of(path, geom_col)
+        actual = geoparquet_crs(path, geom_col)
     except pyproj.exceptions.CRSError as err:
         raise LabelExtentError(path, f"label_extent {path}: unreadable CRS ({err})") from err
     if not actual.equals(expected, ignore_axis_order=True):
@@ -339,7 +313,7 @@ def apply_label_extent(chips_file: str | Path, extent_file: str | Path) -> Label
     """
     chips_path = Path(chips_file).resolve()
     chips_geom_col = detect_geometry_column(chips_path) or "geometry"
-    chips_crs = _crs_of(chips_path, chips_geom_col)
+    chips_crs = geoparquet_crs(chips_path, chips_geom_col)
     extent = load_label_extent(extent_file, expected_crs=chips_crs.to_wkt())
 
     conn = duckdb.connect(":memory:")

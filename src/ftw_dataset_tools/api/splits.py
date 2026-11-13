@@ -10,7 +10,13 @@ import duckdb
 import numpy as np
 
 from ftw_dataset_tools.api.blocks import block_scores, chip_block_ids
-from ftw_dataset_tools.api.geo import sql_path, write_geoparquet
+from ftw_dataset_tools.api.geo import (
+    crs_is_explicit_null,
+    geoparquet_column_metadata,
+    geoparquet_crs,
+    sql_path,
+    write_geoparquet,
+)
 from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -18,6 +24,7 @@ if TYPE_CHECKING:
 
     import geopandas as gpd
     import pandas as pd
+    import pyarrow as pa
 
 logger = get_logger(__name__)
 
@@ -334,16 +341,60 @@ def _load_and_validate_fields(fields_path: Path) -> gpd.GeoDataFrame:
     import geoparquet_io as gpio
 
     table = gpio.read(str(fields_path))
-    fields_gdf = gpd.GeoDataFrame.from_arrow(
-        table.to_arrow(),
-        geometry=table.geometry_column,
-    )
-    if "split" not in fields_gdf.columns:
+    if "split" not in table.column_names:
         raise ValueError(
             "Fields file must contain a 'split' column when split_type is 'predefined'. "
-            f"Found columns: {list(fields_gdf.columns)}"
+            f"Found columns: {list(table.column_names)}"
         )
-    return fields_gdf
+    geom_col = table.geometry_column
+    if crs_is_explicit_null(fields_path, geom_col):
+        raise ValueError(f"Fields file {fields_path} declares an unknown CRS (crs: null).")
+    arrow = table.to_arrow().select(["split", geom_col])
+    if _is_geoarrow(arrow.schema.field(geom_col)):
+        # Tagged GeoArrow (geopandas writes the tag): any encoding, CRS included.
+        fields_gdf = gpd.GeoDataFrame.from_arrow(arrow, geometry=geom_col)
+        if fields_gdf.geometry.name != "geometry":
+            fields_gdf = fields_gdf.rename_geometry("geometry")
+        return fields_gdf
+    # Plain binary (DuckDB and gpio write no tag), which from_arrow cannot place.
+    return _fields_from_wkb(arrow, fields_path, geom_col)
+
+
+def _is_geoarrow(field: pa.Field) -> bool:
+    """Whether ``field`` carries a GeoArrow extension type.
+
+    pyarrow keeps the tag in the field metadata, or turns it into an ``ExtensionType``
+    once something in the process has registered the GeoArrow types.
+    """
+    import pyarrow as pa
+
+    if isinstance(field.type, pa.ExtensionType):
+        return field.type.extension_name.startswith("geoarrow.")
+    name = (field.metadata or {}).get(b"ARROW:extension:name", b"")
+    return name.startswith(b"geoarrow.")
+
+
+def _fields_from_wkb(arrow: pa.Table, fields_path: Path, geom_col: str) -> gpd.GeoDataFrame:
+    """Decode an untagged geometry column, which GeoParquet stores as WKB or not at all."""
+    import geopandas as gpd
+    import pyproj
+    import shapely
+
+    encoding = (geoparquet_column_metadata(fields_path, geom_col) or {}).get("encoding", "WKB")
+    if encoding.upper() != "WKB":
+        raise ValueError(
+            f"Fields file {fields_path}: geometry column '{geom_col}' is {encoding}-encoded "
+            "without a GeoArrow type; rewrite it as WKB."
+        )
+    try:
+        crs = geoparquet_crs(fields_path, geom_col)
+    except pyproj.exceptions.CRSError as err:
+        raise ValueError(f"Fields file {fields_path}: unreadable CRS ({err})") from err
+    return gpd.GeoDataFrame(
+        {"split": arrow["split"].to_pandas()},
+        geometry=shapely.from_wkb(arrow[geom_col].to_numpy(zero_copy_only=False)),
+        crs=crs,
+    )
 
 
 def _normalize_and_validate_splits(fields_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -379,9 +430,11 @@ def _ensure_crs_alignment(
     if fields_gdf.crs is None:
         raise ValueError("Fields file has no CRS information; cannot align with chips CRS.")
 
-    if fields_gdf.crs != gdf.crs:
-        logger.info("Reprojecting fields to match chips CRS for predefined splits...")
-        fields_gdf = fields_gdf.to_crs(gdf.crs)
+    if fields_gdf.crs.equals(gdf.crs, ignore_axis_order=True):
+        # e.g. OGC:CRS84 against EPSG:4326: same coordinates, so relabel, don't reproject.
+        return fields_gdf.set_crs(gdf.crs, allow_override=True)
+    logger.info("Reprojecting fields to match chips CRS for predefined splits...")
+    fields_gdf = fields_gdf.to_crs(gdf.crs)
 
     return fields_gdf
 

@@ -492,6 +492,37 @@ class TestAssignSplits:
         # Chip 2: 1 train vs 1 test -> tie-break to train
         assert split_map["ftw-36NXF0001"] == "train"
 
+    def test_predefined_refuses_fields_with_unknown_crs(self, tmp_path: Path) -> None:
+        """An explicit null CRS (GeoParquet's 'unknown') is refused, not read as lon/lat."""
+        import json
+
+        import pyarrow.parquet as pq
+
+        chips_file = tmp_path / "chips.parquet"
+        fields_file = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["ftw-36NXF0000"], "geometry": [box(0, 0, 1, 1)]}, crs="EPSG:4326"
+        ).to_parquet(chips_file)
+        gpd.GeoDataFrame(
+            {"split": ["train"], "geometry": [box(0.1, 0.1, 0.2, 0.2)]}, crs="EPSG:4326"
+        ).to_parquet(fields_file)
+        table = pq.read_table(fields_file)
+        geo = json.loads(table.schema.metadata[b"geo"])
+        geo["columns"]["geometry"]["crs"] = None
+        pq.write_table(
+            table.replace_schema_metadata({**table.schema.metadata, b"geo": json.dumps(geo)}),
+            fields_file,
+        )
+
+        with pytest.raises(ValueError, match="unknown CRS"):
+            assign_splits(
+                chips_file=chips_file,
+                split_type="predefined",
+                split_percents=(80, 10, 10),
+                random_seed=42,
+                fields_file=fields_file,
+            )
+
     def test_predefined_creates_validation_when_missing(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -534,3 +565,147 @@ class TestAssignSplits:
             r.levelname == "WARNING" and "No validation labels found" in r.message
             for r in caplog.records
         )
+
+
+TRAIN_BOX = box(0.1, 0.1, 0.2, 0.2)
+TEST_BOX = box(2.1, 0.1, 2.2, 0.2)
+
+
+def _write_chips(path: Path) -> None:
+    gpd.GeoDataFrame(
+        {"id": ["ftw-36NXF0000", "ftw-36NXF0001"], "geometry": [box(0, 0, 1, 1), box(2, 0, 3, 1)]},
+        crs="EPSG:4326",
+    ).to_parquet(path)
+
+
+def _write_duckdb_fields(
+    path: Path, geom_col: str = "geometry", crs: dict | str | None = None, to_crs: str | None = None
+) -> None:
+    """Fields as DuckDB writes them: untagged WKB, no crs key unless ``crs`` is given."""
+    import json
+
+    import duckdb
+    import pyarrow.parquet as pq
+    from shapely.ops import transform
+
+    boxes = [TRAIN_BOX, TEST_BOX]
+    if to_crs:
+        import pyproj
+
+        project = pyproj.Transformer.from_crs("EPSG:4326", to_crs, always_xy=True).transform
+        boxes = [transform(project, b) for b in boxes]
+    con = duckdb.connect()
+    con.install_extension("spatial")
+    con.load_extension("spatial")
+    rows = ", ".join(
+        f"('{s}', ST_GeomFromText('{b.wkt}'))"
+        for s, b in zip(["train", "test"], boxes, strict=True)
+    )
+    con.execute(
+        f"COPY (SELECT * FROM (VALUES {rows}) AS t(split, {geom_col})) TO '{path}' (FORMAT parquet)"
+    )
+    if crs is not None:
+        table = pq.read_table(path)
+        geo = json.loads(table.schema.metadata[b"geo"])
+        geo["columns"][geom_col]["crs"] = crs
+        pq.write_table(
+            table.replace_schema_metadata({**table.schema.metadata, b"geo": json.dumps(geo)}), path
+        )
+
+
+def _split_map(chips_file: Path, fields_file: Path) -> dict[str, str]:
+    assign_splits(
+        chips_file=chips_file,
+        split_type="predefined",
+        split_percents=(80, 10, 10),
+        random_seed=42,
+        fields_file=fields_file,
+    )
+    chips = gpd.read_parquet(chips_file)
+    return dict(zip(chips["id"], chips["split"], strict=True))
+
+
+EXPECTED = {"ftw-36NXF0000": "train", "ftw-36NXF0001": "test"}
+
+
+class TestPredefinedFieldsFormats:
+    """The predefined split reads fields however their GeoParquet was written."""
+
+    def test_untagged_wkb_without_crs(self, tmp_path: Path) -> None:
+        """No crs key (GeoParquet's OGC:CRS84 default), as DuckDB and the harmonized data write."""
+        _write_chips(tmp_path / "chips.parquet")
+        _write_duckdb_fields(tmp_path / "fields.parquet")
+        assert _split_map(tmp_path / "chips.parquet", tmp_path / "fields.parquet") == EXPECTED
+
+    def test_untagged_wkb_with_other_column_name(self, tmp_path: Path) -> None:
+        _write_chips(tmp_path / "chips.parquet")
+        _write_duckdb_fields(tmp_path / "fields.parquet", geom_col="geom")
+        assert _split_map(tmp_path / "chips.parquet", tmp_path / "fields.parquet") == EXPECTED
+
+    def test_untagged_wkb_with_minimal_projjson(self, tmp_path: Path) -> None:
+        """A PROJJSON of just an id, as gpio's convert writes, is read through its code."""
+        _write_chips(tmp_path / "chips.parquet")
+        crs = {"id": {"authority": "EPSG", "code": 4326}}
+        _write_duckdb_fields(tmp_path / "fields.parquet", crs=crs)
+        assert _split_map(tmp_path / "chips.parquet", tmp_path / "fields.parquet") == EXPECTED
+
+    def test_untagged_wkb_in_projected_crs(self, tmp_path: Path) -> None:
+        """A projected CRS in the metadata is honoured: the fields are reprojected to the chips."""
+        import pyproj
+
+        _write_chips(tmp_path / "chips.parquet")
+        crs = pyproj.CRS("EPSG:32631").to_json_dict()
+        _write_duckdb_fields(tmp_path / "fields.parquet", crs=crs, to_crs="EPSG:32631")
+        assert _split_map(tmp_path / "chips.parquet", tmp_path / "fields.parquet") == EXPECTED
+
+    def test_geoarrow_native_encoding(self, tmp_path: Path) -> None:
+        """Tagged GeoArrow (not WKB) still goes through geopandas' own reader."""
+        _write_chips(tmp_path / "chips.parquet")
+        gpd.GeoDataFrame(
+            {"split": ["train", "test"], "geometry": [TRAIN_BOX, TEST_BOX]}, crs="EPSG:4326"
+        ).to_parquet(tmp_path / "fields.parquet", geometry_encoding="geoarrow")
+        assert _split_map(tmp_path / "chips.parquet", tmp_path / "fields.parquet") == EXPECTED
+
+    def test_geoarrow_with_other_column_name(self, tmp_path: Path) -> None:
+        """A tagged geometry column not named 'geometry' is renamed for the join."""
+        _write_chips(tmp_path / "chips.parquet")
+        gpd.GeoDataFrame(
+            {"split": ["train", "test"], "geom": [TRAIN_BOX, TEST_BOX]},
+            geometry="geom",
+            crs="EPSG:4326",
+        ).to_parquet(tmp_path / "fields.parquet")
+        assert _split_map(tmp_path / "chips.parquet", tmp_path / "fields.parquet") == EXPECTED
+
+    def test_untagged_wkb_with_wkt1_crs(self, tmp_path: Path) -> None:
+        """A WKT1 crs is read whole, not by its first inner AUTHORITY (the ellipsoid's)."""
+        import pyproj
+
+        _write_chips(tmp_path / "chips.parquet")
+        wkt = pyproj.CRS("EPSG:32631").to_wkt("WKT1_GDAL")
+        _write_duckdb_fields(tmp_path / "fields.parquet", crs=wkt, to_crs="EPSG:32631")
+        assert _split_map(tmp_path / "chips.parquet", tmp_path / "fields.parquet") == EXPECTED
+
+    def test_untagged_wkb_with_unreadable_crs(self, tmp_path: Path) -> None:
+        _write_chips(tmp_path / "chips.parquet")
+        _write_duckdb_fields(tmp_path / "fields.parquet", crs="not a crs")
+        with pytest.raises(ValueError, match="unreadable CRS"):
+            _split_map(tmp_path / "chips.parquet", tmp_path / "fields.parquet")
+
+    def test_untagged_non_wkb_is_refused(self, tmp_path: Path) -> None:
+        """Native encoding without its GeoArrow type cannot be decoded, so it is refused."""
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        fields_file = tmp_path / "fields.parquet"
+        _write_chips(tmp_path / "chips.parquet")
+        gpd.GeoDataFrame(
+            {"split": ["train", "test"], "geometry": [TRAIN_BOX, TEST_BOX]}, crs="EPSG:4326"
+        ).to_parquet(fields_file, geometry_encoding="geoarrow")
+        table = pq.read_table(fields_file)
+        storage = table["geometry"].combine_chunks().storage
+        index = table.schema.get_field_index("geometry")
+        untagged = table.set_column(index, pa.field("geometry", storage.type), storage)
+        pq.write_table(untagged.replace_schema_metadata(table.schema.metadata), fields_file)
+
+        with pytest.raises(ValueError, match="without a GeoArrow type"):
+            _split_map(tmp_path / "chips.parquet", fields_file)
