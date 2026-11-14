@@ -932,9 +932,13 @@ def _published_field_embeddings(ctx: PipelineContext) -> Path | None:
     if not ctx.config.stages.chips.field_embeddings:
         return None
     _require(ctx.field_embeddings_path, stage="stac", produced_by="chips")
-    if ctx.effective_year is None or not field_embeddings.is_current(
-        ctx.field_embeddings_path, ctx.output_fields_path, year=ctx.effective_year
-    ):
+    try:
+        current = ctx.effective_year is not None and field_embeddings.is_current(
+            ctx.field_embeddings_path, ctx.output_fields_path, year=ctx.effective_year
+        )
+    except field_embeddings.FieldEmbeddingsError as err:
+        raise StageInputError(str(err)) from err
+    if not current:
         raise StageInputError(
             f"{ctx.field_embeddings_path.name} is not for the current fields, year and "
             "products. Run the 'chips' stage first."

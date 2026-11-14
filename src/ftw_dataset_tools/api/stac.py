@@ -579,6 +579,13 @@ def _previous_asset_file(previous: dict, output_dir: Path, key: str) -> Path | N
 
 
 FIELD_EMBEDDINGS_ASSET = "field_embeddings"
+#: On a ``license`` link that covers one asset rather than the whole collection.
+ASSET_LICENSE_KEY = "ftw:applies_to"
+
+
+def is_dataset_license_link(link: dict) -> bool:
+    """A ``license`` link for the dataset itself, not one covering a single asset."""
+    return link.get("rel") == "license" and ASSET_LICENSE_KEY not in link
 
 
 def _add_field_embeddings(collection: Collection, path: Path, *, checksums: bool) -> None:
@@ -616,6 +623,7 @@ def _add_field_embeddings(collection: Collection, path: Path, *, checksums: bool
         )
     if field_embeddings.OLMOEARTH.key in included:
         # The collection license covers the dataset; these columns also carry Ai2's terms.
+        # Marked as applying to the asset only, so it is never read as the dataset's own.
         collection.add_link(
             Link(
                 rel="license",
@@ -623,6 +631,7 @@ def _add_field_embeddings(collection: Collection, path: Path, *, checksums: bool
                 media_type="text/plain",
                 title="OlmoEarth Artifact License, for the olmoearth_* columns of "
                 "the field_embeddings asset (including its Section 2 use restrictions)",
+                extra_fields={ASSET_LICENSE_KEY: FIELD_EMBEDDINGS_ASSET},
             )
         )
 
@@ -633,7 +642,7 @@ def _has_license(collection: dict | None) -> bool:
         return False
     links = collection.get("links", [])
     return collection.get("license", "other") != "other" or any(
-        link.get("rel") == "license" for link in links
+        is_dataset_license_link(link) for link in links
     )
 
 
@@ -649,7 +658,8 @@ def _restore_collection_metadata(collection: Collection, previous: dict) -> None
     if previous.get("version"):
         VersionExtension.ext(collection, add_if_missing=True).version = previous["version"]
     for link in previous.get("links", []):
-        if link.get("rel") in ("license", "via"):
+        # Asset licence links are added again with their asset, so they are not restored.
+        if link.get("rel") == "via" or is_dataset_license_link(link):
             collection.add_link(Link.from_dict(link))
     collection.extra_fields.update({k: v for k, v in previous.items() if k.startswith("ftw:")})
 

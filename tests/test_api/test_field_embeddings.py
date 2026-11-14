@@ -583,7 +583,7 @@ class TestSecondReviewFindings:
 
         fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
         out = tmp_path / "o.parquet"
-        with (tmp_path / "o.parquet.lock").open("w") as held:
+        with fe._lock_path(out.resolve()).open("w") as held:
             fcntl.flock(held, fcntl.LOCK_EX)
             with pytest.raises(FieldEmbeddingsError, match="another run"):
                 add_field_embeddings(fields, out, year=2022, sources={"aef": FakeSource(0)})
@@ -609,8 +609,9 @@ class TestSecondReviewFindings:
     def test_a_zero_area_field_is_placed_by_its_bbox(self, tmp_path: Path) -> None:
         line = Polygon([(X + 1, Y + 1), (X + 31, Y + 31), (X + 61, Y + 61), (X + 1, Y + 1)])
         _, rows, sources = self.run(tmp_path, {"flat": line, "ok": box(X, Y, X + 20, Y + 20)})
-        # No area, so no pixels, but read where it is rather than at (0, 0).
-        assert not rows["flat"]["pixels"]
+        # No area, so no pixel centre: it is placed by its bbox and takes touched pixels.
+        assert rows["flat"]["pixel_rule"] == "touched"
+        assert rows["flat"]["pixels"] > 0
         assert rows["ok"]["pixels"] == 4
         assert sources["aef"].reads
         assert all(abs(w.x0 - X) < BLOCK and abs(w.y1 - Y) < BLOCK for w in sources["aef"].reads)
@@ -647,3 +648,23 @@ class TestSecondReviewFindings:
         add_field_embeddings(fields, out, year=2016)
         monkeypatch.setattr(fe, "ALGORITHM_VERSION", fe.ALGORITHM_VERSION + 1)
         assert not fe.is_current(out, fields, year=2016)
+
+
+class TestRetryScope:
+    def test_a_bug_is_not_retried(self) -> None:
+        calls = []
+
+        def broken():
+            calls.append(1)
+            raise TypeError("bad argument")
+
+        with pytest.raises(TypeError):
+            fe._with_retries(broken, "x")
+        assert calls == [1]
+
+    def test_the_lock_is_not_in_the_dataset_folder(self, tmp_path: Path) -> None:
+        fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
+        add_field_embeddings(
+            fields, tmp_path / "o.parquet", year=2022, sources={"aef": FakeSource(0)}
+        )
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["f.parquet", "o.parquet"]

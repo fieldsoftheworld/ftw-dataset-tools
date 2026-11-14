@@ -1331,6 +1331,25 @@ class TestFieldEmbeddings:
         licenses = [link for link in coll["links"] if link["rel"] == "license"]
         assert [link["href"] for link in licenses] == [field_embeddings.OLMOEARTH.license]
         assert "Section 2" in licenses[0]["title"]
+        assert licenses[0]["ftw:applies_to"] == "field_embeddings"
+
+    def test_the_asset_license_is_not_the_dataset_license(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api import stac
+        from ftw_dataset_tools.api.docs import _license_link
+
+        path = _write_field_embeddings(
+            tmp_path / "ds_field_embeddings.parquet", ("aef", "olmoearth")
+        )
+        build_catalog(tmp_path, field_embeddings_file=path)
+        result = build_catalog(tmp_path)  # a rebuild without config restores links
+
+        coll = json.loads(result.collection_path.read_text())
+        licenses = [link for link in coll["links"] if link["rel"] == "license"]
+        assert len(licenses) == 1
+        assert not stac._has_license(coll)
+        assert "OlmoEarth" not in _license_link({**coll, "license": "other"})
 
     def test_without_the_file_there_is_no_asset(self, tmp_path: Path) -> None:
         import json

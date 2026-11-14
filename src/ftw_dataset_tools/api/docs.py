@@ -515,7 +515,8 @@ _NON_SPDX_LICENSES = {"other", "proprietary"}
 def _license_rel_link(collection: dict) -> tuple[str, str] | None:
     """``(title, href)`` of the collection's ``license`` link, when it has one."""
     for link in collection.get("links") or []:
-        if link.get("rel") == "license" and link.get("href"):
+        # A link marked ftw:applies_to covers one asset (the OlmoEarth columns), not the dataset.
+        if link.get("rel") == "license" and link.get("href") and "ftw:applies_to" not in link:
             return str(link.get("title") or "License terms"), str(link["href"])
     return None
 

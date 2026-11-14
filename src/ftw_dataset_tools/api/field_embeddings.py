@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import math
+import tempfile
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -429,8 +430,8 @@ def _with_retries(read: Callable[[], Any], what: str) -> Any:
     for attempt in range(READ_ATTEMPTS):
         try:
             return read()
-        except GridError:
-            raise
+        except (GridError, TypeError, AttributeError, KeyError, IndexError, NameError):
+            raise  # a mismatch or a bug: retrying cannot help
         except Exception as err:
             if attempt == READ_ATTEMPTS - 1:
                 raise SourceFetchError(
@@ -819,10 +820,12 @@ def _plan(con: duckdb.DuckDBPyConnection, fields_sql: str, geom_col: str, crs: C
     rows = con.execute(f"""
         SELECT file_row_number AS rid, ST_X(c) AS x, ST_Y(c) AS y FROM (
             SELECT file_row_number,
-                   -- A zero-area polygon has no centroid; its bbox centre will do.
-                   coalesce(ST_Centroid("{geom_col}"),
-                            ST_Point((ST_XMin("{geom_col}") + ST_XMax("{geom_col}")) / 2,
-                                     (ST_YMin("{geom_col}") + ST_YMax("{geom_col}")) / 2)) AS c
+                   -- A zero-area polygon's centroid is empty (or NULL); use its bbox centre.
+                   CASE WHEN ST_Centroid("{geom_col}") IS NULL
+                             OR ST_IsEmpty(ST_Centroid("{geom_col}"))
+                        THEN ST_Point((ST_XMin("{geom_col}") + ST_XMax("{geom_col}")) / 2,
+                                      (ST_YMin("{geom_col}") + ST_YMax("{geom_col}")) / 2)
+                        ELSE ST_Centroid("{geom_col}") END AS c
             FROM {fields_sql}
             WHERE "{geom_col}" IS NOT NULL AND NOT ST_IsEmpty("{geom_col}"))""").fetchnumpy()
     rid = np.asarray(rows["rid"])
@@ -1120,7 +1123,7 @@ class _Parts:
         import fcntl
         import shutil
 
-        lock = output_path.with_name(output_path.name + ".lock").open("w")
+        lock = _lock_path(output_path).open("w")
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as err:
@@ -1189,6 +1192,14 @@ class _Parts:
         import shutil
 
         shutil.rmtree(self.root, ignore_errors=True)
+
+
+def _lock_path(output_path: Path) -> Path:
+    """Where a run on ``output_path`` keeps its lock: the temp dir, not the dataset folder."""
+    import hashlib
+
+    digest = hashlib.blake2b(str(output_path).encode(), digest_size=8).hexdigest()
+    return Path(tempfile.gettempdir()) / f"ftwd-field-embeddings-{digest}.lock"
 
 
 def _warn_on_ids(con: duckdb.DuckDBPyConnection, fields_sql: str, id_col: str) -> None:
