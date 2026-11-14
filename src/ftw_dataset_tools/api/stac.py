@@ -28,7 +28,7 @@ from pystac import (
 from pystac.extensions.version import VersionExtension
 from pystac.layout import TemplateLayoutStrategy
 
-from ftw_dataset_tools.api import admin_names, land_cover
+from ftw_dataset_tools.api import admin_names, field_embeddings, land_cover
 from ftw_dataset_tools.api.assets import (
     add_file_info,
     add_mask_classification,
@@ -566,11 +566,74 @@ def _read_previous_collection(output_dir: Path, collection_id: str) -> dict | No
 
 def _previous_filtered_fields(previous: dict, output_dir: Path) -> Path | None:
     """The filtered fields file the earlier collection published, if still on disk."""
-    asset = previous.get("assets", {}).get("fields_filtered")
+    return _previous_asset_file(previous, output_dir, "fields_filtered")
+
+
+def _previous_asset_file(previous: dict, output_dir: Path, key: str) -> Path | None:
+    """The file behind one of the earlier collection's assets, if still on disk."""
+    asset = previous.get("assets", {}).get(key)
     if not asset:
         return None
     path = output_dir / asset["href"]
     return path if path.is_file() else None
+
+
+FIELD_EMBEDDINGS_ASSET = "field_embeddings"
+#: On a ``license`` link that covers one asset rather than the whole collection.
+ASSET_LICENSE_KEY = "ftw:applies_to"
+
+
+def is_dataset_license_link(link: dict) -> bool:
+    """A ``license`` link for the dataset itself, not one covering a single asset."""
+    return link.get("rel") == "license" and ASSET_LICENSE_KEY not in link
+
+
+def _add_field_embeddings(collection: Collection, path: Path, *, checksums: bool) -> None:
+    """The per-field embedding statistics asset, and a derived_from link per product."""
+    description = field_embeddings.read_description(path) or {}
+    included = [
+        key for key, product in description.get("products", {}).items() if product.get("included")
+    ]
+    names = {"aef": "AlphaEarth Foundations", "olmoearth": "OlmoEarth v1.3"}
+    _add_parquet_asset(
+        collection,
+        FIELD_EMBEDDINGS_ASSET,
+        path,
+        "Per-field embedding statistics ("
+        + (", ".join(names[k] for k in included) or "no product had this year")
+        + ")",
+        checksums=checksums,
+    )
+    collection.assets[FIELD_EMBEDDINGS_ASSET].extra_fields["ftw:embedding_products"] = included
+    collection.assets[FIELD_EMBEDDINGS_ASSET].description = (
+        f"Mean and standard deviation of each embedding dimension over each field's "
+        f"pixels, for {description.get('year', 'the dataset year')}; joins onto the fields "
+        f"by `{description.get('id_column', 'id')}`. "
+        + " ".join(field_embeddings.PRODUCTS[key].attribution + "." for key in included)
+    )
+    for key in included:
+        product = field_embeddings.PRODUCTS[key]
+        collection.add_link(
+            Link(
+                rel="derived_from",
+                target=product.url,
+                media_type="text/html",
+                title=product.attribution,
+            )
+        )
+    if field_embeddings.OLMOEARTH.key in included:
+        # The collection license covers the dataset; these columns also carry Ai2's terms.
+        # Marked as applying to the asset only, so it is never read as the dataset's own.
+        collection.add_link(
+            Link(
+                rel="license",
+                target=field_embeddings.OLMOEARTH.license,
+                media_type="text/plain",
+                title="OlmoEarth Artifact License, for the olmoearth_* columns of "
+                "the field_embeddings asset (including its Section 2 use restrictions)",
+                extra_fields={ASSET_LICENSE_KEY: FIELD_EMBEDDINGS_ASSET},
+            )
+        )
 
 
 def _has_license(collection: dict | None) -> bool:
@@ -579,7 +642,7 @@ def _has_license(collection: dict | None) -> bool:
         return False
     links = collection.get("links", [])
     return collection.get("license", "other") != "other" or any(
-        link.get("rel") == "license" for link in links
+        is_dataset_license_link(link) for link in links
     )
 
 
@@ -595,7 +658,8 @@ def _restore_collection_metadata(collection: Collection, previous: dict) -> None
     if previous.get("version"):
         VersionExtension.ext(collection, add_if_missing=True).version = previous["version"]
     for link in previous.get("links", []):
-        if link.get("rel") in ("license", "via"):
+        # Asset licence links are added again with their asset, so they are not restored.
+        if link.get("rel") == "via" or is_dataset_license_link(link):
             collection.add_link(Link.from_dict(link))
     collection.extra_fields.update({k: v for k, v in previous.items() if k.startswith("ftw:")})
 
@@ -1176,6 +1240,7 @@ def generate_stac_catalog(
     boundary_lines_file: Path | str,
     *,
     filtered_fields_file: Path | None = None,
+    field_embeddings_file: Path | None = None,
     grid_id_col: str = "id",
     year: int | None = None,
     provenance: dict | None = None,
@@ -1203,6 +1268,8 @@ def generate_stac_catalog(
         fields_file: Path to fields parquet file
         chips_file: Path to chips parquet file
         boundary_lines_file: Path to boundary lines parquet file
+        field_embeddings_file: Optional per-field embedding statistics parquet; when
+            given, a ``field_embeddings`` asset and links to both products are added.
         filtered_fields_file: Optional path to the class-filtered fields parquet file;
             when given, a ``fields_filtered`` asset is added to the collection.
         grid_id_col: Column in the chips file holding the grid cell id. Must match the
@@ -1274,6 +1341,8 @@ def generate_stac_catalog(
     previous = _read_previous_collection(output_dir, field_dataset) if config is None else None
     if previous is not None and filtered_fields_file is None:
         filtered_fields_file = _previous_filtered_fields(previous, output_dir)
+    if previous is not None and field_embeddings_file is None:
+        field_embeddings_file = _previous_asset_file(previous, output_dir, FIELD_EMBEDDINGS_ASSET)
 
     metadata = config.metadata if config is not None else None
     if not (metadata and metadata.license) and not _has_license(previous):
@@ -1296,6 +1365,8 @@ def generate_stac_catalog(
     )
 
     _apply_collection_context(collection, config, metadata, previous, provenance)
+    if field_embeddings_file is not None:
+        _add_field_embeddings(collection, Path(field_embeddings_file), checksums=checksums)
 
     groups = _add_square_subcatalogs(collection, items, item_squares)
 

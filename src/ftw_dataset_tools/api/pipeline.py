@@ -31,6 +31,7 @@ from ftw_dataset_tools.api import (
     class_filter,
     crop_stats,
     docs,
+    field_embeddings,
     field_stats,
     label_extent,
     land_cover,
@@ -185,6 +186,7 @@ class PipelineContext:
     label_extent_result: label_extent.LabelExtentChipsResult | None = None
     scale_result: scale.ScaleResult | None = None
     land_cover_result: land_cover.LandCoverResult | None = None
+    field_embeddings_result: field_embeddings.FieldEmbeddingsResult | None = None
     splits_result: splits.CreateSplitsResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
@@ -202,6 +204,7 @@ class PipelineContext:
     field_polygons_path: Path = field(init=False)
     chips_path: Path = field(init=False)
     boundary_lines_path: Path = field(init=False)
+    field_embeddings_path: Path = field(init=False)
     chips_base_dir: Path = field(init=False)
 
     def __post_init__(self) -> None:
@@ -216,6 +219,7 @@ class PipelineContext:
             self.field_polygons_path = self.output_fields_path
         self.chips_path = self.output_dir / f"{name}_chips.parquet"
         self.boundary_lines_path = self.output_dir / f"{name}_boundary_lines.parquet"
+        self.field_embeddings_path = self.output_dir / f"{name}_field_embeddings.parquet"
         self.chips_base_dir = stac.chips_base_dir_for(self.output_dir)
 
     @property
@@ -667,6 +671,33 @@ def stage_chips(ctx: PipelineContext) -> None:
         crop_stats.drop_crop_stats(ctx.chips_path)
     _add_land_cover(ctx)
     _add_admin_names(ctx)
+    _add_field_embeddings(ctx)
+
+
+def _add_field_embeddings(ctx: PipelineContext) -> None:
+    """Write the per-field embedding statistics, unless the file already matches.
+
+    Reading the embeddings under a national dataset takes hours, so a file written for
+    the same fields (by content, not timestamp: reproject rewrites the fields file on
+    every run), year and products is kept.
+    """
+    path = ctx.field_embeddings_path
+    if not ctx.config.stages.chips.field_embeddings:
+        if path.exists():
+            path.unlink()
+            logger.info(f"Removed {path.name} (stages.chips.field_embeddings is off)")
+        shutil.rmtree(path.with_name(path.name + ".partial"), ignore_errors=True)
+        return
+    if ctx.effective_year is None:
+        raise StageInputError(
+            "stages.chips.field_embeddings needs the dataset year: set year in the config"
+        )
+    if field_embeddings.is_current(path, ctx.output_fields_path, year=ctx.effective_year):
+        logger.info(f"Keeping {path.name}: same fields, year and products")
+        return
+    ctx.field_embeddings_result = field_embeddings.add_field_embeddings(
+        ctx.output_fields_path, path, year=ctx.effective_year
+    )
 
 
 def _add_admin_names(ctx: PipelineContext) -> None:
@@ -882,6 +913,7 @@ def stage_stac(ctx: PipelineContext) -> None:
         filtered_fields_file=(
             ctx.field_polygons_path if ctx.config.class_filter is not None else None
         ),
+        field_embeddings_file=_published_field_embeddings(ctx),
         year=ctx.effective_year,
         provenance=ctx.provenance,
         checksums=ctx.config.stages.stac.checksums,
@@ -893,6 +925,25 @@ def stage_stac(ctx: PipelineContext) -> None:
     n = ctx.stac_result.total_items
     k = len(ctx.stac_result.subcatalog_paths)
     logger.info(f"Created STAC collection with {n} items in {k} sub-catalog(s)")
+
+
+def _published_field_embeddings(ctx: PipelineContext) -> Path | None:
+    """The field embeddings file to publish: required when the step is on, never when off."""
+    if not ctx.config.stages.chips.field_embeddings:
+        return None
+    _require(ctx.field_embeddings_path, stage="stac", produced_by="chips")
+    try:
+        current = ctx.effective_year is not None and field_embeddings.is_current(
+            ctx.field_embeddings_path, ctx.output_fields_path, year=ctx.effective_year
+        )
+    except field_embeddings.FieldEmbeddingsError as err:
+        raise StageInputError(str(err)) from err
+    if not current:
+        raise StageInputError(
+            f"{ctx.field_embeddings_path.name} is not for the current fields, year and "
+            "products. Run the 'chips' stage first."
+        )
+    return ctx.field_embeddings_path
 
 
 def stage_select_images(ctx: PipelineContext) -> None:

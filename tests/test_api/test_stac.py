@@ -393,6 +393,7 @@ def build_catalog(
     background_class_value: int = 0,
     crop_calendar: bool = True,
     label_extent: bool = False,
+    field_embeddings_file: Path | None = None,
 ):
     """Build a one-chip STAC catalog in ``tmp_path``; safe to call again on the same tree."""
     import geopandas as gpd
@@ -439,6 +440,7 @@ def build_catalog(
         chips_file=chips_path,
         boundary_lines_file=lines_path,
         filtered_fields_file=filtered_fields_path,
+        field_embeddings_file=field_embeddings_file,
         year=2024,
         checksums=checksums,
         config=config,
@@ -1276,6 +1278,98 @@ class TestChipProperties:
         item_path = next((tmp_path / "chips").glob("*/*/*.json"))
         props = json.loads(item_path.read_text())["properties"]
         assert not [key for key in props if key.startswith("ftw:landcover_")]
+
+
+def _write_field_embeddings(path: Path, products: tuple[str, ...]) -> Path:
+    import json
+
+    import duckdb
+
+    from ftw_dataset_tools.api import field_embeddings
+
+    meta = json.dumps(field_embeddings.describe(2024, "id", products)).replace("'", "''")
+    duckdb.sql(
+        f"COPY (SELECT 1 AS id, 4 AS pixels, [0.5]::FLOAT[] AS aef_mean) TO '{path}' "
+        f"(FORMAT parquet, KV_METADATA {{'{field_embeddings.METADATA_KEY}': '{meta}'}})"
+    )
+    return path
+
+
+class TestFieldEmbeddings:
+    def test_asset_and_a_link_per_included_product(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api import field_embeddings
+
+        path = _write_field_embeddings(tmp_path / "ds_field_embeddings.parquet", ("aef",))
+        result = build_catalog(tmp_path, field_embeddings_file=path)
+
+        coll = json.loads(result.collection_path.read_text())
+        asset = coll["assets"]["field_embeddings"]
+        assert asset["href"] == "./ds_field_embeddings.parquet"
+        assert asset["table:row_count"] == 1
+        assert "joins onto the fields by `id`" in asset["description"]
+        assert "Google DeepMind" in asset["description"]
+        assert "Ai2" not in asset["description"]
+        derived = [link["href"] for link in coll["links"] if link["rel"] == "derived_from"]
+        assert derived == [field_embeddings.AEF.url]
+        assert asset["ftw:embedding_products"] == ["aef"]
+        assert asset["title"] == "Per-field embedding statistics (AlphaEarth Foundations)"
+        assert field_embeddings.OLMOEARTH.license not in [link["href"] for link in coll["links"]]
+
+    def test_olmoearth_columns_get_a_license_link(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api import field_embeddings
+
+        path = _write_field_embeddings(
+            tmp_path / "ds_field_embeddings.parquet", ("aef", "olmoearth")
+        )
+        result = build_catalog(tmp_path, field_embeddings_file=path)
+
+        coll = json.loads(result.collection_path.read_text())
+        licenses = [link for link in coll["links"] if link["rel"] == "license"]
+        assert [link["href"] for link in licenses] == [field_embeddings.OLMOEARTH.license]
+        assert "Section 2" in licenses[0]["title"]
+        assert licenses[0]["ftw:applies_to"] == "field_embeddings"
+
+    def test_the_asset_license_is_not_the_dataset_license(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api import stac
+        from ftw_dataset_tools.api.docs import _license_link
+
+        path = _write_field_embeddings(
+            tmp_path / "ds_field_embeddings.parquet", ("aef", "olmoearth")
+        )
+        build_catalog(tmp_path, field_embeddings_file=path)
+        result = build_catalog(tmp_path)  # a rebuild without config restores links
+
+        coll = json.loads(result.collection_path.read_text())
+        licenses = [link for link in coll["links"] if link["rel"] == "license"]
+        assert len(licenses) == 1
+        assert not stac._has_license(coll)
+        assert "OlmoEarth" not in _license_link({**coll, "license": "other"})
+
+    def test_without_the_file_there_is_no_asset(self, tmp_path: Path) -> None:
+        import json
+
+        result = build_catalog(tmp_path)
+
+        assert "field_embeddings" not in json.loads(result.collection_path.read_text())["assets"]
+
+    def test_a_rebuild_without_config_keeps_the_published_asset(self, tmp_path: Path) -> None:
+        import json
+
+        path = _write_field_embeddings(
+            tmp_path / "ds_field_embeddings.parquet", ("aef", "olmoearth")
+        )
+        build_catalog(tmp_path, field_embeddings_file=path)
+        result = build_catalog(tmp_path)
+
+        coll = json.loads(result.collection_path.read_text())
+        assert "field_embeddings" in coll["assets"]
+        assert "Section 2" in coll["assets"]["field_embeddings"]["description"]
 
 
 class TestAdminNames:

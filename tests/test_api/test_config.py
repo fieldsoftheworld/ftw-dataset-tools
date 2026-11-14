@@ -260,6 +260,19 @@ class TestFromDict:
                 {"fields_file": "f.parquet", "stages": {"chips": {"admin_names": 1}}}
             )
 
+    def test_field_embeddings_defaults_false(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+
+        assert config.stages.chips.field_embeddings is False
+
+    def test_field_embeddings_non_bool_raises(self) -> None:
+        with pytest.raises(
+            ConfigError, match=r"stages\.chips\.field_embeddings must be true or false"
+        ):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"chips": {"field_embeddings": "yes"}}}
+            )
+
     def test_skip_existing_defaults_false(self) -> None:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
 

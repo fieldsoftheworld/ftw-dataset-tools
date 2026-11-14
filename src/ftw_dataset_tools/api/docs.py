@@ -172,6 +172,8 @@ ASSET_NOTES = {
     "chips_tiles": "vector tiles of the chips, for maps (PMTiles)",
     "fields_tiles": "vector tiles of the fields, for maps (PMTiles)",
     "boundary_lines": "field boundaries as lines rather than polygons (GeoParquet)",
+    "field_embeddings": "per-field mean and std of the AlphaEarth Foundations and OlmoEarth "
+    "v1.3 embeddings, one row per field (Parquet)",
 }
 
 STYLE_BLURBS = {
@@ -513,7 +515,8 @@ _NON_SPDX_LICENSES = {"other", "proprietary"}
 def _license_rel_link(collection: dict) -> tuple[str, str] | None:
     """``(title, href)`` of the collection's ``license`` link, when it has one."""
     for link in collection.get("links") or []:
-        if link.get("rel") == "license" and link.get("href"):
+        # A link marked ftw:applies_to covers one asset (the OlmoEarth columns), not the dataset.
+        if link.get("rel") == "license" and link.get("href") and "ftw:applies_to" not in link:
             return str(link.get("title") or "License terms"), str(link["href"])
     return None
 
@@ -781,6 +784,49 @@ def _readme_access(collection: dict) -> str:
     )
 
 
+def _field_embeddings_section(collection: dict) -> str:
+    """How to read the per-field embedding statistics, and the terms they come with."""
+    from ftw_dataset_tools.api.field_embeddings import AEF, OLMOEARTH
+
+    asset = (collection.get("assets") or {}).get("field_embeddings")
+    if not asset:
+        return ""
+    href = _asset_href(collection, "field_embeddings", "field_embeddings.parquet")
+    fields = _asset_href(collection, "fields", "fields.parquet")
+    columns = asset.get("table:columns") or [{"name": "id"}]
+    id_col = columns[0]["name"]
+    included = asset.get("ftw:embedding_products", [AEF.key, OLMOEARTH.key])
+    bullets = []
+    if AEF.key in included:
+        bullets.append(f"- `aef_*`: {_link(AEF.title, AEF.url)}. {AEF.notes} {AEF.license}.")
+    if OLMOEARTH.key in included:
+        bullets.append(
+            f"- `olmoearth_*`: {_link(OLMOEARTH.title, OLMOEARTH.url)}. {OLMOEARTH.notes} "
+            f"{_link('OlmoEarth Artifact License', OLMOEARTH.license)}: cite Ai2, and its "
+            "use restrictions (Section 2) apply to anything derived from these columns."
+        )
+    if not bullets:
+        bullets.append("- No embedding product covers this dataset's year; the columns are empty.")
+    return (
+        "## Field embeddings\n\n"
+        f"`{href}` has one row per field in `{fields}`, keyed by `{id_col}`. For each "
+        "product it holds the mean (`<product>_mean`) and standard deviation "
+        "(`<product>_std`, population std) of every embedding dimension over the field's "
+        "10 m pixels, as "
+        "64-value float lists, and the pixels used (`<product>_pixels`):\n\n"
+        + "\n".join(bullets)
+        + "\n\n"
+        "A field takes the pixels whose centre is inside it; a field too small to hold one "
+        "uses every pixel it touches (`pixel_rule = 'touched'`). The values are already "
+        "dequantised. Fields with no pixels a product covers have no value for it.\n\n"
+        "```sql\n"
+        "INSTALL spatial; LOAD spatial;\n"
+        f"SELECT f.*, e.aef_mean, e.olmoearth_mean FROM read_parquet('{fields}') f\n"
+        f"JOIN read_parquet('{href}') e USING ({id_col}) LIMIT 5;\n"
+        "```"
+    )
+
+
 def render_readme(
     collection: dict, stats: dict, styles: list[StyleResult], config_dict: dict
 ) -> str:
@@ -795,6 +841,7 @@ def render_readme(
             _readme_uses(stats),
             _readme_limitations(stats),
             _readme_access(collection),
+            _field_embeddings_section(collection),
         ]
     )
 
@@ -980,6 +1027,7 @@ def render_agents(
             _agents_schema(stats),
             _agents_quality(stats),
             _agents_queries(queries),
+            _field_embeddings_section(collection),
             _agents_related(collection),
         ]
     )

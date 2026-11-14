@@ -1695,6 +1695,142 @@ class TestChipsStageAdminNames:
         assert any("stages.chips.admin_names: true" in m for m in caplog.messages)
 
 
+def _embeddings_ctx(tmp_path: Path, monkeypatch, *, on: bool) -> pipeline.PipelineContext:
+    ctx = _admin_ctx(tmp_path, monkeypatch, on=False)
+    ctx.config.stages.chips.field_embeddings = on
+    gpd.read_parquet(ctx.field_polygons_path).to_parquet(ctx.output_fields_path)
+    return ctx
+
+
+class TestChipsStageFieldEmbeddings:
+    def _record(self, monkeypatch) -> list[tuple]:
+        from ftw_dataset_tools.api import field_embeddings
+
+        calls: list[tuple] = []
+
+        def fake(fields, out, *, year):
+            calls.append((Path(fields), Path(out), year))
+            Path(out).write_bytes(b"x")
+
+        monkeypatch.setattr(field_embeddings, "add_field_embeddings", fake)
+        return calls
+
+    def test_enabled_writes_them_for_the_fields_and_year(self, tmp_path: Path, monkeypatch) -> None:
+        ctx = _embeddings_ctx(tmp_path, monkeypatch, on=True)
+        calls = self._record(monkeypatch)
+
+        pipeline.stage_chips(ctx)
+
+        assert calls == [(ctx.output_fields_path, ctx.field_embeddings_path, 2024)]
+        assert ctx.field_embeddings_path.name == "fields_field_embeddings.parquet"
+
+    def test_a_current_file_is_kept(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import field_embeddings
+
+        ctx = _embeddings_ctx(tmp_path, monkeypatch, on=True)
+        calls = self._record(monkeypatch)
+        seen: list[tuple] = []
+
+        def current(path, fields, *, year):
+            seen.append((Path(path), Path(fields), year))
+            return True
+
+        monkeypatch.setattr(field_embeddings, "is_current", current)
+        pipeline.stage_chips(ctx)
+
+        assert calls == []
+        assert seen == [(ctx.field_embeddings_path, ctx.output_fields_path, 2024)]
+
+    def test_a_stale_file_is_rebuilt(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import field_embeddings
+
+        ctx = _embeddings_ctx(tmp_path, monkeypatch, on=True)
+        calls = self._record(monkeypatch)
+        monkeypatch.setattr(field_embeddings, "is_current", lambda *_a, **_k: False)
+
+        pipeline.stage_chips(ctx)
+
+        assert len(calls) == 1
+
+    def test_needs_a_year(self, tmp_path: Path, monkeypatch) -> None:
+        ctx = _embeddings_ctx(tmp_path, monkeypatch, on=True)
+        self._record(monkeypatch)
+        ctx.effective_year = None
+
+        with pytest.raises(pipeline.StageInputError, match="needs the dataset year"):
+            pipeline.stage_chips(ctx)
+
+    def test_disabled_removes_a_previous_file(self, tmp_path: Path, monkeypatch) -> None:
+        ctx = _embeddings_ctx(tmp_path, monkeypatch, on=False)
+        calls = self._record(monkeypatch)
+        ctx.field_embeddings_path.write_bytes(b"x")
+
+        pipeline.stage_chips(ctx)
+
+        assert calls == []
+        assert not ctx.field_embeddings_path.exists()
+
+    def _stac_kwargs(self, tmp_path: Path, monkeypatch, ctx) -> dict:
+        from ftw_dataset_tools.api import stac
+
+        TestStacStageStaleLandCover()._stub_stac(tmp_path, monkeypatch, ctx)
+        seen: dict = {}
+        stub = stac.generate_stac_catalog
+
+        def capture(**kwargs):
+            seen.update(kwargs)
+            return stub(**kwargs)
+
+        monkeypatch.setattr(stac, "generate_stac_catalog", capture)
+        pipeline.stage_stac(ctx)
+        return seen
+
+    def test_stac_stage_publishes_the_file_when_enabled(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import field_embeddings
+
+        ctx = _embeddings_ctx(tmp_path, monkeypatch, on=True)
+        ctx.field_embeddings_path.write_bytes(b"x")
+        monkeypatch.setattr(field_embeddings, "is_current", lambda *_a, **_k: True)
+
+        kwargs = self._stac_kwargs(tmp_path, monkeypatch, ctx)
+
+        assert kwargs["field_embeddings_file"] == ctx.field_embeddings_path
+
+    def test_stac_stage_needs_the_file_when_enabled(self, tmp_path: Path, monkeypatch) -> None:
+        ctx = _embeddings_ctx(tmp_path, monkeypatch, on=True)
+
+        with pytest.raises(pipeline.StageInputError, match=r"field_embeddings\.parquet"):
+            self._stac_kwargs(tmp_path, monkeypatch, ctx)
+
+    def test_stac_stage_refuses_a_stale_file(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import field_embeddings
+
+        ctx = _embeddings_ctx(tmp_path, monkeypatch, on=True)
+        ctx.field_embeddings_path.write_bytes(b"x")
+        monkeypatch.setattr(field_embeddings, "is_current", lambda *_a, **_k: False)
+
+        with pytest.raises(pipeline.StageInputError, match="not for the current fields"):
+            self._stac_kwargs(tmp_path, monkeypatch, ctx)
+
+    def test_disabled_also_removes_saved_parts(self, tmp_path: Path, monkeypatch) -> None:
+        ctx = _embeddings_ctx(tmp_path, monkeypatch, on=False)
+        self._record(monkeypatch)
+        partial = ctx.field_embeddings_path.with_name(ctx.field_embeddings_path.name + ".partial")
+        partial.mkdir()
+
+        pipeline.stage_chips(ctx)
+
+        assert not partial.exists()
+
+    def test_stac_stage_ignores_a_file_when_disabled(self, tmp_path: Path, monkeypatch) -> None:
+        ctx = _embeddings_ctx(tmp_path, monkeypatch, on=False)
+        ctx.field_embeddings_path.write_bytes(b"x")
+
+        kwargs = self._stac_kwargs(tmp_path, monkeypatch, ctx)
+
+        assert kwargs["field_embeddings_file"] is None
+
+
 class TestDocsStage:
     """Tests for the final docs stage: tiles, styles, README/AGENTS, registration."""
 

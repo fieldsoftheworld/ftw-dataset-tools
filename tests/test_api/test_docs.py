@@ -957,3 +957,37 @@ class TestChipSizeLine:
         text = _readme_provenance({"links": [], "ftw:chip_size_km": 2.0}, {})
 
         assert "- Chips are 2 km (2,000 m) on a side" in text
+
+
+class TestFieldEmbeddingsSection:
+    def _collection(self, with_asset: bool) -> dict:
+        assets = {"fields": {"href": "./ds_fields.parquet"}}
+        if with_asset:
+            assets["field_embeddings"] = {"href": "./ds_field_embeddings.parquet"}
+        return {"title": "T", "links": [], "assets": assets}
+
+    def test_section_only_when_the_asset_is_there(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents, render_readme
+
+        assert "Field embeddings" not in render_readme(self._collection(False), _stats(), [], {})
+        readme = render_readme(self._collection(True), _stats(), [], {})
+        agents = render_agents(self._collection(True), _stats(), [])
+        for text in (readme, agents):
+            assert "## Field embeddings" in text
+            assert "ds_field_embeddings.parquet" in text
+            assert "Section 2" in text
+            assert "JOIN read_parquet('ds_field_embeddings.parquet') e USING (id)" in text
+
+    def test_only_the_products_present_are_described(self) -> None:
+        from ftw_dataset_tools.api.docs import render_readme
+
+        collection = self._collection(True)
+        asset = collection["assets"]["field_embeddings"]
+        asset["ftw:embedding_products"] = ["aef"]
+        asset["table:columns"] = [{"name": "field_id", "type": "varchar"}]
+
+        readme = render_readme(collection, _stats(), [], {})
+
+        assert "`aef_*`" in readme
+        assert "olmoearth_*" not in readme
+        assert "USING (field_id)" in readme
