@@ -181,7 +181,20 @@ class TestPrintSummaryCropComposition:
         ctx.selection_result = None
         ctx.download_result = None
         ctx.docs_result = None
+        ctx.field_embeddings_result = None
         return ctx
+
+    def test_field_embeddings_line_when_written(self, tmp_path: Path, capsys) -> None:
+        from ftw_dataset_tools.api.field_embeddings import FieldEmbeddingsResult
+
+        ctx = self._base_ctx(tmp_path)
+        ctx.crop_stats_result = None
+        ctx.land_cover_result = None
+        ctx.field_embeddings_result = FieldEmbeddingsResult(5, 5, 0, ("aef",), 2022)
+
+        _print_summary(ctx)
+
+        assert "Field embeddings (aef, 2022): 5 of 5 fields" in capsys.readouterr().out
 
     def test_failed_imagery_chips_make_the_run_incomplete(self, tmp_path: Path) -> None:
         from types import SimpleNamespace

@@ -300,6 +300,10 @@ class ChipsConfig:
     # Per-chip country, first- and second-level unit names from FAO GAUL 2024 on
     # Source Cooperative. Off by default: it reads remote boundaries.
     admin_names: bool = False
+    # Per-field mean and std of the AlphaEarth Foundations and OlmoEarth v1.3 embeddings
+    # for the dataset's year, written to <name>_field_embeddings.parquet (one row per
+    # field, not per chip). Off by default: it reads remote embeddings under every field.
+    field_embeddings: bool = False
     # Grid cells per coverage batch. Lower it when the coverage step runs the
     # machine out of memory on a dense, country-sized input.
     coverage_batch_size: int = field_stats.DEFAULT_COVERAGE_BATCH_SIZE
@@ -727,6 +731,8 @@ class DatasetConfig:
             raise ConfigError("stages.chips.land_cover must be true or false")
         if not isinstance(self.stages.chips.admin_names, bool):
             raise ConfigError("stages.chips.admin_names must be true or false")
+        if not isinstance(self.stages.chips.field_embeddings, bool):
+            raise ConfigError("stages.chips.field_embeddings must be true or false")
 
         batch_size = self.stages.chips.coverage_batch_size
         if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:

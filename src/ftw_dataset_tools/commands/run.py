@@ -9,6 +9,7 @@ import click
 from ftw_dataset_tools.api import (
     assets,
     crop_stats,
+    field_embeddings,
     label_extent,
     land_cover,
     masks,
@@ -211,6 +212,10 @@ def _print_summary(ctx: pipeline.PipelineContext) -> None:
     if ctx.chips_result:
         click.echo(f"  {crop_stats.crop_stats_summary(ctx.crop_stats_result)}")
         click.echo(f"  {land_cover.land_cover_summary(ctx.land_cover_result)}")
+        if ctx.field_embeddings_result is not None:
+            click.echo(
+                f"  {field_embeddings.field_embeddings_summary(ctx.field_embeddings_result)}"
+            )
     if ctx.stac_result:
         click.echo(f"  STAC items: {ctx.stac_result.total_items:,}")
     if ctx.selection_result is not None:
