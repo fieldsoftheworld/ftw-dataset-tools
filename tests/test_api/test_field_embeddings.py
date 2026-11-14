@@ -253,7 +253,7 @@ class TestAddFieldEmbeddings:
         line = field_embeddings_summary(result)
         assert "9 of 10 fields" in line
         assert "2 from touched pixels" in line
-        assert "1 without geometry" in line
+        assert "1 without pixels" in line
         assert field_embeddings_summary(None) == "Field embeddings: none written this run"
 
 
@@ -386,3 +386,174 @@ class TestDescription:
         )
         assert read_description(path)["dequantization"] == fe.DEQUANTIZATION
         assert read_description(tmp_path / "x.parquet")["year"] == 2020
+
+
+class FlakySource(FakeSource):
+    """Fails the first ``fail_first`` reads, then the ones listed in ``fail_at``."""
+
+    def __init__(self, seed: int = 0, fail_first: int = 0, fail_after: int | None = None) -> None:
+        super().__init__(seed)
+        self.calls = 0
+        self.fail_first = fail_first
+        self.fail_after = fail_after
+
+    def read(self, window: Window) -> np.ndarray:
+        self.calls += 1
+        if self.calls <= self.fail_first:
+            raise OSError("connection reset")
+        if self.fail_after is not None and self.calls > self.fail_after:
+            raise OSError("connection reset")
+        return super().read(window)
+
+
+@pytest.fixture
+def no_backoff(monkeypatch):
+    monkeypatch.setattr(fe, "READ_BACKOFF_S", 0.0)
+
+
+class TestReviewFindings:
+    run = TestAddFieldEmbeddings.run
+    assert_stats = TestAddFieldEmbeddings.assert_stats
+
+    def test_constant_and_single_pixel_fields_have_zero_std(self) -> None:
+        sums = fe._Sums.zeros(2)
+        codes = np.full((BANDS, 5), 100, np.int8)
+        sums.add(np.array([0, 0, 0, 0, 1]), dequantize(codes))
+        _, _, std = fe._stats(sums, np.array([True, True]), sums)
+        assert (std == 0).all()
+
+    def test_a_proj_string_crs_is_read_in_full(self, tmp_path: Path) -> None:
+        geom = box(X, Y, X + 200, Y + 100)
+        crs = "+proj=utm +zone=31 +datum=WGS84 +units=m +no_defs"
+        _, rows, sources = self.run(tmp_path, {"f": geom}, crs=crs)
+        self.assert_stats(rows["f"], "aef", sources["aef"], geom)
+
+    def test_an_explicit_null_crs_is_refused(self, tmp_path: Path) -> None:
+        fields = write_fields(tmp_path / "f.parquet", {"f": box(X, Y, X + 10, Y + 10)})
+        table = pq.read_table(fields)
+        geo = json.loads(table.schema.metadata[b"geo"])
+        geo["columns"]["geometry"]["crs"] = None
+        pq.write_table(
+            table.replace_schema_metadata({**table.schema.metadata, b"geo": json.dumps(geo)}),
+            fields,
+        )
+        with pytest.raises(FieldEmbeddingsError, match="declares no CRS"):
+            add_field_embeddings(fields, tmp_path / "o.parquet", year=2022, sources={})
+
+    @pytest.mark.parametrize("id_col", ["pixels", "aef_mean", 'a"b'])
+    def test_an_id_column_clashing_with_the_output_is_refused(
+        self, tmp_path: Path, id_col: str
+    ) -> None:
+        fields = write_fields(tmp_path / "f.parquet", {"f": box(X, Y, X + 10, Y + 10)})
+        with pytest.raises(FieldEmbeddingsError, match="cannot be the id column"):
+            add_field_embeddings(
+                fields, tmp_path / "o.parquet", year=2022, sources={}, id_col=id_col
+            )
+
+    def test_fields_off_any_utm_grid_get_no_pixels(self, tmp_path: Path) -> None:
+        geoms = {
+            "ok": box(3.0, 45.0, 3.001, 45.001),
+            "antimeridian": box(-179.9, -17.0, 179.9, -16.9),
+        }
+        result, rows, _ = self.run(tmp_path, geoms, crs="EPSG:4326")
+        assert rows["ok"]["pixels"] > 0
+        assert not rows["antimeridian"]["pixels"]
+        assert rows["antimeridian"]["pixel_rule"] is None
+        assert result.without_pixels == 1
+
+    def test_many_blocks_and_workers_match_a_direct_computation(self, tmp_path: Path) -> None:
+        rng = np.random.default_rng(3)
+        geoms = {}
+        for i in range(40):
+            x, y = X + rng.uniform(0, 90_000), Y + rng.uniform(0, 90_000)
+            geoms[f"f{i}"] = box(x, y, x + rng.uniform(5, 400), y + rng.uniform(5, 400))
+        fields = write_fields(tmp_path / "fields.parquet", geoms)
+        sources = {"aef": FakeSource(0)}
+        add_field_embeddings(
+            fields, tmp_path / "o.parquet", year=2022, sources=sources, workers=4, tile_px=64
+        )
+        table = pq.read_table(tmp_path / "o.parquet")
+        assert table.column("id").to_pylist() == list(geoms)
+        rows = rows_by_id(tmp_path / "o.parquet")
+        for fid, geom in geoms.items():
+            self.assert_stats(
+                rows[fid],
+                "aef",
+                sources["aef"],
+                geom,
+                all_touched=rows[fid]["pixel_rule"] == "touched",
+            )
+
+    def test_reads_are_clipped_to_the_fields(self, tmp_path: Path) -> None:
+        # A small field near a tile corner reads its own few pixels, not whole tiles.
+        _, _, sources = self.run(tmp_path, {"f": box(X + 10235, Y + 10235, X + 10245, Y + 10245)})
+        assert sum(w.width * w.height for w in sources["aef"].reads) <= 4
+
+    @pytest.mark.usefixtures("no_backoff")
+    def test_a_transient_read_error_is_retried(self, tmp_path: Path) -> None:
+        geom = box(X, Y, X + 100, Y + 100)
+        sources = {"aef": FlakySource(0, fail_first=2)}
+        _, rows, _ = self.run(tmp_path, {"f": geom}, sources=sources)
+        self.assert_stats(rows["f"], "aef", FakeSource(0), geom)
+
+    @pytest.mark.usefixtures("no_backoff")
+    def test_a_stopped_run_resumes_where_it_stopped(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api.source import SourceFetchError
+
+        monkeypatch.setattr(fe, "PART_ROWS", 1)
+        geoms = {f"f{i}": box(X + i * 30_000, Y, X + i * 30_000 + 50, Y + 50) for i in range(6)}
+        fields = write_fields(tmp_path / "fields.parquet", geoms)
+        out = tmp_path / "o.parquet"
+
+        with pytest.raises(SourceFetchError):
+            add_field_embeddings(
+                fields, out, year=2022, workers=1, sources={"aef": FlakySource(0, fail_after=3)}
+            )
+        assert not out.exists()
+        assert len(list((tmp_path / "o.parquet.partial").glob("part-*.parquet"))) >= 2
+
+        again = FakeSource(0)
+        add_field_embeddings(fields, out, year=2022, workers=1, sources={"aef": again})
+
+        assert len(again.reads) <= 6 - 2
+        rows = rows_by_id(out)
+        for fid, geom in geoms.items():
+            self.assert_stats(rows[fid], "aef", again, geom)
+        assert not (tmp_path / "o.parquet.partial").exists()
+
+    def test_parts_of_another_run_are_not_reused(self, tmp_path: Path) -> None:
+        geoms = {"f": box(X, Y, X + 50, Y + 50)}
+        fields = write_fields(tmp_path / "fields.parquet", geoms)
+        out = tmp_path / "o.parquet"
+        stale = tmp_path / "o.parquet.partial"
+        stale.mkdir()
+        (stale / "run.json").write_text(json.dumps({"year": 1999}))
+        (stale / "part-000000.parquet").write_bytes(b"junk")
+
+        add_field_embeddings(fields, out, year=2022, sources={"aef": FakeSource(0)})
+
+        assert rows_by_id(out)["f"]["pixels"] == 25
+
+
+class TestIsCurrent:
+    def test_same_fields_year_and_products(self, tmp_path: Path) -> None:
+        fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
+        out = tmp_path / "o.parquet"
+        add_field_embeddings(
+            fields, out, year=2022, sources={"aef": FakeSource(0), "olmoearth": FakeSource(1)}
+        )
+
+        assert fe.is_current(out, fields, year=2022)
+        assert not fe.is_current(out, fields, year=2023)
+        assert not fe.is_current(tmp_path / "missing.parquet", fields, year=2022)
+
+        # Same ids, one geometry changed: no longer current, whatever the timestamps.
+        write_fields(fields, {"a": box(X, Y, X + 60, Y + 50)})
+        assert not fe.is_current(out, fields, year=2022)
+
+    def test_a_file_missing_a_product_is_not_current(self, tmp_path: Path) -> None:
+        fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
+        out = tmp_path / "o.parquet"
+        add_field_embeddings(fields, out, year=2022, sources={"aef": FakeSource(0)})
+
+        assert not fe.is_current(out, fields, year=2022)

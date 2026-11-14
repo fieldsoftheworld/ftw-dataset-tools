@@ -1724,33 +1724,29 @@ class TestChipsStageFieldEmbeddings:
         assert calls == [(ctx.output_fields_path, ctx.field_embeddings_path, 2024)]
         assert ctx.field_embeddings_path.name == "fields_field_embeddings.parquet"
 
-    def test_a_current_file_for_the_same_year_is_kept(self, tmp_path: Path, monkeypatch) -> None:
-        import os
-
+    def test_a_current_file_is_kept(self, tmp_path: Path, monkeypatch) -> None:
         from ftw_dataset_tools.api import field_embeddings
 
         ctx = _embeddings_ctx(tmp_path, monkeypatch, on=True)
         calls = self._record(monkeypatch)
-        ctx.field_embeddings_path.write_bytes(b"x")
-        fields_time = ctx.output_fields_path.stat().st_mtime
-        os.utime(ctx.field_embeddings_path, (fields_time + 10, fields_time + 10))
+        seen: list[tuple] = []
 
-        monkeypatch.setattr(field_embeddings, "read_description", lambda _p: {"year": 2024})
+        def current(path, fields, *, year):
+            seen.append((Path(path), Path(fields), year))
+            return True
+
+        monkeypatch.setattr(field_embeddings, "is_current", current)
         pipeline.stage_chips(ctx)
+
         assert calls == []
+        assert seen == [(ctx.field_embeddings_path, ctx.output_fields_path, 2024)]
 
-        monkeypatch.setattr(field_embeddings, "read_description", lambda _p: {"year": 2023})
-        pipeline.stage_chips(ctx)
-        assert len(calls) == 1
-
-    def test_a_file_older_than_the_fields_is_rebuilt(self, tmp_path: Path, monkeypatch) -> None:
-        import os
+    def test_a_stale_file_is_rebuilt(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import field_embeddings
 
         ctx = _embeddings_ctx(tmp_path, monkeypatch, on=True)
         calls = self._record(monkeypatch)
-        ctx.field_embeddings_path.write_bytes(b"x")
-        fields_time = ctx.output_fields_path.stat().st_mtime
-        os.utime(ctx.field_embeddings_path, (fields_time - 10, fields_time - 10))
+        monkeypatch.setattr(field_embeddings, "is_current", lambda *_a, **_k: False)
 
         pipeline.stage_chips(ctx)
 

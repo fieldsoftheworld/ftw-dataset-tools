@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import json
 import math
-import tempfile
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,7 +54,6 @@ from rasterio.transform import from_origin
 
 from ftw_dataset_tools.api.chips_io import parquet_columns
 from ftw_dataset_tools.api.geo import (
-    detect_crs,
     detect_geometry_column,
     ensure_spatial_loaded,
     sql_path,
@@ -79,6 +77,14 @@ BLOCK_M = 20_480.0
 #: Pixels per side of the windows a work unit is read and rasterised in; bounds memory.
 TILE_PX = 1024
 DEFAULT_WORKERS = 8
+#: Fields wider or taller than this (in their UTM zone) are not on a usable grid:
+#: polygons crossing the antimeridian, or projected far outside their zone.
+MAX_FIELD_M = 200_000.0
+#: Attempts per remote read before the run stops, and the first backoff in seconds.
+READ_ATTEMPTS = 4
+READ_BACKOFF_S = 2.0
+#: Finished fields are saved in parts of about this many rows, so a stopped run resumes.
+PART_ROWS = 20_000
 #: Key of the JSON description in the output Parquet's key-value metadata.
 METADATA_KEY = "ftw:field_embeddings"
 
@@ -222,7 +228,11 @@ class OlmoEarthSource:
             region=SOURCE_COOP_REGION,
             skip_signature=True,
         )
-        return cls(year, zarr.open_group(ObjectStore(store, read_only=True), mode="r"))
+        try:
+            root = zarr.open_group(ObjectStore(store, read_only=True), mode="r")
+        except Exception as err:
+            raise SourceFetchError(f"Could not open the OlmoEarth store: {err}") from err
+        return cls(year, root)
 
     def years(self) -> list[int]:
         """The years the store holds, read from one zone (all zones share them)."""
@@ -398,6 +408,29 @@ def _aef_tile(
     return _AefTile(path, code % 100, code // 100 == 327, west, south, east, north)
 
 
+def _with_retries(read: Callable[[], Any], what: str) -> Any:
+    """Run a remote read, retrying with backoff; SourceFetchError once it keeps failing.
+
+    Any exception counts: rasterio, zarr and obstore each raise their own network
+    errors. A ValueError is a grid mismatch, not a network fault, and is raised at once.
+    """
+    import time
+
+    for attempt in range(READ_ATTEMPTS):
+        try:
+            return read()
+        except ValueError:
+            raise
+        except Exception as err:
+            if attempt == READ_ATTEMPTS - 1:
+                raise SourceFetchError(
+                    f"Could not read {what} after {READ_ATTEMPTS} attempts: {err}"
+                ) from err
+            logger.debug(f"Retrying {what} after: {err}")
+            time.sleep(READ_BACKOFF_S * 2**attempt)
+    raise AssertionError("unreachable")
+
+
 def open_sources(year: int, products: tuple[str, ...] = tuple(PRODUCTS)) -> dict[str, object]:
     """The default remote source for each product that has ``year``; warns for the rest."""
     openers: dict[str, Callable[[int], object]] = {
@@ -407,7 +440,7 @@ def open_sources(year: int, products: tuple[str, ...] = tuple(PRODUCTS)) -> dict
     sources: dict[str, object] = {}
     for key in products:
         source = openers[key](year)
-        if _has_year(source, year):
+        if _with_retries(lambda s=source: _has_year(s, year), f"{PRODUCTS[key].title} years"):
             sources[key] = source
         else:
             logger.warning(f"{PRODUCTS[key].title} has no embeddings for {year}; left empty")
@@ -444,10 +477,12 @@ class _Sums:
         order = np.argsort(fields, kind="stable")
         sorted_fields = fields[order]
         uniq, start = np.unique(sorted_fields, return_index=True)
-        v = values[:, order]
+        # Squared in float64: float32 squares leave a variance error larger than the
+        # smallest quantisation step, so a constant field would not get a std of 0.
+        v = values[:, order].astype(np.float64)
         self.n[uniq] += np.diff(np.append(start, sorted_fields.size))
-        self.s[uniq] += np.add.reduceat(v, start, axis=1, dtype=np.float64).T
-        self.ss[uniq] += np.add.reduceat(v * v, start, axis=1, dtype=np.float64).T
+        self.s[uniq] += np.add.reduceat(v, start, axis=1).T
+        self.ss[uniq] += np.add.reduceat(v * v, start, axis=1).T
 
 
 @dataclass
@@ -511,6 +546,7 @@ def _window_fields(geoms: np.ndarray, boxes: np.ndarray, window: Window) -> np.n
         & (boxes[:, 2] > window.x0)
         & (boxes[:, 1] < window.y1)
         & (boxes[:, 3] > window.y0)
+        & ~shapely.is_missing(geoms)
         & ~shapely.is_empty(geoms)
     )
 
@@ -644,20 +680,53 @@ def _task_stats(
     task: _Task, crs: CRS, sources: Mapping[str, EmbeddingSource], tile_px: int
 ) -> pa.RecordBatch:
     """Statistics for one work unit's fields."""
-    geoms = _to_zone(shapely.from_wkb(task.wkb), crs, task.zone)
+    source_geoms = shapely.from_wkb(task.wkb)
+    geoms = _to_zone(source_geoms, crs, task.zone)
     boxes = shapely.bounds(geoms)
     acc = _Accumulator(len(geoms), tuple(sources))
-    usable = ~np.isnan(boxes).any(axis=1)
+    usable = _usable(boxes)
+    if crs.is_geographic:
+        # Written across the antimeridian, a polygon spans most of the globe in
+        # longitude and projects to a small but meaningless shape.
+        lon = shapely.bounds(source_geoms)[:, [0, 2]]
+        usable &= (lon[:, 1] - lon[:, 0]) <= 180
+    geoms = np.where(usable, geoms, None)
     if usable.any():
         b = boxes[usable]
         bounds = (b[:, 0].min(), b[:, 1].min(), b[:, 2].max(), b[:, 3].max())
-        for window in _tiles(bounds, task.zone, tile_px):
-            idx = _window_fields(geoms, boxes, window)
+        for tile in _tiles(bounds, task.zone, tile_px):
+            idx = _window_fields(geoms, boxes, tile)
             if idx.size == 0:
                 continue
-            codes = {key: source.read(window) for key, source in sources.items()}
+            window = _clip(tile, boxes[idx])
+            codes = {
+                key: _with_retries(lambda s=source, w=window: s.read(w), f"{key} {window}")
+                for key, source in sources.items()
+            }
             _add_window(acc, geoms, idx, window, codes)
     return _batch(task.rids, acc)
+
+
+def _usable(boxes: np.ndarray) -> np.ndarray:
+    """Fields with finite bounds of a plausible size in their zone."""
+    finite = np.isfinite(boxes).all(axis=1)
+    size = np.where(finite[:, None], boxes[:, 2:] - boxes[:, :2], np.inf)
+    return finite & (size < MAX_FIELD_M).all(axis=1)
+
+
+def _clip(tile: Window, boxes: np.ndarray) -> Window:
+    """The part of a tile the given field bboxes reach, snapped outward to the grid.
+
+    Reads and rasterising cover only that, not the whole tile: a field spilling a few
+    metres into a neighbouring tile then costs a sliver, not a tile.
+    """
+    x0 = max(tile.x0, math.floor(boxes[:, 0].min() / PIXEL_M) * PIXEL_M)
+    x1 = min(tile.x1, math.ceil(boxes[:, 2].max() / PIXEL_M) * PIXEL_M)
+    y0 = max(tile.y0, math.floor(boxes[:, 1].min() / PIXEL_M) * PIXEL_M)
+    y1 = min(tile.y1, math.ceil(boxes[:, 3].max() / PIXEL_M) * PIXEL_M)
+    width = max(round((x1 - x0) / PIXEL_M), 1)
+    height = max(round((y1 - y0) / PIXEL_M), 1)
+    return Window(tile.zone, x0, y1, width, height)
 
 
 def _stats(sums: _Sums, pick: np.ndarray, other: _Sums) -> tuple[np.ndarray, ...]:
@@ -733,6 +802,8 @@ def _plan(con: duckdb.DuckDBPyConnection, fields_sql: str, geom_col: str, crs: C
     rid, x, y = rows["rid"], np.asarray(rows["x"], float), np.asarray(rows["y"], float)
     to_lonlat = Transformer.from_crs(crs, CRS.from_epsg(4326), always_xy=True)
     lon, lat = _transform(to_lonlat, x, y)
+    finite = np.isfinite(lon) & np.isfinite(lat)
+    rid, lon, lat = rid[finite], lon[finite], lat[finite]
     zone = utm_zone(lon)
     bx = np.zeros(rid.size, np.int64)
     by = np.zeros(rid.size, np.int64)
@@ -805,16 +876,20 @@ def field_embeddings_summary(result: FieldEmbeddingsResult | None) -> str:
     if result.by_touch:
         line += f", {result.by_touch:,} from touched pixels because they hold no pixel centre"
     if result.without_pixels:
-        line += f", {result.without_pixels:,} without geometry"
+        line += f", {result.without_pixels:,} without pixels (no geometry, or not on a UTM grid)"
     return line
 
 
-def describe(year: int, id_col: str, products: tuple[str, ...]) -> dict:
+def describe(
+    year: int, id_col: str, products: tuple[str, ...], fingerprint: str | None = None
+) -> dict:
     """The JSON stored under ``METADATA_KEY``: what the table holds and where it came from."""
     return {
         "year": year,
         "id_column": id_col,
+        "fields_fingerprint": fingerprint,
         "statistics": list(STATISTICS),
+        "std": "population standard deviation (ddof = 0) over the field's pixels",
         "dimensions": BANDS,
         "pixel_rule": (
             "pixels whose centre is inside the field; fields holding no pixel centre use "
@@ -836,17 +911,62 @@ def describe(year: int, id_col: str, products: tuple[str, ...]) -> dict:
     }
 
 
+#: Output columns besides the id; the id column may not share a name with one.
+OUTPUT_COLUMNS = tuple(name for name in SCHEMA.names if name != "rid")
+
+
 def _check_fields(fields_path: Path, id_col: str) -> tuple[str, CRS]:
+    """The geometry column and CRS, after checking the id column is usable."""
+    from ftw_dataset_tools.api.geo import crs_is_explicit_null, geoparquet_crs
+
+    if '"' in id_col or id_col in OUTPUT_COLUMNS or id_col == "rid":
+        raise FieldEmbeddingsError(fields_path, f"'{id_col}' cannot be the id column")
     geom_col = detect_geometry_column(fields_path)
+    if geom_col is None:
+        raise FieldEmbeddingsError(fields_path, f"{fields_path.name} is not GeoParquet")
     if id_col not in parquet_columns(fields_path):
         raise FieldEmbeddingsError(fields_path, f"{fields_path.name} has no '{id_col}' column")
-    detected = detect_crs(fields_path, geom_col)
-    code = detected.authority_code or "OGC:CRS84"
+    if crs_is_explicit_null(fields_path, geom_col):
+        raise FieldEmbeddingsError(
+            fields_path, f"{fields_path.name} declares no CRS (crs: null); set one first"
+        )
     try:
-        crs = CRS.from_user_input(code)
+        crs = geoparquet_crs(fields_path, geom_col)
     except CRSError as err:
-        raise FieldEmbeddingsError(fields_path, f"{fields_path.name}: unusable CRS {code}") from err
+        raise FieldEmbeddingsError(fields_path, f"{fields_path.name}: unusable CRS") from err
     return geom_col, crs
+
+
+def fields_fingerprint(fields_file: Path | str, id_col: str = "id") -> str:
+    """A hash of every field's row number, id and geometry: changes when the fields do."""
+    fields_path = Path(fields_file).resolve()
+    geom_col = detect_geometry_column(fields_path) or "geometry"
+    con = duckdb.connect(":memory:")
+    con.execute("SET enable_progress_bar = false")
+    ensure_spatial_loaded(con)
+    try:
+        rows, digest = con.execute(f"""
+            SELECT count(*), bit_xor(hash(file_row_number, "{id_col}"::VARCHAR,
+                                          ST_AsWKB("{geom_col}")))
+            FROM read_parquet('{sql_path(fields_path)}', file_row_number = true)""").fetchone()
+    finally:
+        con.close()
+    return f"{rows}:{digest or 0:016x}"
+
+
+def is_current(path: Path | str, fields_file: Path | str, *, year: int, id_col: str = "id") -> bool:
+    """Whether ``path`` holds every product's statistics for these fields and year."""
+    path = Path(path)
+    if not path.exists():
+        return False
+    description = read_description(path) or {}
+    included = {k for k, p in description.get("products", {}).items() if p.get("included")}
+    return (
+        description.get("year") == year
+        and description.get("id_column") == id_col
+        and included == set(PRODUCTS)
+        and description.get("fields_fingerprint") == fields_fingerprint(fields_file, id_col)
+    )
 
 
 def add_field_embeddings(
@@ -862,6 +982,11 @@ def add_field_embeddings(
 ) -> FieldEmbeddingsResult:
     """Write per-field embedding statistics for a fields GeoParquet.
 
+    Finished fields are saved under ``<output_file>.partial/`` as the run goes; a run
+    stopped part way (a network failure, a killed process) resumes from there when
+    started again on the same fields, year and products. The folder is removed once
+    the output is written.
+
     Args:
         fields_file: Field polygons (GeoParquet, any CRS).
         output_file: Parquet to write: the id column, then pixel counts and statistics.
@@ -873,44 +998,90 @@ def add_field_embeddings(
         on_progress: Called with (fields done, total fields).
     """
     fields_path = Path(fields_file).resolve()
-    output_path = Path(output_file)
+    output_path = Path(output_file).resolve()
     geom_col, crs = _check_fields(fields_path, id_col)
     if sources is None:
         sources = open_sources(year)
+    fingerprint = fields_fingerprint(fields_path, id_col)
+    description = describe(year, id_col, tuple(sources), fingerprint)
     fields_sql = f"read_parquet('{sql_path(fields_path)}', file_row_number = true)"
+    parts = _Parts.open(output_path, description)
 
     con = duckdb.connect(":memory:")
     con.execute("SET enable_progress_bar = false")
+    con.execute(f"SET temp_directory = '{sql_path(parts.root / 'duckdb')}'")
     ensure_spatial_loaded(con)
     try:
         total = _plan(con, fields_sql, geom_col, crs)
-        with tempfile.TemporaryDirectory(dir=output_path.parent) as tmp:
-            stats_path = Path(tmp) / "stats.parquet"
-            _compute(
-                con,
-                fields_sql,
-                geom_col,
-                crs,
-                sources,
-                stats_path,
-                workers,
-                tile_px,
-                total,
-                on_progress,
-            )
-            _write_output(
-                con,
-                fields_sql,
-                id_col,
-                stats_path,
-                output_path,
-                describe(year, id_col, tuple(sources)),
-            )
+        resumed = parts.skip_done(con)
+        if resumed:
+            logger.info(f"Resuming: {resumed:,} of {total:,} fields already done")
+        _compute(
+            con,
+            fields_sql,
+            geom_col,
+            crs,
+            sources,
+            parts,
+            workers,
+            tile_px,
+            total,
+            resumed,
+            on_progress,
+        )
+        _write_output(con, fields_sql, id_col, parts, output_path, description)
         result = _result(con, output_path, year, tuple(sources))
     finally:
         con.close()
+    parts.remove()
     logger.info(field_embeddings_summary(result))
     return result
+
+
+@dataclass
+class _Parts:
+    """Finished fields of a run, saved as Parquet parts beside the output."""
+
+    root: Path
+    count: int = 0
+
+    @classmethod
+    def open(cls, output_path: Path, description: dict) -> _Parts:
+        """The run's parts folder: kept when it belongs to the same run, else started over."""
+        import shutil
+
+        root = output_path.with_name(output_path.name + ".partial")
+        marker = root / "run.json"
+        same = marker.exists() and json.loads(marker.read_text()) == description
+        if root.exists() and not same:
+            shutil.rmtree(root)
+        root.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps(description))
+        return cls(root, count=len(list(root.glob("part-*.parquet"))))
+
+    @property
+    def glob(self) -> str:
+        return sql_path(self.root / "part-*.parquet")
+
+    def skip_done(self, con: duckdb.DuckDBPyConnection) -> int:
+        """Drop the fields earlier parts hold from ``_keys``; returns how many."""
+        if self.count == 0:
+            return 0
+        con.execute(f"DELETE FROM _keys WHERE rid IN (SELECT rid FROM read_parquet('{self.glob}'))")
+        return con.execute(f"SELECT count(*) FROM read_parquet('{self.glob}')").fetchone()[0]
+
+    def write(self, batches: list[pa.RecordBatch]) -> None:
+        """Save finished batches as the next part, atomically."""
+        path = self.root / f"part-{self.count:06d}.parquet"
+        tmp = path.with_suffix(".tmp")
+        pq.write_table(pa.Table.from_batches(batches, schema=SCHEMA), tmp)
+        tmp.replace(path)
+        self.count += 1
+
+    def remove(self) -> None:
+        import shutil
+
+        shutil.rmtree(self.root, ignore_errors=True)
 
 
 def _compute(
@@ -919,39 +1090,49 @@ def _compute(
     geom_col: str,
     crs: CRS,
     sources: Mapping[str, EmbeddingSource],
-    stats_path: Path,
+    parts: _Parts,
     workers: int,
     tile_px: int,
     total: int,
+    done: int,
     on_progress: Callable[[int, int], None] | None,
 ) -> None:
-    """Run every work unit on a thread pool, writing results as they finish."""
-    done = 0
-    with pq.ParquetWriter(stats_path, SCHEMA) as writer, ThreadPoolExecutor(workers) as pool:
+    """Run every work unit on a thread pool, saving results in parts as they finish."""
+    buffer: list[pa.RecordBatch] = []
+    buffered = 0
+
+    def drain(futures: set[Future]) -> None:
+        nonlocal done, buffered
+        for future in futures:
+            batch = future.result()
+            buffer.append(batch)
+            buffered += batch.num_rows
+            done += batch.num_rows
+            if on_progress is not None:
+                on_progress(done, total)
+        if buffered >= PART_ROWS:
+            parts.write(buffer)
+            buffer.clear()
+            buffered = 0
+
+    with ThreadPoolExecutor(workers) as pool:
         pending: set[Future] = set()
-
-        def drain(futures: set[Future]) -> None:
-            nonlocal done
-            for future in futures:
-                batch = future.result()
-                writer.write_batch(batch)
-                done += batch.num_rows
-                if on_progress is not None:
-                    on_progress(done, total)
-
         for task in _tasks(con, fields_sql, geom_col):
             pending.add(pool.submit(_task_stats, task, crs, sources, tile_px))
             if len(pending) >= 2 * workers:
                 finished, pending = wait(pending, return_when=FIRST_COMPLETED)
                 drain(finished)
         drain(pending)
+    # Always at least one part, so the output's join has a schema to read.
+    if buffer or parts.count == 0:
+        parts.write(buffer)
 
 
 def _write_output(
     con: duckdb.DuckDBPyConnection,
     fields_sql: str,
     id_col: str,
-    stats_path: Path,
+    parts: _Parts,
     output_path: Path,
     description: dict,
 ) -> None:
@@ -961,7 +1142,7 @@ def _write_output(
     con.execute(f"""
         COPY (
             SELECT f."{id_col}", s.* EXCLUDE (rid)
-            FROM {fields_sql} f LEFT JOIN read_parquet('{sql_path(stats_path)}') s
+            FROM {fields_sql} f LEFT JOIN read_parquet('{parts.glob}') s
               ON s.rid = f.file_row_number
             ORDER BY f.file_row_number
         ) TO '{sql_path(tmp_out)}'

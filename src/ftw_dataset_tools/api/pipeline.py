@@ -675,10 +675,11 @@ def stage_chips(ctx: PipelineContext) -> None:
 
 
 def _add_field_embeddings(ctx: PipelineContext) -> None:
-    """Write the per-field embedding statistics, unless an up-to-date file is there.
+    """Write the per-field embedding statistics, unless the file already matches.
 
-    Reading the embeddings under a national dataset takes hours, so a rerun of the
-    chips stage keeps a file written after the fields file for the same year.
+    Reading the embeddings under a national dataset takes hours, so a file written for
+    the same fields (by content, not timestamp: reproject rewrites the fields file on
+    every run), year and products is kept.
     """
     path = ctx.field_embeddings_path
     if not ctx.config.stages.chips.field_embeddings:
@@ -690,19 +691,12 @@ def _add_field_embeddings(ctx: PipelineContext) -> None:
         raise StageInputError(
             "stages.chips.field_embeddings needs the dataset year: set year in the config"
         )
-    if _field_embeddings_current(path, ctx.output_fields_path, ctx.effective_year):
-        logger.info(f"Keeping {path.name}: newer than the fields, same year")
+    if field_embeddings.is_current(path, ctx.output_fields_path, year=ctx.effective_year):
+        logger.info(f"Keeping {path.name}: same fields, year and products")
         return
     ctx.field_embeddings_result = field_embeddings.add_field_embeddings(
         ctx.output_fields_path, path, year=ctx.effective_year
     )
-
-
-def _field_embeddings_current(path: Path, fields_path: Path, year: int) -> bool:
-    if not path.exists() or path.stat().st_mtime < fields_path.stat().st_mtime:
-        return False
-    description = field_embeddings.read_description(path) or {}
-    return description.get("year") == year
 
 
 def _add_admin_names(ctx: PipelineContext) -> None:

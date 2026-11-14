@@ -792,11 +792,14 @@ def _field_embeddings_section(collection: dict) -> str:
         return ""
     href = _asset_href(collection, "field_embeddings", "field_embeddings.parquet")
     fields = _asset_href(collection, "fields", "fields.parquet")
+    columns = asset.get("table:columns") or [{"name": "id"}]
+    id_col = columns[0]["name"]
     return (
         "## Field embeddings\n\n"
-        f"`{href}` has one row per field in `{fields}`, keyed by the same id. For each "
+        f"`{href}` has one row per field in `{fields}`, keyed by `{id_col}`. For each "
         "product it holds the mean (`<product>_mean`) and standard deviation "
-        "(`<product>_std`) of every embedding dimension over the field's 10 m pixels, as "
+        "(`<product>_std`, population std) of every embedding dimension over the field's "
+        "10 m pixels, as "
         "64-value float lists, and the pixels used (`<product>_pixels`):\n\n"
         f"- `aef_*`: {_link(AEF.title, AEF.url)}. {AEF.notes} {AEF.license}.\n"
         f"- `olmoearth_*`: {_link(OLMOEARTH.title, OLMOEARTH.url)}. {OLMOEARTH.notes} "
@@ -808,7 +811,7 @@ def _field_embeddings_section(collection: dict) -> str:
         "```sql\n"
         "INSTALL spatial; LOAD spatial;\n"
         f"SELECT f.*, e.aef_mean, e.olmoearth_mean FROM read_parquet('{fields}') f\n"
-        f"JOIN read_parquet('{href}') e USING (id) LIMIT 5;\n"
+        f"JOIN read_parquet('{href}') e USING ({id_col}) LIMIT 5;\n"
         "```"
     )
 
