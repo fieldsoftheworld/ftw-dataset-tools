@@ -149,6 +149,39 @@ class TestUpdateCollection:
             run.pop("generated_at")
         assert doc == once
 
+    def test_the_record_follows_the_latest_run(self, tmp_path: Path) -> None:
+        root, doc = _published(tmp_path)
+        chips = _chips_with_admin_names(root / "ds_chips.parquet")
+        embeddings = _write_field_embeddings(root / "ds_field_embeddings.parquet", ("aef",))
+        backfill.update_collection(
+            doc, chips_file=chips, admin_names_added=True, field_embeddings_file=embeddings
+        )
+
+        backfill.update_collection(
+            doc, chips_file=chips, admin_names_added=True, field_embeddings_file=None
+        )
+        assert [r["steps"] for r in doc["ftw:config"]["backfills"]] == [["admin_names"]]
+        backfill.update_collection(
+            doc, chips_file=chips, admin_names_added=False, field_embeddings_file=None
+        )
+        assert "backfills" not in doc["ftw:config"]
+
+    def test_refreshes_the_items_mirror_columns(self, tmp_path: Path) -> None:
+        root, doc = _published(tmp_path)
+        chips = _chips_with_admin_names(root / "ds_chips.parquet")
+        fresh = tmp_path / "fresh"
+        fresh.mkdir()
+        build_catalog(fresh, chips_path=_chips_with_admin_names(fresh / "ds_chips.parquet"))
+        backfill.update_collection(
+            doc, chips_file=chips, admin_names_added=True, field_embeddings_file=None
+        )
+
+        backfill.refresh_parquet_asset(doc, "items", fresh / "items.parquet")
+
+        names = [c["name"] for c in doc["assets"]["items"]["table:columns"]]
+        assert "ftw:admin0_name" in names
+        assert doc["assets"]["items"] == _collection(fresh)["assets"]["items"]
+
     def test_dropping_the_embeddings_removes_their_asset_and_links(self, tmp_path: Path) -> None:
         root, doc = _published(tmp_path)
         chips = _chips_with_admin_names(root / "ds_chips.parquet")

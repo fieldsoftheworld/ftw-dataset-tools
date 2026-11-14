@@ -101,20 +101,20 @@ def _holder(assets: dict[str, dict] | None = None) -> pystac.Collection:
     )
 
 
-def _refresh_chips_asset(doc: dict, chips_file: Path) -> bool:
-    """The chips asset's size, checksum (when it had one) and columns, from the file.
+def refresh_parquet_asset(doc: dict, key: str, path: Path | str) -> bool:
+    """An asset's size, checksum (when it had one) and columns, from its file, as built.
 
     Returns whether the asset carries a checksum, so new assets can match it.
     """
-    current = doc.get("assets", {}).get("chips")
+    current = doc.get("assets", {}).get(key)
     if current is None:
-        raise BackfillError("chips", "the collection has no chips asset")
+        raise BackfillError(key, f"the collection has no {key} asset")
     checksum = "file:checksum" in current
-    holder = _holder({"chips": current})
-    asset = holder.assets["chips"]
-    add_file_info(asset, chips_file, checksum=checksum)
-    add_table_columns(asset, chips_file)
-    doc["assets"]["chips"] = asset.to_dict()
+    holder = _holder({key: current})
+    asset = holder.assets[key]
+    add_file_info(asset, Path(path), checksum=checksum)
+    add_table_columns(asset, Path(path))
+    doc["assets"][key] = asset.to_dict()
     _add_extensions(doc, holder.stac_extensions)
     return checksum
 
@@ -164,22 +164,23 @@ def _gaul_link() -> dict:
 
 
 def _record(doc: dict, *, steps: list[str]) -> None:
-    """Note in ``ftw:config`` what this backfill added, and with which ftwd.
+    """Note in ``ftw:config`` what the backfill added, and with which ftwd.
 
-    The config itself stays as the build ran it. A later run of the same steps
-    replaces the earlier entry.
+    The config itself stays as the build ran it. Each run replaces the record, so it
+    never claims a step a later run took out; a run that adds nothing removes it.
     """
     record = doc.setdefault("ftw:config", {})
-    runs = [r for r in record.get(BACKFILL_KEY, []) if r.get("steps") != steps]
-    runs.append(
+    if not steps:
+        record.pop(BACKFILL_KEY, None)
+        return
+    record[BACKFILL_KEY] = [
         {
             "steps": steps,
             "ftwd_version": __version__,
             "ftwd_git_commit": installed_git_commit(),
             "generated_at": datetime.now(UTC).isoformat(),
         }
-    )
-    record[BACKFILL_KEY] = runs
+    ]
 
 
 def update_collection(
@@ -198,7 +199,7 @@ def update_collection(
         field_embeddings_file: The field embeddings file to publish beside the
             collection, or None to publish none.
     """
-    checksum = _refresh_chips_asset(doc, Path(chips_file))
+    checksum = refresh_parquet_asset(doc, "chips", chips_file)
     doc["links"] = [link for link in doc.get("links", []) if not _is_backfill_link(link)]
     doc.get("assets", {}).pop(stac.FIELD_EMBEDDINGS_ASSET, None)
 
@@ -214,8 +215,7 @@ def update_collection(
         )
         if done
     ]
-    if steps:
-        _record(doc, steps=steps)
+    _record(doc, steps=steps)
 
 
 def _add_embeddings(doc: dict, path: Path, *, checksum: bool) -> list[dict]:
