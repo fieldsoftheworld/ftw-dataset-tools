@@ -587,13 +587,17 @@ def _add_field_embeddings(collection: Collection, path: Path, *, checksums: bool
     included = [
         key for key, product in description.get("products", {}).items() if product.get("included")
     ]
+    names = {"aef": "AlphaEarth Foundations", "olmoearth": "OlmoEarth v1.3"}
     _add_parquet_asset(
         collection,
         FIELD_EMBEDDINGS_ASSET,
         path,
-        "Per-field embedding statistics (AlphaEarth Foundations, OlmoEarth v1.3)",
+        "Per-field embedding statistics ("
+        + (", ".join(names[k] for k in included) or "no product had this year")
+        + ")",
         checksums=checksums,
     )
+    collection.assets[FIELD_EMBEDDINGS_ASSET].extra_fields["ftw:embedding_products"] = included
     collection.assets[FIELD_EMBEDDINGS_ASSET].description = (
         f"Mean and standard deviation of each embedding dimension over each field's "
         f"pixels, for {description.get('year', 'the dataset year')}; joins onto the fields "
@@ -608,6 +612,17 @@ def _add_field_embeddings(collection: Collection, path: Path, *, checksums: bool
                 target=product.url,
                 media_type="text/html",
                 title=product.attribution,
+            )
+        )
+    if field_embeddings.OLMOEARTH.key in included:
+        # The collection license covers the dataset; these columns also carry Ai2's terms.
+        collection.add_link(
+            Link(
+                rel="license",
+                target=field_embeddings.OLMOEARTH.license,
+                media_type="text/plain",
+                title="OlmoEarth Artifact License, for the olmoearth_* columns of "
+                "the field_embeddings asset (including its Section 2 use restrictions)",
             )
         )
 

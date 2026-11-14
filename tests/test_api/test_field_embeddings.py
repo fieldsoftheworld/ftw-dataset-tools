@@ -557,3 +557,93 @@ class TestIsCurrent:
         add_field_embeddings(fields, out, year=2022, sources={"aef": FakeSource(0)})
 
         assert not fe.is_current(out, fields, year=2022)
+
+
+BLOCK = fe.BLOCK_M * 2
+
+
+class TestSecondReviewFindings:
+    run = TestAddFieldEmbeddings.run
+
+    def test_a_no_data_field_between_fields_with_data_is_written(self, tmp_path: Path) -> None:
+        # a and c have AEF data, b sits in the no-data area: v-N-v in one batch.
+        geoms = {
+            "a": box(X + 100, Y, X + 150, Y + 50),
+            "b": box(X - 300, Y, X - 250, Y + 50),
+            "c": box(X + 200, Y, X + 250, Y + 50),
+        }
+        sources = {"aef": FakeSource(0, nodata_west_of=X), "olmoearth": FakeSource(1)}
+        _, rows, _ = self.run(tmp_path, geoms, sources=sources)
+
+        assert rows["b"]["aef_mean"] is None
+        assert len(rows["a"]["aef_mean"]) == len(rows["c"]["aef_mean"]) == BANDS
+
+    def test_a_second_run_on_the_same_output_is_refused(self, tmp_path: Path) -> None:
+        import fcntl
+
+        fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
+        out = tmp_path / "o.parquet"
+        with (tmp_path / "o.parquet.lock").open("w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            with pytest.raises(FieldEmbeddingsError, match="another run"):
+                add_field_embeddings(fields, out, year=2022, sources={"aef": FakeSource(0)})
+        add_field_embeddings(fields, out, year=2022, sources={"aef": FakeSource(0)})
+        assert out.exists()
+
+    def test_parts_that_do_not_add_up_are_never_published(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
+        out = tmp_path / "o.parquet"
+        real_write = fe._Parts.write
+
+        def write_twice(self, batches):
+            real_write(self, batches)
+            real_write(self, batches)
+
+        monkeypatch.setattr(fe._Parts, "write", write_twice)
+        with pytest.raises(FieldEmbeddingsError, match="expected 1"):
+            add_field_embeddings(fields, out, year=2022, sources={"aef": FakeSource(0)})
+        assert not out.exists()
+
+    def test_a_zero_area_field_is_placed_by_its_bbox(self, tmp_path: Path) -> None:
+        line = Polygon([(X + 1, Y + 1), (X + 31, Y + 31), (X + 61, Y + 61), (X + 1, Y + 1)])
+        _, rows, sources = self.run(tmp_path, {"flat": line, "ok": box(X, Y, X + 20, Y + 20)})
+        # No area, so no pixels, but read where it is rather than at (0, 0).
+        assert not rows["flat"]["pixels"]
+        assert rows["ok"]["pixels"] == 4
+        assert sources["aef"].reads
+        assert all(abs(w.x0 - X) < BLOCK and abs(w.y1 - Y) < BLOCK for w in sources["aef"].reads)
+
+    def test_without_any_product_the_ids_are_written_without_reading(self, tmp_path: Path) -> None:
+        fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
+        out = tmp_path / "o.parquet"
+        add_field_embeddings(fields, out, year=2016, sources={})
+        rows = rows_by_id(out)
+        assert rows["a"]["aef_mean"] is None
+        assert read_description(out)["requested_products"] == []
+
+    def test_a_year_no_product_has_counts_as_current(self, tmp_path: Path, monkeypatch) -> None:
+        fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
+        out = tmp_path / "o.parquet"
+        monkeypatch.setattr(fe, "open_sources", lambda _year: {})
+
+        add_field_embeddings(fields, out, year=2016)
+
+        assert fe.is_current(out, fields, year=2016)
+
+    def test_the_fingerprint_follows_the_crs_and_ignores_scan_order(self, tmp_path: Path) -> None:
+        geoms = {"a": box(X, Y, X + 50, Y + 50), "b": box(X + 90, Y, X + 99, Y + 9)}
+        utm = fe.fields_fingerprint(write_fields(tmp_path / "u.parquet", geoms))
+        again = fe.fields_fingerprint(write_fields(tmp_path / "v.parquet", geoms))
+        other_crs = fe.fields_fingerprint(write_fields(tmp_path / "w.parquet", geoms, "EPSG:32632"))
+        assert utm == again
+        assert utm != other_crs
+
+    def test_an_older_algorithm_version_is_not_current(self, tmp_path: Path, monkeypatch) -> None:
+        fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
+        out = tmp_path / "o.parquet"
+        monkeypatch.setattr(fe, "open_sources", lambda _year: {})
+        add_field_embeddings(fields, out, year=2016)
+        monkeypatch.setattr(fe, "ALGORITHM_VERSION", fe.ALGORITHM_VERSION + 1)
+        assert not fe.is_current(out, fields, year=2016)

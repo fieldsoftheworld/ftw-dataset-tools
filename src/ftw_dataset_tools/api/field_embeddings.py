@@ -93,6 +93,11 @@ SOURCE_COOP_REGION = "us-west-2"
 AEF_INDEX = f"s3://{SOURCE_COOP_BUCKET}/tge-labs/aef/v1/annual/aef_index.parquet"
 OLMOEARTH_PREFIX = "olmoearth/olmoearth-v1-3-embeddings/embeddings.zarr"
 
+#: Bumped whenever the statistics change, so older outputs and saved parts are not reused.
+ALGORITHM_VERSION = 1
+#: Memory DuckDB may use before spilling to the run's temp folder.
+DUCKDB_MEMORY_LIMIT = "4GB"
+
 #: Statistics per product and dimension.
 STATISTICS = ("mean", "std")
 PIXEL_RULE_CENTRE = "centre"
@@ -200,11 +205,15 @@ def _empty(window: Window) -> np.ndarray:
     return np.full((BANDS, window.height, window.width), NODATA, dtype=np.int8)
 
 
+class GridError(ValueError):
+    """A product's grid does not line up with the 10 m grid the fields are read on."""
+
+
 def _grid_index(value: float, what: str) -> int:
     """A grid offset in pixels, refusing a source whose grid is not on whole pixels."""
     index = value / PIXEL_M
     if abs(index - round(index)) > 1e-6:
-        raise ValueError(f"{what} is not on the 10 m grid ({value})")
+        raise GridError(f"{what} is not on the 10 m grid ({value})")
     return round(index)
 
 
@@ -262,7 +271,7 @@ class OlmoEarthSource:
             return out
         array, t, (a, _, c, _, e, f) = entry
         if a != PIXEL_M or e != -PIXEL_M:
-            raise ValueError(f"OlmoEarth utm{window.zone:02d} is not a 10 m north-up grid")
+            raise GridError(f"OlmoEarth utm{window.zone:02d} is not a 10 m north-up grid")
         col0 = _grid_index(window.x0 - c, "OlmoEarth window x")
         row0 = _grid_index(f - window.y1, "OlmoEarth window y")
         _, _, n_rows, n_cols = array.shape
@@ -361,7 +370,7 @@ class AefSource:
         with _public_s3_env(), self._open(path) as src:
             t = src.transform
             if t.a != PIXEL_M or abs(t.e) != PIXEL_M:
-                raise ValueError(f"{path} is not a 10 m grid")
+                raise GridError(f"{path} is not a 10 m grid")
             col0 = _grid_index(window.x0 - t.c, "AlphaEarth window x")
             south_up = t.e > 0
             if south_up:
@@ -411,15 +420,16 @@ def _aef_tile(
 def _with_retries(read: Callable[[], Any], what: str) -> Any:
     """Run a remote read, retrying with backoff; SourceFetchError once it keeps failing.
 
-    Any exception counts: rasterio, zarr and obstore each raise their own network
-    errors. A ValueError is a grid mismatch, not a network fault, and is raised at once.
+    Any exception counts (rasterio, zarr and obstore each raise their own network errors,
+    and a truncated response can surface as a ValueError) except GridError, a mismatch
+    no retry can fix.
     """
     import time
 
     for attempt in range(READ_ATTEMPTS):
         try:
             return read()
-        except ValueError:
+        except GridError:
             raise
         except Exception as err:
             if attempt == READ_ATTEMPTS - 1:
@@ -439,7 +449,7 @@ def open_sources(year: int, products: tuple[str, ...] = tuple(PRODUCTS)) -> dict
     }
     sources: dict[str, object] = {}
     for key in products:
-        source = openers[key](year)
+        source = _with_retries(lambda o=openers[key]: o(year), PRODUCTS[key].title)
         if _with_retries(lambda s=source: _has_year(s, year), f"{PRODUCTS[key].title} years"):
             sources[key] = source
         else:
@@ -470,19 +480,20 @@ class _Sums:
     def zeros(cls, k: int) -> _Sums:
         return cls(np.zeros(k, np.int64), np.zeros((k, BANDS)), np.zeros((k, BANDS)))
 
-    def add(self, fields: np.ndarray, values: np.ndarray) -> None:
-        """Add pixels: ``fields`` (P,) field index per pixel, ``values`` (BANDS, P) float32."""
+    def add(self, fields: np.ndarray, codes: np.ndarray) -> None:
+        """Add pixels: ``fields`` (P,) local field index per pixel, ``codes`` (BANDS, P) int8.
+
+        One band at a time, summed in float64 by bincount: memory stays at a few
+        vectors of P, and float64 squares keep a constant field's std at 0.
+        """
         if fields.size == 0:
             return
-        order = np.argsort(fields, kind="stable")
-        sorted_fields = fields[order]
-        uniq, start = np.unique(sorted_fields, return_index=True)
-        # Squared in float64: float32 squares leave a variance error larger than the
-        # smallest quantisation step, so a constant field would not get a std of 0.
-        v = values[:, order].astype(np.float64)
-        self.n[uniq] += np.diff(np.append(start, sorted_fields.size))
-        self.s[uniq] += np.add.reduceat(v, start, axis=1).T
-        self.ss[uniq] += np.add.reduceat(v * v, start, axis=1).T
+        k = self.n.size
+        self.n += np.bincount(fields, minlength=k)
+        for band in range(BANDS):
+            v = dequantize(codes[band]).astype(np.float64)
+            self.s[:, band] += np.bincount(fields, weights=v, minlength=k)
+            self.ss[:, band] += np.bincount(fields, weights=v * v, minlength=k)
 
 
 @dataclass
@@ -510,8 +521,10 @@ class _Accumulator:
         sums = self.touched if touched else self.centre
         for product, data in codes.items():
             flat = data.reshape(BANDS, -1)[:, pixels]
-            valid = flat[0] != NODATA
-            sums[product].add(fields[valid], dequantize(flat[:, valid]))
+            # Both products mark no data in every band at once; requiring all bands keeps
+            # one stray code from turning a field's mean into NaN.
+            valid = (flat != NODATA).all(axis=0)
+            sums[product].add(fields[valid], flat[:, valid])
 
 
 def _tiles(bounds: tuple[float, float, float, float], zone: int, tile_px: int) -> Iterator[Window]:
@@ -741,8 +754,16 @@ def _stats(sums: _Sums, pick: np.ndarray, other: _Sums) -> tuple[np.ndarray, ...
 
 
 def _vectors(values: np.ndarray, missing: np.ndarray) -> pa.Array:
-    flat = pa.array(values.reshape(-1), type=pa.float32())
-    return pa.FixedSizeListArray.from_arrays(flat, BANDS, mask=pa.array(missing))
+    """64-value lists, null where missing.
+
+    Null entries have zero length: Parquet writers refuse null list entries that still
+    hold values (pyarrow does for fixed-size lists with a null between two values).
+    """
+    present = ~missing
+    lengths = np.where(present, BANDS, 0)
+    offsets = np.concatenate([[0], np.cumsum(lengths)]).astype(np.int32)
+    flat = pa.array(values[present].reshape(-1), type=pa.float32())
+    return pa.ListArray.from_arrays(pa.array(offsets), flat, mask=pa.array(missing))
 
 
 SCHEMA = pa.schema(
@@ -755,7 +776,7 @@ SCHEMA = pa.schema(
             for key in PRODUCTS
             for column in (
                 (f"{key}_pixels", pa.int32()),
-                *((f"{key}_{stat}", pa.list_(pa.float32(), BANDS)) for stat in STATISTICS),
+                *((f"{key}_{stat}", pa.list_(pa.float32())) for stat in STATISTICS),
             )
         ],
     ]
@@ -797,9 +818,16 @@ def _plan(con: duckdb.DuckDBPyConnection, fields_sql: str, geom_col: str, crs: C
     """Table ``_keys`` (rid, zone, bx, by): each field's zone and block; returns its size."""
     rows = con.execute(f"""
         SELECT file_row_number AS rid, ST_X(c) AS x, ST_Y(c) AS y FROM (
-            SELECT file_row_number, ST_Centroid("{geom_col}") AS c FROM {fields_sql}
+            SELECT file_row_number,
+                   -- A zero-area polygon has no centroid; its bbox centre will do.
+                   coalesce(ST_Centroid("{geom_col}"),
+                            ST_Point((ST_XMin("{geom_col}") + ST_XMax("{geom_col}")) / 2,
+                                     (ST_YMin("{geom_col}") + ST_YMax("{geom_col}")) / 2)) AS c
+            FROM {fields_sql}
             WHERE "{geom_col}" IS NOT NULL AND NOT ST_IsEmpty("{geom_col}"))""").fetchnumpy()
-    rid, x, y = rows["rid"], np.asarray(rows["x"], float), np.asarray(rows["y"], float)
+    rid = np.asarray(rows["rid"])
+    x = np.ma.filled(np.ma.asarray(rows["x"], float), np.nan)
+    y = np.ma.filled(np.ma.asarray(rows["y"], float), np.nan)
     to_lonlat = Transformer.from_crs(crs, CRS.from_epsg(4326), always_xy=True)
     lon, lat = _transform(to_lonlat, x, y)
     finite = np.isfinite(lon) & np.isfinite(lat)
@@ -881,13 +909,24 @@ def field_embeddings_summary(result: FieldEmbeddingsResult | None) -> str:
 
 
 def describe(
-    year: int, id_col: str, products: tuple[str, ...], fingerprint: str | None = None
+    year: int,
+    id_col: str,
+    products: tuple[str, ...],
+    fingerprint: str | None = None,
+    requested: tuple[str, ...] | None = None,
 ) -> dict:
-    """The JSON stored under ``METADATA_KEY``: what the table holds and where it came from."""
+    """The JSON stored under ``METADATA_KEY``: what the table holds and where it came from.
+
+    ``products`` are the ones with embeddings for the year; ``requested`` the ones
+    looked for (all of them unless sources were given), so a year a product lacks is
+    not mistaken for an incomplete file.
+    """
     return {
+        "algorithm_version": ALGORITHM_VERSION,
         "year": year,
         "id_column": id_col,
         "fields_fingerprint": fingerprint,
+        "requested_products": sorted(requested if requested is not None else products),
         "statistics": list(STATISTICS),
         "std": "population standard deviation (ddof = 0) over the field's pixels",
         "dimensions": BANDS,
@@ -938,20 +977,37 @@ def _check_fields(fields_path: Path, id_col: str) -> tuple[str, CRS]:
 
 
 def fields_fingerprint(fields_file: Path | str, id_col: str = "id") -> str:
-    """A hash of every field's row number, id and geometry: changes when the fields do."""
+    """A digest of the fields' CRS and every field's row number, id and geometry.
+
+    Stable across library versions (BLAKE2 per row, combined by XOR so row order in
+    the scan does not matter); changes when any field, id or the CRS does.
+    """
+    import hashlib
+
     fields_path = Path(fields_file).resolve()
-    geom_col = detect_geometry_column(fields_path) or "geometry"
+    geom_col, crs = _check_fields(fields_path, id_col)
+    combined = 0
+    rows = 0
     con = duckdb.connect(":memory:")
     con.execute("SET enable_progress_bar = false")
+    con.execute(f"SET memory_limit = '{DUCKDB_MEMORY_LIMIT}'")
     ensure_spatial_loaded(con)
     try:
-        rows, digest = con.execute(f"""
-            SELECT count(*), bit_xor(hash(file_row_number, "{id_col}"::VARCHAR,
-                                          ST_AsWKB("{geom_col}")))
-            FROM read_parquet('{sql_path(fields_path)}', file_row_number = true)""").fetchone()
+        reader = con.execute(f"""
+            SELECT file_row_number, "{id_col}"::VARCHAR AS id, ST_AsWKB("{geom_col}") AS wkb
+            FROM read_parquet('{sql_path(fields_path)}', file_row_number = true)
+            """).fetch_record_batch(100_000)
+        for batch in reader:
+            cols = batch.to_pydict()
+            for rid, fid, wkb in zip(cols["file_row_number"], cols["id"], cols["wkb"], strict=True):
+                h = hashlib.blake2b(f"{rid}\0{fid}\0".encode(), digest_size=16)
+                h.update(wkb or b"")
+                combined ^= int.from_bytes(h.digest(), "big")
+                rows += 1
     finally:
         con.close()
-    return f"{rows}:{digest or 0:016x}"
+    crs_digest = hashlib.blake2b(crs.to_json().encode(), digest_size=8).hexdigest()
+    return f"{rows}:{crs_digest}:{combined:032x}"
 
 
 def is_current(path: Path | str, fields_file: Path | str, *, year: int, id_col: str = "id") -> bool:
@@ -960,11 +1016,11 @@ def is_current(path: Path | str, fields_file: Path | str, *, year: int, id_col: 
     if not path.exists():
         return False
     description = read_description(path) or {}
-    included = {k for k, p in description.get("products", {}).items() if p.get("included")}
     return (
-        description.get("year") == year
+        description.get("algorithm_version") == ALGORITHM_VERSION
+        and description.get("year") == year
         and description.get("id_column") == id_col
-        and included == set(PRODUCTS)
+        and set(description.get("requested_products", ())) == set(PRODUCTS)
         and description.get("fields_fingerprint") == fields_fingerprint(fields_file, id_col)
     )
 
@@ -1000,64 +1056,98 @@ def add_field_embeddings(
     fields_path = Path(fields_file).resolve()
     output_path = Path(output_file).resolve()
     geom_col, crs = _check_fields(fields_path, id_col)
+    requested = tuple(PRODUCTS) if sources is None else tuple(sources)
     if sources is None:
         sources = open_sources(year)
     fingerprint = fields_fingerprint(fields_path, id_col)
-    description = describe(year, id_col, tuple(sources), fingerprint)
+    description = describe(year, id_col, tuple(sources), fingerprint, requested)
     fields_sql = f"read_parquet('{sql_path(fields_path)}', file_row_number = true)"
-    parts = _Parts.open(output_path, description)
 
-    con = duckdb.connect(":memory:")
-    con.execute("SET enable_progress_bar = false")
-    con.execute(f"SET temp_directory = '{sql_path(parts.root / 'duckdb')}'")
-    ensure_spatial_loaded(con)
-    try:
-        total = _plan(con, fields_sql, geom_col, crs)
-        resumed = parts.skip_done(con)
-        if resumed:
-            logger.info(f"Resuming: {resumed:,} of {total:,} fields already done")
-        _compute(
-            con,
-            fields_sql,
-            geom_col,
-            crs,
-            sources,
-            parts,
-            workers,
-            tile_px,
-            total,
-            resumed,
-            on_progress,
-        )
-        _write_output(con, fields_sql, id_col, parts, output_path, description)
-        result = _result(con, output_path, year, tuple(sources))
-    finally:
-        con.close()
-    parts.remove()
+    with _Parts.open(output_path, description) as parts:
+        con = duckdb.connect(":memory:")
+        con.execute("SET enable_progress_bar = false")
+        con.execute(f"SET memory_limit = '{DUCKDB_MEMORY_LIMIT}'")
+        con.execute(f"SET temp_directory = '{sql_path(parts.root / 'duckdb')}'")
+        ensure_spatial_loaded(con)
+        try:
+            _warn_on_ids(con, fields_sql, id_col)
+            total = _plan(con, fields_sql, geom_col, crs)
+            resumed = parts.skip_done(con)
+            if resumed:
+                logger.info(f"Resuming: {resumed:,} of {total:,} fields already done")
+            if sources:
+                _compute(
+                    con,
+                    fields_sql,
+                    geom_col,
+                    crs,
+                    sources,
+                    parts,
+                    workers,
+                    tile_px,
+                    total,
+                    resumed,
+                    on_progress,
+                )
+            else:
+                logger.warning(f"No embedding product has {year}; writing empty statistics")
+            parts.finish()
+            parts.check(con, total if sources else 0)
+            _write_output(con, fields_sql, id_col, parts, output_path, description)
+            result = _result(con, output_path, year, tuple(sources))
+        finally:
+            con.close()
+        parts.remove()
     logger.info(field_embeddings_summary(result))
     return result
 
 
 @dataclass
 class _Parts:
-    """Finished fields of a run, saved as Parquet parts beside the output."""
+    """Finished fields of a run, saved as Parquet parts beside the output.
+
+    A lock file next to the output keeps a second run on the same output from adopting
+    or deleting this run's parts.
+    """
 
     root: Path
+    lock: Any
     count: int = 0
 
     @classmethod
     def open(cls, output_path: Path, description: dict) -> _Parts:
         """The run's parts folder: kept when it belongs to the same run, else started over."""
+        import fcntl
         import shutil
 
+        lock = output_path.with_name(output_path.name + ".lock").open("w")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as err:
+            lock.close()
+            raise FieldEmbeddingsError(
+                output_path, f"another run is writing {output_path.name}"
+            ) from err
         root = output_path.with_name(output_path.name + ".partial")
         marker = root / "run.json"
-        same = marker.exists() and json.loads(marker.read_text()) == description
+        try:
+            same = json.loads(marker.read_text()) == description
+        except (OSError, ValueError):
+            same = False
         if root.exists() and not same:
             shutil.rmtree(root)
         root.mkdir(parents=True, exist_ok=True)
-        marker.write_text(json.dumps(description))
-        return cls(root, count=len(list(root.glob("part-*.parquet"))))
+        tmp = marker.with_suffix(".tmp")
+        tmp.write_text(json.dumps(description))
+        tmp.replace(marker)
+        return cls(root, lock, count=len(list(root.glob("part-*.parquet"))))
+
+    def __enter__(self) -> _Parts:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        # The lock file stays: unlinking it would let a waiting run lock a stale inode.
+        self.lock.close()
 
     @property
     def glob(self) -> str:
@@ -1078,10 +1168,39 @@ class _Parts:
         tmp.replace(path)
         self.count += 1
 
+    def finish(self) -> None:
+        """At least one part, so the output's join has a schema to read."""
+        if self.count == 0:
+            self.write([])
+
+    def check(self, con: duckdb.DuckDBPyConnection, expected: int) -> None:
+        """Every planned field exactly once, before anything is published."""
+        rows, distinct = con.execute(
+            f"SELECT count(*), count(DISTINCT rid) FROM read_parquet('{self.glob}')"
+        ).fetchone()
+        if rows != distinct or rows != expected:
+            raise FieldEmbeddingsError(
+                self.root,
+                f"saved parts hold {rows:,} rows for {distinct:,} fields, expected {expected:,}; "
+                f"delete {self.root.name} and run again",
+            )
+
     def remove(self) -> None:
         import shutil
 
         shutil.rmtree(self.root, ignore_errors=True)
+
+
+def _warn_on_ids(con: duckdb.DuckDBPyConnection, fields_sql: str, id_col: str) -> None:
+    """Duplicate or missing ids make the output ambiguous to join; say so."""
+    rows, distinct, nulls = con.execute(f"""
+        SELECT count(*), count(DISTINCT "{id_col}"), count(*) - count("{id_col}")
+        FROM {fields_sql}""").fetchone()
+    if nulls or distinct < rows - nulls:
+        logger.warning(
+            f"'{id_col}' is not a unique key ({rows - nulls - distinct:,} duplicates, "
+            f"{nulls:,} missing); rows stay in the fields' order, but joins on it will not"
+        )
 
 
 def _compute(
@@ -1097,25 +1216,34 @@ def _compute(
     done: int,
     on_progress: Callable[[int, int], None] | None,
 ) -> None:
-    """Run every work unit on a thread pool, saving results in parts as they finish."""
+    """Run every work unit on a thread pool, saving results in parts as they finish.
+
+    On a failure, the results already finished are saved before it is raised, and the
+    queued work units are cancelled rather than waited for.
+    """
     buffer: list[pa.RecordBatch] = []
-    buffered = 0
 
     def drain(futures: set[Future]) -> None:
-        nonlocal done, buffered
+        nonlocal done
+        error: BaseException | None = None
         for future in futures:
-            batch = future.result()
+            try:
+                batch = future.result()
+            except BaseException as err:  # keep collecting the others first
+                error = error or err
+                continue
             buffer.append(batch)
-            buffered += batch.num_rows
             done += batch.num_rows
             if on_progress is not None:
                 on_progress(done, total)
-        if buffered >= PART_ROWS:
+        if buffer and (error is not None or sum(b.num_rows for b in buffer) >= PART_ROWS):
             parts.write(buffer)
             buffer.clear()
-            buffered = 0
+        if error is not None:
+            raise error
 
-    with ThreadPoolExecutor(workers) as pool:
+    pool = ThreadPoolExecutor(workers)
+    try:
         pending: set[Future] = set()
         for task in _tasks(con, fields_sql, geom_col):
             pending.add(pool.submit(_task_stats, task, crs, sources, tile_px))
@@ -1123,9 +1251,10 @@ def _compute(
                 finished, pending = wait(pending, return_when=FIRST_COMPLETED)
                 drain(finished)
         drain(pending)
-    # Always at least one part, so the output's join has a schema to read.
-    if buffer or parts.count == 0:
-        parts.write(buffer)
+        if buffer:
+            parts.write(buffer)
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def _write_output(

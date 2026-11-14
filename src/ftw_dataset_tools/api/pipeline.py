@@ -686,6 +686,7 @@ def _add_field_embeddings(ctx: PipelineContext) -> None:
         if path.exists():
             path.unlink()
             logger.info(f"Removed {path.name} (stages.chips.field_embeddings is off)")
+        shutil.rmtree(path.with_name(path.name + ".partial"), ignore_errors=True)
         return
     if ctx.effective_year is None:
         raise StageInputError(
@@ -931,6 +932,13 @@ def _published_field_embeddings(ctx: PipelineContext) -> Path | None:
     if not ctx.config.stages.chips.field_embeddings:
         return None
     _require(ctx.field_embeddings_path, stage="stac", produced_by="chips")
+    if ctx.effective_year is None or not field_embeddings.is_current(
+        ctx.field_embeddings_path, ctx.output_fields_path, year=ctx.effective_year
+    ):
+        raise StageInputError(
+            f"{ctx.field_embeddings_path.name} is not for the current fields, year and "
+            "products. Run the 'chips' stage first."
+        )
     return ctx.field_embeddings_path
 
 

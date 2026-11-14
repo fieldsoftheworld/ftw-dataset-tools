@@ -977,3 +977,17 @@ class TestFieldEmbeddingsSection:
             assert "ds_field_embeddings.parquet" in text
             assert "Section 2" in text
             assert "JOIN read_parquet('ds_field_embeddings.parquet') e USING (id)" in text
+
+    def test_only_the_products_present_are_described(self) -> None:
+        from ftw_dataset_tools.api.docs import render_readme
+
+        collection = self._collection(True)
+        asset = collection["assets"]["field_embeddings"]
+        asset["ftw:embedding_products"] = ["aef"]
+        asset["table:columns"] = [{"name": "field_id", "type": "varchar"}]
+
+        readme = render_readme(collection, _stats(), [], {})
+
+        assert "`aef_*`" in readme
+        assert "olmoearth_*" not in readme
+        assert "USING (field_id)" in readme

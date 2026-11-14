@@ -1786,8 +1786,11 @@ class TestChipsStageFieldEmbeddings:
         return seen
 
     def test_stac_stage_publishes_the_file_when_enabled(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import field_embeddings
+
         ctx = _embeddings_ctx(tmp_path, monkeypatch, on=True)
         ctx.field_embeddings_path.write_bytes(b"x")
+        monkeypatch.setattr(field_embeddings, "is_current", lambda *_a, **_k: True)
 
         kwargs = self._stac_kwargs(tmp_path, monkeypatch, ctx)
 
@@ -1798,6 +1801,26 @@ class TestChipsStageFieldEmbeddings:
 
         with pytest.raises(pipeline.StageInputError, match=r"field_embeddings\.parquet"):
             self._stac_kwargs(tmp_path, monkeypatch, ctx)
+
+    def test_stac_stage_refuses_a_stale_file(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import field_embeddings
+
+        ctx = _embeddings_ctx(tmp_path, monkeypatch, on=True)
+        ctx.field_embeddings_path.write_bytes(b"x")
+        monkeypatch.setattr(field_embeddings, "is_current", lambda *_a, **_k: False)
+
+        with pytest.raises(pipeline.StageInputError, match="not for the current fields"):
+            self._stac_kwargs(tmp_path, monkeypatch, ctx)
+
+    def test_disabled_also_removes_saved_parts(self, tmp_path: Path, monkeypatch) -> None:
+        ctx = _embeddings_ctx(tmp_path, monkeypatch, on=False)
+        self._record(monkeypatch)
+        partial = ctx.field_embeddings_path.with_name(ctx.field_embeddings_path.name + ".partial")
+        partial.mkdir()
+
+        pipeline.stage_chips(ctx)
+
+        assert not partial.exists()
 
     def test_stac_stage_ignores_a_file_when_disabled(self, tmp_path: Path, monkeypatch) -> None:
         ctx = _embeddings_ctx(tmp_path, monkeypatch, on=False)

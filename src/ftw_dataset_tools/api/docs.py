@@ -794,6 +794,18 @@ def _field_embeddings_section(collection: dict) -> str:
     fields = _asset_href(collection, "fields", "fields.parquet")
     columns = asset.get("table:columns") or [{"name": "id"}]
     id_col = columns[0]["name"]
+    included = asset.get("ftw:embedding_products", [AEF.key, OLMOEARTH.key])
+    bullets = []
+    if AEF.key in included:
+        bullets.append(f"- `aef_*`: {_link(AEF.title, AEF.url)}. {AEF.notes} {AEF.license}.")
+    if OLMOEARTH.key in included:
+        bullets.append(
+            f"- `olmoearth_*`: {_link(OLMOEARTH.title, OLMOEARTH.url)}. {OLMOEARTH.notes} "
+            f"{_link('OlmoEarth Artifact License', OLMOEARTH.license)}: cite Ai2, and its "
+            "use restrictions (Section 2) apply to anything derived from these columns."
+        )
+    if not bullets:
+        bullets.append("- No embedding product covers this dataset's year; the columns are empty.")
     return (
         "## Field embeddings\n\n"
         f"`{href}` has one row per field in `{fields}`, keyed by `{id_col}`. For each "
@@ -801,10 +813,8 @@ def _field_embeddings_section(collection: dict) -> str:
         "(`<product>_std`, population std) of every embedding dimension over the field's "
         "10 m pixels, as "
         "64-value float lists, and the pixels used (`<product>_pixels`):\n\n"
-        f"- `aef_*`: {_link(AEF.title, AEF.url)}. {AEF.notes} {AEF.license}.\n"
-        f"- `olmoearth_*`: {_link(OLMOEARTH.title, OLMOEARTH.url)}. {OLMOEARTH.notes} "
-        f"{_link('OlmoEarth Artifact License', OLMOEARTH.license)}: cite Ai2, and its "
-        "use restrictions (Section 2) apply to anything derived from these columns.\n\n"
+        + "\n".join(bullets)
+        + "\n\n"
         "A field takes the pixels whose centre is inside it; a field too small to hold one "
         "uses every pixel it touches (`pixel_rule = 'touched'`). The values are already "
         "dequantised. Fields with no pixels a product covers have no value for it.\n\n"

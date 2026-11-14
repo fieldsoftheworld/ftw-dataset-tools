@@ -1313,6 +1313,24 @@ class TestFieldEmbeddings:
         assert "Ai2" not in asset["description"]
         derived = [link["href"] for link in coll["links"] if link["rel"] == "derived_from"]
         assert derived == [field_embeddings.AEF.url]
+        assert asset["ftw:embedding_products"] == ["aef"]
+        assert asset["title"] == "Per-field embedding statistics (AlphaEarth Foundations)"
+        assert field_embeddings.OLMOEARTH.license not in [link["href"] for link in coll["links"]]
+
+    def test_olmoearth_columns_get_a_license_link(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api import field_embeddings
+
+        path = _write_field_embeddings(
+            tmp_path / "ds_field_embeddings.parquet", ("aef", "olmoearth")
+        )
+        result = build_catalog(tmp_path, field_embeddings_file=path)
+
+        coll = json.loads(result.collection_path.read_text())
+        licenses = [link for link in coll["links"] if link["rel"] == "license"]
+        assert [link["href"] for link in licenses] == [field_embeddings.OLMOEARTH.license]
+        assert "Section 2" in licenses[0]["title"]
 
     def test_without_the_file_there_is_no_asset(self, tmp_path: Path) -> None:
         import json
