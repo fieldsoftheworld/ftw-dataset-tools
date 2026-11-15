@@ -99,9 +99,10 @@ OLMOEARTH_PREFIX = "olmoearth/olmoearth-v1-3-embeddings/embeddings.zarr"
 ALGORITHM_VERSION = 1
 #: Memory DuckDB may use before spilling to the run's temp folder.
 DUCKDB_MEMORY_LIMIT = "4GB"
-#: Share of the machine's memory the final sort may use. Sorting tens of millions of rows of
-#: 256 statistics does not fit in DUCKDB_MEMORY_LIMIT, and DuckDB cannot spill all of it.
-WRITE_MEMORY_SHARE = 0.6
+#: Share of the machine's memory the two big sorts may use: fields with their geometry into
+#: work-unit order, and tens of millions of rows of 256 statistics into the output. Neither
+#: fits in DUCKDB_MEMORY_LIMIT on large datasets, and DuckDB cannot spill all of it.
+SORT_MEMORY_SHARE = 0.6
 
 #: Statistics per product and dimension.
 STATISTICS = ("mean", "std")
@@ -859,6 +860,7 @@ def _tasks(
     con: duckdb.DuckDBPyConnection, fields_sql: str, geom_col: str, batch_rows: int = 50_000
 ) -> Iterator[_Task]:
     """Fields grouped by (zone, block), streamed in key order."""
+    con.execute(f"SET memory_limit = '{sort_memory_limit()}'")
     reader = con.execute(f"""
         SELECT k.zone, k.bx, k.by, k.rid, ST_AsWKB(f."{geom_col}") AS wkb
         FROM {fields_sql} f JOIN _keys k ON k.rid = f.file_row_number
@@ -1272,12 +1274,12 @@ def _compute(
         pool.shutdown(wait=True, cancel_futures=True)
 
 
-def write_memory_limit(total_bytes: int | None = None) -> str:
-    """DuckDB's memory limit for writing the output: a share of the machine, at least the default."""
+def sort_memory_limit(total_bytes: int | None = None) -> str:
+    """DuckDB's memory limit for the big sorts: a share of the machine, at least the default."""
     if total_bytes is None:
         total_bytes = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
     floor = int(DUCKDB_MEMORY_LIMIT.removesuffix("GB"))
-    return f"{max(floor, int(total_bytes * WRITE_MEMORY_SHARE) // 1024**3)}GB"
+    return f"{max(floor, int(total_bytes * SORT_MEMORY_SHARE) // 1024**3)}GB"
 
 
 def _write_output(
@@ -1291,7 +1293,7 @@ def _write_output(
     """The statistics joined onto the field ids, in the fields file's order."""
     meta = json.dumps(description).replace("'", "''")
     tmp_out = output_path.with_name(output_path.name + ".tmp")
-    con.execute(f"SET memory_limit = '{write_memory_limit()}'")
+    con.execute(f"SET memory_limit = '{sort_memory_limit()}'")
     con.execute(f"""
         COPY (
             SELECT f."{id_col}", s.* EXCLUDE (rid)

@@ -670,12 +670,26 @@ class TestRetryScope:
         assert sorted(p.name for p in tmp_path.iterdir()) == ["f.parquet", "o.parquet"]
 
 
-class TestWriteMemoryLimit:
+class TestSortMemoryLimit:
     def test_a_share_of_a_large_machine(self) -> None:
-        assert fe.write_memory_limit(128 * 1024**3) == "76GB"
+        assert fe.sort_memory_limit(128 * 1024**3) == "76GB"
 
     def test_never_below_the_default(self) -> None:
-        assert fe.write_memory_limit(2 * 1024**3) == fe.DUCKDB_MEMORY_LIMIT
+        assert fe.sort_memory_limit(2 * 1024**3) == fe.DUCKDB_MEMORY_LIMIT
 
     def test_reads_this_machine(self) -> None:
-        assert fe.write_memory_limit().endswith("GB")
+        assert fe.sort_memory_limit().endswith("GB")
+
+    def test_both_sorts_raise_the_limit(self, tmp_path: Path, monkeypatch) -> None:
+        calls: list[int] = []
+
+        def limit() -> str:
+            calls.append(1)
+            return "5GB"
+
+        monkeypatch.setattr(fe, "sort_memory_limit", limit)
+        fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
+        add_field_embeddings(
+            fields, tmp_path / "o.parquet", year=2022, sources={"aef": FakeSource(0)}
+        )
+        assert len(calls) == 2  # the work-unit sort and the output sort
