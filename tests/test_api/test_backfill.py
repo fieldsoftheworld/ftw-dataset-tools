@@ -289,6 +289,21 @@ class TestRewriteDocs:
         assert set(listed) <= set(on_disk)
         assert assets["chips_tiles"] == doc["assets"]["chips_tiles"]
 
+    def test_unchanged_styles_leave_the_collection_alone(self, tmp_path: Path) -> None:
+        root, doc = _published(tmp_path)
+        doc["assets"]["chips_tiles"] = {"href": "./ds_chips.pmtiles", "roles": ["visual"]}
+        (root / "collection.json").write_text(json.dumps(doc))
+        backfill.rewrite_docs(root, root / "collection.json")
+        published = _collection(root)
+        for key in published["assets"]:
+            if key.startswith("style-"):
+                published["assets"][key]["file:size"] = 123
+        (root / "collection.json").write_text(json.dumps(published))
+
+        backfill.rewrite_docs(root, root / "collection.json")
+
+        assert _collection(root) == published
+
     def test_without_tiles_no_styles_are_written_or_listed(self, tmp_path: Path) -> None:
         root, doc = _published(tmp_path)
         doc["assets"]["style-gone"] = {"href": "./styles/gone.json", "roles": ["style"]}

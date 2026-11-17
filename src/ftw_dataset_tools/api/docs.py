@@ -1160,14 +1160,21 @@ def sync_style_assets(collection: dict, styles: list[StyleResult]) -> bool:
     """Make a collection's style assets exactly ``styles``; True if that changed it.
 
     For a collection whose tile archives are not on disk (a backfill): its tile
-    assets and every other asset are left as they are.
+    assets and every other asset are left as they are. Only the fields this module
+    writes are compared and set, so fields a later step added to a kept style
+    (``file:size``) stay.
     """
     assets = collection.setdefault("assets", {})
     before = {key: value for key, value in assets.items() if key.startswith("style-")}
+    wanted = {f"style-{style.style_id}": _style_asset(style) for style in styles}
+    if before.keys() == wanted.keys() and all(
+        {name: before[key].get(name) for name in entry} == entry for key, entry in wanted.items()
+    ):
+        return False
     _prune_managed_assets(assets, {key: Path(key) for key in assets if key in TILE_TITLES}, styles)
-    for style in styles:
-        assets[f"style-{style.style_id}"] = _style_asset(style)
-    return before != {key: value for key, value in assets.items() if key.startswith("style-")}
+    for key, entry in wanted.items():
+        assets[key] = {**before.get(key, {}), **entry}
+    return True
 
 
 def register_docs_assets(

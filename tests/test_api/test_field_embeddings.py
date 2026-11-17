@@ -675,8 +675,15 @@ class TestSortMemoryLimit:
     def test_a_share_of_a_large_machine(self) -> None:
         assert fe.sort_memory_limit(128 * 1024**3) == "76GB"
 
-    def test_never_below_the_default(self) -> None:
-        assert fe.sort_memory_limit(2 * 1024**3) == fe.DUCKDB_MEMORY_LIMIT
+    def test_stays_within_a_small_container(self) -> None:
+        assert fe.sort_memory_limit(2 * 1024**3) == "1GB"
+        assert fe.sort_memory_limit(1024**3) == "614MB"
+
+    @pytest.mark.parametrize("value", ["lots", "80%", "1GB'; SELECT 1; --"])
+    def test_a_bad_override_is_refused(self, monkeypatch, value: str) -> None:
+        monkeypatch.setenv(fe.SORT_MEMORY_ENV, value)
+        with pytest.raises(fe.SortMemoryError):
+            fe.sort_memory_limit()
 
     def test_reads_this_machine(self, monkeypatch) -> None:
         monkeypatch.delenv(fe.SORT_MEMORY_ENV, raising=False)

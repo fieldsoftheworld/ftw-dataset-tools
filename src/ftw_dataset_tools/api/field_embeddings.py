@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import tempfile
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
@@ -106,8 +107,9 @@ DUCKDB_MEMORY_LIMIT = f"{DUCKDB_MEMORY_GB}GB"
 #: the output. Neither fits in DUCKDB_MEMORY_LIMIT on large datasets, and DuckDB cannot spill
 #: all of it. The rest is left for the worker threads' tiles, which DuckDB does not count.
 SORT_MEMORY_SHARE = 0.6
-#: Environment variable that sets the sorts' memory limit instead, as DuckDB reads it ("20GB").
+#: Environment variable that sets the sorts' memory limit instead, as a size ("20GB").
 SORT_MEMORY_ENV = "FTWD_SORT_MEMORY"
+_SIZE = re.compile(r"\d+(\.\d+)?\s*[KMGT]i?B", re.IGNORECASE)
 #: Container memory limits (cgroup v2, then v1); a process may get less than the machine has.
 CGROUP_MEMORY_FILES = (
     Path("/sys/fs/cgroup/memory.max"),
@@ -169,6 +171,14 @@ class FieldEmbeddingsError(ValueError):
     def __init__(self, path: Path, message: str) -> None:
         super().__init__(message)
         self.path = path
+
+
+class SortMemoryError(ValueError):
+    """``SORT_MEMORY_ENV`` is set to something that is not a memory size."""
+
+    def __init__(self, value: str) -> None:
+        super().__init__(f"{SORT_MEMORY_ENV} must be a size like 20GB, not {value!r}")
+        self.value = value
 
 
 def _dequantize_table() -> np.ndarray:
@@ -1303,16 +1313,25 @@ def sort_memory(con: duckdb.DuckDBPyConnection) -> Iterator[None]:
 
 
 def sort_memory_limit(total_bytes: int | None = None) -> str:
-    """DuckDB's memory limit for the big sorts: a share of the memory available, at least
-    the default. ``SORT_MEMORY_ENV`` overrides it; unknown memory gives the default."""
+    """DuckDB's memory limit for the big sorts: ``SORT_MEMORY_SHARE`` of the memory
+    available. ``SORT_MEMORY_ENV`` overrides it; unknown memory gives the default.
+
+    Raises:
+        SortMemoryError: ``SORT_MEMORY_ENV`` is set but is not a size like "20GB".
+    """
     override = os.environ.get(SORT_MEMORY_ENV, "").strip()
     if override:
+        if not _SIZE.fullmatch(override):
+            raise SortMemoryError(override)
         return override
     if total_bytes is None:
         total_bytes = available_memory()
     if total_bytes is None:
         return DUCKDB_MEMORY_LIMIT
-    return f"{max(DUCKDB_MEMORY_GB, int(total_bytes * SORT_MEMORY_SHARE) // 1024**3)}GB"
+    limit = int(total_bytes * SORT_MEMORY_SHARE)
+    if limit >= 1024**3:
+        return f"{limit // 1024**3}GB"
+    return f"{max(1, limit // 1024**2)}MB"
 
 
 def available_memory() -> int | None:
