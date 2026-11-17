@@ -36,8 +36,11 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import re
 import tempfile
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -96,8 +99,22 @@ OLMOEARTH_PREFIX = "olmoearth/olmoearth-v1-3-embeddings/embeddings.zarr"
 
 #: Bumped whenever the statistics change, so older outputs and saved parts are not reused.
 ALGORITHM_VERSION = 1
-#: Memory DuckDB may use before spilling to the run's temp folder.
-DUCKDB_MEMORY_LIMIT = "4GB"
+#: Memory DuckDB may use before spilling to the run's temp folder, in GB.
+DUCKDB_MEMORY_GB = 4
+DUCKDB_MEMORY_LIMIT = f"{DUCKDB_MEMORY_GB}GB"
+#: Share of the memory available to this process the two big sorts may use: fields with
+#: their geometry into work-unit order, and tens of millions of rows of 256 statistics into
+#: the output. Neither fits in DUCKDB_MEMORY_LIMIT on large datasets, and DuckDB cannot spill
+#: all of it. The rest is left for the worker threads' tiles, which DuckDB does not count.
+SORT_MEMORY_SHARE = 0.6
+#: Environment variable that sets the sorts' memory limit instead, as a size ("20GB").
+SORT_MEMORY_ENV = "FTWD_SORT_MEMORY"
+_SIZE = re.compile(r"\d+(\.\d+)?\s*[KMGT]i?B", re.IGNORECASE)
+#: Container memory limits (cgroup v2, then v1); a process may get less than the machine has.
+CGROUP_MEMORY_FILES = (
+    Path("/sys/fs/cgroup/memory.max"),
+    Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+)
 
 #: Statistics per product and dimension.
 STATISTICS = ("mean", "std")
@@ -154,6 +171,14 @@ class FieldEmbeddingsError(ValueError):
     def __init__(self, path: Path, message: str) -> None:
         super().__init__(message)
         self.path = path
+
+
+class SortMemoryError(ValueError):
+    """``SORT_MEMORY_ENV`` is set to something that is not a memory size."""
+
+    def __init__(self, value: str) -> None:
+        super().__init__(f"{SORT_MEMORY_ENV} must be a size like 20GB, not {value!r}")
+        self.value = value
 
 
 def _dequantize_table() -> np.ndarray:
@@ -854,11 +879,20 @@ def _plan(con: duckdb.DuckDBPyConnection, fields_sql: str, geom_col: str, crs: C
 def _tasks(
     con: duckdb.DuckDBPyConnection, fields_sql: str, geom_col: str, batch_rows: int = 50_000
 ) -> Iterator[_Task]:
-    """Fields grouped by (zone, block), streamed in key order."""
-    reader = con.execute(f"""
-        SELECT k.zone, k.bx, k.by, k.rid, ST_AsWKB(f."{geom_col}") AS wkb
-        FROM {fields_sql} f JOIN _keys k ON k.rid = f.file_row_number
-        ORDER BY k.zone, k.bx, k.by, k.rid""").fetch_record_batch(batch_rows)
+    """Fields grouped by (zone, block), streamed in key order.
+
+    The sort keeps its larger memory limit until the last work unit is read.
+    """
+    with sort_memory(con):
+        reader = con.execute(f"""
+            SELECT k.zone, k.bx, k.by, k.rid, ST_AsWKB(f."{geom_col}") AS wkb
+            FROM {fields_sql} f JOIN _keys k ON k.rid = f.file_row_number
+            ORDER BY k.zone, k.bx, k.by, k.rid""").fetch_record_batch(batch_rows)
+        yield from _group_tasks(reader)
+
+
+def _group_tasks(reader: pa.RecordBatchReader) -> Iterator[_Task]:
+    """Consecutive rows with the same (zone, block) key, as one task each."""
     key: tuple[int, int, int] | None = None
     rids: list[int] = []
     wkb: list[bytes] = []
@@ -1268,6 +1302,62 @@ def _compute(
         pool.shutdown(wait=True, cancel_futures=True)
 
 
+@contextmanager
+def sort_memory(con: duckdb.DuckDBPyConnection) -> Iterator[None]:
+    """Raise the connection's memory limit for one big sort, then restore the default."""
+    con.execute(f"SET memory_limit = '{sort_memory_limit()}'")
+    try:
+        yield
+    finally:
+        con.execute(f"SET memory_limit = '{DUCKDB_MEMORY_LIMIT}'")
+
+
+def sort_memory_limit(total_bytes: int | None = None) -> str:
+    """DuckDB's memory limit for the big sorts: ``SORT_MEMORY_SHARE`` of the memory
+    available. ``SORT_MEMORY_ENV`` overrides it; unknown memory gives the default.
+
+    Raises:
+        SortMemoryError: ``SORT_MEMORY_ENV`` is set but is not a size like "20GB".
+    """
+    override = os.environ.get(SORT_MEMORY_ENV, "").strip()
+    if override:
+        if not _SIZE.fullmatch(override):
+            raise SortMemoryError(override)
+        return override
+    if total_bytes is None:
+        total_bytes = available_memory()
+    if total_bytes is None:
+        return DUCKDB_MEMORY_LIMIT
+    limit = int(total_bytes * SORT_MEMORY_SHARE)
+    if limit >= 1024**3:
+        return f"{limit // 1024**3}GB"
+    return f"{max(1, limit // 1024**2)}MB"
+
+
+def available_memory() -> int | None:
+    """Bytes of memory this process may use: the machine's, or its container's limit when
+    lower. None when neither can be read."""
+    sizes = [_physical_memory(), *(_cgroup_limit(path) for path in CGROUP_MEMORY_FILES)]
+    known = [size for size in sizes if size]
+    return min(known) if known else None
+
+
+def _physical_memory() -> int | None:
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, ValueError, OSError):  # no sysconf (Windows) or no such name
+        return None
+
+
+def _cgroup_limit(path: Path) -> int | None:
+    """A cgroup memory limit in bytes; None when there is none ("max") or no such file."""
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return int(text) if text.isdigit() else None
+
+
 def _write_output(
     con: duckdb.DuckDBPyConnection,
     fields_sql: str,
@@ -1279,6 +1369,19 @@ def _write_output(
     """The statistics joined onto the field ids, in the fields file's order."""
     meta = json.dumps(description).replace("'", "''")
     tmp_out = output_path.with_name(output_path.name + ".tmp")
+    with sort_memory(con):
+        _copy_output(con, fields_sql, id_col, parts, tmp_out, meta)
+    tmp_out.replace(output_path)
+
+
+def _copy_output(
+    con: duckdb.DuckDBPyConnection,
+    fields_sql: str,
+    id_col: str,
+    parts: _Parts,
+    tmp_out: Path,
+    meta: str,
+) -> None:
     con.execute(f"""
         COPY (
             SELECT f."{id_col}", s.* EXCLUDE (rid)
@@ -1287,7 +1390,6 @@ def _write_output(
             ORDER BY f.file_row_number
         ) TO '{sql_path(tmp_out)}'
         (FORMAT parquet, COMPRESSION zstd, KV_METADATA {{'{METADATA_KEY}': '{meta}'}})""")
-    tmp_out.replace(output_path)
 
 
 def _result(

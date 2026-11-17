@@ -588,6 +588,16 @@ def is_dataset_license_link(link: dict) -> bool:
     return link.get("rel") == "license" and ASSET_LICENSE_KEY not in link
 
 
+def gaul_link() -> Link:
+    """The collection link crediting FAO GAUL for the chips' admin names."""
+    return Link(
+        rel="derived_from",
+        target=admin_names.GAUL_URL,
+        media_type="text/html",
+        title=admin_names.ATTRIBUTION,
+    )
+
+
 def _add_field_embeddings(collection: Collection, path: Path, *, checksums: bool) -> None:
     """The per-field embedding statistics asset, and a derived_from link per product."""
     description = field_embeddings.read_description(path) or {}
@@ -1185,14 +1195,7 @@ def _apply_collection_context(
             )
         )
     if config is not None and config.stages.chips.admin_names:
-        collection.add_link(
-            Link(
-                rel="derived_from",
-                target=admin_names.GAUL_URL,
-                media_type="text/html",
-                title=admin_names.ATTRIBUTION,
-            )
-        )
+        collection.add_link(gaul_link())
     if config is not None and config.stages.chips.land_cover:
         collection.add_link(
             Link(

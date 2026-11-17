@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+import duckdb
 import geopandas as gpd
 import numpy as np
 import pyarrow.parquet as pq
@@ -668,3 +669,75 @@ class TestRetryScope:
             fields, tmp_path / "o.parquet", year=2022, sources={"aef": FakeSource(0)}
         )
         assert sorted(p.name for p in tmp_path.iterdir()) == ["f.parquet", "o.parquet"]
+
+
+class TestSortMemoryLimit:
+    def test_a_share_of_a_large_machine(self) -> None:
+        assert fe.sort_memory_limit(128 * 1024**3) == "76GB"
+
+    def test_stays_within_a_small_container(self) -> None:
+        assert fe.sort_memory_limit(2 * 1024**3) == "1GB"
+        assert fe.sort_memory_limit(1024**3) == "614MB"
+
+    @pytest.mark.parametrize("value", ["lots", "80%", "1GB'; SELECT 1; --"])
+    def test_a_bad_override_is_refused(self, monkeypatch, value: str) -> None:
+        monkeypatch.setenv(fe.SORT_MEMORY_ENV, value)
+        with pytest.raises(fe.SortMemoryError):
+            fe.sort_memory_limit()
+
+    def test_reads_this_machine(self, monkeypatch) -> None:
+        monkeypatch.delenv(fe.SORT_MEMORY_ENV, raising=False)
+        assert fe.sort_memory_limit().endswith("GB")
+
+    def test_the_environment_overrides_it(self, monkeypatch) -> None:
+        monkeypatch.setenv(fe.SORT_MEMORY_ENV, "20GB")
+        assert fe.sort_memory_limit(128 * 1024**3) == "20GB"
+
+    def test_a_container_limit_below_the_machine_wins(self, tmp_path: Path, monkeypatch) -> None:
+        v2 = tmp_path / "memory.max"
+        v2.write_text(f"{16 * 1024**3}\n")
+        monkeypatch.setattr(fe, "CGROUP_MEMORY_FILES", (v2, tmp_path / "missing"))
+        monkeypatch.setattr(fe, "_physical_memory", lambda: 128 * 1024**3)
+        assert fe.available_memory() == 16 * 1024**3
+
+    def test_an_unlimited_container_uses_the_machine(self, tmp_path: Path, monkeypatch) -> None:
+        v2 = tmp_path / "memory.max"
+        v2.write_text("max\n")
+        monkeypatch.setattr(fe, "CGROUP_MEMORY_FILES", (v2,))
+        monkeypatch.setattr(fe, "_physical_memory", lambda: 128 * 1024**3)
+        assert fe.available_memory() == 128 * 1024**3
+
+    def test_unknown_memory_gives_the_default(self, tmp_path: Path, monkeypatch) -> None:
+        def no_sysconf(name: str) -> int:
+            raise ValueError(name)
+
+        monkeypatch.delenv(fe.SORT_MEMORY_ENV, raising=False)
+        monkeypatch.setattr(fe.os, "sysconf", no_sysconf)
+        monkeypatch.setattr(fe, "CGROUP_MEMORY_FILES", (tmp_path / "missing",))
+        assert fe.available_memory() is None
+        assert fe.sort_memory_limit() == fe.DUCKDB_MEMORY_LIMIT
+
+    def test_the_default_comes_back_after_a_sort(self, monkeypatch) -> None:
+        monkeypatch.setattr(fe, "sort_memory_limit", lambda: "5GB")
+        con = duckdb.connect()
+        con.execute(f"SET memory_limit = '{fe.DUCKDB_MEMORY_LIMIT}'")
+        default = con.execute("SELECT current_setting('memory_limit')").fetchone()[0]
+        with fe.sort_memory(con):
+            raised = con.execute("SELECT current_setting('memory_limit')").fetchone()[0]
+        after = con.execute("SELECT current_setting('memory_limit')").fetchone()[0]
+        assert raised != default
+        assert after == default
+
+    def test_both_sorts_raise_the_limit(self, tmp_path: Path, monkeypatch) -> None:
+        calls: list[int] = []
+
+        def limit() -> str:
+            calls.append(1)
+            return "5GB"
+
+        monkeypatch.setattr(fe, "sort_memory_limit", limit)
+        fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
+        add_field_embeddings(
+            fields, tmp_path / "o.parquet", year=2022, sources={"aef": FakeSource(0)}
+        )
+        assert len(calls) == 2  # the work-unit sort and the output sort
