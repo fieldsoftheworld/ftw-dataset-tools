@@ -9,13 +9,17 @@ documents instead, and leave everything else in them as it was:
   chip item, from the chips file;
 - ``update_collection``: the chips asset's size and columns, the GAUL link, the field
   embeddings asset with its links, and a record of the backfill in ``ftw:config``;
-- ``rewrite_docs``: the styles, README.md and AGENTS.md, measured from the updated files.
+- ``rewrite_docs``: the styles, README.md and AGENTS.md, measured from the updated files,
+  and the style assets listed on the collection.
 
-Each function gives the same result when run again, so a backfill can be repeated.
+Running a function again gives the same result, apart from the time stamp in the
+backfill record, so a backfill can be repeated. The benchmark catalog's
+``tools/backfill.py`` drives these functions for each published dataset.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -30,7 +34,7 @@ from ftw_dataset_tools.api.source import installed_git_commit
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-#: The ``ftw:config`` key a backfill records itself under, one entry per run.
+#: The ``ftw:config`` key a backfill records itself under: the latest run's record.
 BACKFILL_KEY = "backfills"
 
 #: Item properties a backfill owns: removed, then set again from the chips file.
@@ -41,7 +45,7 @@ ADMIN_PROPERTIES: tuple[str, ...] = tuple(f"ftw:{col}" for col in admin_names.OU
 _TRAILING_RELS = frozenset({"child", "item"})
 
 
-class BackfillError(ValueError):
+class BackfillError(Exception):
     """A published collection lacks something the backfill needs."""
 
     def __init__(self, what: str, message: str) -> None:
@@ -154,15 +158,6 @@ def _embedding_entries(path: Path, *, checksum: bool) -> tuple[dict, list[dict],
     return asset, links, list(holder.stac_extensions)
 
 
-def _gaul_link() -> dict:
-    return {
-        "rel": "derived_from",
-        "href": admin_names.GAUL_URL,
-        "type": "text/html",
-        "title": admin_names.ATTRIBUTION,
-    }
-
-
 def _record(doc: dict, *, steps: list[str]) -> None:
     """Note in ``ftw:config`` what the backfill added, and with which ftwd.
 
@@ -199,22 +194,23 @@ def update_collection(
         field_embeddings_file: The field embeddings file to publish beside the
             collection, or None to publish none.
     """
+    if field_embeddings_file is not None and not Path(field_embeddings_file).is_file():
+        raise BackfillError(
+            stac.FIELD_EMBEDDINGS_ASSET, f"no field embeddings file at {field_embeddings_file}"
+        )
     checksum = refresh_parquet_asset(doc, "chips", chips_file)
     doc["links"] = [link for link in doc.get("links", []) if not _is_backfill_link(link)]
     doc.get("assets", {}).pop(stac.FIELD_EMBEDDINGS_ASSET, None)
 
-    new_links = [_gaul_link()] if admin_names_added else []
+    new_links = [stac.gaul_link().to_dict()] if admin_names_added else []
     if field_embeddings_file is not None:
         new_links += _add_embeddings(doc, Path(field_embeddings_file), checksum=checksum)
     _insert_links(doc, new_links)
-    steps = [
-        step
-        for step, done in (
-            ("admin_names", admin_names_added),
-            ("field_embeddings", field_embeddings_file is not None),
-        )
-        if done
-    ]
+    steps = []
+    if admin_names_added:
+        steps.append("admin_names")
+    if field_embeddings_file is not None:
+        steps.append("field_embeddings")
     _record(doc, steps=steps)
 
 
@@ -226,33 +222,64 @@ def _add_embeddings(doc: dict, path: Path, *, checksum: bool) -> list[dict]:
     return links
 
 
+def asset_path(doc: dict, key: str, output_dir: Path) -> Path:
+    """Where an asset's file is in ``output_dir``, from its relative href."""
+    asset = doc.get("assets", {}).get(key)
+    if asset is None:
+        raise BackfillError(key, f"the collection has no {key} asset")
+    return output_dir / str(asset["href"]).removeprefix("./")
+
+
 def field_polygons_file(doc: dict, output_dir: Path) -> Path:
     """The field polygons the docs measure: the filtered set when the build filtered classes."""
     assets = doc.get("assets", {})
     key = "fields_filtered" if "fields_filtered" in assets else "fields"
-    if key not in assets:
-        raise BackfillError("fields", "the collection has no fields asset")
-    return output_dir / str(assets[key]["href"]).removeprefix("./")
+    return asset_path(doc, key, output_dir)
 
 
 def rewrite_docs(output_dir: Path | str, collection_json: Path | str) -> list[Path]:
     """Rewrite the styles, README.md and AGENTS.md from the files in ``output_dir``.
 
     Uses the tile archives the collection already names, so no tiles are rebuilt, and
-    the build's own config from ``ftw:config``. Returns the documents written.
+    the build's own config from ``ftw:config``. As in the docs stage, styles are
+    written only when there are tile archives, and the collection's style assets are
+    made to match the styles written; its tile assets are left as they are. Returns
+    the documents written.
     """
-    import json
-
     output_dir = Path(output_dir)
     collection_json = Path(collection_json)
     doc = json.loads(collection_json.read_text(encoding="utf-8"))
-    chips = output_dir / str(doc["assets"]["chips"]["href"]).removeprefix("./")
+    chips = asset_path(doc, "chips", output_dir)
     fields = field_polygons_file(doc, output_dir)
-    style_results = styles.write_styles(
-        output_dir, doc["id"], chips, fields, **_tile_refs(doc["assets"])
-    )
+    style_results = _write_styles(doc, output_dir, chips, fields)
+    if docs.sync_style_assets(doc, style_results):
+        collection_json.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    return _write_docs(doc, output_dir, collection_json, chips, fields, style_results)
+
+
+def _write_styles(
+    doc: dict, output_dir: Path, chips: Path, fields: Path
+) -> list[styles.StyleResult]:
+    tiles = _tile_refs(doc.get("assets", {}))
+    if not any(tiles.values()):
+        return []
+    return styles.write_styles(output_dir, doc["id"], chips, fields, **tiles)
+
+
+def _write_docs(
+    doc: dict,
+    output_dir: Path,
+    collection_json: Path,
+    chips: Path,
+    fields: Path,
+    style_results: list[styles.StyleResult],
+) -> list[Path]:
     config_dict = (doc.get("ftw:config") or {}).get("config") or {}
     docs_cfg = (config_dict.get("stages") or {}).get("docs") or {}
+    readme = docs_cfg.get("readme", True)
+    agents = docs_cfg.get("agents", True)
+    if not (readme or agents):
+        return []
     return docs.write_docs(
         output_dir,
         collection_json,
@@ -260,8 +287,8 @@ def rewrite_docs(output_dir: Path | str, collection_json: Path | str) -> list[Pa
         fields,
         style_results,
         config_dict,
-        readme=docs_cfg.get("readme", True),
-        agents=docs_cfg.get("agents", True),
+        readme=readme,
+        agents=agents,
     )
 
 

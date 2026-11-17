@@ -224,6 +224,19 @@ class TestUpdateCollection:
                 field_embeddings_file=None,
             )
 
+    def test_a_missing_embeddings_file_is_refused_before_any_edit(self, tmp_path: Path) -> None:
+        root, doc = _published(tmp_path)
+        before = json.loads(json.dumps(doc))
+
+        with pytest.raises(backfill.BackfillError, match="no field embeddings file"):
+            backfill.update_collection(
+                doc,
+                chips_file=root / "ds_chips.parquet",
+                admin_names_added=True,
+                field_embeddings_file=root / "missing.parquet",
+            )
+        assert doc == before
+
 
 class TestRewriteDocs:
     def test_documents_the_new_columns_and_asset(self, tmp_path: Path) -> None:
@@ -251,6 +264,55 @@ class TestRewriteDocs:
         written = backfill.rewrite_docs(root, root / "collection.json")
 
         assert [p.name for p in written] == ["README.md"]
+
+    def test_writes_nothing_when_the_build_turned_both_documents_off(self, tmp_path: Path) -> None:
+        root, doc = _published(tmp_path)
+        doc["ftw:config"] = {"config": {"stages": {"docs": {"readme": False, "agents": False}}}}
+        (root / "collection.json").write_text(json.dumps(doc))
+
+        assert backfill.rewrite_docs(root, root / "collection.json") == []
+        assert not (root / "README.md").exists()
+
+    def test_lists_exactly_the_styles_written(self, tmp_path: Path) -> None:
+        root, doc = _published(tmp_path)
+        doc["assets"]["chips_tiles"] = {"href": "./ds_chips.pmtiles", "roles": ["visual"]}
+        doc["assets"]["style-gone"] = {"href": "./styles/gone.json", "roles": ["style"]}
+        (root / "collection.json").write_text(json.dumps(doc))
+
+        backfill.rewrite_docs(root, root / "collection.json")
+
+        assets = _collection(root)["assets"]
+        listed = sorted(key for key in assets if key.startswith("style-"))
+        on_disk = sorted(f"style-{path.stem}" for path in (root / "styles").glob("*.json"))
+        assert "style-gone" not in listed
+        assert listed
+        assert set(listed) <= set(on_disk)
+        assert assets["chips_tiles"] == doc["assets"]["chips_tiles"]
+
+    def test_without_tiles_no_styles_are_written_or_listed(self, tmp_path: Path) -> None:
+        root, doc = _published(tmp_path)
+        doc["assets"]["style-gone"] = {"href": "./styles/gone.json", "roles": ["style"]}
+        (root / "collection.json").write_text(json.dumps(doc))
+
+        backfill.rewrite_docs(root, root / "collection.json")
+
+        assert not any(key.startswith("style-") for key in _collection(root)["assets"])
+        assert not (root / "styles").exists()
+
+    def test_a_collection_without_chips_is_refused(self, tmp_path: Path) -> None:
+        root, doc = _published(tmp_path)
+        del doc["assets"]["chips"]
+        (root / "collection.json").write_text(json.dumps(doc))
+
+        with pytest.raises(backfill.BackfillError, match="no chips asset"):
+            backfill.rewrite_docs(root, root / "collection.json")
+
+    def test_a_collection_without_fields_is_refused(self, tmp_path: Path) -> None:
+        _, doc = _published(tmp_path)
+        del doc["assets"]["fields"]
+
+        with pytest.raises(backfill.BackfillError, match="no fields asset"):
+            backfill.field_polygons_file(doc, tmp_path)
 
     def test_measures_the_filtered_fields_when_the_build_filtered(self, tmp_path: Path) -> None:
         root = tmp_path / "published"

@@ -1156,6 +1156,20 @@ def _merge_links(existing: list[dict], new: list[dict]) -> list[dict]:
     return merged
 
 
+def sync_style_assets(collection: dict, styles: list[StyleResult]) -> bool:
+    """Make a collection's style assets exactly ``styles``; True if that changed it.
+
+    For a collection whose tile archives are not on disk (a backfill): its tile
+    assets and every other asset are left as they are.
+    """
+    assets = collection.setdefault("assets", {})
+    before = {key: value for key, value in assets.items() if key.startswith("style-")}
+    _prune_managed_assets(assets, {key: Path(key) for key in assets if key in TILE_TITLES}, styles)
+    for style in styles:
+        assets[f"style-{style.style_id}"] = _style_asset(style)
+    return before != {key: value for key, value in assets.items() if key.startswith("style-")}
+
+
 def register_docs_assets(
     collection_json_path: Path | str,
     *,
