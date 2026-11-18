@@ -257,3 +257,60 @@ class TestRefusals:
     def test_a_fields_file_without_a_crop_code(self, tmp_path: Path) -> None:
         path = write(tmp_path / "fields.parquet", [{"id": "a"}])
         self.assert_refused(path, source(tmp_path), "has no crop:code column")
+
+
+class TestByCode:
+    """by="code" names each field from its crop code, whatever its id."""
+
+    def other_ids(self, tmp_path: Path) -> Path:
+        """A fields file from another release: ids the source does not have."""
+        rows = [
+            {"id": "x", "crop:code": "20"},
+            {"id": "y", "crop:code": "10"},
+            {"id": "z", "crop:code": "99"},
+        ]
+        return write(tmp_path / "fields.parquet", rows)
+
+    def test_names_follow_the_code(self, tmp_path: Path) -> None:
+        path = self.other_ids(tmp_path)
+        result = add_crop_names(path, source(tmp_path), by="code")
+        assert column(path, "crop:name") == ["Mais", "Weizen", None]
+        assert column(path, "crop:name_en") == ["maize", "wheat", None]
+        assert (result.rows, result.named) == (3, 2)
+
+    def test_ids_are_not_needed(self, tmp_path: Path) -> None:
+        path = write(tmp_path / "fields.parquet", [{"crop:code": "10"}])
+        add_crop_names(path, source(tmp_path), by="code")
+        assert column(path, "crop:name") == ["Weizen"]
+
+    def test_a_code_with_two_names_is_refused(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": "a", "crop:code": "10", "crop:name": "Weizen"},
+                {"id": "b", "crop:code": "10", "crop:name": "Hafer"},
+            ],
+        )
+        path = self.other_ids(tmp_path)
+        before = path.read_bytes()
+        with pytest.raises(CropNameError, match=r"1 crop code\(s\) .* several names.*\['10'\]"):
+            add_crop_names(path, src, by="code")
+        assert path.read_bytes() == before
+
+    def test_a_code_named_by_many_rows_once(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [{"id": i, "crop:code": "10", "crop:name": "Weizen"} for i in "abc"],
+        )
+        path = self.other_ids(tmp_path)
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == [None, "Weizen", None]
+
+    def test_codes_of_another_type_match_as_text(self, tmp_path: Path) -> None:
+        path = write(tmp_path / "fields.parquet", [{"id": "x", "crop:code": 10}])
+        add_crop_names(path, source(tmp_path), by="code")
+        assert column(path, "crop:name") == ["Weizen"]
+
+    def test_an_unknown_mode_is_refused(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="by must be one of"):
+            add_crop_names(fields(tmp_path), source(tmp_path), by="name")

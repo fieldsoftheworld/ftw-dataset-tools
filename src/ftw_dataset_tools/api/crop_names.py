@@ -7,6 +7,12 @@ benchmark built earlier lacks. ``add_crop_names`` joins those columns in by fiel
 ``id``, and refuses when a field is missing from the edition or its ``crop:code``
 differs there, so no field ever takes another field's name.
 
+When the edition's names come from a code table, so a name depends on nothing but
+the code, ``by="code"`` takes each code's name from the edition instead. That serves a
+benchmark built from an earlier release of the same edition whose ids no longer
+line up (e.g. fr 2024: RPG 3.0 was replaced by RPG 4.0). It refuses when a code has
+more than one name in the edition.
+
 The file is rewritten one row group at a time with pyarrow, not read whole through
 geoparquet-io: a fields file can hold ten million fields, and streaming keeps memory
 flat and the file as it was (row groups, compression, the ``geo`` and fiboa metadata).
@@ -29,6 +35,9 @@ NAME_COLUMNS: tuple[str, ...] = ("crop:name", "crop:name_en")
 
 #: The columns the join needs in both files.
 KEY_COLUMNS: tuple[str, ...] = ("id", "crop:code")
+
+#: What the names can be joined by: each field's id, or its crop code.
+JOIN_KEYS: tuple[str, ...] = ("id", "code")
 
 #: How many mismatched field ids an error message lists.
 _EXAMPLES = 5
@@ -55,24 +64,28 @@ class CropNameResult:
     changed: bool
 
 
-def _check_columns(fields_file: Path, source_file: Path) -> tuple[str, ...]:
+def _check_columns(fields_file: Path, source_file: Path, by: str) -> tuple[str, ...]:
     """The name columns to take from the source; raises when the join could go wrong."""
     import pyarrow.parquet as pq
 
     fields_schema, source_schema = pq.read_schema(fields_file), pq.read_schema(source_file)
     if "crop:name" not in source_schema.names:
         raise CropNameError(source_file, f"{source_file} has no crop:name column")
+    keys = KEY_COLUMNS if by == "id" else ("crop:code",)
     for path, schema in ((fields_file, fields_schema), (source_file, source_schema)):
-        missing = [c for c in KEY_COLUMNS if c not in schema.names]
+        missing = [c for c in keys if c not in schema.names]
         if missing:
             raise CropNameError(path, f"{path} has no {', '.join(missing)} column")
+    names = tuple(c for c in NAME_COLUMNS if c in source_schema.names)
+    if by == "code":
+        return names
     # Equal types, so the join never casts: "007" must not match 7.
     fields_id, source_id = fields_schema.field("id").type, source_schema.field("id").type
     if fields_id != source_id:
         raise CropNameError(
             fields_file, f"id is {fields_id} in {fields_file} but {source_id} in {source_file}"
         )
-    return tuple(c for c in NAME_COLUMNS if c in source_schema.names)
+    return names
 
 
 def _check_ids(con: duckdb.DuckDBPyConnection, path: Path, *, unique: bool) -> None:
@@ -110,14 +123,50 @@ def _join(con: duckdb.DuckDBPyConnection, fields_file: Path, source_file: Path, 
     )
 
 
-def _joined_names(
-    fields_file: Path, source_file: Path, names: tuple[str, ...], rows: int
-) -> pa.Table:
-    """The name columns for each row of ``fields_file``, in its row order, checked."""
-    import duckdb
+def _join_by_code(
+    con: duckdb.DuckDBPyConnection, fields_file: Path, source_file: Path, names
+) -> None:
+    """Give every field the names of its crop code in the source, in a temp table ``joined``.
 
-    con = duckdb.connect()
-    con.execute(f"SET memory_limit = '{_JOIN_MEMORY}'")
+    Codes are compared as text. A code that names nothing in the source leaves the
+    field unnamed; a code with more than one set of names is refused.
+    """
+    quoted = ", ".join(f'"{c}"' for c in names)
+    con.execute(
+        f"""
+        CREATE TEMP TABLE codes AS
+        SELECT DISTINCT CAST("crop:code" AS VARCHAR) AS code, {quoted}
+        FROM read_parquet(?) WHERE "crop:code" IS NOT NULL
+        """,
+        [str(source_file)],
+    )
+    count, examples = con.execute(
+        f"""
+        SELECT count(*), list(code ORDER BY code)[1:{_EXAMPLES}]
+        FROM (SELECT code FROM codes GROUP BY code HAVING count(*) > 1)
+        """
+    ).fetchone()
+    if count:
+        raise CropNameError(
+            source_file,
+            f"{count} crop code(s) of {source_file} have several names, e.g. {examples}",
+        )
+    selected = ", ".join(f'c."{c}"' for c in names)
+    con.execute(
+        f"""
+        CREATE TEMP TABLE joined AS
+        SELECT f.file_row_number AS row_number, {selected}
+        FROM read_parquet(?, file_row_number = true) f
+        LEFT JOIN codes c ON CAST(f."crop:code" AS VARCHAR) = c.code
+        """,
+        [str(fields_file)],
+    )
+
+
+def _join_by_id(
+    con: duckdb.DuckDBPyConnection, fields_file: Path, source_file: Path, names
+) -> None:
+    """Join the source's names onto every field by id, refusing any field that does not match."""
     _check_ids(con, source_file, unique=True)
     _check_ids(con, fields_file, unique=False)
     _join(con, fields_file, source_file, names)
@@ -130,6 +179,18 @@ def _joined_names(
                 fields_file,
                 f"{count} field(s) of {fields_file} {what} {source_file}, e.g. {examples}",
             )
+
+
+def _joined_names(
+    fields_file: Path, source_file: Path, names: tuple[str, ...], rows: int, by: str
+) -> pa.Table:
+    """The name columns for each row of ``fields_file``, in its row order, checked."""
+    import duckdb
+
+    con = duckdb.connect()
+    con.execute(f"SET memory_limit = '{_JOIN_MEMORY}'")
+    join = _join_by_id if by == "id" else _join_by_code
+    join(con, fields_file, source_file, names)
     quoted = ", ".join(f'"{c}"' for c in names)
     table = con.execute(f"SELECT {quoted} FROM joined ORDER BY row_number").fetch_arrow_table()
     if table.num_rows != rows:
@@ -188,7 +249,11 @@ def _rewrite(fields_file: Path, tmp: Path, names_table: pa.Table) -> bool:
 
 
 def add_crop_names(
-    fields_file: Path | str, source_file: Path | str, output_file: Path | str | None = None
+    fields_file: Path | str,
+    source_file: Path | str,
+    output_file: Path | str | None = None,
+    *,
+    by: str = "id",
 ) -> CropNameResult:
     """Join the crop name columns of ``source_file`` onto ``fields_file`` by field id.
 
@@ -200,20 +265,28 @@ def add_crop_names(
         source_file: The harmonized edition it was built from, with crop names.
         output_file: Where to write; ``fields_file`` itself when None. Nothing is
             written when the names are already there and equal.
+        by: ``"id"`` joins each field to its own row in the source. ``"code"`` gives
+            each field the names of its crop code in the source, for sources whose
+            names come from a code table; a field whose code the source lacks stays
+            unnamed.
 
     Raises:
-        CropNameError: The source has no crop:name, a key column is missing, the id
-            types differ, an id is missing or (in the source) repeated, or a field is
-            missing from the source or has another crop:code there. Nothing is written.
+        ValueError: ``by`` is neither "id" nor "code".
+        CropNameError: The source has no crop:name, or a key column is missing. By id:
+            the id types differ, an id is missing or (in the source) repeated, or a
+            field is missing from the source or has another crop:code there. By code:
+            a code has more than one name in the source. Nothing is written.
     """
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
 
+    if by not in JOIN_KEYS:
+        raise ValueError(f"by must be one of {JOIN_KEYS}, not {by!r}")
     fields_file, source_file = Path(fields_file), Path(source_file)
     output = Path(output_file) if output_file is not None else fields_file
-    names = _check_columns(fields_file, source_file)
+    names = _check_columns(fields_file, source_file, by)
     rows = pq.ParquetFile(fields_file).metadata.num_rows
-    names_table = _joined_names(fields_file, source_file, names, rows)
+    names_table = _joined_names(fields_file, source_file, names, rows, by)
     tmp = output.with_name(f".{output.name}.tmp")
     try:
         changed = _rewrite(fields_file, tmp, names_table)
