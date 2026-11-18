@@ -293,7 +293,9 @@ class TestByCode:
         )
         path = self.other_ids(tmp_path)
         before = path.read_bytes()
-        with pytest.raises(CropNameError, match=r"1 crop code\(s\) .* several names.*\['10'\]"):
+        with pytest.raises(
+            CropNameError, match=r"1 crop code\(s\) .* same crop:name on every row.*\['10'\]"
+        ):
             add_crop_names(path, src, by="code")
         assert path.read_bytes() == before
 
@@ -310,6 +312,79 @@ class TestByCode:
         path = write(tmp_path / "fields.parquet", [{"id": "x", "crop:code": 10}])
         add_crop_names(path, source(tmp_path), by="code")
         assert column(path, "crop:name") == ["Weizen"]
+
+    def test_a_code_unnamed_on_some_rows_is_refused(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": "a", "crop:code": "10", "crop:name": "Weizen"},
+                {"id": "b", "crop:code": "10", "crop:name": None},
+            ],
+        )
+        with pytest.raises(CropNameError, match="unnamed on some"):
+            add_crop_names(self.other_ids(tmp_path), src, by="code")
+
+    def test_a_code_whose_english_name_differs_is_refused(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": "a", "crop:code": "10", "crop:name": "Weizen", "crop:name_en": "wheat"},
+                {"id": "b", "crop:code": "10", "crop:name": "Weizen", "crop:name_en": "corn"},
+            ],
+        )
+        with pytest.raises(CropNameError, match=r"crop:name, crop:name_en .*\['10'\]"):
+            add_crop_names(self.other_ids(tmp_path), src, by="code")
+
+    def test_unnamed_codes_are_logged(self, tmp_path: Path, caplog) -> None:
+        add_crop_names(self.other_ids(tmp_path), source(tmp_path), by="code")
+        assert "1 crop code(s) on 1 field(s)" in caplog.text
+        assert "['99']" in caplog.text
+
+    def test_all_codes_named_logs_nothing(self, tmp_path: Path, caplog) -> None:
+        add_crop_names(fields(tmp_path, ids=("a", "b")), source(tmp_path), by="code")
+        assert "no name" not in caplog.text
+
+    def test_an_unnamed_code_loses_its_old_name(self, tmp_path: Path) -> None:
+        path = write(
+            tmp_path / "fields.parquet",
+            [{"id": "x", "crop:code": "99", "crop:name": "old"}],
+        )
+        result = add_crop_names(path, source(tmp_path), by="code")
+        assert result.changed
+        assert column(path, "crop:name") == [None]
+
+    def test_fields_without_a_code_stay_unnamed(self, tmp_path: Path) -> None:
+        path = write(
+            tmp_path / "fields.parquet",
+            [{"id": "x", "crop:code": None}, {"id": "y", "crop:code": "10"}],
+        )
+        add_crop_names(path, source(tmp_path), by="code")
+        assert column(path, "crop:name") == [None, "Weizen"]
+
+    def test_nan_is_no_code(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": "a", "crop:code": float("nan"), "crop:name": "x"},
+                {"id": "b", "crop:code": 10.0, "crop:name": "y"},
+            ],
+        )
+        path = write(
+            tmp_path / "fields.parquet",
+            [{"id": "x", "crop:code": float("nan")}, {"id": "y", "crop:code": 10.0}],
+        )
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == [None, "y"]
+
+    def test_a_fields_file_without_a_crop_code(self, tmp_path: Path) -> None:
+        path = write(tmp_path / "fields.parquet", [{"id": "a"}])
+        with pytest.raises(CropNameError, match="has no crop:code column"):
+            add_crop_names(path, source(tmp_path), by="code")
+
+    def test_a_source_without_a_crop_code(self, tmp_path: Path) -> None:
+        src = write(tmp_path / "source.parquet", [{"id": "a", "crop:name": "x"}])
+        with pytest.raises(CropNameError, match="has no crop:code column"):
+            add_crop_names(self.other_ids(tmp_path), src, by="code")
 
     def test_an_unknown_mode_is_refused(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="by must be one of"):

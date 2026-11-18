@@ -24,7 +24,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
+
+from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
     import duckdb
@@ -33,11 +35,18 @@ if TYPE_CHECKING:
 #: The columns taken from the harmonized edition, in the order they are written.
 NAME_COLUMNS: tuple[str, ...] = ("crop:name", "crop:name_en")
 
+logger = get_logger(__name__)
+
 #: The columns the join needs in both files.
 KEY_COLUMNS: tuple[str, ...] = ("id", "crop:code")
 
 #: What the names can be joined by: each field's id, or its crop code.
+JoinKey = Literal["id", "code"]
 JOIN_KEYS: tuple[str, ...] = ("id", "code")
+
+#: A crop code as text, with NaN (a float column's "no code") as NULL.
+_CODE_TEXT = """CASE WHEN lower(CAST("crop:code" AS VARCHAR)) = 'nan' THEN NULL
+    ELSE CAST("crop:code" AS VARCHAR) END"""
 
 #: How many mismatched field ids an error message lists.
 _EXAMPLES = 5
@@ -64,7 +73,7 @@ class CropNameResult:
     changed: bool
 
 
-def _check_columns(fields_file: Path, source_file: Path, by: str) -> tuple[str, ...]:
+def _check_columns(fields_file: Path, source_file: Path, by: JoinKey) -> tuple[str, ...]:
     """The name columns to take from the source; raises when the join could go wrong."""
     import pyarrow.parquet as pq
 
@@ -76,16 +85,20 @@ def _check_columns(fields_file: Path, source_file: Path, by: str) -> tuple[str, 
         missing = [c for c in keys if c not in schema.names]
         if missing:
             raise CropNameError(path, f"{path} has no {', '.join(missing)} column")
-    names = tuple(c for c in NAME_COLUMNS if c in source_schema.names)
-    if by == "code":
-        return names
-    # Equal types, so the join never casts: "007" must not match 7.
+    if by == "id":
+        _check_id_types(fields_file, fields_schema, source_file, source_schema)
+    return tuple(c for c in NAME_COLUMNS if c in source_schema.names)
+
+
+def _check_id_types(
+    fields_file: Path, fields_schema: pa.Schema, source_file: Path, source_schema: pa.Schema
+) -> None:
+    """Refuse ids of different types, so the join never casts: "007" must not match 7."""
     fields_id, source_id = fields_schema.field("id").type, source_schema.field("id").type
     if fields_id != source_id:
         raise CropNameError(
             fields_file, f"id is {fields_id} in {fields_file} but {source_id} in {source_file}"
         )
-    return names
 
 
 def _check_ids(con: duckdb.DuckDBPyConnection, path: Path, *, unique: bool) -> None:
@@ -100,11 +113,12 @@ def _check_ids(con: duckdb.DuckDBPyConnection, path: Path, *, unique: bool) -> N
         raise CropNameError(path, f"{path} repeats {repeats} field id(s)")
 
 
-def _join(con: duckdb.DuckDBPyConnection, fields_file: Path, source_file: Path, names) -> None:
-    """Join the source's names onto every field, in a temp table ``joined``.
+def _join(
+    con: duckdb.DuckDBPyConnection, fields_file: Path, source_file: Path, names: tuple[str, ...]
+) -> None:
+    """Join the source's names onto every field by id, in a temp table ``joined``.
 
-    Both crop codes are compared as text, so codes stored as different types count as
-    different and the join is refused rather than guessed.
+    Both crop codes are compared as text, flagging the fields whose code differs.
     """
     selected = ", ".join(f's."{c}"' for c in names)
     con.execute(
@@ -123,20 +137,18 @@ def _join(con: duckdb.DuckDBPyConnection, fields_file: Path, source_file: Path, 
     )
 
 
-def _join_by_code(
-    con: duckdb.DuckDBPyConnection, fields_file: Path, source_file: Path, names
-) -> None:
-    """Give every field the names of its crop code in the source, in a temp table ``joined``.
+def _code_names(con: duckdb.DuckDBPyConnection, source_file: Path, names: tuple[str, ...]) -> None:
+    """Each crop code's names in the source, in a temp table ``codes``; one row per code.
 
-    Codes are compared as text. A code that names nothing in the source leaves the
-    field unnamed; a code with more than one set of names is refused.
+    A code whose rows do not all carry the same names (a name column differs, or is
+    empty on some rows only) is refused: the code alone would not tell which is right.
     """
     quoted = ", ".join(f'"{c}"' for c in names)
     con.execute(
         f"""
         CREATE TEMP TABLE codes AS
-        SELECT DISTINCT CAST("crop:code" AS VARCHAR) AS code, {quoted}
-        FROM read_parquet(?) WHERE "crop:code" IS NOT NULL
+        SELECT DISTINCT {_CODE_TEXT} AS code, {quoted}
+        FROM read_parquet(?) WHERE ({_CODE_TEXT}) IS NOT NULL
         """,
         [str(source_file)],
     )
@@ -149,22 +161,52 @@ def _join_by_code(
     if count:
         raise CropNameError(
             source_file,
-            f"{count} crop code(s) of {source_file} have several names, e.g. {examples}",
+            f"{count} crop code(s) of {source_file} do not have the same {', '.join(names)} "
+            f"on every row (or are unnamed on some), e.g. {examples}",
         )
+
+
+def _warn_unnamed_codes(con: duckdb.DuckDBPyConnection, fields_file: Path) -> None:
+    """Log the crop codes of ``fields_file`` that the source does not name."""
+    count, fields, examples = con.execute(
+        f"""
+        SELECT count(*), sum(n), list(code ORDER BY n DESC)[1:{_EXAMPLES}]
+        FROM (SELECT code, count(*) n FROM joined
+              WHERE code IS NOT NULL AND "crop:name" IS NULL GROUP BY code)
+        """
+    ).fetchone()
+    if count:
+        logger.warning(
+            f"{count} crop code(s) on {fields:,} field(s) of {fields_file} have no name in the "
+            f"source, e.g. {examples}"
+        )
+
+
+def _join_by_code(
+    con: duckdb.DuckDBPyConnection, fields_file: Path, source_file: Path, names: tuple[str, ...]
+) -> None:
+    """Give every field the names of its crop code in the source, in a temp table ``joined``.
+
+    Codes are compared as text, NaN counting as no code. A field whose code the source
+    does not name stays unnamed, and the codes concerned are logged as a warning.
+    """
+    _code_names(con, source_file, names)
     selected = ", ".join(f'c."{c}"' for c in names)
     con.execute(
         f"""
         CREATE TEMP TABLE joined AS
-        SELECT f.file_row_number AS row_number, {selected}
-        FROM read_parquet(?, file_row_number = true) f
-        LEFT JOIN codes c ON CAST(f."crop:code" AS VARCHAR) = c.code
+        SELECT f.file_row_number AS row_number, f.code, {selected}
+        FROM (SELECT file_row_number, {_CODE_TEXT} AS code
+              FROM read_parquet(?, file_row_number = true)) f
+        LEFT JOIN codes c ON f.code = c.code
         """,
         [str(fields_file)],
     )
+    _warn_unnamed_codes(con, fields_file)
 
 
 def _join_by_id(
-    con: duckdb.DuckDBPyConnection, fields_file: Path, source_file: Path, names
+    con: duckdb.DuckDBPyConnection, fields_file: Path, source_file: Path, names: tuple[str, ...]
 ) -> None:
     """Join the source's names onto every field by id, refusing any field that does not match."""
     _check_ids(con, source_file, unique=True)
@@ -182,7 +224,7 @@ def _join_by_id(
 
 
 def _joined_names(
-    fields_file: Path, source_file: Path, names: tuple[str, ...], rows: int, by: str
+    fields_file: Path, source_file: Path, names: tuple[str, ...], rows: int, by: JoinKey
 ) -> pa.Table:
     """The name columns for each row of ``fields_file``, in its row order, checked."""
     import duckdb
@@ -253,12 +295,13 @@ def add_crop_names(
     source_file: Path | str,
     output_file: Path | str | None = None,
     *,
-    by: str = "id",
+    by: JoinKey = "id",
 ) -> CropNameResult:
-    """Join the crop name columns of ``source_file`` onto ``fields_file`` by field id.
+    """Join the crop name columns of ``source_file`` onto ``fields_file``.
 
-    A name column the fields file has but the source lacks is dropped, so the names
-    always come from one edition.
+    The names always come from one edition: every name column is replaced, so a name
+    column the source lacks is dropped, and by code a field whose code the source does
+    not name loses any name it had.
 
     Args:
         fields_file: A benchmark's fields (or fields_filtered) GeoParquet.
@@ -267,15 +310,16 @@ def add_crop_names(
             written when the names are already there and equal.
         by: ``"id"`` joins each field to its own row in the source. ``"code"`` gives
             each field the names of its crop code in the source, for sources whose
-            names come from a code table; a field whose code the source lacks stays
-            unnamed.
+            names come from a code table; a field whose code the source does not
+            name stays unnamed (logged as a warning).
 
     Raises:
         ValueError: ``by`` is neither "id" nor "code".
         CropNameError: The source has no crop:name, or a key column is missing. By id:
             the id types differ, an id is missing or (in the source) repeated, or a
             field is missing from the source or has another crop:code there. By code:
-            a code has more than one name in the source. Nothing is written.
+            a code's rows in the source do not all have the same names. Nothing is
+            written.
     """
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
