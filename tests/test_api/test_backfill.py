@@ -193,6 +193,54 @@ class TestUpdateCollection:
         [run] = doc["ftw:config"][backfill.BACKFILL_KEY]
         assert run["steps"] == ["admin_names", "crop_names"]
 
+    def test_crop_names_on_both_field_assets(self, tmp_path: Path) -> None:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        root, doc = _published(tmp_path)
+        chips = _chips_with_admin_names(root / "ds_chips.parquet")
+        files = {}
+        for key in ("fields", "fields_filtered"):
+            files[key] = root / f"ds_{key}.parquet"
+            gpd.GeoDataFrame(
+                {"id": ["a"], "crop:code": ["10"], "crop:name": ["Weizen"]},
+                geometry=[box(0, 0, 1, 1)],
+                crs="EPSG:4326",
+            ).to_parquet(files[key])
+        doc["assets"]["fields_filtered"] = {**doc["assets"]["fields"], "href": "./x.parquet"}
+
+        backfill.update_collection(
+            doc,
+            chips_file=chips,
+            admin_names_added=True,
+            field_embeddings_file=None,
+            crop_name_files=files,
+        )
+        for key in files:
+            assert "crop:name" in [c["name"] for c in doc["assets"][key]["table:columns"]]
+
+        backfill.update_collection(
+            doc, chips_file=chips, admin_names_added=True, field_embeddings_file=None
+        )
+        [run] = doc["ftw:config"][backfill.BACKFILL_KEY]
+        assert run["steps"] == ["admin_names"], "a run without crop names records none"
+
+    def test_a_file_that_fails_to_read_leaves_the_collection_alone(self, tmp_path: Path) -> None:
+        root, doc = _published(tmp_path)
+        chips = _chips_with_admin_names(root / "ds_chips.parquet")
+        broken = root / "broken.parquet"
+        broken.write_bytes(b"not parquet")
+        before = json.loads(json.dumps(doc))
+        with pytest.raises(Exception, match=r"(?i)parquet"):
+            backfill.update_collection(
+                doc,
+                chips_file=chips,
+                admin_names_added=True,
+                field_embeddings_file=None,
+                crop_name_files={"fields": broken},
+            )
+        assert doc == before
+
     def test_crop_names_for_a_missing_asset_or_file_are_refused(self, tmp_path: Path) -> None:
         root, doc = _published(tmp_path)
         chips = _chips_with_admin_names(root / "ds_chips.parquet")

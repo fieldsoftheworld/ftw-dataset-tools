@@ -20,6 +20,7 @@ backfill record, so a backfill can be repeated. The benchmark catalog's
 
 from __future__ import annotations
 
+import copy
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -200,7 +201,31 @@ def update_collection(
             collection, or None to publish none.
         crop_name_files: Asset key to field file for the field assets that gained
             crop names (``fields``, ``fields_filtered``), or None when none did.
+
+    Raises:
+        BackfillError: A file or asset is missing. ``doc`` is left as it was, as it
+            is when reading a file fails part way.
     """
+    work = copy.deepcopy(doc)
+    _update_collection(
+        work,
+        chips_file=chips_file,
+        admin_names_added=admin_names_added,
+        field_embeddings_file=field_embeddings_file,
+        crop_name_files=crop_name_files,
+    )
+    doc.clear()
+    doc.update(work)
+
+
+def _update_collection(
+    doc: dict,
+    *,
+    chips_file: Path | str,
+    admin_names_added: bool,
+    field_embeddings_file: Path | str | None,
+    crop_name_files: Mapping[str, Path | str] | None,
+) -> None:
     if field_embeddings_file is not None and not Path(field_embeddings_file).is_file():
         raise BackfillError(
             stac.FIELD_EMBEDDINGS_ASSET, f"no field embeddings file at {field_embeddings_file}"

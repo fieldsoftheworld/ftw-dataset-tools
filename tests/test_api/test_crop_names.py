@@ -91,6 +91,47 @@ class TestAddCropNames:
         add_crop_names(path, source(tmp_path))
         assert fields_fingerprint(path) == before
 
+    def test_the_file_layout_and_metadata_are_kept(self, tmp_path: Path) -> None:
+        path = tmp_path / "fields.parquet"
+        rows = [{"id": f"f{i}", "crop:code": "10"} for i in range(10)]
+        geoms = [box(i, 0, i + 1, 1) for i in range(10)]
+        gpd.GeoDataFrame(rows, geometry=geoms, crs="EPSG:4326").to_parquet(
+            path, row_group_size=3, compression="zstd"
+        )
+        src = write(
+            tmp_path / "source.parquet",
+            [{**r, "crop:name": "Weizen"} for r in rows],
+        )
+        before = pq.read_metadata(path)
+        add_crop_names(path, src)
+        after = pq.read_metadata(path)
+        assert after.num_row_groups == before.num_row_groups == 4
+        assert after.row_group(0).column(0).compression == "ZSTD"
+        for key in (b"geo", b"pandas"):
+            assert after.metadata[key] == before.metadata[key]
+        assert column(path, "crop:name") == ["Weizen"] * 10
+
+    def test_a_stale_english_name_is_dropped(self, tmp_path: Path) -> None:
+        path = write(
+            tmp_path / "fields.parquet",
+            [{"id": "a", "crop:code": "10", "crop:name_en": "old"}],
+        )
+        src = write(
+            tmp_path / "source.parquet", [{"id": "a", "crop:code": "10", "crop:name": "Weizen"}]
+        )
+        result = add_crop_names(path, src)
+        assert result.changed
+        assert "crop:name_en" not in pq.read_schema(path).names
+
+    def test_an_empty_fields_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame({"id": [], "crop:code": []}, geometry=[], crs="EPSG:4326").astype(
+            {"id": "string", "crop:code": "string"}
+        ).to_parquet(path)
+        src = write(tmp_path / "source.parquet", [{"id": "a", "crop:code": "10", "crop:name": "x"}])
+        result = add_crop_names(path, src)
+        assert (result.rows, result.named) == (0, 0)
+
     def test_a_subset_of_the_fields_works(self, tmp_path: Path) -> None:
         path = fields(tmp_path, ids=("b",), name="fields_filtered.parquet")
         add_crop_names(path, source(tmp_path))
@@ -121,8 +162,10 @@ class TestAddCropNames:
     def test_only_the_name_columns_the_source_has(self, tmp_path: Path) -> None:
         src = write(
             tmp_path / "source.parquet",
-            [{"id": i, "crop:code": c, "crop:name": n} for i, c, n in
-             (("a", "10", "x"), ("b", "20", "y"), ("c", "30", "z"))],
+            [
+                {"id": i, "crop:code": c, "crop:name": n}
+                for i, c, n in (("a", "10", "x"), ("b", "20", "y"), ("c", "30", "z"))
+            ],
         )
         path = fields(tmp_path)
         result = add_crop_names(path, src)
@@ -140,10 +183,13 @@ class TestRefusals:
         assert path.read_bytes() == before
 
     def test_a_field_missing_from_the_source(self, tmp_path: Path) -> None:
-        src = write(tmp_path / "source.parquet", [
-            {"id": "a", "crop:code": "10", "crop:name": "Weizen"},
-            {"id": "b", "crop:code": "20", "crop:name": "Mais"},
-        ])
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": "a", "crop:code": "10", "crop:name": "Weizen"},
+                {"id": "b", "crop:code": "20", "crop:name": "Mais"},
+            ],
+        )
         self.assert_refused(fields(tmp_path), src, r"1 field\(s\) .* not in .*\['c'\]")
 
     def test_a_field_with_another_code_in_the_source(self, tmp_path: Path) -> None:
@@ -151,15 +197,62 @@ class TestRefusals:
         self.assert_refused(fields(tmp_path), src, r"another crop:code .*\['b'\]")
 
     def test_a_source_repeating_an_id(self, tmp_path: Path) -> None:
-        src = write(tmp_path / "source.parquet", [
-            {"id": "a", "crop:code": "10", "crop:name": "Weizen"},
-            {"id": "a", "crop:code": "10", "crop:name": "Weizen"},
-        ])
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": "a", "crop:code": "10", "crop:name": "Weizen"},
+                {"id": "a", "crop:code": "10", "crop:name": "Weizen"},
+            ],
+        )
         self.assert_refused(fields(tmp_path, ids=("a",)), src, "repeats 1 field id")
 
     def test_a_source_without_names(self, tmp_path: Path) -> None:
         src = write(tmp_path / "source.parquet", [{"id": "a", "crop:code": "10"}])
         self.assert_refused(fields(tmp_path, ids=("a",)), src, "has no crop:name column")
+
+    def test_ids_of_another_type(self, tmp_path: Path) -> None:
+        path = write(tmp_path / "fields.parquet", [{"id": 7, "crop:code": "10"}])
+        src = write(
+            tmp_path / "source.parquet", [{"id": "007", "crop:code": "10", "crop:name": "x"}]
+        )
+        self.assert_refused(path, src, "id is int64 .* but string")
+
+    def test_a_source_with_only_english_names(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet", [{"id": "a", "crop:code": "10", "crop:name_en": "wheat"}]
+        )
+        self.assert_refused(fields(tmp_path, ids=("a",)), src, "has no crop:name column")
+
+    def test_a_source_field_without_an_id(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": "a", "crop:code": "10", "crop:name": "x"},
+                {"id": None, "crop:code": "10", "crop:name": "y"},
+            ],
+        )
+        self.assert_refused(fields(tmp_path, ids=("a",)), src, "1 field.* without an id")
+
+    def test_crop_codes_of_another_type(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [{"id": i, "crop:code": c, "crop:name": "x"} for i, c in (("a", 10.0), ("b", 20.0))],
+        )
+        self.assert_refused(fields(tmp_path, ids=("a", "b")), src, "another crop:code")
+
+    def test_a_failed_write_leaves_no_temp_file(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import crop_names
+
+        def broken(*_args):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(crop_names, "_rewrite", broken)
+        path = fields(tmp_path)
+        before = path.read_bytes()
+        with pytest.raises(OSError, match="disk full"):
+            add_crop_names(path, source(tmp_path))
+        assert path.read_bytes() == before
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["fields.parquet", "source.parquet"]
 
     def test_a_fields_file_without_a_crop_code(self, tmp_path: Path) -> None:
         path = write(tmp_path / "fields.parquet", [{"id": "a"}])
