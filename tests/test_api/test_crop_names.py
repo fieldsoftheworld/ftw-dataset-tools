@@ -233,12 +233,48 @@ class TestRefusals:
         )
         self.assert_refused(fields(tmp_path, ids=("a",)), src, "1 field.* without an id")
 
-    def test_crop_codes_of_another_type(self, tmp_path: Path) -> None:
+    def test_text_codes_against_numeric_ones(self, tmp_path: Path) -> None:
         src = write(
             tmp_path / "source.parquet",
             [{"id": i, "crop:code": c, "crop:name": "x"} for i, c in (("a", 10.0), ("b", 20.0))],
         )
-        self.assert_refused(fields(tmp_path, ids=("a", "b")), src, "another crop:code")
+        self.assert_refused(fields(tmp_path, ids=("a", "b")), src, "crop:code is string")
+
+    def test_a_crop_code_that_differs_as_a_number(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [{"id": i, "crop:code": c, "crop:name": "x"} for i, c in (("a", 10.5), ("b", 20.0))],
+        )
+        path = write(
+            tmp_path / "fields.parquet",
+            [{"id": "a", "crop:code": 10}, {"id": "b", "crop:code": 20}],
+        )
+        self.assert_refused(path, src, "1 field.* another crop:code")
+
+    def test_a_failed_write_part_way_leaves_no_temp_file(self, tmp_path: Path, monkeypatch) -> None:
+        src = source(tmp_path)
+        calls = []
+        write_table = pq.ParquetWriter.write_table
+
+        def fail_on_second(self, *args, **kwargs):
+            calls.append(1)
+            if len(calls) == 2:
+                raise OSError("disk full")
+            return write_table(self, *args, **kwargs)
+
+        path = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame(
+            [{"id": i, "crop:code": "10"} for i in ("a", "b", "c")],
+            geometry=[box(i, 0, i + 1, 1) for i in range(3)],
+            crs="EPSG:4326",
+        ).to_parquet(path, row_group_size=1)
+        before = path.read_bytes()
+        monkeypatch.setattr(pq.ParquetWriter, "write_table", fail_on_second)
+        with pytest.raises(OSError, match="disk full"):
+            add_crop_names(path, src, by="code")
+        assert len(calls) == 2, "the first row group was written before the failure"
+        assert path.read_bytes() == before
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["fields.parquet", "source.parquet"]
 
     def test_a_failed_write_leaves_no_temp_file(self, tmp_path: Path, monkeypatch) -> None:
         from ftw_dataset_tools.api import crop_names
@@ -308,10 +344,50 @@ class TestByCode:
         add_crop_names(path, src, by="code")
         assert column(path, "crop:name") == [None, "Weizen", None]
 
-    def test_codes_of_another_type_match_as_text(self, tmp_path: Path) -> None:
-        path = write(tmp_path / "fields.parquet", [{"id": "x", "crop:code": 10}])
-        add_crop_names(path, source(tmp_path), by="code")
-        assert column(path, "crop:name") == ["Weizen"]
+    def test_text_codes_against_numeric_ones_are_refused(self, tmp_path: Path) -> None:
+        path = write(tmp_path / "fields.parquet", [{"id": "x", "crop:code": 10, "crop:name": "k"}])
+        before = path.read_bytes()
+        with pytest.raises(CropNameError, match="crop:code is int64"):
+            add_crop_names(path, source(tmp_path), by="code")
+        assert path.read_bytes() == before
+
+    @pytest.mark.parametrize(
+        ("source_codes", "fields_codes"),
+        [([10.0, 20.0], [10, 20]), ([10, 20], [10.0, float("nan")]), ([10.0, 20.0], [10.0, 20.0])],
+    )
+    def test_whole_floats_match_integers(self, tmp_path, source_codes, fields_codes) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": f"s{i}", "crop:code": c, "crop:name": n}
+                for i, (c, n) in enumerate(zip(source_codes, ("Weizen", "Mais"), strict=True))
+            ],
+        )
+        path = write(
+            tmp_path / "fields.parquet",
+            [
+                {"id": f"f{i}", "crop:code": c, "crop:name": "old"}
+                for i, c in enumerate(fields_codes)
+            ],
+        )
+        add_crop_names(path, src, by="code")
+        nan = fields_codes[1] != fields_codes[1]
+        assert column(path, "crop:name") == ["Weizen", None if nan else "Mais"]
+
+    def test_whole_floats_match_integers_by_id(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": "a", "crop:code": 10, "crop:name": "Weizen"},
+                {"id": "b", "crop:code": None, "crop:name": None},
+            ],
+        )
+        path = write(
+            tmp_path / "fields.parquet",
+            [{"id": "a", "crop:code": 10.0}, {"id": "b", "crop:code": float("nan")}],
+        )
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == ["Weizen", None]
 
     def test_a_code_unnamed_on_some_rows_is_refused(self, tmp_path: Path) -> None:
         src = write(
@@ -389,3 +465,382 @@ class TestByCode:
     def test_an_unknown_mode_is_refused(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="by must be one of"):
             add_crop_names(fields(tmp_path), source(tmp_path), by="name")
+
+
+class TestFileFormat:
+    """The rewrite keeps each column's codec and writes names as text."""
+
+    def test_a_name_column_empty_in_the_source_is_text(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        path = fields(tmp_path)
+        src = source(
+            tmp_path,
+            a={"crop:name_en": None},
+            b={"crop:name_en": None},
+        )
+        table = pq.read_table(src)
+        index = table.schema.get_field_index("crop:name_en")
+        table = table.set_column(index, pa.field("crop:name_en", pa.null()), pa.nulls(3))
+        pq.write_table(table, src)
+        add_crop_names(path, src)
+        assert pq.read_schema(path).field("crop:name_en").type == pa.string()
+
+    def test_each_columns_codec_is_kept(self, tmp_path: Path) -> None:
+        path = fields(tmp_path)
+        table = pq.read_table(path)
+        codecs = {"id": "snappy", "crop:code": "zstd", "hcat:code": "none", "geometry": "gzip"}
+        pq.write_table(table, path, compression=codecs)
+        add_crop_names(path, source(tmp_path))
+        group = pq.ParquetFile(path).metadata.row_group(0)
+        written = {
+            group.column(i).path_in_schema: group.column(i).compression
+            for i in range(group.num_columns)
+        }
+        assert written == {
+            "id": "SNAPPY",
+            "crop:code": "ZSTD",
+            "crop:name": "ZSTD",
+            "crop:name_en": "ZSTD",
+            "hcat:code": "UNCOMPRESSED",
+            "geometry": "GZIP",
+        }
+
+    def test_an_uncompressed_file(self, tmp_path: Path) -> None:
+        path = fields(tmp_path)
+        pq.write_table(pq.read_table(path), path, compression="none")
+        add_crop_names(path, source(tmp_path))
+        assert column(path, "crop:name") == [None, "Weizen", "Mais"]
+
+
+def _table_file(path: Path, columns: dict) -> Path:
+    """A plain parquet file (no geometry needed by the join) from typed arrow columns."""
+    import pyarrow as pa
+
+    pq.write_table(pa.table(columns), path)
+    return path
+
+
+class TestCodeTypes:
+    """Codes of different numeric types match only when they are the same number."""
+
+    def test_integers_beyond_float_precision_stay_apart(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        big = 2**53
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {
+                "id": ["s"],
+                "crop:code": pa.array([big], pa.int64()),
+                "crop:name": ["BIG"],
+            },
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {"id": ["f"], "crop:code": pa.array([big + 1], pa.int64())},
+        )
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == [None]
+
+    def test_integers_beyond_float_precision_differ_by_id(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        big = 2**53
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["a"], "crop:code": pa.array([big], pa.int64()), "crop:name": ["BIG"]},
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {"id": ["a"], "crop:code": pa.array([big + 1], pa.int64())},
+        )
+        with pytest.raises(CropNameError, match="another crop:code"):
+            add_crop_names(path, src)
+
+    def test_decimals_match_floats_and_integers(self, tmp_path: Path) -> None:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {
+                "id": ["s1", "s2"],
+                "crop:code": pa.array([Decimal("10.50"), Decimal("20.00")], pa.decimal128(5, 2)),
+                "crop:name": ["half", "whole"],
+            },
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {"id": ["f1", "f2"], "crop:code": pa.array([10.5, 20.0], pa.float64())},
+        )
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["half", "whole"]
+
+    def test_a_float_too_large_for_an_integer_does_not_crash(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["s"], "crop:code": pa.array([1e39]), "crop:name": ["huge"]},
+        )
+        path = _table_file(tmp_path / "fields.parquet", {"id": ["f"], "crop:code": [1e39]})
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["huge"]
+
+    @pytest.mark.parametrize(
+        ("fields_id", "source_id"),
+        [("large_string", "string"), ("int32", "int64")],
+    )
+    def test_ids_of_the_same_kind_join(self, tmp_path, fields_id, source_id) -> None:
+        import pyarrow as pa
+
+        ids = ["1", "2"] if "string" in fields_id else [1, 2]
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {
+                "id": pa.array(ids, getattr(pa, source_id)()),
+                "crop:code": ["10", "20"],
+                "crop:name": ["Weizen", "Mais"],
+            },
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {"id": pa.array(ids[::-1], getattr(pa, fields_id)()), "crop:code": ["20", "10"]},
+        )
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == ["Mais", "Weizen"]
+
+
+class TestSchemaRepairs:
+    """A name column of the wrong type, or missing from an empty file, is a change."""
+
+    def test_a_wrongly_typed_name_column_is_rewritten(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["a"], "crop:code": ["10"], "crop:name": pa.array([None], pa.string())},
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {"id": ["a"], "crop:code": ["10"], "crop:name": pa.array([None], pa.int32())},
+        )
+        result = add_crop_names(path, src)
+        assert result.changed
+        assert pq.read_schema(path).field("crop:name").type == pa.string()
+
+    def test_a_file_without_row_groups_gains_the_columns(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        src = source(tmp_path)
+        path = tmp_path / "fields.parquet"
+        schema = pa.schema([("id", pa.string()), ("crop:code", pa.string())])
+        pq.ParquetWriter(path, schema).close()
+        assert pq.ParquetFile(path).metadata.num_row_groups == 0
+        result = add_crop_names(path, src)
+        assert result.changed
+        assert "crop:name" in pq.read_schema(path).names
+
+
+class TestFractionalCodes:
+    """Codes with a fraction match across float widths and decimals."""
+
+    @pytest.mark.parametrize(
+        ("source_type", "fields_type", "value"),
+        [
+            ("float32", "float64", "0.6"),
+            ("float64", "float32", "0.1"),
+            ("decimal", "float64", "0.0015"),
+            ("decimal", "float32", "0.1"),
+            ("decimal", "decimal", "0.00001"),
+        ],
+    )
+    def test_the_same_value_matches(self, tmp_path, source_type, fields_type, value) -> None:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        def codes(kind: str) -> pa.Array:
+            if kind == "decimal":
+                return pa.array([Decimal(value)], pa.decimal128(10, 6))
+            return pa.array([float(value)], getattr(pa, kind)())
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["a"], "crop:code": codes(source_type), "crop:name": ["x"]},
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet", {"id": ["a"], "crop:code": codes(fields_type)}
+        )
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["x"]
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == ["x"]
+
+
+class TestDifferentCodesStayApart:
+    """Two different numbers never match, however close."""
+
+    @pytest.mark.parametrize(
+        ("source_code", "fields_code"),
+        [
+            ("1234567890.0000000001", "1234567890.0000000002"),
+            ("123456789012345.6700000000", "123456789012345.6710000000"),
+        ],
+    )
+    def test_decimals_beyond_float_precision(self, tmp_path, source_code, fields_code) -> None:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        def codes(value: str) -> pa.Array:
+            return pa.array([Decimal(value)], pa.decimal128(38, 10))
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["a"], "crop:code": codes(source_code), "crop:name": ["wheat"]},
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet", {"id": ["a"], "crop:code": codes(fields_code)}
+        )
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == [None]
+        with pytest.raises(CropNameError, match="another crop:code"):
+            add_crop_names(path, src)
+
+    def test_a_decimal_beyond_float_precision_still_matches_itself(self, tmp_path: Path) -> None:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        code = pa.array([Decimal("1234567890.0000000001")], pa.decimal128(38, 10))
+        src = _table_file(
+            tmp_path / "source.parquet", {"id": ["a"], "crop:code": code, "crop:name": ["wheat"]}
+        )
+        path = _table_file(tmp_path / "fields.parquet", {"id": ["a"], "crop:code": code})
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["wheat"]
+
+    def test_float32_and_float64_of_different_numbers(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["a"], "crop:code": pa.array([0.6], pa.float32()), "crop:name": ["x"]},
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {"id": ["a"], "crop:code": pa.array([0.6000000238418579], pa.float64())},
+        )
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == [None]
+
+
+class TestDecimalEdges:
+    """Decimals are compared by their exact digits, never through a float."""
+
+    @staticmethod
+    def _decimal_file(path: Path, value: str, precision: int, scale: int, **extra) -> Path:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        code = pa.array([Decimal(value)], pa.decimal128(precision, scale))
+        return _table_file(path, {"id": ["a"], "crop:code": code, **extra})
+
+    @pytest.mark.parametrize(
+        ("source", "fields_code"),
+        [
+            (("82114535650721.59", 38, 2), ("82114535650721.60", 38, 2)),
+            (("0.1", 30, 25), ("0.1000000000000000117440512", 30, 25)),
+            (
+                ("0.000000000000000000000000000001", 38, 30),
+                ("0.000000000000000000000000000002", 38, 30),
+            ),
+        ],
+    )
+    def test_different_decimals_stay_apart(self, tmp_path, source, fields_code) -> None:
+        src = self._decimal_file(tmp_path / "source.parquet", *source, **{"crop:name": ["x"]})
+        path = self._decimal_file(tmp_path / "fields.parquet", *fields_code)
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == [None]
+
+    @pytest.mark.parametrize(
+        ("value", "precision", "scale"),
+        [("9.99999999999999999", 18, 17), ("9999999999999999.99", 18, 2), ("-0.10", 5, 2)],
+    )
+    def test_decimals_at_the_edge_of_their_type_match_themselves(
+        self, tmp_path, value, precision, scale
+    ) -> None:
+        src = self._decimal_file(
+            tmp_path / "source.parquet", value, precision, scale, **{"crop:name": ["x"]}
+        )
+        path = self._decimal_file(tmp_path / "fields.parquet", value, precision, scale)
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["x"]
+
+    def test_the_same_decimal_at_another_scale_matches(self, tmp_path: Path) -> None:
+        src = self._decimal_file(
+            tmp_path / "source.parquet", "0.00001", 38, 30, **{"crop:name": ["x"]}
+        )
+        path = self._decimal_file(tmp_path / "fields.parquet", "0.00001", 10, 6)
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["x"]
+
+
+class TestWideAndUnusualTypes:
+    """Types DuckDB cannot compare exactly are refused; text views count as text."""
+
+    def test_decimals_wider_than_38_digits_are_refused(self, tmp_path: Path) -> None:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        code = pa.array([Decimal("0.1")], pa.decimal256(40, 20))
+        src = _table_file(
+            tmp_path / "source.parquet", {"id": ["a"], "crop:code": code, "crop:name": ["x"]}
+        )
+        path = _table_file(tmp_path / "fields.parquet", {"id": ["a"], "crop:code": code})
+        before = path.read_bytes()
+        for by in ("id", "code"):
+            with pytest.raises(CropNameError, match="wider than 38 digits"):
+                add_crop_names(path, src, by=by)
+        assert path.read_bytes() == before
+
+    def test_a_decimal_without_integer_digits_matches_a_float(self, tmp_path: Path) -> None:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {
+                "id": ["a", "b"],
+                "crop:code": pa.array([Decimal("0.500"), Decimal("-0.250")], pa.decimal128(3, 3)),
+                "crop:name": ["half", "minus a quarter"],
+            },
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet", {"id": ["b", "a"], "crop:code": [-0.25, 0.5]}
+        )
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["minus a quarter", "half"]
+
+    def test_string_view_ids_and_codes_are_text(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["a"], "crop:code": ["10"], "crop:name": ["Weizen"]},
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {
+                "id": pa.array(["a"], pa.string_view()),
+                "crop:code": pa.array(["10"], pa.string_view()),
+            },
+        )
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == ["Weizen"]
