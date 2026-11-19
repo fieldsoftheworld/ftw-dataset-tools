@@ -60,13 +60,13 @@ _FLOAT_CODE = """CASE WHEN isnan(CAST({column} AS DOUBLE)) THEN NULL
          AND CAST({column} AS DOUBLE) = trunc(CAST({column} AS DOUBLE))
       THEN coalesce(CAST(TRY_CAST(CAST({column} AS DOUBLE) AS HUGEINT) AS VARCHAR),
                     CAST(CAST({column} AS DOUBLE) AS VARCHAR))
-    ELSE CAST(CAST({column} AS DOUBLE) AS VARCHAR) END"""
+    ELSE CAST({column} AS VARCHAR) END"""
 
-#: A decimal crop code as text: whole as the integer, otherwise without trailing
-#: zeros, so 10.50 matches the float 10.5.
+#: A decimal crop code as text: whole as the integer, otherwise as a float prints
+#: it, so 10.50 matches the float 10.5 (and 0.00001 the float 1e-05).
 _DECIMAL_CODE = """CASE WHEN {column} = trunc({column})
       THEN CAST(CAST(trunc({column}) AS HUGEINT) AS VARCHAR)
-    ELSE rtrim(rtrim(CAST({column} AS VARCHAR), '0'), '.') END"""
+    ELSE CAST(CAST({column} AS DOUBLE) AS VARCHAR) END"""
 
 #: How many mismatched field ids an error message lists.
 _EXAMPLES = 5
@@ -283,8 +283,9 @@ def _join_by_code(
 ) -> None:
     """Give every field the names of its crop code in the source, in a temp table ``joined``.
 
-    Codes are compared as text, NaN counting as no code and 10.0 as 10. A field whose code the source
-    does not name stays unnamed, and the codes concerned are logged as a warning.
+    Codes are compared as text, NaN counting as no code and 10.0 as 10. A field whose
+    code the source does not name stays unnamed, and the codes concerned are logged as a
+    warning.
     """
     _code_names(con, source_file, names)
     selected = ", ".join(f'c."{c}"' for c in names)

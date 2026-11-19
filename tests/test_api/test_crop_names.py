@@ -642,3 +642,38 @@ class TestSchemaRepairs:
         result = add_crop_names(path, src)
         assert result.changed
         assert "crop:name" in pq.read_schema(path).names
+
+
+class TestFractionalCodes:
+    """Codes with a fraction match across float widths and decimals."""
+
+    @pytest.mark.parametrize(
+        ("source_type", "fields_type", "value"),
+        [
+            ("float32", "float64", "0.6"),
+            ("float64", "float32", "0.1"),
+            ("decimal", "float64", "0.00001"),
+            ("decimal", "float32", "0.1"),
+        ],
+    )
+    def test_the_same_value_matches(self, tmp_path, source_type, fields_type, value) -> None:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        def codes(kind: str) -> pa.Array:
+            if kind == "decimal":
+                return pa.array([Decimal(value)], pa.decimal128(10, 6))
+            return pa.array([float(value)], getattr(pa, kind)())
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["a"], "crop:code": codes(source_type), "crop:name": ["x"]},
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet", {"id": ["a"], "crop:code": codes(fields_type)}
+        )
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["x"]
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == ["x"]
