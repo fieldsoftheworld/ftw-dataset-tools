@@ -233,12 +233,48 @@ class TestRefusals:
         )
         self.assert_refused(fields(tmp_path, ids=("a",)), src, "1 field.* without an id")
 
-    def test_crop_codes_of_another_type(self, tmp_path: Path) -> None:
+    def test_text_codes_against_numeric_ones(self, tmp_path: Path) -> None:
         src = write(
             tmp_path / "source.parquet",
             [{"id": i, "crop:code": c, "crop:name": "x"} for i, c in (("a", 10.0), ("b", 20.0))],
         )
-        self.assert_refused(fields(tmp_path, ids=("a", "b")), src, "another crop:code")
+        self.assert_refused(fields(tmp_path, ids=("a", "b")), src, "crop:code is string")
+
+    def test_a_crop_code_that_differs_as_a_number(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [{"id": i, "crop:code": c, "crop:name": "x"} for i, c in (("a", 10.5), ("b", 20.0))],
+        )
+        path = write(
+            tmp_path / "fields.parquet",
+            [{"id": "a", "crop:code": 10}, {"id": "b", "crop:code": 20}],
+        )
+        self.assert_refused(path, src, "1 field.* another crop:code")
+
+    def test_a_failed_write_part_way_leaves_no_temp_file(self, tmp_path: Path, monkeypatch) -> None:
+        from ftw_dataset_tools.api import crop_names
+
+        calls = []
+
+        def fail_on_second(*_args):
+            calls.append(1)
+            if len(calls) == 2:
+                raise OSError("disk full")
+            return False
+
+        monkeypatch.setattr(crop_names, "_group_changed", fail_on_second)
+        path = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame(
+            [{"id": i, "crop:code": "10"} for i in ("a", "b", "c")],
+            geometry=[box(i, 0, i + 1, 1) for i in range(3)],
+            crs="EPSG:4326",
+        ).to_parquet(path, row_group_size=1)
+        before = path.read_bytes()
+        with pytest.raises(OSError, match="disk full"):
+            add_crop_names(path, source(tmp_path), by="code")
+        assert len(calls) == 2, "the first row group was written before the failure"
+        assert path.read_bytes() == before
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["fields.parquet", "source.parquet"]
 
     def test_a_failed_write_leaves_no_temp_file(self, tmp_path: Path, monkeypatch) -> None:
         from ftw_dataset_tools.api import crop_names
@@ -308,10 +344,50 @@ class TestByCode:
         add_crop_names(path, src, by="code")
         assert column(path, "crop:name") == [None, "Weizen", None]
 
-    def test_codes_of_another_type_match_as_text(self, tmp_path: Path) -> None:
-        path = write(tmp_path / "fields.parquet", [{"id": "x", "crop:code": 10}])
-        add_crop_names(path, source(tmp_path), by="code")
-        assert column(path, "crop:name") == ["Weizen"]
+    def test_text_codes_against_numeric_ones_are_refused(self, tmp_path: Path) -> None:
+        path = write(tmp_path / "fields.parquet", [{"id": "x", "crop:code": 10, "crop:name": "k"}])
+        before = path.read_bytes()
+        with pytest.raises(CropNameError, match="crop:code is int64"):
+            add_crop_names(path, source(tmp_path), by="code")
+        assert path.read_bytes() == before
+
+    @pytest.mark.parametrize(
+        ("source_codes", "fields_codes"),
+        [([10.0, 20.0], [10, 20]), ([10, 20], [10.0, float("nan")]), ([10.0, 20.0], [10.0, 20.0])],
+    )
+    def test_whole_floats_match_integers(self, tmp_path, source_codes, fields_codes) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": f"s{i}", "crop:code": c, "crop:name": n}
+                for i, (c, n) in enumerate(zip(source_codes, ("Weizen", "Mais"), strict=True))
+            ],
+        )
+        path = write(
+            tmp_path / "fields.parquet",
+            [
+                {"id": f"f{i}", "crop:code": c, "crop:name": "old"}
+                for i, c in enumerate(fields_codes)
+            ],
+        )
+        add_crop_names(path, src, by="code")
+        nan = fields_codes[1] != fields_codes[1]
+        assert column(path, "crop:name") == ["Weizen", None if nan else "Mais"]
+
+    def test_whole_floats_match_integers_by_id(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": "a", "crop:code": 10, "crop:name": "Weizen"},
+                {"id": "b", "crop:code": None, "crop:name": None},
+            ],
+        )
+        path = write(
+            tmp_path / "fields.parquet",
+            [{"id": "a", "crop:code": 10.0}, {"id": "b", "crop:code": float("nan")}],
+        )
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == ["Weizen", None]
 
     def test_a_code_unnamed_on_some_rows_is_refused(self, tmp_path: Path) -> None:
         src = write(
@@ -389,3 +465,49 @@ class TestByCode:
     def test_an_unknown_mode_is_refused(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="by must be one of"):
             add_crop_names(fields(tmp_path), source(tmp_path), by="name")
+
+
+class TestFileFormat:
+    """The rewrite keeps each column's codec and writes names as text."""
+
+    def test_a_name_column_empty_in_the_source_is_text(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        path = fields(tmp_path)
+        src = source(
+            tmp_path,
+            a={"crop:name_en": None},
+            b={"crop:name_en": None},
+        )
+        table = pq.read_table(src)
+        index = table.schema.get_field_index("crop:name_en")
+        table = table.set_column(index, pa.field("crop:name_en", pa.null()), pa.nulls(3))
+        pq.write_table(table, src)
+        add_crop_names(path, src)
+        assert pq.read_schema(path).field("crop:name_en").type == pa.string()
+
+    def test_each_columns_codec_is_kept(self, tmp_path: Path) -> None:
+        path = fields(tmp_path)
+        table = pq.read_table(path)
+        codecs = {"id": "snappy", "crop:code": "zstd", "hcat:code": "none", "geometry": "gzip"}
+        pq.write_table(table, path, compression=codecs)
+        add_crop_names(path, source(tmp_path))
+        group = pq.ParquetFile(path).metadata.row_group(0)
+        written = {
+            group.column(i).path_in_schema: group.column(i).compression
+            for i in range(group.num_columns)
+        }
+        assert written == {
+            "id": "SNAPPY",
+            "crop:code": "ZSTD",
+            "crop:name": "ZSTD",
+            "crop:name_en": "ZSTD",
+            "hcat:code": "UNCOMPRESSED",
+            "geometry": "GZIP",
+        }
+
+    def test_an_uncompressed_file(self, tmp_path: Path) -> None:
+        path = fields(tmp_path)
+        pq.write_table(pq.read_table(path), path, compression="none")
+        add_crop_names(path, source(tmp_path))
+        assert column(path, "crop:name") == [None, "Weizen", "Mais"]

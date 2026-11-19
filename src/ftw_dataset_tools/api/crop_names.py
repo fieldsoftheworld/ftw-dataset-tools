@@ -15,7 +15,8 @@ more than one name in the edition.
 
 The file is rewritten one row group at a time with pyarrow, not read whole through
 geoparquet-io: a fields file can hold ten million fields, and streaming keeps memory
-flat and the file as it was (row groups, compression, the ``geo`` and fiboa metadata).
+flat and the file as it was (row groups, each column's codec, the ``geo`` and fiboa
+metadata). A codec's level is not stored in the file, so it is pyarrow's default.
 Only the name columns change, and the geometry is copied as is, so the ``geo``
 metadata stays true.
 """
@@ -31,6 +32,7 @@ from ftw_dataset_tools.api.logging_config import get_logger
 if TYPE_CHECKING:
     import duckdb
     import pyarrow as pa
+    import pyarrow.parquet as pq
 
 #: The columns taken from the harmonized edition, in the order they are written.
 NAME_COLUMNS: tuple[str, ...] = ("crop:name", "crop:name_en")
@@ -44,9 +46,17 @@ KEY_COLUMNS: tuple[str, ...] = ("id", "crop:code")
 JoinKey = Literal["id", "code"]
 JOIN_KEYS: tuple[str, ...] = ("id", "code")
 
-#: A crop code as text, with NaN (a float column's "no code") as NULL.
-_CODE_TEXT = """CASE WHEN lower(CAST("crop:code" AS VARCHAR)) = 'nan' THEN NULL
-    ELSE CAST("crop:code" AS VARCHAR) END"""
+#: A text crop code, with "NaN" as no code.
+_TEXT_CODE = """CASE WHEN lower(CAST({column} AS VARCHAR)) = 'nan' THEN NULL
+    ELSE CAST({column} AS VARCHAR) END"""
+
+#: A numeric crop code as text: NaN is no code, and a whole float is written as the
+#: integer it is, so 10.0 in one file matches 10 in the other.
+_NUMBER_CODE = """CASE WHEN isnan(CAST({column} AS DOUBLE)) THEN NULL
+    WHEN isfinite(CAST({column} AS DOUBLE))
+         AND CAST({column} AS DOUBLE) = trunc(CAST({column} AS DOUBLE))
+      THEN CAST(CAST(CAST({column} AS DOUBLE) AS HUGEINT) AS VARCHAR)
+    ELSE CAST({column} AS VARCHAR) END"""
 
 #: How many mismatched field ids an error message lists.
 _EXAMPLES = 5
@@ -73,6 +83,45 @@ class CropNameResult:
     changed: bool
 
 
+def _code_kind(code_type: pa.DataType) -> str:
+    """Whether a crop:code column holds text or numbers ("null" when it holds nothing)."""
+    import pyarrow as pa
+
+    if pa.types.is_dictionary(code_type):
+        code_type = code_type.value_type
+    if pa.types.is_null(code_type):
+        return "null"
+    if pa.types.is_string(code_type) or pa.types.is_large_string(code_type):
+        return "text"
+    if pa.types.is_integer(code_type) or pa.types.is_floating(code_type):
+        return "number"
+    if pa.types.is_decimal(code_type):
+        return "number"
+    return str(code_type)
+
+
+def _code_text(code_type: pa.DataType, column: str = '"crop:code"') -> str:
+    """SQL for a crop code of ``code_type`` as comparable text, NULL for no code."""
+    template = _NUMBER_CODE if _code_kind(code_type) == "number" else _TEXT_CODE
+    return template.format(column=column)
+
+
+def _check_code_types(
+    fields_file: Path, fields_schema: pa.Schema, source_file: Path, source_schema: pa.Schema
+) -> None:
+    """Refuse text codes against numeric ones: "01" and 1 would never match, silently."""
+    kinds = {
+        _code_kind(schema.field("crop:code").type) for schema in (fields_schema, source_schema)
+    }
+    kinds.discard("null")
+    if len(kinds) > 1:
+        raise CropNameError(
+            fields_file,
+            f"crop:code is {fields_schema.field('crop:code').type} in {fields_file} but "
+            f"{source_schema.field('crop:code').type} in {source_file}",
+        )
+
+
 def _check_columns(fields_file: Path, source_file: Path, by: JoinKey) -> tuple[str, ...]:
     """The name columns to take from the source; raises when the join could go wrong."""
     import pyarrow.parquet as pq
@@ -87,6 +136,7 @@ def _check_columns(fields_file: Path, source_file: Path, by: JoinKey) -> tuple[s
             raise CropNameError(path, f"{path} has no {', '.join(missing)} column")
     if by == "id":
         _check_id_types(fields_file, fields_schema, source_file, source_schema)
+    _check_code_types(fields_file, fields_schema, source_file, source_schema)
     return tuple(c for c in NAME_COLUMNS if c in source_schema.names)
 
 
@@ -118,23 +168,32 @@ def _join(
 ) -> None:
     """Join the source's names onto every field by id, in a temp table ``joined``.
 
-    Both crop codes are compared as text, flagging the fields whose code differs.
+    Both crop codes are compared as text (NaN as no code, 10.0 as 10), flagging the
+    fields whose code differs.
     """
     selected = ", ".join(f's."{c}"' for c in names)
+    fields_code = _code_text(_code_type(fields_file), 'f."crop:code"')
+    source_code = _code_text(_code_type(source_file), 's."crop:code"')
     con.execute(
         f"""
         CREATE TEMP TABLE joined AS
         SELECT f.file_row_number AS row_number, f.id AS id,
                s.id IS NULL AS missing,
                s.id IS NOT NULL
-                 AND CAST(f."crop:code" AS VARCHAR) IS DISTINCT FROM CAST(s."crop:code" AS VARCHAR)
-                 AS differs,
+                 AND ({fields_code}) IS DISTINCT FROM ({source_code}) AS differs,
                {selected}
         FROM read_parquet(?, file_row_number = true) f
         LEFT JOIN read_parquet(?) s ON f.id = s.id
         """,
         [str(fields_file), str(source_file)],
     )
+
+
+def _code_type(path: Path) -> pa.DataType:
+    """The type of ``path``'s crop:code column."""
+    import pyarrow.parquet as pq
+
+    return pq.read_schema(path).field("crop:code").type
 
 
 def _code_names(con: duckdb.DuckDBPyConnection, source_file: Path, names: tuple[str, ...]) -> None:
@@ -144,11 +203,12 @@ def _code_names(con: duckdb.DuckDBPyConnection, source_file: Path, names: tuple[
     empty on some rows only) is refused: the code alone would not tell which is right.
     """
     quoted = ", ".join(f'"{c}"' for c in names)
+    code = _code_text(_code_type(source_file))
     con.execute(
         f"""
         CREATE TEMP TABLE codes AS
-        SELECT DISTINCT {_CODE_TEXT} AS code, {quoted}
-        FROM read_parquet(?) WHERE ({_CODE_TEXT}) IS NOT NULL
+        SELECT DISTINCT {code} AS code, {quoted}
+        FROM read_parquet(?) WHERE ({code}) IS NOT NULL
         """,
         [str(source_file)],
     )
@@ -187,7 +247,7 @@ def _join_by_code(
 ) -> None:
     """Give every field the names of its crop code in the source, in a temp table ``joined``.
 
-    Codes are compared as text, NaN counting as no code. A field whose code the source
+    Codes are compared as text, NaN counting as no code and 10.0 as 10. A field whose code the source
     does not name stays unnamed, and the codes concerned are logged as a warning.
     """
     _code_names(con, source_file, names)
@@ -196,7 +256,7 @@ def _join_by_code(
         f"""
         CREATE TEMP TABLE joined AS
         SELECT f.file_row_number AS row_number, f.code, {selected}
-        FROM (SELECT file_row_number, {_CODE_TEXT} AS code
+        FROM (SELECT file_row_number, {_code_text(_code_type(fields_file))} AS code
               FROM read_parquet(?, file_row_number = true)) f
         LEFT JOIN codes c ON f.code = c.code
         """,
@@ -233,8 +293,9 @@ def _joined_names(
     con.execute(f"SET memory_limit = '{_JOIN_MEMORY}'")
     join = _join_by_id if by == "id" else _join_by_code
     join(con, fields_file, source_file, names)
-    quoted = ", ".join(f'"{c}"' for c in names)
-    table = con.execute(f"SELECT {quoted} FROM joined ORDER BY row_number").fetch_arrow_table()
+    # As text: a name column empty in the source would otherwise come back as INTEGER.
+    text = ", ".join(f'CAST("{c}" AS VARCHAR) AS "{c}"' for c in names)
+    table = con.execute(f"SELECT {text} FROM joined ORDER BY row_number").fetch_arrow_table()
     if table.num_rows != rows:
         raise CropNameError(
             fields_file, f"the join gave {table.num_rows} rows for {rows} fields of {fields_file}"
@@ -265,17 +326,35 @@ def _group_changed(group: pa.Table, part: pa.Table, schema: pa.Schema) -> bool:
     )
 
 
+def _codec(name: str) -> str:
+    """A codec as parquet metadata names it, as pyarrow's writer takes it."""
+    return "none" if name == "UNCOMPRESSED" else name.lower()
+
+
+def _compression(meta: pq.FileMetaData, names: list[str]) -> dict[str, str]:
+    """Each column's codec in ``meta``; the new name columns take crop:code's."""
+    if not meta.num_row_groups:
+        return dict.fromkeys(names, "zstd")
+    group = meta.row_group(0)
+    codecs = {
+        group.column(i).path_in_schema: _codec(group.column(i).compression)
+        for i in range(group.num_columns)
+    }
+    for name in names:
+        codecs[name] = codecs.get("crop:code", "zstd")
+    return codecs
+
+
 def _rewrite(fields_file: Path, tmp: Path, names_table: pa.Table) -> bool:
     """Write ``fields_file`` with the joined names to ``tmp``; whether anything changed."""
     import pyarrow.parquet as pq
 
     source = pq.ParquetFile(fields_file)
     schema = _output_schema(source.schema_arrow, names_table)
-    meta = source.metadata
-    compression = meta.row_group(0).column(0).compression if meta.num_row_groups else "ZSTD"
+    compression = _compression(source.metadata, names_table.column_names)
     changed = False
     offset = 0
-    with pq.ParquetWriter(tmp, schema, compression=compression.lower()) as writer:
+    with pq.ParquetWriter(tmp, schema, compression=compression) as writer:
         for index in range(source.num_row_groups):
             group = source.read_row_group(index)
             part = names_table.slice(offset, group.num_rows)
@@ -315,7 +394,8 @@ def add_crop_names(
 
     Raises:
         ValueError: ``by`` is neither "id" nor "code".
-        CropNameError: The source has no crop:name, or a key column is missing. By id:
+        CropNameError: The source has no crop:name, a key column is missing, or one
+            file's crop codes are text and the other's numbers. By id:
             the id types differ, an id is missing or (in the source) repeated, or a
             field is missing from the source or has another crop:code there. By code:
             a code's rows in the source do not all have the same names. Nothing is

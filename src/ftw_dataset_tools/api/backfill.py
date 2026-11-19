@@ -8,8 +8,9 @@ documents instead, and leave everything else in them as it was:
 - ``chip_item_properties`` and ``update_item``: the ``ftw:admin*`` properties of each
   chip item, from the chips file;
 - ``update_collection``: the chips asset's size and columns, the GAUL link, the field
-  embeddings asset with its links, the field assets that gained crop names (see
-  ``crop_names.add_crop_names``), and a record of the backfill in ``ftw:config``;
+  embeddings asset with its links, the field assets as their files now are (which
+  may have gained crop names, see ``crop_names.add_crop_names``), and a record of the
+  backfill in ``ftw:config``;
 - ``rewrite_docs``: the styles, README.md and AGENTS.md, measured from the updated files,
   and the style assets listed on the collection.
 
@@ -160,7 +161,7 @@ def _embedding_entries(path: Path, *, checksum: bool) -> tuple[dict, list[dict],
     return asset, links, list(holder.stac_extensions)
 
 
-def _record(doc: dict, *, steps: list[str]) -> None:
+def _record(doc: dict, *, steps: list[str], details: Mapping[str, Any] | None = None) -> None:
     """Note in ``ftw:config`` what the backfill added, and with which ftwd.
 
     The config itself stays as the build ran it. Each run replaces the record, so it
@@ -173,6 +174,7 @@ def _record(doc: dict, *, steps: list[str]) -> None:
     record[BACKFILL_KEY] = [
         {
             "steps": steps,
+            **dict(details or {}),
             "ftwd_version": __version__,
             "ftwd_git_commit": installed_git_commit(),
             "generated_at": datetime.now(UTC).isoformat(),
@@ -186,7 +188,8 @@ def update_collection(
     chips_file: Path | str,
     admin_names_added: bool,
     field_embeddings_file: Path | str | None,
-    crop_name_files: Mapping[str, Path | str] | None = None,
+    field_files: Mapping[str, Path | str] | None = None,
+    crop_names: Mapping[str, str] | None = None,
 ) -> None:
     """Make a published collection describe the backfilled chips and field embeddings.
 
@@ -199,8 +202,12 @@ def update_collection(
         admin_names_added: Whether the chips carry the admin name columns now.
         field_embeddings_file: The field embeddings file to publish beside the
             collection, or None to publish none.
-        crop_name_files: Asset key to field file for the field assets that gained
-            crop names (``fields``, ``fields_filtered``), or None when none did.
+        field_files: Asset key to field file (``fields``, ``fields_filtered``) as it
+            will be published. Each asset's size, checksum and columns are read from
+            its file, so they stay true whether or not the run changed the file.
+        crop_names: Where this run's crop names came from (e.g. ``{"source": ...,
+            "by": "code"}``), recorded with the ``crop_names`` step; None when the
+            run joined none. Needs ``field_files``.
 
     Raises:
         BackfillError: A file or asset is missing. ``doc`` is left as it was, as it
@@ -212,7 +219,8 @@ def update_collection(
         chips_file=chips_file,
         admin_names_added=admin_names_added,
         field_embeddings_file=field_embeddings_file,
-        crop_name_files=crop_name_files,
+        field_files=field_files,
+        crop_names=crop_names,
     )
     doc.clear()
     doc.update(work)
@@ -224,20 +232,23 @@ def _update_collection(
     chips_file: Path | str,
     admin_names_added: bool,
     field_embeddings_file: Path | str | None,
-    crop_name_files: Mapping[str, Path | str] | None,
+    field_files: Mapping[str, Path | str] | None,
+    crop_names: Mapping[str, str] | None,
 ) -> None:
     if field_embeddings_file is not None and not Path(field_embeddings_file).is_file():
         raise BackfillError(
             stac.FIELD_EMBEDDINGS_ASSET, f"no field embeddings file at {field_embeddings_file}"
         )
-    crop_name_files = dict(crop_name_files or {})
-    for key, path in crop_name_files.items():
+    field_files = dict(field_files or {})
+    if crop_names is not None and not field_files:
+        raise BackfillError("fields", "crop names were joined but no field file was given")
+    for key, path in field_files.items():
         if key not in doc.get("assets", {}):
             raise BackfillError(key, f"the collection has no {key} asset")
         if not Path(path).is_file():
             raise BackfillError(key, f"no {key} file at {path}")
     checksum = refresh_parquet_asset(doc, "chips", chips_file)
-    for key, path in crop_name_files.items():
+    for key, path in field_files.items():
         refresh_parquet_asset(doc, key, path)
     doc["links"] = [link for link in doc.get("links", []) if not _is_backfill_link(link)]
     doc.get("assets", {}).pop(stac.FIELD_EMBEDDINGS_ASSET, None)
@@ -251,9 +262,9 @@ def _update_collection(
         steps.append("admin_names")
     if field_embeddings_file is not None:
         steps.append("field_embeddings")
-    if crop_name_files:
+    if crop_names is not None:
         steps.append("crop_names")
-    _record(doc, steps=steps)
+    _record(doc, steps=steps, details={"crop_names": dict(crop_names)} if crop_names else None)
 
 
 def _add_embeddings(doc: dict, path: Path, *, checksum: bool) -> list[dict]:

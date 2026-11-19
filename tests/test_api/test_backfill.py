@@ -184,7 +184,8 @@ class TestUpdateCollection:
             chips_file=chips,
             admin_names_added=True,
             field_embeddings_file=None,
-            crop_name_files={"fields": fields},
+            field_files={"fields": fields},
+            crop_names={"source": "fr/year=2024/fr-2024.parquet", "by": "code"},
         )
 
         columns = [c["name"] for c in doc["assets"]["fields"]["table:columns"]]
@@ -192,6 +193,50 @@ class TestUpdateCollection:
         assert doc["assets"]["fields"]["file:size"] == fields.stat().st_size
         [run] = doc["ftw:config"][backfill.BACKFILL_KEY]
         assert run["steps"] == ["admin_names", "crop_names"]
+        assert run["crop_names"] == {"source": "fr/year=2024/fr-2024.parquet", "by": "code"}
+
+    def test_field_files_are_refreshed_without_crop_names(self, tmp_path: Path) -> None:
+        """A run that joins no names still describes the field files it publishes."""
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        root, doc = _published(tmp_path)
+        chips = _chips_with_admin_names(root / "ds_chips.parquet")
+        fields = root / "ds_fields.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["a"], "crop:code": ["10"]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326"
+        ).to_parquet(fields)
+        doc["assets"]["fields"]["table:columns"] = [{"name": "crop:name", "type": "string"}]
+        doc["assets"]["fields"]["file:size"] = 1
+
+        backfill.update_collection(
+            doc,
+            chips_file=chips,
+            admin_names_added=True,
+            field_embeddings_file=None,
+            field_files={"fields": fields},
+        )
+
+        columns = [c["name"] for c in doc["assets"]["fields"]["table:columns"]]
+        assert "crop:name" not in columns
+        assert doc["assets"]["fields"]["file:size"] == fields.stat().st_size
+        [run] = doc["ftw:config"][backfill.BACKFILL_KEY]
+        assert run["steps"] == ["admin_names"]
+        assert "crop_names" not in run
+
+    def test_crop_names_without_field_files_are_refused(self, tmp_path: Path) -> None:
+        root, doc = _published(tmp_path)
+        chips = _chips_with_admin_names(root / "ds_chips.parquet")
+        before = json.loads(json.dumps(doc))
+        with pytest.raises(backfill.BackfillError, match="no field file"):
+            backfill.update_collection(
+                doc,
+                chips_file=chips,
+                admin_names_added=True,
+                field_embeddings_file=None,
+                crop_names={"source": "x", "by": "id"},
+            )
+        assert doc == before
 
     def test_crop_names_on_both_field_assets(self, tmp_path: Path) -> None:
         import geopandas as gpd
@@ -214,7 +259,8 @@ class TestUpdateCollection:
             chips_file=chips,
             admin_names_added=True,
             field_embeddings_file=None,
-            crop_name_files=files,
+            field_files=files,
+            crop_names={"source": "s", "by": "id"},
         )
         for key in files:
             assert "crop:name" in [c["name"] for c in doc["assets"][key]["table:columns"]]
@@ -237,7 +283,7 @@ class TestUpdateCollection:
                 chips_file=chips,
                 admin_names_added=True,
                 field_embeddings_file=None,
-                crop_name_files={"fields": broken},
+                field_files={"fields": broken},
             )
         assert doc == before
 
@@ -255,7 +301,7 @@ class TestUpdateCollection:
                     chips_file=chips,
                     admin_names_added=True,
                     field_embeddings_file=None,
-                    crop_name_files=files,
+                    field_files=files,
                 )
             assert doc == before
 
