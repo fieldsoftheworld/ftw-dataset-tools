@@ -677,3 +677,61 @@ class TestFractionalCodes:
         assert column(path, "crop:name") == ["x"]
         add_crop_names(path, src)
         assert column(path, "crop:name") == ["x"]
+
+
+class TestDifferentCodesStayApart:
+    """Two different numbers never match, however close."""
+
+    @pytest.mark.parametrize(
+        ("source_code", "fields_code"),
+        [
+            ("1234567890.0000000001", "1234567890.0000000002"),
+            ("123456789012345.6700000000", "123456789012345.6710000000"),
+        ],
+    )
+    def test_decimals_beyond_float_precision(self, tmp_path, source_code, fields_code) -> None:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        def codes(value: str) -> pa.Array:
+            return pa.array([Decimal(value)], pa.decimal128(38, 10))
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["a"], "crop:code": codes(source_code), "crop:name": ["wheat"]},
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet", {"id": ["a"], "crop:code": codes(fields_code)}
+        )
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == [None]
+        with pytest.raises(CropNameError, match="another crop:code"):
+            add_crop_names(path, src)
+
+    def test_a_decimal_beyond_float_precision_still_matches_itself(self, tmp_path: Path) -> None:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        code = pa.array([Decimal("1234567890.0000000001")], pa.decimal128(38, 10))
+        src = _table_file(
+            tmp_path / "source.parquet", {"id": ["a"], "crop:code": code, "crop:name": ["wheat"]}
+        )
+        path = _table_file(tmp_path / "fields.parquet", {"id": ["a"], "crop:code": code})
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["wheat"]
+
+    def test_float32_and_float64_of_different_numbers(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["a"], "crop:code": pa.array([0.6], pa.float32()), "crop:name": ["x"]},
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {"id": ["a"], "crop:code": pa.array([0.6000000238418579], pa.float64())},
+        )
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == [None]

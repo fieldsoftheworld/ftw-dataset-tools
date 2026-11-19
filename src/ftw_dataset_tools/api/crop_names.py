@@ -54,7 +54,10 @@ _TEXT_CODE = """CASE WHEN lower(CAST({column} AS VARCHAR)) = 'nan' THEN NULL
 _INTEGER_CODE = "CAST({column} AS VARCHAR)"
 
 #: A float crop code as text: NaN is no code, and a whole float is written as the
-#: integer it is, so 10.0 in one file matches 10 in the other.
+#: integer it is, so 10.0 in one file matches 10 in the other. A fraction is written
+#: as the shortest text that reads back to the float in its own width, so a float32
+#: 0.6 matches a float64 0.6 (the decimal number both stand for), not the float64
+#: 0.6000000238418579 that equals the float32 exactly.
 _FLOAT_CODE = """CASE WHEN isnan(CAST({column} AS DOUBLE)) THEN NULL
     WHEN isfinite(CAST({column} AS DOUBLE))
          AND CAST({column} AS DOUBLE) = trunc(CAST({column} AS DOUBLE))
@@ -62,11 +65,15 @@ _FLOAT_CODE = """CASE WHEN isnan(CAST({column} AS DOUBLE)) THEN NULL
                     CAST(CAST({column} AS DOUBLE) AS VARCHAR))
     ELSE CAST({column} AS VARCHAR) END"""
 
-#: A decimal crop code as text: whole as the integer, otherwise as a float prints
-#: it, so 10.50 matches the float 10.5 (and 0.00001 the float 1e-05).
+#: A decimal crop code as text: whole as the integer; otherwise as a float prints it
+#: when the float holds it exactly, so 10.50 matches the float 10.5 (and 0.00001 the
+#: float 1e-05); otherwise its exact digits, which no float can equal, so two decimals
+#: that one float would round together stay apart.
 _DECIMAL_CODE = """CASE WHEN {column} = trunc({column})
       THEN CAST(CAST(trunc({column}) AS HUGEINT) AS VARCHAR)
-    ELSE CAST(CAST({column} AS DOUBLE) AS VARCHAR) END"""
+    WHEN CAST(CAST({column} AS DOUBLE) AS {decimal}) = {column}
+      THEN CAST(CAST({column} AS DOUBLE) AS VARCHAR)
+    ELSE rtrim(CAST({column} AS VARCHAR), '0') END"""
 
 #: How many mismatched field ids an error message lists.
 _EXAMPLES = 5
@@ -119,7 +126,8 @@ def _code_text(code_type: pa.DataType, column: str = '"crop:code"') -> str:
     elif pa.types.is_floating(code_type):
         template = _FLOAT_CODE
     elif pa.types.is_decimal(code_type):
-        template = _DECIMAL_CODE
+        decimal = f"DECIMAL({code_type.precision}, {code_type.scale})"
+        return _DECIMAL_CODE.format(column=column, decimal=decimal)
     else:
         template = _TEXT_CODE
     return template.format(column=column)
