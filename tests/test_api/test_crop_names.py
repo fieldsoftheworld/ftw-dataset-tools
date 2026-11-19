@@ -652,8 +652,9 @@ class TestFractionalCodes:
         [
             ("float32", "float64", "0.6"),
             ("float64", "float32", "0.1"),
-            ("decimal", "float64", "0.00001"),
+            ("decimal", "float64", "0.0015"),
             ("decimal", "float32", "0.1"),
+            ("decimal", "decimal", "0.00001"),
         ],
     )
     def test_the_same_value_matches(self, tmp_path, source_type, fields_type, value) -> None:
@@ -735,3 +736,55 @@ class TestDifferentCodesStayApart:
         )
         add_crop_names(path, src, by="code")
         assert column(path, "crop:name") == [None]
+
+
+class TestDecimalEdges:
+    """Decimals are compared by their exact digits, never through a float."""
+
+    @staticmethod
+    def _decimal_file(path: Path, value: str, precision: int, scale: int, **extra) -> Path:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        code = pa.array([Decimal(value)], pa.decimal128(precision, scale))
+        return _table_file(path, {"id": ["a"], "crop:code": code, **extra})
+
+    @pytest.mark.parametrize(
+        ("source", "fields_code"),
+        [
+            (("82114535650721.59", 38, 2), ("82114535650721.60", 38, 2)),
+            (("0.1", 30, 25), ("0.1000000000000000117440512", 30, 25)),
+            (
+                ("0.000000000000000000000000000001", 38, 30),
+                ("0.000000000000000000000000000002", 38, 30),
+            ),
+        ],
+    )
+    def test_different_decimals_stay_apart(self, tmp_path, source, fields_code) -> None:
+        src = self._decimal_file(tmp_path / "source.parquet", *source, **{"crop:name": ["x"]})
+        path = self._decimal_file(tmp_path / "fields.parquet", *fields_code)
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == [None]
+
+    @pytest.mark.parametrize(
+        ("value", "precision", "scale"),
+        [("9.99999999999999999", 18, 17), ("9999999999999999.99", 18, 2), ("-0.10", 5, 2)],
+    )
+    def test_decimals_at_the_edge_of_their_type_match_themselves(
+        self, tmp_path, value, precision, scale
+    ) -> None:
+        src = self._decimal_file(
+            tmp_path / "source.parquet", value, precision, scale, **{"crop:name": ["x"]}
+        )
+        path = self._decimal_file(tmp_path / "fields.parquet", value, precision, scale)
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["x"]
+
+    def test_the_same_decimal_at_another_scale_matches(self, tmp_path: Path) -> None:
+        src = self._decimal_file(
+            tmp_path / "source.parquet", "0.00001", 38, 30, **{"crop:name": ["x"]}
+        )
+        path = self._decimal_file(tmp_path / "fields.parquet", "0.00001", 10, 6)
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["x"]

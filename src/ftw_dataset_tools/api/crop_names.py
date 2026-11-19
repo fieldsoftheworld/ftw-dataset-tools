@@ -65,14 +65,13 @@ _FLOAT_CODE = """CASE WHEN isnan(CAST({column} AS DOUBLE)) THEN NULL
                     CAST(CAST({column} AS DOUBLE) AS VARCHAR))
     ELSE CAST({column} AS VARCHAR) END"""
 
-#: A decimal crop code as text: whole as the integer; otherwise as a float prints it
-#: when the float holds it exactly, so 10.50 matches the float 10.5 (and 0.00001 the
-#: float 1e-05); otherwise its exact digits, which no float can equal, so two decimals
-#: that one float would round together stay apart.
+#: A decimal crop code as text, exactly: whole as the integer, otherwise its digits
+#: without trailing zeros, so 10.50 matches the decimal 10.5 at any scale and the float
+#: 10.5. It never goes through a float, so two different decimals never match. A float
+#: that prints with an exponent (1e-05) does not match the decimal 0.00001: refused by
+#: id, unnamed by code.
 _DECIMAL_CODE = """CASE WHEN {column} = trunc({column})
       THEN CAST(CAST(trunc({column}) AS HUGEINT) AS VARCHAR)
-    WHEN CAST(CAST({column} AS DOUBLE) AS {decimal}) = {column}
-      THEN CAST(CAST({column} AS DOUBLE) AS VARCHAR)
     ELSE rtrim(CAST({column} AS VARCHAR), '0') END"""
 
 #: How many mismatched field ids an error message lists.
@@ -126,8 +125,7 @@ def _code_text(code_type: pa.DataType, column: str = '"crop:code"') -> str:
     elif pa.types.is_floating(code_type):
         template = _FLOAT_CODE
     elif pa.types.is_decimal(code_type):
-        decimal = f"DECIMAL({code_type.precision}, {code_type.scale})"
-        return _DECIMAL_CODE.format(column=column, decimal=decimal)
+        template = _DECIMAL_CODE
     else:
         template = _TEXT_CODE
     return template.format(column=column)
