@@ -55,9 +55,10 @@ _INTEGER_CODE = "CAST({column} AS VARCHAR)"
 
 #: A float crop code as text: NaN is no code, and a whole float is written as the
 #: integer it is, so 10.0 in one file matches 10 in the other. A fraction is written
-#: as the shortest text that reads back to the float in its own width, so a float32
-#: 0.6 matches a float64 0.6 (the decimal number both stand for), not the float64
-#: 0.6000000238418579 that equals the float32 exactly.
+#: as DuckDB prints it in the float's own width, so a float32 0.6 usually matches a
+#: float64 0.6 (the decimal number both stand for), not the float64 0.6000000238418579
+#: that equals the float32 exactly; one DuckDB prints less precisely (1234.5678 as
+#: 1234.5677) misses.
 _FLOAT_CODE = """CASE WHEN isnan(CAST({column} AS DOUBLE)) THEN NULL
     WHEN isfinite(CAST({column} AS DOUBLE))
          AND CAST({column} AS DOUBLE) = trunc(CAST({column} AS DOUBLE))
@@ -72,7 +73,7 @@ _FLOAT_CODE = """CASE WHEN isnan(CAST({column} AS DOUBLE)) THEN NULL
 #: id, unnamed by code.
 _DECIMAL_CODE = """CASE WHEN {column} = trunc({column})
       THEN CAST(CAST(trunc({column}) AS HUGEINT) AS VARCHAR)
-    ELSE rtrim(CAST({column} AS VARCHAR), '0') END"""
+    ELSE regexp_replace(rtrim(CAST({column} AS VARCHAR), '0'), '^(-?)\\.', '\\10.') END"""
 
 #: How many mismatched field ids an error message lists.
 _EXAMPLES = 5
@@ -99,6 +100,34 @@ class CropNameResult:
     changed: bool
 
 
+def _is_text(data_type: pa.DataType) -> bool:
+    import pyarrow as pa
+
+    return (
+        pa.types.is_string(data_type)
+        or pa.types.is_large_string(data_type)
+        or pa.types.is_string_view(data_type)
+    )
+
+
+#: The widest decimal DuckDB reads exactly; it reads wider ones as (wrong) floats.
+_MAX_DECIMAL_DIGITS = 38
+
+
+def _check_decimal_width(path: Path, schema: pa.Schema, columns: tuple[str, ...]) -> None:
+    """Refuse a key column of decimals too wide for DuckDB to read exactly."""
+    import pyarrow as pa
+
+    for name in columns:
+        data_type = schema.field(name).type
+        if pa.types.is_decimal(data_type) and data_type.precision > _MAX_DECIMAL_DIGITS:
+            raise CropNameError(
+                path,
+                f"{name} of {path} is {data_type}; decimals wider than "
+                f"{_MAX_DECIMAL_DIGITS} digits cannot be compared exactly",
+            )
+
+
 def _code_kind(code_type: pa.DataType) -> str:
     """Whether a crop:code column holds text or numbers ("null" when it holds nothing)."""
     import pyarrow as pa
@@ -107,7 +136,7 @@ def _code_kind(code_type: pa.DataType) -> str:
         code_type = code_type.value_type
     if pa.types.is_null(code_type):
         return "null"
-    if pa.types.is_string(code_type) or pa.types.is_large_string(code_type):
+    if _is_text(code_type):
         return "text"
     if pa.types.is_integer(code_type) or pa.types.is_floating(code_type):
         return "number"
@@ -137,7 +166,7 @@ def _id_kind(id_type: pa.DataType) -> str:
 
     if pa.types.is_dictionary(id_type):
         id_type = id_type.value_type
-    if pa.types.is_string(id_type) or pa.types.is_large_string(id_type):
+    if _is_text(id_type):
         return "text"
     if pa.types.is_integer(id_type):
         return "integer"
@@ -172,6 +201,8 @@ def _check_columns(fields_file: Path, source_file: Path, by: JoinKey) -> tuple[s
         missing = [c for c in keys if c not in schema.names]
         if missing:
             raise CropNameError(path, f"{path} has no {', '.join(missing)} column")
+    for path, schema in ((fields_file, fields_schema), (source_file, source_schema)):
+        _check_decimal_width(path, schema, keys)
     if by == "id":
         _check_id_types(fields_file, fields_schema, source_file, source_schema)
     _check_code_types(fields_file, fields_schema, source_file, source_schema)

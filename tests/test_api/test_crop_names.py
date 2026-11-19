@@ -788,3 +788,59 @@ class TestDecimalEdges:
         path = self._decimal_file(tmp_path / "fields.parquet", "0.00001", 10, 6)
         add_crop_names(path, src, by="code")
         assert column(path, "crop:name") == ["x"]
+
+
+class TestWideAndUnusualTypes:
+    """Types DuckDB cannot compare exactly are refused; text views count as text."""
+
+    def test_decimals_wider_than_38_digits_are_refused(self, tmp_path: Path) -> None:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        code = pa.array([Decimal("0.1")], pa.decimal256(40, 20))
+        src = _table_file(
+            tmp_path / "source.parquet", {"id": ["a"], "crop:code": code, "crop:name": ["x"]}
+        )
+        path = _table_file(tmp_path / "fields.parquet", {"id": ["a"], "crop:code": code})
+        before = path.read_bytes()
+        for by in ("id", "code"):
+            with pytest.raises(CropNameError, match="wider than 38 digits"):
+                add_crop_names(path, src, by=by)
+        assert path.read_bytes() == before
+
+    def test_a_decimal_without_integer_digits_matches_a_float(self, tmp_path: Path) -> None:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {
+                "id": ["a", "b"],
+                "crop:code": pa.array([Decimal("0.500"), Decimal("-0.250")], pa.decimal128(3, 3)),
+                "crop:name": ["half", "minus a quarter"],
+            },
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet", {"id": ["b", "a"], "crop:code": [-0.25, 0.5]}
+        )
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["minus a quarter", "half"]
+
+    def test_string_view_ids_and_codes_are_text(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["a"], "crop:code": ["10"], "crop:name": ["Weizen"]},
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {
+                "id": pa.array(["a"], pa.string_view()),
+                "crop:code": pa.array(["10"], pa.string_view()),
+            },
+        )
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == ["Weizen"]

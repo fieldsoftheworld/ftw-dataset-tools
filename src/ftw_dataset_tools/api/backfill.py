@@ -226,6 +226,23 @@ def update_collection(
     doc.update(work)
 
 
+def _checked_field_files(
+    doc: dict,
+    field_files: Mapping[str, Path | str] | None,
+    crop_names: Mapping[str, str] | None,
+) -> dict[str, Path | str]:
+    """The field files to refresh, each with its asset and on disk; raises otherwise."""
+    field_files = dict(field_files or {})
+    if crop_names is not None and not field_files:
+        raise BackfillError("fields", "crop names were joined but no field file was given")
+    for key, path in field_files.items():
+        if key not in doc.get("assets", {}):
+            raise BackfillError(key, f"the collection has no {key} asset")
+        if not Path(path).is_file():
+            raise BackfillError(key, f"no {key} file at {path}")
+    return field_files
+
+
 def _update_collection(
     doc: dict,
     *,
@@ -239,14 +256,7 @@ def _update_collection(
         raise BackfillError(
             stac.FIELD_EMBEDDINGS_ASSET, f"no field embeddings file at {field_embeddings_file}"
         )
-    field_files = dict(field_files or {})
-    if crop_names is not None and not field_files:
-        raise BackfillError("fields", "crop names were joined but no field file was given")
-    for key, path in field_files.items():
-        if key not in doc.get("assets", {}):
-            raise BackfillError(key, f"the collection has no {key} asset")
-        if not Path(path).is_file():
-            raise BackfillError(key, f"no {key} file at {path}")
+    field_files = _checked_field_files(doc, field_files, crop_names)
     checksum = refresh_parquet_asset(doc, "chips", chips_file)
     for key, path in field_files.items():
         refresh_parquet_asset(doc, key, path)
