@@ -844,3 +844,60 @@ class TestWideAndUnusualTypes:
         )
         add_crop_names(path, src)
         assert column(path, "crop:name") == ["Weizen"]
+
+
+class TestNameText:
+    """Names are written without surrounding spaces, and a blank name counts as none."""
+
+    def test_padded_names_are_trimmed_by_id(self, tmp_path: Path) -> None:
+        src = source(tmp_path, a={"crop:name": "Weizen "}, b={"crop:name": "  Mais"})
+        path = fields(tmp_path)
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == [None, "Weizen", "Mais"]
+
+    def test_blank_names_are_none(self, tmp_path: Path) -> None:
+        src = source(tmp_path, a={"crop:name": ""}, b={"crop:name": "   "})
+        path = fields(tmp_path)
+        result = add_crop_names(path, src)
+        assert column(path, "crop:name") == [None, None, None]
+        assert result.named == 0
+
+    def test_inner_spaces_are_kept(self, tmp_path: Path) -> None:
+        src = source(tmp_path, a={"crop:name": " Winter  Weizen "})
+        path = fields(tmp_path)
+        add_crop_names(path, src)
+        assert column(path, "crop:name")[1] == "Winter  Weizen"
+
+    def test_a_code_padded_on_some_rows_has_one_name(self, tmp_path: Path) -> None:
+        """By code, "Weizen " and "Weizen" are the same name, not two to refuse."""
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": "a", "crop:code": "10", "crop:name": "Weizen "},
+                {"id": "b", "crop:code": "10", "crop:name": "Weizen"},
+            ],
+        )
+        path = write(tmp_path / "fields.parquet", [{"id": "x", "crop:code": "10"}])
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["Weizen"]
+
+    def test_a_code_blank_on_some_rows_is_still_refused(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": "a", "crop:code": "10", "crop:name": " "},
+                {"id": "b", "crop:code": "10", "crop:name": "Weizen"},
+            ],
+        )
+        path = write(tmp_path / "fields.parquet", [{"id": "x", "crop:code": "10"}])
+        with pytest.raises(CropNameError, match="same"):
+            add_crop_names(path, src, by="code")
+
+    def test_trimming_an_existing_name_is_a_change(self, tmp_path: Path) -> None:
+        rows = [{"id": "a", "crop:code": "10", "crop:name": "Weizen "}]
+        path = write(tmp_path / "fields.parquet", rows)
+        src = source(tmp_path, a={"crop:name": "Weizen "})
+        result = add_crop_names(path, src)
+        assert result.changed
+        assert column(path, "crop:name") == ["Weizen"]
+        assert not add_crop_names(path, src).changed

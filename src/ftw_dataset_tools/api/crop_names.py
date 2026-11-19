@@ -76,6 +76,10 @@ _DECIMAL_CODE = """CASE WHEN {column} = trunc({column})
       THEN CAST(CAST(trunc({column}) AS HUGEINT) AS VARCHAR)
     ELSE regexp_replace(rtrim(CAST({column} AS VARCHAR), '0'), '^(-?)\\.', '\\10.') END"""
 
+#: A name as written: without surrounding spaces, and a blank name as none. Some code
+#: tables pad names ("OLIVAL "), which would otherwise split one crop in two.
+_NAME_TEXT = "NULLIF(trim(CAST({column} AS VARCHAR)), '')"
+
 #: The widest decimal DuckDB reads exactly; it reads wider ones as (wrong) floats.
 _MAX_DECIMAL_DIGITS = 38
 
@@ -244,7 +248,7 @@ def _join(
     Both crop codes are compared as text (NaN as no code, 10.0 as 10), flagging the
     fields whose code differs.
     """
-    selected = ", ".join(f's."{c}"' for c in names)
+    selected = ", ".join(f"{_name_text(f's.{_quote(c)}')} AS {_quote(c)}" for c in names)
     fields_code = _code_text(_code_type(fields_file), 'f."crop:code"')
     source_code = _code_text(_code_type(source_file), 's."crop:code"')
     con.execute(
@@ -262,6 +266,15 @@ def _join(
     )
 
 
+def _quote(column: str) -> str:
+    return f'"{column}"'
+
+
+def _name_text(column: str) -> str:
+    """A name column as the joined name: trimmed, a blank one as none."""
+    return _NAME_TEXT.format(column=column)
+
+
 def _code_type(path: Path) -> pa.DataType:
     """The type of ``path``'s crop:code column."""
     import pyarrow.parquet as pq
@@ -275,7 +288,7 @@ def _code_names(con: duckdb.DuckDBPyConnection, source_file: Path, names: tuple[
     A code whose rows do not all carry the same names (a name column differs, or is
     empty on some rows only) is refused: the code alone would not tell which is right.
     """
-    quoted = ", ".join(f'"{c}"' for c in names)
+    quoted = ", ".join(f"{_name_text(_quote(c))} AS {_quote(c)}" for c in names)
     code = _code_text(_code_type(source_file))
     con.execute(
         f"""
@@ -459,10 +472,11 @@ def add_crop_names(
 
     The names always come from one edition: every name column is replaced, so a name
     column the source lacks is dropped, and by code a field whose code the source does
-    not name loses any name it had.
+    not name loses any name it had. Names are written without surrounding spaces, and
+    a blank name counts as none.
 
     Args:
-        fields_file: A benchmark's fields (or fields_filtered) GeoParquet.
+        fields_file: A benchmark's fields, fields_filtered or boundary_lines GeoParquet.
         source_file: The harmonized edition it was built from, with crop names.
         output_file: Where to write; ``fields_file`` itself when None. Nothing is
             written when the names are already there and equal.
