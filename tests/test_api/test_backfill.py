@@ -224,6 +224,23 @@ class TestUpdateCollection:
         assert run["steps"] == ["admin_names"]
         assert "crop_names" not in run
 
+    def test_crop_names_without_details_are_still_recorded(self, tmp_path: Path) -> None:
+        root, doc = _published(tmp_path)
+        chips = _chips_with_admin_names(root / "ds_chips.parquet")
+        fields = root / "ds_fields.parquet"
+        fields.write_bytes((root / "ds_chips.parquet").read_bytes())
+        backfill.update_collection(
+            doc,
+            chips_file=chips,
+            admin_names_added=True,
+            field_embeddings_file=None,
+            field_files={"fields": fields},
+            crop_names={},
+        )
+        [run] = doc["ftw:config"][backfill.BACKFILL_KEY]
+        assert run["steps"] == ["admin_names", "crop_names"]
+        assert run["crop_names"] == {}
+
     def test_crop_names_without_field_files_are_refused(self, tmp_path: Path) -> None:
         root, doc = _published(tmp_path)
         chips = _chips_with_admin_names(root / "ds_chips.parquet")

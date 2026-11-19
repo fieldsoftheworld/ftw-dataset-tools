@@ -50,13 +50,23 @@ JOIN_KEYS: tuple[str, ...] = ("id", "code")
 _TEXT_CODE = """CASE WHEN lower(CAST({column} AS VARCHAR)) = 'nan' THEN NULL
     ELSE CAST({column} AS VARCHAR) END"""
 
-#: A numeric crop code as text: NaN is no code, and a whole float is written as the
+#: An integer crop code as text, exactly (never through a float).
+_INTEGER_CODE = "CAST({column} AS VARCHAR)"
+
+#: A float crop code as text: NaN is no code, and a whole float is written as the
 #: integer it is, so 10.0 in one file matches 10 in the other.
-_NUMBER_CODE = """CASE WHEN isnan(CAST({column} AS DOUBLE)) THEN NULL
+_FLOAT_CODE = """CASE WHEN isnan(CAST({column} AS DOUBLE)) THEN NULL
     WHEN isfinite(CAST({column} AS DOUBLE))
          AND CAST({column} AS DOUBLE) = trunc(CAST({column} AS DOUBLE))
-      THEN CAST(CAST(CAST({column} AS DOUBLE) AS HUGEINT) AS VARCHAR)
-    ELSE CAST({column} AS VARCHAR) END"""
+      THEN coalesce(CAST(TRY_CAST(CAST({column} AS DOUBLE) AS HUGEINT) AS VARCHAR),
+                    CAST(CAST({column} AS DOUBLE) AS VARCHAR))
+    ELSE CAST(CAST({column} AS DOUBLE) AS VARCHAR) END"""
+
+#: A decimal crop code as text: whole as the integer, otherwise without trailing
+#: zeros, so 10.50 matches the float 10.5.
+_DECIMAL_CODE = """CASE WHEN {column} = trunc({column})
+      THEN CAST(CAST(trunc({column}) AS HUGEINT) AS VARCHAR)
+    ELSE rtrim(rtrim(CAST({column} AS VARCHAR), '0'), '.') END"""
 
 #: How many mismatched field ids an error message lists.
 _EXAMPLES = 5
@@ -102,8 +112,30 @@ def _code_kind(code_type: pa.DataType) -> str:
 
 def _code_text(code_type: pa.DataType, column: str = '"crop:code"') -> str:
     """SQL for a crop code of ``code_type`` as comparable text, NULL for no code."""
-    template = _NUMBER_CODE if _code_kind(code_type) == "number" else _TEXT_CODE
+    import pyarrow as pa
+
+    if pa.types.is_integer(code_type):
+        template = _INTEGER_CODE
+    elif pa.types.is_floating(code_type):
+        template = _FLOAT_CODE
+    elif pa.types.is_decimal(code_type):
+        template = _DECIMAL_CODE
+    else:
+        template = _TEXT_CODE
     return template.format(column=column)
+
+
+def _id_kind(id_type: pa.DataType) -> str:
+    """What an id column holds, for comparing two files' ids without a cast."""
+    import pyarrow as pa
+
+    if pa.types.is_dictionary(id_type):
+        id_type = id_type.value_type
+    if pa.types.is_string(id_type) or pa.types.is_large_string(id_type):
+        return "text"
+    if pa.types.is_integer(id_type):
+        return "integer"
+    return str(id_type)
 
 
 def _check_code_types(
@@ -143,9 +175,13 @@ def _check_columns(fields_file: Path, source_file: Path, by: JoinKey) -> tuple[s
 def _check_id_types(
     fields_file: Path, fields_schema: pa.Schema, source_file: Path, source_schema: pa.Schema
 ) -> None:
-    """Refuse ids of different types, so the join never casts: "007" must not match 7."""
+    """Refuse ids of different kinds, so the join never casts: "007" must not match 7.
+
+    Text ids match text ids (string or large_string), integer ids integer ids of any
+    width; any other type only the same type.
+    """
     fields_id, source_id = fields_schema.field("id").type, source_schema.field("id").type
-    if fields_id != source_id:
+    if _id_kind(fields_id) != _id_kind(source_id):
         raise CropNameError(
             fields_file, f"id is {fields_id} in {fields_file} but {source_id} in {source_file}"
         )
@@ -326,6 +362,10 @@ def _group_changed(group: pa.Table, part: pa.Table, schema: pa.Schema) -> bool:
     )
 
 
+def _columns(schema: pa.Schema) -> list[tuple[str, pa.DataType]]:
+    return [(field.name, field.type) for field in schema]
+
+
 def _codec(name: str) -> str:
     """A codec as parquet metadata names it, as pyarrow's writer takes it."""
     return "none" if name == "UNCOMPRESSED" else name.lower()
@@ -352,7 +392,8 @@ def _rewrite(fields_file: Path, tmp: Path, names_table: pa.Table) -> bool:
     source = pq.ParquetFile(fields_file)
     schema = _output_schema(source.schema_arrow, names_table)
     compression = _compression(source.metadata, names_table.column_names)
-    changed = False
+    # A name column added, dropped, moved or of another type is a change in itself.
+    changed = _columns(source.schema_arrow) != _columns(schema)
     offset = 0
     with pq.ParquetWriter(tmp, schema, compression=compression) as writer:
         for index in range(source.num_row_groups):

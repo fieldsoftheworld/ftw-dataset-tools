@@ -264,7 +264,9 @@ def _update_collection(
         steps.append("field_embeddings")
     if crop_names is not None:
         steps.append("crop_names")
-    _record(doc, steps=steps, details={"crop_names": dict(crop_names)} if crop_names else None)
+    _record(
+        doc, steps=steps, details=None if crop_names is None else {"crop_names": dict(crop_names)}
+    )
 
 
 def _add_embeddings(doc: dict, path: Path, *, checksum: bool) -> list[dict]:

@@ -252,17 +252,16 @@ class TestRefusals:
         self.assert_refused(path, src, "1 field.* another crop:code")
 
     def test_a_failed_write_part_way_leaves_no_temp_file(self, tmp_path: Path, monkeypatch) -> None:
-        from ftw_dataset_tools.api import crop_names
-
+        src = source(tmp_path)
         calls = []
+        write_table = pq.ParquetWriter.write_table
 
-        def fail_on_second(*_args):
+        def fail_on_second(self, *args, **kwargs):
             calls.append(1)
             if len(calls) == 2:
                 raise OSError("disk full")
-            return False
+            return write_table(self, *args, **kwargs)
 
-        monkeypatch.setattr(crop_names, "_group_changed", fail_on_second)
         path = tmp_path / "fields.parquet"
         gpd.GeoDataFrame(
             [{"id": i, "crop:code": "10"} for i in ("a", "b", "c")],
@@ -270,8 +269,9 @@ class TestRefusals:
             crs="EPSG:4326",
         ).to_parquet(path, row_group_size=1)
         before = path.read_bytes()
+        monkeypatch.setattr(pq.ParquetWriter, "write_table", fail_on_second)
         with pytest.raises(OSError, match="disk full"):
-            add_crop_names(path, source(tmp_path), by="code")
+            add_crop_names(path, src, by="code")
         assert len(calls) == 2, "the first row group was written before the failure"
         assert path.read_bytes() == before
         assert sorted(p.name for p in tmp_path.iterdir()) == ["fields.parquet", "source.parquet"]
@@ -511,3 +511,134 @@ class TestFileFormat:
         pq.write_table(pq.read_table(path), path, compression="none")
         add_crop_names(path, source(tmp_path))
         assert column(path, "crop:name") == [None, "Weizen", "Mais"]
+
+
+def _table_file(path: Path, columns: dict) -> Path:
+    """A plain parquet file (no geometry needed by the join) from typed arrow columns."""
+    import pyarrow as pa
+
+    pq.write_table(pa.table(columns), path)
+    return path
+
+
+class TestCodeTypes:
+    """Codes of different numeric types match only when they are the same number."""
+
+    def test_integers_beyond_float_precision_stay_apart(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        big = 2**53
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {
+                "id": ["s"],
+                "crop:code": pa.array([big], pa.int64()),
+                "crop:name": ["BIG"],
+            },
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {"id": ["f"], "crop:code": pa.array([big + 1], pa.int64())},
+        )
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == [None]
+
+    def test_integers_beyond_float_precision_differ_by_id(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        big = 2**53
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["a"], "crop:code": pa.array([big], pa.int64()), "crop:name": ["BIG"]},
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {"id": ["a"], "crop:code": pa.array([big + 1], pa.int64())},
+        )
+        with pytest.raises(CropNameError, match="another crop:code"):
+            add_crop_names(path, src)
+
+    def test_decimals_match_floats_and_integers(self, tmp_path: Path) -> None:
+        from decimal import Decimal
+
+        import pyarrow as pa
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {
+                "id": ["s1", "s2"],
+                "crop:code": pa.array([Decimal("10.50"), Decimal("20.00")], pa.decimal128(5, 2)),
+                "crop:name": ["half", "whole"],
+            },
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {"id": ["f1", "f2"], "crop:code": pa.array([10.5, 20.0], pa.float64())},
+        )
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["half", "whole"]
+
+    def test_a_float_too_large_for_an_integer_does_not_crash(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["s"], "crop:code": pa.array([1e39]), "crop:name": ["huge"]},
+        )
+        path = _table_file(tmp_path / "fields.parquet", {"id": ["f"], "crop:code": [1e39]})
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["huge"]
+
+    @pytest.mark.parametrize(
+        ("fields_id", "source_id"),
+        [("large_string", "string"), ("int32", "int64")],
+    )
+    def test_ids_of_the_same_kind_join(self, tmp_path, fields_id, source_id) -> None:
+        import pyarrow as pa
+
+        ids = ["1", "2"] if "string" in fields_id else [1, 2]
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {
+                "id": pa.array(ids, getattr(pa, source_id)()),
+                "crop:code": ["10", "20"],
+                "crop:name": ["Weizen", "Mais"],
+            },
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {"id": pa.array(ids[::-1], getattr(pa, fields_id)()), "crop:code": ["20", "10"]},
+        )
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == ["Mais", "Weizen"]
+
+
+class TestSchemaRepairs:
+    """A name column of the wrong type, or missing from an empty file, is a change."""
+
+    def test_a_wrongly_typed_name_column_is_rewritten(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        src = _table_file(
+            tmp_path / "source.parquet",
+            {"id": ["a"], "crop:code": ["10"], "crop:name": pa.array([None], pa.string())},
+        )
+        path = _table_file(
+            tmp_path / "fields.parquet",
+            {"id": ["a"], "crop:code": ["10"], "crop:name": pa.array([None], pa.int32())},
+        )
+        result = add_crop_names(path, src)
+        assert result.changed
+        assert pq.read_schema(path).field("crop:name").type == pa.string()
+
+    def test_a_file_without_row_groups_gains_the_columns(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        src = source(tmp_path)
+        path = tmp_path / "fields.parquet"
+        schema = pa.schema([("id", pa.string()), ("crop:code", pa.string())])
+        pq.ParquetWriter(path, schema).close()
+        assert pq.ParquetFile(path).metadata.num_row_groups == 0
+        result = add_crop_names(path, src)
+        assert result.changed
+        assert "crop:name" in pq.read_schema(path).names
