@@ -70,10 +70,14 @@ _FLOAT_CODE = """CASE WHEN isnan(CAST({column} AS DOUBLE)) THEN NULL
 #: without trailing zeros, so 10.50 matches the decimal 10.5 at any scale and the float
 #: 10.5. It never goes through a float, so two different decimals never match. A float
 #: that prints with an exponent (1e-05) does not match the decimal 0.00001: refused by
-#: id, unnamed by code.
+#: id, unnamed by code. DuckDB prints a decimal without integer digits as ".5"; the
+#: regexp adds the 0 (RE2 reads "\\10." as group 1, then "0.").
 _DECIMAL_CODE = """CASE WHEN {column} = trunc({column})
       THEN CAST(CAST(trunc({column}) AS HUGEINT) AS VARCHAR)
     ELSE regexp_replace(rtrim(CAST({column} AS VARCHAR), '0'), '^(-?)\\.', '\\10.') END"""
+
+#: The widest decimal DuckDB reads exactly; it reads wider ones as (wrong) floats.
+_MAX_DECIMAL_DIGITS = 38
 
 #: How many mismatched field ids an error message lists.
 _EXAMPLES = 5
@@ -108,10 +112,6 @@ def _is_text(data_type: pa.DataType) -> bool:
         or pa.types.is_large_string(data_type)
         or pa.types.is_string_view(data_type)
     )
-
-
-#: The widest decimal DuckDB reads exactly; it reads wider ones as (wrong) floats.
-_MAX_DECIMAL_DIGITS = 38
 
 
 def _check_decimal_width(path: Path, schema: pa.Schema, columns: tuple[str, ...]) -> None:
