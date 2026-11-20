@@ -868,6 +868,13 @@ class TestNameText:
         add_crop_names(path, src)
         assert column(path, "crop:name") == [None, "Weizen", "Mais"]
 
+    def test_a_bom_and_zero_width_spaces_are_trimmed(self, tmp_path: Path) -> None:
+        src = source(tmp_path, a={"crop:name": "\ufeffWeizen\u200b"}, b={"crop:name": "\u200b"})
+        path = fields(tmp_path)
+        result = add_crop_names(path, src)
+        assert column(path, "crop:name") == [None, "Weizen", None]
+        assert result.named == 1
+
     def test_inner_spaces_are_kept(self, tmp_path: Path) -> None:
         src = source(tmp_path, a={"crop:name": " Winter  Weizen "})
         path = fields(tmp_path)

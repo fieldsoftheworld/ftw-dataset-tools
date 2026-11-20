@@ -76,11 +76,14 @@ _DECIMAL_CODE = """CASE WHEN {column} = trunc({column})
       THEN CAST(CAST(trunc({column}) AS HUGEINT) AS VARCHAR)
     ELSE regexp_replace(rtrim(CAST({column} AS VARCHAR), '0'), '^(-?)\\.', '\\10.') END"""
 
-#: A name as written: without surrounding whitespace (ASCII, and Unicode spaces such as
-#: NBSP), and a blank name as none. Some code tables pad names ("OLIVAL "), which would
-#: otherwise split one crop in two.
+#: A name as written: without surrounding whitespace, and a blank name as none. Some
+#: code tables pad names ("OLIVAL "), which would otherwise split one crop in two. RE2's
+#: \s is ASCII only and \pZ the Unicode spaces (NBSP), so vertical tab, NEL, the
+#: zero-width space and a BOM (from a CSV code table) are listed too.
+_NAME_SPACE = r"[\s\pZ\x{{0B}}\x{{85}}\x{{200B}}\x{{FEFF}}]"  # braces doubled for format()
 _NAME_TEXT = (
-    "NULLIF(regexp_replace(CAST({column} AS VARCHAR), '^[\\s\\pZ]+|[\\s\\pZ]+$', '', 'g'), '')"
+    "NULLIF(regexp_replace(CAST({column} AS VARCHAR), "
+    f"'^{_NAME_SPACE}+|{_NAME_SPACE}+$', '', 'g'), '')"
 )
 
 #: The widest decimal DuckDB reads exactly; it reads wider ones as (wrong) floats.
@@ -383,9 +386,9 @@ def _joined_names(
     con.execute(f"SET memory_limit = '{_JOIN_MEMORY}'")
     join = _join_by_id if by == "id" else _join_by_code
     join(con, fields_file, source_file, names)
-    # As text: a name column empty in the source would otherwise come back as INTEGER.
-    text = ", ".join(f'CAST("{c}" AS VARCHAR) AS "{c}"' for c in names)
-    table = con.execute(f"SELECT {text} FROM joined ORDER BY row_number").fetch_arrow_table()
+    # Both joins wrote the names as text (_name_text), even a column empty in the source.
+    selected = ", ".join(_quote(c) for c in names)
+    table = con.execute(f"SELECT {selected} FROM joined ORDER BY row_number").fetch_arrow_table()
     if table.num_rows != rows:
         raise CropNameError(
             fields_file, f"the join gave {table.num_rows} rows for {rows} fields of {fields_file}"
