@@ -844,3 +844,116 @@ class TestWideAndUnusualTypes:
         )
         add_crop_names(path, src)
         assert column(path, "crop:name") == ["Weizen"]
+
+
+class TestNameText:
+    """Names are written without surrounding spaces, and a blank name counts as none."""
+
+    def test_padded_names_are_trimmed_by_id(self, tmp_path: Path) -> None:
+        src = source(tmp_path, a={"crop:name": "Weizen "}, b={"crop:name": "  Mais"})
+        path = fields(tmp_path)
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == [None, "Weizen", "Mais"]
+
+    def test_blank_names_are_none(self, tmp_path: Path) -> None:
+        src = source(tmp_path, a={"crop:name": ""}, b={"crop:name": "   "})
+        path = fields(tmp_path)
+        result = add_crop_names(path, src)
+        assert column(path, "crop:name") == [None, None, None]
+        assert result.named == 0
+
+    def test_tabs_line_breaks_and_unicode_spaces_are_trimmed(self, tmp_path: Path) -> None:
+        src = source(tmp_path, a={"crop:name": "\tWeizen\n"}, b={"crop:name": "Mais\t\u00a0"})
+        path = fields(tmp_path)
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == [None, "Weizen", "Mais"]
+
+    def test_a_bom_and_zero_width_spaces_are_trimmed(self, tmp_path: Path) -> None:
+        src = source(tmp_path, a={"crop:name": "\ufeffWeizen\u200b"}, b={"crop:name": "\u200b"})
+        path = fields(tmp_path)
+        result = add_crop_names(path, src)
+        assert column(path, "crop:name") == [None, "Weizen", None]
+        assert result.named == 1
+
+    def test_more_invisible_padding_is_trimmed_from_names(self, tmp_path: Path) -> None:
+        src = source(
+            tmp_path, a={"crop:name": "\x0bWeizen\x85"}, b={"crop:name": "\u2060Mais\u200e"}
+        )
+        path = fields(tmp_path)
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == [None, "Weizen", "Mais"]
+
+    def test_inner_spaces_are_kept(self, tmp_path: Path) -> None:
+        src = source(tmp_path, a={"crop:name": " Winter  Weizen "})
+        path = fields(tmp_path)
+        add_crop_names(path, src)
+        assert column(path, "crop:name")[1] == "Winter  Weizen"
+
+    def test_a_code_padded_on_some_rows_has_one_name(self, tmp_path: Path) -> None:
+        """By code, "Weizen " and "Weizen" are the same name, not two to refuse."""
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": "a", "crop:code": "10", "crop:name": "Weizen "},
+                {"id": "b", "crop:code": "10", "crop:name": "Weizen"},
+            ],
+        )
+        path = write(tmp_path / "fields.parquet", [{"id": "x", "crop:code": "10"}])
+        add_crop_names(path, src, by="code")
+        assert column(path, "crop:name") == ["Weizen"]
+
+    def test_a_code_blank_on_some_rows_is_still_refused(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "source.parquet",
+            [
+                {"id": "a", "crop:code": "10", "crop:name": " "},
+                {"id": "b", "crop:code": "10", "crop:name": "Weizen"},
+            ],
+        )
+        path = write(tmp_path / "fields.parquet", [{"id": "x", "crop:code": "10"}])
+        with pytest.raises(CropNameError, match="same"):
+            add_crop_names(path, src, by="code")
+
+    def test_trimming_an_existing_name_is_a_change(self, tmp_path: Path) -> None:
+        rows = [{"id": "a", "crop:code": "10", "crop:name": "Weizen "}]
+        path = write(tmp_path / "fields.parquet", rows)
+        src = source(tmp_path, a={"crop:name": "Weizen "})
+        result = add_crop_names(path, src)
+        assert result.changed
+        assert column(path, "crop:name") == ["Weizen"]
+        assert not add_crop_names(path, src).changed
+
+
+class TestTextCodesAsCompared:
+    """Text codes are compared trimmed, with a blank code as no code."""
+
+    def test_a_blank_code_matches_an_empty_one_by_id(self, tmp_path: Path) -> None:
+        """pt 2023 published " " for no code, the rebuilt edition ""."""
+        src = write(tmp_path / "source.parquet", [{"id": "a", "crop:code": "", "crop:name": None}])
+        path = write(tmp_path / "fields.parquet", [{"id": "a", "crop:code": " "}])
+        result = add_crop_names(path, src)
+        assert column(path, "crop:name") == [None]
+        assert column(path, "crop:code") == [" "], "the code itself is left as it was"
+        assert result.named == 0
+
+    def test_padded_codes_match_by_id_and_by_code(self, tmp_path: Path) -> None:
+        src = source(tmp_path, a={"crop:code": "10 "})
+        path = write(tmp_path / "fields.parquet", [{"id": "a", "crop:code": " 10"}])
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == ["Weizen"]
+        other = write(tmp_path / "other.parquet", [{"id": "x", "crop:code": "\t10"}])
+        add_crop_names(other, src, by="code")
+        assert column(other, "crop:name") == ["Weizen"]
+
+    def test_a_code_and_no_code_still_differ(self, tmp_path: Path) -> None:
+        src = source(tmp_path, a={"crop:code": " "})
+        path = write(tmp_path / "fields.parquet", [{"id": "a", "crop:code": "10"}])
+        with pytest.raises(CropNameError, match="another crop:code"):
+            add_crop_names(path, src)
+
+    def test_leading_zeros_still_count(self, tmp_path: Path) -> None:
+        """'22' and '022' are different text codes; nothing here knows they mean the same."""
+        src = source(tmp_path, a={"crop:code": "010"})
+        path = write(tmp_path / "fields.parquet", [{"id": "a", "crop:code": "10"}])
+        with pytest.raises(CropNameError, match="another crop:code"):
+            add_crop_names(path, src)

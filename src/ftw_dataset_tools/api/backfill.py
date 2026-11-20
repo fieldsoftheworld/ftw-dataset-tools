@@ -31,7 +31,7 @@ import pystac
 
 from ftw_dataset_tools import __version__
 from ftw_dataset_tools.api import admin_names, docs, field_embeddings, stac, styles
-from ftw_dataset_tools.api.assets import add_file_info, add_table_columns
+from ftw_dataset_tools.api.assets import CROP_NAME_NOTES, add_file_info, add_table_columns
 from ftw_dataset_tools.api.source import installed_git_commit
 
 if TYPE_CHECKING:
@@ -202,12 +202,14 @@ def update_collection(
         admin_names_added: Whether the chips carry the admin name columns now.
         field_embeddings_file: The field embeddings file to publish beside the
             collection, or None to publish none.
-        field_files: Asset key to field file (``fields``, ``fields_filtered``) as it
-            will be published. Each asset's size, checksum and columns are read from
-            its file, so they stay true whether or not the run changed the file.
+        field_files: Asset key to field file (``fields``, ``fields_filtered``,
+            ``boundary_lines``) as it will be published. Each asset's size, checksum
+            and columns are read from its file, so they stay true whether or not the
+            run changed the file.
         crop_names: Where this run's crop names came from (e.g. ``{"source": ...,
-            "by": "code"}``), recorded with the ``crop_names`` step; None when the
-            run joined none. Needs ``field_files``.
+            "by": "code"}``), recorded with the ``crop_names`` step and in the name
+            columns' descriptions; None when the run joined none. Needs
+            ``field_files``.
 
     Raises:
         BackfillError: A file or asset is missing. ``doc`` is left as it was, as it
@@ -258,8 +260,7 @@ def _update_collection(
         )
     field_files = _checked_field_files(doc, field_files, crop_names)
     checksum = refresh_parquet_asset(doc, "chips", chips_file)
-    for key, path in field_files.items():
-        refresh_parquet_asset(doc, key, path)
+    _refresh_field_assets(doc, field_files, crop_names)
     doc["links"] = [link for link in doc.get("links", []) if not _is_backfill_link(link)]
     doc.get("assets", {}).pop(stac.FIELD_EMBEDDINGS_ASSET, None)
 
@@ -277,6 +278,31 @@ def _update_collection(
     _record(
         doc, steps=steps, details=None if crop_names is None else {"crop_names": dict(crop_names)}
     )
+
+
+def _refresh_field_assets(
+    doc: dict, field_files: Mapping[str, Path | str], crop_names: Mapping[str, str] | None
+) -> None:
+    for key, path in field_files.items():
+        refresh_parquet_asset(doc, key, path)
+        if crop_names is not None:
+            _describe_crop_names(doc["assets"][key], crop_names)
+
+
+def crop_name_notes(crop_names: Mapping[str, str]) -> dict[str, str]:
+    """What each crop name column holds, given where a run's names came from."""
+    source = crop_names.get("source")
+    origin = f"the harmonized edition {source}" if source else "the harmonized edition"
+    if crop_names.get("by") == "code":
+        origin += ", matched by crop:code as that edition's field ids differ from this dataset's"
+    return {name: f"{note}, from {origin}" for name, note in CROP_NAME_NOTES.items()}
+
+
+def _describe_crop_names(asset: dict, crop_names: Mapping[str, str]) -> None:
+    notes = crop_name_notes(crop_names)
+    for column in asset.get("table:columns", []):
+        if column.get("name") in notes:
+            column["description"] = notes[column["name"]]
 
 
 def _add_embeddings(doc: dict, path: Path, *, checksum: bool) -> list[dict]:

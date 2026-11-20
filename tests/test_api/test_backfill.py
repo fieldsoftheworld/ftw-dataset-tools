@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from ftw_dataset_tools.api import admin_names, backfill, field_embeddings, stac
+from ftw_dataset_tools.api.assets import CROP_NAME_NOTES
 from tests.test_api.test_stac import _write_field_embeddings, build_catalog
 
 if TYPE_CHECKING:
@@ -493,3 +494,59 @@ class TestRewriteDocs:
         path = backfill.field_polygons_file(_collection(root), root)
 
         assert path == root / "ds_fields_filtered.parquet"
+
+
+class TestCropNameDescriptions:
+    """A run that joins crop names describes the name columns of every field asset."""
+
+    def _run(self, tmp_path: Path, crop_names: dict | None) -> dict:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        root, doc = _published(tmp_path)
+        chips = _chips_with_admin_names(root / "ds_chips.parquet")
+        files = {}
+        for key in ("fields", "boundary_lines"):
+            files[key] = root / f"ds_{key}.parquet"
+            gpd.GeoDataFrame(
+                {"id": ["a"], "crop:code": ["10"], "crop:name": ["Weizen"]},
+                geometry=[box(0, 0, 1, 1)],
+                crs="EPSG:4326",
+            ).to_parquet(files[key])
+        doc["assets"]["boundary_lines"] = {**doc["assets"]["fields"], "href": "./b.parquet"}
+        backfill.update_collection(
+            doc,
+            chips_file=chips,
+            admin_names_added=True,
+            field_embeddings_file=None,
+            field_files=files,
+            crop_names=crop_names,
+        )
+        return doc
+
+    @staticmethod
+    def _note(doc: dict, key: str, name: str = "crop:name") -> str | None:
+        [column] = [c for c in doc["assets"][key]["table:columns"] if c["name"] == name]
+        return column.get("description")
+
+    def test_by_id_names_the_source(self, tmp_path: Path) -> None:
+        doc = self._run(tmp_path, {"source": "pt/year=2021/pt-2021.parquet", "by": "id"})
+        for key in ("fields", "boundary_lines"):
+            note = self._note(doc, key)
+            assert "pt/year=2021/pt-2021.parquet" in note
+            assert "matched by crop:code" not in note
+        assert self._note(doc, "fields", "crop:code") is None
+
+    def test_by_code_says_so(self, tmp_path: Path) -> None:
+        doc = self._run(tmp_path, {"source": "fr/year=2024/fr-2024.parquet", "by": "code"})
+        assert "matched by crop:code" in self._note(doc, "fields")
+
+    def test_without_crop_names_the_general_description(self, tmp_path: Path) -> None:
+        """A refresh that joined no names still says what the column is, not where from."""
+        doc = self._run(tmp_path, None)
+        assert self._note(doc, "fields") == CROP_NAME_NOTES["crop:name"]
+
+    def test_notes_without_a_source(self) -> None:
+        notes = backfill.crop_name_notes({})
+        assert notes["crop:name"] == f"{CROP_NAME_NOTES['crop:name']}, from the harmonized edition"
+        assert "English" in notes["crop:name_en"]

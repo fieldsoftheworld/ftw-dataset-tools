@@ -470,6 +470,27 @@ class TestAddTableColumns:
         assert asset.extra_fields["table:row_count"] == 2
         assert "https://stac-extensions.github.io/table/v1.2.0/schema.json" in item.stac_extensions
 
+    def test_crop_name_columns_are_described(self, tmp_path: Path) -> None:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.assets import CROP_NAME_NOTES, add_table_columns
+
+        path = tmp_path / "named.parquet"
+        gpd.GeoDataFrame(
+            {"crop:code": ["10"], "crop:name": ["Weizen"], "crop:name_en": ["wheat"]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(path)
+        _, asset = _item_with_asset(path, ["data"])
+
+        add_table_columns(asset, path)
+
+        notes = {c["name"]: c.get("description") for c in asset.extra_fields["table:columns"]}
+        assert notes["crop:name"] == CROP_NAME_NOTES["crop:name"]
+        assert notes["crop:name_en"] == CROP_NAME_NOTES["crop:name_en"]
+        assert notes["crop:code"] is None
+
     def test_geometry_column_detected_when_not_given(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.assets import add_table_columns
 

@@ -46,9 +46,18 @@ KEY_COLUMNS: tuple[str, ...] = ("id", "crop:code")
 JoinKey = Literal["id", "code"]
 JOIN_KEYS: tuple[str, ...] = ("id", "code")
 
-#: A text crop code, with "NaN" as no code.
-_TEXT_CODE = """CASE WHEN lower(CAST({column} AS VARCHAR)) = 'nan' THEN NULL
-    ELSE CAST({column} AS VARCHAR) END"""
+#: Whitespace around a name or text code: RE2's \s is ASCII only and \pZ the Unicode
+#: spaces (NBSP), so vertical tab, NEL, the C0 separators, and the invisible zero-width
+#: space, word joiner, direction marks and BOM (from a CSV code table) are listed too.
+_SPACE = (
+    r"[\s\pZ\x{{0B}}\x{{1C}}-\x{{1F}}\x{{85}}\x{{180E}}\x{{200B}}\x{{200E}}\x{{200F}}"
+    r"\x{{2060}}\x{{FEFF}}]"
+)  # braces doubled for format()
+_TRIMMED = f"regexp_replace(CAST({{column}} AS VARCHAR), '^{_SPACE}+|{_SPACE}+$', '', 'g')"
+
+#: A text crop code as compared: trimmed, with "NaN" and a blank code as no code, so the
+#: " " of one release matches the "" of another.
+_TEXT_CODE = f"CASE WHEN lower({_TRIMMED}) IN ('nan', '') THEN NULL ELSE {_TRIMMED} END"
 
 #: An integer crop code as text, exactly (never through a float).
 _INTEGER_CODE = "CAST({column} AS VARCHAR)"
@@ -75,6 +84,10 @@ _FLOAT_CODE = """CASE WHEN isnan(CAST({column} AS DOUBLE)) THEN NULL
 _DECIMAL_CODE = """CASE WHEN {column} = trunc({column})
       THEN CAST(CAST(trunc({column}) AS HUGEINT) AS VARCHAR)
     ELSE regexp_replace(rtrim(CAST({column} AS VARCHAR), '0'), '^(-?)\\.', '\\10.') END"""
+
+#: A name as written: trimmed (see _SPACE), and a blank name as none. Some code tables
+#: pad names ("OLIVAL "), which would otherwise split one crop in two.
+_NAME_TEXT = f"NULLIF({_TRIMMED}, '')"
 
 #: The widest decimal DuckDB reads exactly; it reads wider ones as (wrong) floats.
 _MAX_DECIMAL_DIGITS = 38
@@ -241,10 +254,10 @@ def _join(
 ) -> None:
     """Join the source's names onto every field by id, in a temp table ``joined``.
 
-    Both crop codes are compared as text (NaN as no code, 10.0 as 10), flagging the
-    fields whose code differs.
+    Both crop codes are compared as text (trimmed, NaN or blank as no code, 10.0 as 10),
+    flagging the fields whose code differs.
     """
-    selected = ", ".join(f's."{c}"' for c in names)
+    selected = ", ".join(f"{_name_text(f's.{_quote(c)}')} AS {_quote(c)}" for c in names)
     fields_code = _code_text(_code_type(fields_file), 'f."crop:code"')
     source_code = _code_text(_code_type(source_file), 's."crop:code"')
     con.execute(
@@ -262,6 +275,15 @@ def _join(
     )
 
 
+def _quote(column: str) -> str:
+    return f'"{column}"'
+
+
+def _name_text(column: str) -> str:
+    """A name column as the joined name: trimmed, a blank one as none."""
+    return _NAME_TEXT.format(column=column)
+
+
 def _code_type(path: Path) -> pa.DataType:
     """The type of ``path``'s crop:code column."""
     import pyarrow.parquet as pq
@@ -275,7 +297,7 @@ def _code_names(con: duckdb.DuckDBPyConnection, source_file: Path, names: tuple[
     A code whose rows do not all carry the same names (a name column differs, or is
     empty on some rows only) is refused: the code alone would not tell which is right.
     """
-    quoted = ", ".join(f'"{c}"' for c in names)
+    quoted = ", ".join(f"{_name_text(_quote(c))} AS {_quote(c)}" for c in names)
     code = _code_text(_code_type(source_file))
     con.execute(
         f"""
@@ -320,9 +342,9 @@ def _join_by_code(
 ) -> None:
     """Give every field the names of its crop code in the source, in a temp table ``joined``.
 
-    Codes are compared as text, NaN counting as no code and 10.0 as 10. A field whose
-    code the source does not name stays unnamed, and the codes concerned are logged as a
-    warning.
+    Codes are compared as text: trimmed, NaN or blank counting as no code, 10.0 as 10. A
+    field whose code the source does not name stays unnamed, and the codes concerned are
+    logged as a warning.
     """
     _code_names(con, source_file, names)
     selected = ", ".join(f'c."{c}"' for c in names)
@@ -367,9 +389,9 @@ def _joined_names(
     con.execute(f"SET memory_limit = '{_JOIN_MEMORY}'")
     join = _join_by_id if by == "id" else _join_by_code
     join(con, fields_file, source_file, names)
-    # As text: a name column empty in the source would otherwise come back as INTEGER.
-    text = ", ".join(f'CAST("{c}" AS VARCHAR) AS "{c}"' for c in names)
-    table = con.execute(f"SELECT {text} FROM joined ORDER BY row_number").fetch_arrow_table()
+    # Both joins wrote the names as text (_name_text), even a column empty in the source.
+    selected = ", ".join(_quote(c) for c in names)
+    table = con.execute(f"SELECT {selected} FROM joined ORDER BY row_number").fetch_arrow_table()
     if table.num_rows != rows:
         raise CropNameError(
             fields_file, f"the join gave {table.num_rows} rows for {rows} fields of {fields_file}"
@@ -459,10 +481,11 @@ def add_crop_names(
 
     The names always come from one edition: every name column is replaced, so a name
     column the source lacks is dropped, and by code a field whose code the source does
-    not name loses any name it had.
+    not name loses any name it had. Names are written without surrounding whitespace, and
+    a blank name counts as none.
 
     Args:
-        fields_file: A benchmark's fields (or fields_filtered) GeoParquet.
+        fields_file: A benchmark's fields, fields_filtered or boundary_lines GeoParquet.
         source_file: The harmonized edition it was built from, with crop names.
         output_file: Where to write; ``fields_file`` itself when None. Nothing is
             written when the names are already there and equal.
