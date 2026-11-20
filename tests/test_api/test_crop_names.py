@@ -875,6 +875,14 @@ class TestNameText:
         assert column(path, "crop:name") == [None, "Weizen", None]
         assert result.named == 1
 
+    def test_more_invisible_padding_is_trimmed_from_names(self, tmp_path: Path) -> None:
+        src = source(
+            tmp_path, a={"crop:name": "\x0bWeizen\x85"}, b={"crop:name": "\u2060Mais\u200e"}
+        )
+        path = fields(tmp_path)
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == [None, "Weizen", "Mais"]
+
     def test_inner_spaces_are_kept(self, tmp_path: Path) -> None:
         src = source(tmp_path, a={"crop:name": " Winter  Weizen "})
         path = fields(tmp_path)
@@ -949,9 +957,3 @@ class TestTextCodesAsCompared:
         path = write(tmp_path / "fields.parquet", [{"id": "a", "crop:code": "10"}])
         with pytest.raises(CropNameError, match="another crop:code"):
             add_crop_names(path, src)
-
-    def test_more_invisible_padding_is_trimmed_from_names(self, tmp_path: Path) -> None:
-        src = source(tmp_path, a={"crop:name": "\x0bWeizen\x85"}, b={"crop:name": "⁠Mais‎"})
-        path = fields(tmp_path)
-        add_crop_names(path, src)
-        assert column(path, "crop:name") == [None, "Weizen", "Mais"]
