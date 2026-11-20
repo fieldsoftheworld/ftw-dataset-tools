@@ -76,9 +76,12 @@ _DECIMAL_CODE = """CASE WHEN {column} = trunc({column})
       THEN CAST(CAST(trunc({column}) AS HUGEINT) AS VARCHAR)
     ELSE regexp_replace(rtrim(CAST({column} AS VARCHAR), '0'), '^(-?)\\.', '\\10.') END"""
 
-#: A name as written: without surrounding spaces, and a blank name as none. Some code
-#: tables pad names ("OLIVAL "), which would otherwise split one crop in two.
-_NAME_TEXT = "NULLIF(trim(CAST({column} AS VARCHAR)), '')"
+#: A name as written: without surrounding whitespace (ASCII, and Unicode spaces such as
+#: NBSP), and a blank name as none. Some code tables pad names ("OLIVAL "), which would
+#: otherwise split one crop in two.
+_NAME_TEXT = (
+    "NULLIF(regexp_replace(CAST({column} AS VARCHAR), '^[\\s\\pZ]+|[\\s\\pZ]+$', '', 'g'), '')"
+)
 
 #: The widest decimal DuckDB reads exactly; it reads wider ones as (wrong) floats.
 _MAX_DECIMAL_DIGITS = 38
@@ -472,7 +475,7 @@ def add_crop_names(
 
     The names always come from one edition: every name column is replaced, so a name
     column the source lacks is dropped, and by code a field whose code the source does
-    not name loses any name it had. Names are written without surrounding spaces, and
+    not name loses any name it had. Names are written without surrounding whitespace, and
     a blank name counts as none.
 
     Args:

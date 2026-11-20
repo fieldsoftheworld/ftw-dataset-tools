@@ -862,6 +862,12 @@ class TestNameText:
         assert column(path, "crop:name") == [None, None, None]
         assert result.named == 0
 
+    def test_tabs_line_breaks_and_unicode_spaces_are_trimmed(self, tmp_path: Path) -> None:
+        src = source(tmp_path, a={"crop:name": "\tWeizen\n"}, b={"crop:name": "Mais\t\u00a0"})
+        path = fields(tmp_path)
+        add_crop_names(path, src)
+        assert column(path, "crop:name") == [None, "Weizen", "Mais"]
+
     def test_inner_spaces_are_kept(self, tmp_path: Path) -> None:
         src = source(tmp_path, a={"crop:name": " Winter  Weizen "})
         path = fields(tmp_path)

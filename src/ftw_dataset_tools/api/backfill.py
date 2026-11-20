@@ -31,7 +31,7 @@ import pystac
 
 from ftw_dataset_tools import __version__
 from ftw_dataset_tools.api import admin_names, docs, field_embeddings, stac, styles
-from ftw_dataset_tools.api.assets import add_file_info, add_table_columns
+from ftw_dataset_tools.api.assets import COLUMN_NOTES, add_file_info, add_table_columns
 from ftw_dataset_tools.api.source import installed_git_commit
 
 if TYPE_CHECKING:
@@ -260,10 +260,7 @@ def _update_collection(
         )
     field_files = _checked_field_files(doc, field_files, crop_names)
     checksum = refresh_parquet_asset(doc, "chips", chips_file)
-    for key, path in field_files.items():
-        refresh_parquet_asset(doc, key, path)
-        if crop_names is not None:
-            _describe_crop_names(doc["assets"][key], crop_names)
+    _refresh_field_assets(doc, field_files, crop_names)
     doc["links"] = [link for link in doc.get("links", []) if not _is_backfill_link(link)]
     doc.get("assets", {}).pop(stac.FIELD_EMBEDDINGS_ASSET, None)
 
@@ -283,16 +280,22 @@ def _update_collection(
     )
 
 
+def _refresh_field_assets(
+    doc: dict, field_files: Mapping[str, Path | str], crop_names: Mapping[str, str] | None
+) -> None:
+    for key, path in field_files.items():
+        refresh_parquet_asset(doc, key, path)
+        if crop_names is not None:
+            _describe_crop_names(doc["assets"][key], crop_names)
+
+
 def crop_name_notes(crop_names: Mapping[str, str]) -> dict[str, str]:
     """What each crop name column holds, given where a run's names came from."""
     source = crop_names.get("source")
     origin = f"the harmonized edition {source}" if source else "the harmonized edition"
     if crop_names.get("by") == "code":
         origin += ", matched by crop:code as that edition's field ids differ from this dataset's"
-    return {
-        "crop:name": f"the source's own name for crop:code, in its language, from {origin}",
-        "crop:name_en": f"English name for crop:code, from {origin}",
-    }
+    return {name: f"{note}, from {origin}" for name, note in COLUMN_NOTES.items()}
 
 
 def _describe_crop_names(asset: dict, crop_names: Mapping[str, str]) -> None:
