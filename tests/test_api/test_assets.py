@@ -474,7 +474,7 @@ class TestAddTableColumns:
         import geopandas as gpd
         from shapely.geometry import box
 
-        from ftw_dataset_tools.api.assets import COLUMN_NOTES, add_table_columns
+        from ftw_dataset_tools.api.assets import CROP_NAME_NOTES, add_table_columns
 
         path = tmp_path / "named.parquet"
         gpd.GeoDataFrame(
@@ -487,8 +487,8 @@ class TestAddTableColumns:
         add_table_columns(asset, path)
 
         notes = {c["name"]: c.get("description") for c in asset.extra_fields["table:columns"]}
-        assert notes["crop:name"] == COLUMN_NOTES["crop:name"]
-        assert notes["crop:name_en"] == COLUMN_NOTES["crop:name_en"]
+        assert notes["crop:name"] == CROP_NAME_NOTES["crop:name"]
+        assert notes["crop:name_en"] == CROP_NAME_NOTES["crop:name_en"]
         assert notes["crop:code"] is None
 
     def test_geometry_column_detected_when_not_given(self, tmp_path: Path) -> None:

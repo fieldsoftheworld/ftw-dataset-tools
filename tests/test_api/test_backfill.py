@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from ftw_dataset_tools.api import admin_names, backfill, field_embeddings, stac
-from ftw_dataset_tools.api.assets import COLUMN_NOTES
+from ftw_dataset_tools.api.assets import CROP_NAME_NOTES
 from tests.test_api.test_stac import _write_field_embeddings, build_catalog
 
 if TYPE_CHECKING:
@@ -544,9 +544,9 @@ class TestCropNameDescriptions:
     def test_without_crop_names_the_general_description(self, tmp_path: Path) -> None:
         """A refresh that joined no names still says what the column is, not where from."""
         doc = self._run(tmp_path, None)
-        assert self._note(doc, "fields") == COLUMN_NOTES["crop:name"]
+        assert self._note(doc, "fields") == CROP_NAME_NOTES["crop:name"]
 
     def test_notes_without_a_source(self) -> None:
         notes = backfill.crop_name_notes({})
-        assert notes["crop:name"] == f"{COLUMN_NOTES['crop:name']}, from the harmonized edition"
+        assert notes["crop:name"] == f"{CROP_NAME_NOTES['crop:name']}, from the harmonized edition"
         assert "English" in notes["crop:name_en"]

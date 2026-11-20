@@ -46,9 +46,18 @@ KEY_COLUMNS: tuple[str, ...] = ("id", "crop:code")
 JoinKey = Literal["id", "code"]
 JOIN_KEYS: tuple[str, ...] = ("id", "code")
 
-#: A text crop code, with "NaN" as no code.
-_TEXT_CODE = """CASE WHEN lower(CAST({column} AS VARCHAR)) = 'nan' THEN NULL
-    ELSE CAST({column} AS VARCHAR) END"""
+#: Whitespace around a name or text code: RE2's \s is ASCII only and \pZ the Unicode
+#: spaces (NBSP), so vertical tab, NEL, the C0 separators, and the invisible zero-width
+#: space, word joiner, direction marks and BOM (from a CSV code table) are listed too.
+_SPACE = (
+    r"[\s\pZ\x{{0B}}\x{{1C}}-\x{{1F}}\x{{85}}\x{{180E}}\x{{200B}}\x{{200E}}\x{{200F}}"
+    r"\x{{2060}}\x{{FEFF}}]"
+)  # braces doubled for format()
+_TRIMMED = f"regexp_replace(CAST({{column}} AS VARCHAR), '^{_SPACE}+|{_SPACE}+$', '', 'g')"
+
+#: A text crop code as compared: trimmed, with "NaN" and a blank code as no code, so the
+#: " " of one release matches the "" of another.
+_TEXT_CODE = f"CASE WHEN lower({_TRIMMED}) IN ('nan', '') THEN NULL ELSE {_TRIMMED} END"
 
 #: An integer crop code as text, exactly (never through a float).
 _INTEGER_CODE = "CAST({column} AS VARCHAR)"
@@ -76,15 +85,9 @@ _DECIMAL_CODE = """CASE WHEN {column} = trunc({column})
       THEN CAST(CAST(trunc({column}) AS HUGEINT) AS VARCHAR)
     ELSE regexp_replace(rtrim(CAST({column} AS VARCHAR), '0'), '^(-?)\\.', '\\10.') END"""
 
-#: A name as written: without surrounding whitespace, and a blank name as none. Some
-#: code tables pad names ("OLIVAL "), which would otherwise split one crop in two. RE2's
-#: \s is ASCII only and \pZ the Unicode spaces (NBSP), so vertical tab, NEL, the
-#: zero-width space and a BOM (from a CSV code table) are listed too.
-_NAME_SPACE = r"[\s\pZ\x{{0B}}\x{{85}}\x{{200B}}\x{{FEFF}}]"  # braces doubled for format()
-_NAME_TEXT = (
-    "NULLIF(regexp_replace(CAST({column} AS VARCHAR), "
-    f"'^{_NAME_SPACE}+|{_NAME_SPACE}+$', '', 'g'), '')"
-)
+#: A name as written: trimmed (see _SPACE), and a blank name as none. Some code tables
+#: pad names ("OLIVAL "), which would otherwise split one crop in two.
+_NAME_TEXT = f"NULLIF({_TRIMMED}, '')"
 
 #: The widest decimal DuckDB reads exactly; it reads wider ones as (wrong) floats.
 _MAX_DECIMAL_DIGITS = 38
@@ -251,8 +254,8 @@ def _join(
 ) -> None:
     """Join the source's names onto every field by id, in a temp table ``joined``.
 
-    Both crop codes are compared as text (NaN as no code, 10.0 as 10), flagging the
-    fields whose code differs.
+    Both crop codes are compared as text (trimmed, NaN or blank as no code, 10.0 as 10),
+    flagging the fields whose code differs.
     """
     selected = ", ".join(f"{_name_text(f's.{_quote(c)}')} AS {_quote(c)}" for c in names)
     fields_code = _code_text(_code_type(fields_file), 'f."crop:code"')
@@ -339,9 +342,9 @@ def _join_by_code(
 ) -> None:
     """Give every field the names of its crop code in the source, in a temp table ``joined``.
 
-    Codes are compared as text, NaN counting as no code and 10.0 as 10. A field whose
-    code the source does not name stays unnamed, and the codes concerned are logged as a
-    warning.
+    Codes are compared as text: trimmed, NaN or blank counting as no code, 10.0 as 10. A
+    field whose code the source does not name stays unnamed, and the codes concerned are
+    logged as a warning.
     """
     _code_names(con, source_file, names)
     selected = ", ".join(f'c."{c}"' for c in names)

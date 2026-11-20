@@ -175,8 +175,8 @@ def _top_level_type(dtype: str) -> str:
     return str(dtype).split("(", 1)[0].strip().lower()
 
 
-#: Descriptions of the columns whose meaning is the same in every dataset.
-COLUMN_NOTES = {
+#: Descriptions of the crop name columns, the same in every dataset.
+CROP_NAME_NOTES = {
     "crop:name": "the source's own name for crop:code, in its language",
     "crop:name_en": "English name for crop:code",
 }
@@ -186,7 +186,7 @@ def add_table_columns(asset: pystac.Asset, path: Path, geometry_column: str | No
     """Set ``table:columns`` (name, type) and ``table:row_count`` from a parquet file.
 
     Types are DuckDB's, lowercased. The geometry column is typed ``geometry``
-    (DuckDB reports the WKB blob). Only the columns in ``COLUMN_NOTES`` get a
+    (DuckDB reports the WKB blob). Only the columns in ``CROP_NAME_NOTES`` get a
     description.
     """
     # Imported here: api.geo pulls geopandas and geoparquet-io into every assets import otherwise.
@@ -211,8 +211,8 @@ def add_table_columns(asset: pystac.Asset, path: Path, geometry_column: str | No
     for name, dtype, *_ in rows:
         column_type = "geometry" if name == geometry_column else _top_level_type(dtype)
         column = {"name": name, "type": column_type}
-        if name in COLUMN_NOTES:
-            column["description"] = COLUMN_NOTES[name]
+        if name in CROP_NAME_NOTES:
+            column["description"] = CROP_NAME_NOTES[name]
         columns.append(Column(column))
 
     table = TableExtension.ext(asset, add_if_missing=True)

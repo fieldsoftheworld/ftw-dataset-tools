@@ -31,7 +31,7 @@ import pystac
 
 from ftw_dataset_tools import __version__
 from ftw_dataset_tools.api import admin_names, docs, field_embeddings, stac, styles
-from ftw_dataset_tools.api.assets import COLUMN_NOTES, add_file_info, add_table_columns
+from ftw_dataset_tools.api.assets import CROP_NAME_NOTES, add_file_info, add_table_columns
 from ftw_dataset_tools.api.source import installed_git_commit
 
 if TYPE_CHECKING:
@@ -295,7 +295,7 @@ def crop_name_notes(crop_names: Mapping[str, str]) -> dict[str, str]:
     origin = f"the harmonized edition {source}" if source else "the harmonized edition"
     if crop_names.get("by") == "code":
         origin += ", matched by crop:code as that edition's field ids differ from this dataset's"
-    return {name: f"{note}, from {origin}" for name, note in COLUMN_NOTES.items()}
+    return {name: f"{note}, from {origin}" for name, note in CROP_NAME_NOTES.items()}
 
 
 def _describe_crop_names(asset: dict, crop_names: Mapping[str, str]) -> None:
