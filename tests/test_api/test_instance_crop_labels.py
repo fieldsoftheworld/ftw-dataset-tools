@@ -249,18 +249,24 @@ def test_pipeline_matches_api(tmp_path):
         np.testing.assert_array_equal(a.read(1), b.read(1))
 
 
-def _instances(tmp_path, ids, geometries):
-    """Burn an instance mask without crop labels: (pixel values, lookup or None)."""
+def _instances(tmp_path, ids, geometries, crop_column=None, counts=False):
+    """Burn an instance mask: (pixel values, or {value: pixel count}, and lookup or None)."""
     kwargs = inputs(tmp_path, crops=(None, None))
     write_geoparquet(
         kwargs["boundaries_file"],
-        gdf=gpd.GeoDataFrame({"id": list(ids)}, geometry=list(geometries), crs=4326),
+        gdf=gpd.GeoDataFrame(
+            {"id": list(ids), "crop:name": [f"crop-{i}" for i in ids]},
+            geometry=list(geometries),
+            crs=4326,
+        ),
     )
-    kwargs["crop_column"] = None
+    kwargs["crop_column"] = crop_column
     result = masks.create_masks(**kwargs)[masks.MaskType.INSTANCE]
     path = result.masks_created[0].output_path
     with rasterio.open(path) as src:
-        values = set(np.unique(src.read(1))) - {0}
+        pixels = src.read(1)
+    found, n = np.unique(pixels[pixels > 0], return_counts=True)
+    values = dict(zip(found.tolist(), n.tolist(), strict=True)) if counts else set(found.tolist())
     lookup_path = masks.instance_labels_path(path)
     lookup = json.loads(lookup_path.read_text(encoding="utf-8")) if lookup_path.exists() else None
     return values, lookup
@@ -295,6 +301,57 @@ class TestInstancePerPiece:
         values, lookup = _instances(tmp_path, (5,), (MultiPolygon([_LEFT, touching]),))
         assert values == {5}
         assert lookup is None
+
+    def test_overlapping_fields_burn_in_file_order(self, tmp_path) -> None:
+        # Where fields overlap the later row wins, as before; the values stay field ids.
+        wide = box(10.001, 50.001, 10.006, 50.004)
+        values, lookup = _instances(tmp_path, (4, 3), (wide, _LEFT), counts=True)
+        assert lookup is None
+        assert values[3] > values[4]
+
+    def test_corner_touching_parts_stay_one_field(self, tmp_path) -> None:
+        corner = box(10.004, 50.004, 10.007, 50.007)
+        values, lookup = _instances(tmp_path, (5,), (MultiPolygon([_LEFT, corner]),))
+        assert values == {5}
+        assert lookup is None
+
+    def test_parts_outside_the_chip_do_not_renumber_it(self, tmp_path) -> None:
+        outside = box(10.02, 50.001, 10.023, 50.004)
+        values, lookup = _instances(tmp_path, (5, 6), (MultiPolygon([_LEFT, outside]), _RIGHT))
+        assert values == {5, 6}
+        assert lookup is None
+
+    def test_values_are_contiguous_when_a_piece_is_hidden(self, tmp_path) -> None:
+        # Field 7's second polygon lies under field 8, so it shows no pixels.
+        values, lookup = _instances(tmp_path, (7, 7, 8), (_LEFT, _RIGHT, _RIGHT))
+        assert values == {1, 2}
+        assert sorted((r["instance_value"], r["field_id"]) for r in lookup["instances"]) == [
+            (1, "7"),
+            (2, "8"),
+        ]
+
+    def test_crop_labels_follow_the_pieces(self, tmp_path) -> None:
+        values, lookup = _instances(
+            tmp_path, (5,), (MultiPolygon([_LEFT, _RIGHT]),), crop_column="crop:name"
+        )
+        assert values == {1, 2}
+        assert {(r["field_id"], r["crop_value"]) for r in lookup["instances"]} == {("5", "crop-5")}
+
+    @pytest.mark.parametrize("raw", ["12.7", "inf"])
+    def test_ids_that_are_not_whole_numbers_are_renumbered(self, tmp_path, raw) -> None:
+        values, lookup = _instances(tmp_path, (raw, "4"), (_LEFT, _RIGHT))
+        assert values == {1, 2}
+        assert {r["field_id"] for r in lookup["instances"]} == {raw, "4"}
+
+    def test_a_missing_lookup_is_rewritten_on_resume(self, tmp_path) -> None:
+        kwargs = inputs(tmp_path, ids=(7, 7))
+        kwargs["crop_column"] = None
+        path = masks.create_masks(**kwargs)[masks.MaskType.INSTANCE].masks_created[0].output_path
+        masks.instance_labels_path(path).unlink()
+        kwargs["skip_existing"] = True
+        result = masks.create_masks(**kwargs)[masks.MaskType.INSTANCE]
+        assert result.masks_existing == 0
+        assert masks.instance_labels_path(path).exists()
 
     def test_masks_from_before_are_rewritten_on_resume(self, tmp_path) -> None:
         kwargs = inputs(tmp_path, ids=(3, 4))

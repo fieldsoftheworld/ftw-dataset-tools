@@ -13,10 +13,12 @@ The FTW extension adds properties to STAC items that describe:
 
 An `instance_mask` pixel holds its field's id, so masks join back to the fields file.
 When a chip's ids cannot give one instance per field piece (a repeated id, a
-MultiPolygon whose parts don't touch, or an id that isn't a positive uint32), each
-connected piece is numbered 1..n instead, and the chip gets the lookup below with
-`crop_column` null and no `crop_value`. Masks with a crop column always get it. Instance
-masks carry the GeoTIFF tag `ftw_instance_values=piece`.
+MultiPolygon whose parts don't touch, or an id that isn't a whole number in uint32
+range), each connected piece is numbered 1..n instead, and the chip gets the lookup
+below with `crop_column` null and no `crop_value`. Masks with a crop column always get
+it. Parts touching at an edge or a corner are one piece; parts outside the chip don't
+count. The GeoTIFF tag `ftw_instance_values` says which: `piece-id` (values are field
+ids, no lookup) or `piece-lookup`.
 
 The optional `instance_labels` asset references `{item_id}_instance_labels.json`
 (`application/json`, roles `labels`, `metadata`):
