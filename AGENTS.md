@@ -44,7 +44,7 @@ Follow the [Development](README.md#development) section of the README. In additi
 ## Writing
 
 - Commit messages: one short imperative line ("Fix bbox check for antimeridian chips"), no
-  period.
+  period, and no `Co-Authored-By` or other agent footer.
 - Keep PR descriptions, review comments and replies short. Answer questions in a sentence or
   two, and don't repeat what the author already did.
 - Write `#123` only for issues and PRs of this repository, `owner/repo#123` for others, and no
