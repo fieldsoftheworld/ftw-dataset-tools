@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
+import pystac
 import pytest
 import rasterio
 from pyproj import Transformer
@@ -14,8 +16,11 @@ from shapely.geometry import box
 from shapely.ops import transform as shapely_transform
 
 from ftw_dataset_tools.api import masks
+from ftw_dataset_tools.api.assets import add_raster_bands
 from ftw_dataset_tools.api.chip_grid import utm_crs_for_cell, utm_grid_for_cell
 from ftw_dataset_tools.api.geo import write_geoparquet
+from ftw_dataset_tools.api.imagery.image_download import download_and_clip_scene, on_reference_grid
+from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -196,6 +201,63 @@ def _one_chip_inputs(tmp_path: Path, grid_id: str, chip, fields_utm, epsg: str) 
 
 
 class TestUtmGridEdgeCases:
+    @pytest.mark.parametrize("factor", [1, 2, 3, 4, 8])
+    @pytest.mark.parametrize("offset", [0.0, 3.3])
+    def test_finer_masks_keep_10m_imagery(self, tmp_path: Path, factor: int, offset: float) -> None:
+        chip = _utm_chip("EPSG:32632", 500_000 + offset, 5_540_000 + offset, size=40)
+        field = box(500_005, 5_540_005, 500_035, 5_540_035)
+        inputs = _one_chip_inputs(tmp_path, GRID_ID, chip, [field], "EPSG:32632")
+        inputs["resolution"] = 10.0 / factor
+        result = masks.create_masks(**inputs)[masks.MaskType.SEMANTIC_2_CLASS]
+        mask_path = result.masks_created[0].output_path
+        crs, transform, width, height = utm_grid_for_cell(
+            GRID_ID, chip.bounds, "EPSG:4326", 10.0, chip
+        )
+        source = tmp_path / "red.tif"
+        data = np.arange(1, width * height + 1, dtype="uint16").reshape(height, width)
+        with rasterio.open(
+            source,
+            "w",
+            driver="GTiff",
+            count=1,
+            dtype="uint16",
+            crs=crs,
+            transform=transform,
+            width=width,
+            height=height,
+        ) as dst:
+            dst.write(data, 1)
+        dt = datetime(2024, 5, 1, tzinfo=UTC)
+        item = pystac.Item("scene", None, list(chip.bounds), dt, {})
+        item.add_asset("red", pystac.Asset(str(source)))
+        scene = SelectedScene(item, "planting", 0.0, dt, "")
+        image_path = mask_path.with_name(f"{GRID_ID}_2024_planting_image_s2.tif")
+
+        downloaded = download_and_clip_scene(
+            scene, chip.bounds, image_path, bands=["red"], cell=chip
+        )
+
+        assert downloaded.success, downloaded.error
+        with rasterio.open(image_path) as image, rasterio.open(mask_path) as mask:
+            assert image.crs == mask.crs == crs
+            assert image.res == (10.0, 10.0)
+            assert mask.res == pytest.approx((10.0 / factor, 10.0 / factor))
+            assert image.transform == transform
+            assert mask.transform.c == image.transform.c
+            assert mask.transform.f == image.transform.f
+            assert mask.bounds == pytest.approx(image.bounds)
+            assert (mask.width, mask.height) == (width * factor, height * factor)
+            np.testing.assert_array_equal(image.read(1), data)
+            assert 1 in mask.read(1)
+        assert on_reference_grid(image_path)
+        for path, resolution in [(image_path, 10.0), (mask_path, 10.0 / factor)]:
+            asset = pystac.Asset(str(path))
+            item.add_asset(path.stem, asset)
+            add_raster_bands(asset, path)
+            assert asset.extra_fields["raster:bands"][0]["spatial_resolution"] == pytest.approx(
+                resolution
+            )
+
     @pytest.mark.parametrize(
         ("grid_id", "epsg", "origin"),
         [

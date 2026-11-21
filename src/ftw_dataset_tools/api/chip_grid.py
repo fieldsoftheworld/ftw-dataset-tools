@@ -455,6 +455,8 @@ def utm_grid_for_cell(
     whereas its lon/lat ``bounds`` add a margin of the neighbouring chips. The grid
     snaps outward to multiples of ``resolution`` in the zone, so a chip clipped at a
     zone or square edge keeps the pixel lattice of its neighbours and of the imagery.
+    Subdivisions of 10 m snap their footprint to the 10 m lattice first, including
+    clipped chips, so masks and 10 m imagery cover exactly the same area.
     A ``resolution`` that does not divide the chip size (3 m for 2 km) gives full chips
     shapes that differ by a pixel, depending on where each sits on the lattice.
     """
@@ -468,8 +470,10 @@ def utm_grid_for_cell(
     # Centimetres first: a reprojected corner lands a hair off the chip's metre grid,
     # and a hair past the lattice on any edge would grow the grid by a whole pixel.
     minx, miny, maxx, maxy = (round(v, 2) for v in (minx, miny, maxx, maxy))
-    left = math.floor(round(minx / resolution, 6)) * resolution
-    top = math.ceil(round(maxy / resolution, 6)) * resolution
-    width = math.ceil(round((maxx - left) / resolution, 6))
-    height = math.ceil(round((top - miny) / resolution, 6))
+    factor = 10.0 / resolution
+    lattice = 10.0 if factor >= 1 and math.isclose(factor, round(factor)) else resolution
+    left = math.floor(round(minx / lattice, 6)) * lattice
+    top = math.ceil(round(maxy / lattice, 6)) * lattice
+    width = round(math.ceil(round((maxx - left) / lattice, 6)) * lattice / resolution)
+    height = round(math.ceil(round((top - miny) / lattice, 6)) * lattice / resolution)
     return utm, from_origin(left, top, resolution, resolution), width, height

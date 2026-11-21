@@ -23,6 +23,7 @@ from ftw_dataset_tools.api.imagery.image_download import (
     download_and_clip_scene,
     find_reference_mask_for_output,
     on_reference_grid,
+    validate_alignment,
 )
 from ftw_dataset_tools.api.imagery.settings import BANDS_OF_INTEREST
 
@@ -120,6 +121,22 @@ class TestComputeTargetGrid:
         assert (transform.c, transform.f) == pytest.approx((500_000, 5_542_000))
         assert reference is None
 
+    def test_non_integer_resolution_keeps_legacy_reference_grid(self, tmp_path: Path) -> None:
+        reference = tmp_path / "mask.tif"
+        transform = from_origin(500_001, 5_542_002, 3, 3)
+        _write_raster(reference, "EPSG:32632", transform, (7, 9))
+        grid, error = compute_target_grid((0, 0, 1, 1), tmp_path / "image.tif", 10, reference)
+        assert error is None
+        assert grid[1:4] == (transform, 7, 9)
+
+    def test_indivisible_reference_shape_is_an_actionable_failure(self, tmp_path: Path) -> None:
+        reference = tmp_path / "mask.tif"
+        _write_raster(reference, "EPSG:32632", from_origin(500_000, 5_542_000, 2.5, 2.5), (7, 8))
+        grid, error = compute_target_grid((0, 0, 1, 1), tmp_path / "image.tif", 10, reference)
+        assert grid is None
+        assert "not divisible" in error
+        assert "regenerate masks" in error
+
 
 class TestOnReferenceGrid:
     """A resumed download keeps an image only when it is on its mask's grid."""
@@ -140,6 +157,16 @@ class TestOnReferenceGrid:
         _write_raster(image, "EPSG:32632", from_origin(500_000, 5_542_000, 10, 10), (200, 200))
 
         assert on_reference_grid(image)
+
+    def test_shifted_image_beside_fine_mask_is_rejected(self, tmp_path: Path) -> None:
+        image = self._chip(tmp_path)
+        mask = image.parent / "ftw-32UMA0101_2024_semantic_3_class.tif"
+        _write_raster(mask, "EPSG:32632", from_origin(500_000, 5_542_000, 2.5, 2.5), (800, 800))
+        _write_raster(image, "EPSG:32632", from_origin(500_010, 5_542_000, 10, 10), (200, 200))
+
+        assert not on_reference_grid(image)
+        assert "does not match" in validate_alignment(image, mask)
+        assert not image.exists()
 
     def test_lonlat_image_beside_a_utm_mask_is_not(self, tmp_path: Path) -> None:
         image = self._chip(tmp_path)

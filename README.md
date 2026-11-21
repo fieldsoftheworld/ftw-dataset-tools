@@ -473,6 +473,16 @@ ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spa
 - `--workers` - Number of parallel workers (default: CPU count, capped at 8)
 - `--skip-existing` - Reuse masks already on disk instead of recreating them
 
+### Finer masks with 10 m imagery
+
+Set `stages.masks.resolution` to `10 / n` for any positive integer `n` (for example, 5, 2.5 or 1.25 m for factors 2, 4 or 8), and leave `stages.download_images.resolution` at its default of 10 m. No new flag is needed: standalone `create-masks --resolution 2.5` or `create-dataset --resolution 2.5` followed by `download-images` works too.
+
+With the default UTM masks, both rasters have the same CRS, origin and footprint, including clipped chips. A 2 km chip has 200×200 imagery pixels and 800×800 mask pixels at 2.5 m. Masks are rasterized directly from the vectors; imagery is not upsampled to the mask resolution, and class/boundary semantics are unchanged.
+
+Defaults remain 10 m for both. Arbitrary mask resolutions (such as 3 m) and `--no-utm` remain supported with the legacy exact-reference-grid imagery behavior when the requested imagery resolution is not an integer multiple of the mask's metre resolution. Integer coarsening requires divisible raster dimensions; incompatible existing masks produce an actionable error rather than a shifted footprint.
+
+Use a fresh output directory when changing mask resolution, or disable `stages.masks.skip_existing` to regenerate masks. Already downloaded imagery can be retained if it shares the finer masks' footprint; to replace imagery that was previously upsampled, run `select-images --force` and disable download resume (`stages.download_images.resume: false` or `download-images --no-resume`). Existing published datasets do not need rebuilding unless opting into finer masks.
+
 #### Crop labels for instance masks
 
 Use `--crop-column crop:name` with `create-dataset` or `create-masks --mask-type instance`.
