@@ -65,7 +65,7 @@ SOURCE_GRID_KM_SIZE = 2.0
 DEFAULT_CHIP_KM_SIZE = SOURCE_GRID_KM_SIZE
 
 # Minimum chip area, as a percentage of a full km_size x km_size cell, for a chip
-# to be kept. Cells on a UTM zone boundary or an MGRS latitude-band boundary are
+# to be kept. Cells on a UTM zone boundary or an MGRS 100 km square edge are
 # clipped short and can come out only metres wide. Full cells measure 99.74%-100.08%
 # of nominal (the spread is UTM scale factor, not truncation; the low end is on the
 # west edge of the widened zone 32V), so 99.5% clears every full cell.
@@ -407,9 +407,11 @@ def _drop_undersized_chips(
     """
     Remove grid cells truncated below min_chip_area percent of a full cell.
 
-    MGRS cells are clipped at UTM zone and latitude-band boundaries, so a cell on a
+    MGRS cells are clipped at UTM zone boundaries and square edges, so a cell on a
     boundary covers only what survives the cut - sometimes a sliver a few metres
-    across. Returns the number of cells removed.
+    across. Band-line pieces are joined before this, so the only ones left are those
+    whose other piece lies in another zone (the Norway and Svalbard exceptions).
+    Returns the number of cells removed.
     """
     nominal_area = km_size * km_size * 1_000_000
     cutoff = nominal_area * min_chip_area / 100
@@ -457,16 +459,20 @@ def _fetch_grid_cells(
     grid_source: str,
     bounds: tuple[float, float, float, float],
     km_size: float,
+    min_chip_area: float | None,
 ) -> int:
     """Load the remote grid cells over ``bounds`` into grid_table, cut to ``km_size``.
 
-    The source grid is 2 km; any other size is cut from it, which needs the source
-    cells up to one chip beyond ``bounds`` to finish the chips on the edge. Cells
-    with malformed ids are dropped first, since cutting cannot place them; returns
-    how many were dropped.
+    Cells up to two chips beyond ``bounds`` are fetched, then trimmed back: cutting
+    the 2 km source grid to another size needs them to finish the chips on the edge,
+    and a chip cut by a band line can have its other piece there (one chip is not
+    always enough where the grid is rotated). Cells with malformed ids are dropped
+    first, since cutting cannot place them; returns how many were dropped.
     """
     recut = km_size != SOURCE_GRID_KM_SIZE
-    xmin, ymin, xmax, ymax = chip_grid.expand_bounds(bounds, km_size) if recut else bounds
+    xmin, ymin, xmax, ymax = chip_grid.expand_bounds(
+        chip_grid.expand_bounds(bounds, km_size), km_size
+    )
     configure_source_coop_s3(conn)
     logger.info("Fetching grid cells by bounding box...")
     conn.execute(f"""
@@ -479,18 +485,51 @@ def _fetch_grid_cells(
           AND bbox.ymax >= {ymin}
     """)
     dropped = _drop_malformed_chip_ids(conn)
-    if not recut:
-        return dropped
+    if recut:
+        _cut_remote_grid(conn, km_size)
+    _join_band_pieces(conn, "geometry", min_chip_area, km_size, is_geographic=True)
+    xmin, ymin, xmax, ymax = bounds
+    conn.execute(f"""
+        DELETE FROM grid_table
+        WHERE NOT (bbox.xmin <= {xmax} AND bbox.xmax >= {xmin}
+                   AND bbox.ymin <= {ymax} AND bbox.ymax >= {ymin})
+    """)
+    return dropped
+
+
+def _cut_remote_grid(conn: duckdb.DuckDBPyConnection, km_size: float) -> None:
     label = chip_grid.chip_size_label(km_size)
     logger.info(f"Cutting the {SOURCE_GRID_KM_SIZE:g} km grid into {label} chips...")
-    chip_grid.cut_grid(conn, "grid_table", km_size, keep_bounds=bounds)
+    chip_grid.cut_grid(conn, "grid_table", km_size)
     if chip_grid.SQUARE_M % chip_grid.chip_size_m(km_size):
         logger.warning(
             f"{label} does not divide an MGRS 100 km square evenly, so the last "
             "row and column of chips in each square are cut short (the minimum chip "
             "area filter drops them)."
         )
-    return dropped
+
+
+def _join_band_pieces(
+    conn: duckdb.DuckDBPyConnection,
+    geom_col: str,
+    min_chip_area: float | None,
+    km_size: float,
+    is_geographic: bool,
+) -> int:
+    """Join the chips a latitude-band line cuts into two undersized pieces.
+
+    Only with the minimum chip area filter on: without it both pieces are kept as
+    they are. Returns the number of rows removed, one per joined chip.
+    """
+    if min_chip_area is None:
+        return 0
+    cutoff = km_size * km_size * 1_000_000 * min_chip_area / 100
+    joined = chip_grid.join_band_pieces(
+        conn, "grid_table", cutoff, _chip_area_expr("g", is_geographic), geom_col
+    )
+    if joined:
+        logger.info(f"Joined {joined:,} chips cut in two by a latitude-band line")
+    return joined
 
 
 def _reproject_to_4326(path: Path, temp_files: list[Path]) -> Path:
@@ -564,6 +603,7 @@ def _load_remote_grid(
     fields_geom_col: str,
     grid_source: str,
     km_size: float,
+    min_chip_area: float | None = None,
 ) -> tuple[str, int]:
     """Fetch the grid cells overlapping the fields' bounds into grid_table, cut to km_size.
 
@@ -608,7 +648,7 @@ def _load_remote_grid(
             "EPSG:4326."
         )
 
-    dropped = _fetch_grid_cells(conn, grid_source, (xmin, ymin, xmax, ymax), km_size)
+    dropped = _fetch_grid_cells(conn, grid_source, (xmin, ymin, xmax, ymax), km_size, min_chip_area)
 
     if grid_geom_col is None:
         grid_geom_col = "geometry"
@@ -829,6 +869,7 @@ def add_field_stats(
                 fields_geom_col=fields_geom_col,
                 grid_source=grid_source,
                 km_size=km_size,
+                min_chip_area=min_chip_area,
             )
 
         # Get grid count
@@ -839,8 +880,17 @@ def add_field_stats(
         dropped_here = _drop_malformed_chip_ids(conn)
         grid_count -= dropped_here
         cells_dropped_malformed += dropped_here
+        # A remote grid was joined before it was trimmed to the fields' bounds.
+        if grid_path is not None:
+            grid_count -= _join_band_pieces(
+                conn,
+                grid_geom_col,
+                min_chip_area,
+                km_size,
+                is_geographic=_grid_uses_degrees(conn, grid_path, grid_geom_col),
+            )
 
-        # Drop chips the MGRS grid truncated at a zone or band boundary. Done before
+        # Drop chips the MGRS grid truncated at a zone boundary. Done before
         # the coverage pass so no work is spent on cells that are about to go.
         cells_dropped_undersized = 0
         if min_chip_area is not None:
