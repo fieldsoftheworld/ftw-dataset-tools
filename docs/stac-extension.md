@@ -352,7 +352,10 @@ stddev, and valid_percent whenever a value was excluded from them). The same sta
 COG as GDAL `STATISTICS_*` band tags, never in an `.aux.xml` sidecar.
 
 Semantic mask assets add `classification:classes`
-([classification extension](https://github.com/stac-extensions/classification)):
+([classification extension](https://github.com/stac-extensions/classification)) on the
+asset, as Portolan v0.3 reads it for a single-band asset, with a copy on
+`raster:bands[0]` for older readers. Every class has a `name` and a `title`
+(Background, Field, Field boundary, Unknown):
 
 | Mask | Classes |
 |------|---------|
@@ -540,7 +543,7 @@ sub-catalog and every item — declares the
 
 **Items parquet:** The `items.parquet` asset with role `collection-mirror` exists only if at least one chip item has masks. It is a geoparquet mirror of all chip items in the collection.
 
-**Item assets:** The collection's `item_assets` declares the possible assets on chip items: mask types (`instance_mask`, `semantic_2class_mask`, `semantic_3class_mask`, `decode_boundary_mask`, `decode_distance_mask`), imagery (`planting_image`, `harvest_image`), and `thumbnail`.
+**Item assets:** The collection's `item_assets` declares the possible assets on chip items: mask types (`instance_mask`, `semantic_2class_mask`, `semantic_3class_mask`, `decode_boundary_mask`, `decode_distance_mask`), imagery (`planting_image`, `harvest_image`), and `thumbnail`. The classified mask entries carry the same `classification:classes` as the items, so a client can draw a legend from the collection alone.
 
 **Chip previews:** Every chip item carries a `thumbnail` asset of media type `image/webp` —
 the mask overlay (`{item_id}_overlay.webp`) when it could be drawn, otherwise the plain

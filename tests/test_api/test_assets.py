@@ -214,6 +214,51 @@ class TestAddMaskClassification:
             in item.stac_extensions
         )
 
+    @pytest.mark.parametrize(
+        ("kind", "background", "label_extent", "titles"),
+        [
+            ("semantic_2class", 0, False, ["Background", "Field"]),
+            ("semantic_2class", 3, False, ["Field boundary line", "Field", "Unknown"]),
+            ("semantic_2class", 0, True, ["Background", "Field", "Unknown"]),
+            ("semantic_3class", 3, False, ["Field", "Field boundary", "Unknown"]),
+            ("semantic_3class", 0, True, ["Background", "Field", "Field boundary", "Unknown"]),
+            ("decode_boundary", 0, False, ["Background", "Field boundary"]),
+        ],
+    )
+    def test_classes_have_titles_and_sit_on_the_asset(
+        self, tmp_path: Path, kind: str, background: int, label_extent: bool, titles: list
+    ) -> None:
+        # Portolan v0.3: each class has a title (PTL-CLS-002), and a single-band
+        # asset carries the list itself (PTL-CLS-005); the band copy stays for old readers.
+        from ftw_dataset_tools.api.assets import add_mask_classification, add_raster_bands
+
+        p = tmp_path / "m.tif"
+        _write_cog(p, np.array([[0, 1], [3, 0]], dtype=np.uint8))
+        item, asset = _item_with_asset(p, ["labels"])
+        add_raster_bands(asset, p)
+
+        add_mask_classification(asset, kind, background_value=background, label_extent=label_extent)
+
+        on_asset = asset.extra_fields["classification:classes"]
+        assert on_asset == asset.extra_fields["raster:bands"][0]["classification:classes"]
+        assert sorted(c["title"] for c in on_asset) == sorted(titles)
+        reread = pystac.Item.from_dict(item.to_dict())
+        assert (
+            reread.assets[next(iter(reread.assets))].extra_fields["classification:classes"]
+            == on_asset
+        )
+
+    @pytest.mark.parametrize("kind", ["instance", "decode_distance"])
+    def test_masks_without_classes_get_no_list(self, tmp_path: Path, kind: str) -> None:
+        from ftw_dataset_tools.api.assets import add_mask_classification, add_raster_bands
+
+        p = tmp_path / "m.tif"
+        _write_cog(p, np.array([[0, 1], [3, 0]], dtype=np.uint8))
+        _, asset = _item_with_asset(p, ["labels"])
+        add_raster_bands(asset, p)
+        add_mask_classification(asset, kind)
+        assert "classification:classes" not in asset.extra_fields
+
     def test_presence_only_background_value(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.assets import add_mask_classification, add_raster_bands
 
