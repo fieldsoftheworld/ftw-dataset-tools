@@ -40,6 +40,9 @@ Follow the [Development](README.md#development) section of the README. In additi
   (CliRunner) for `commands/`. Mark slow tests `slow` and tests that need the network `network`.
 - Run `uv run pre-commit run --all-files` until it passes without modifying files, then
   `uv run pytest` (the hook skips `slow` tests).
+- Every change gets an independent review before it merges: a reviewer (person or separate
+  agent) who gets the diff and the code, not the author's reasoning. Fix or answer each
+  finding first.
 
 ## Writing
 
