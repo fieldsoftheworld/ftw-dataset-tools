@@ -1,5 +1,6 @@
 """Tests for the STAC API."""
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -378,6 +379,34 @@ class TestChipItemAssetMetadata:
         assert distance["data_type"] == "float32"
         assert "classification:classes" not in distance
         assert "decode_distance_max_px" in distance["description"]
+
+
+@pytest.mark.parametrize(("background", "label_extent"), [(0, False), (3, False), (0, True)])
+def test_collection_item_assets_match_the_item_classes(
+    tmp_path: Path, background: int, label_extent: bool
+) -> None:
+    """A built collection's item_assets carry the very class list its items carry."""
+    build_catalog(
+        tmp_path,
+        background_class_value=background,
+        label_extent=label_extent,
+        crop_calendar=False,
+    )
+    collection = json.loads((tmp_path / "collection.json").read_text())
+    item = json.loads(
+        (
+            tmp_path / "chips" / "33UXP" / "ftw-33UXP0410_2024" / "ftw-33UXP0410_2024.json"
+        ).read_text()
+    )
+    key = "semantic_2class_mask"
+    assert (
+        collection["item_assets"][key]["classification:classes"]
+        == item["assets"][key]["classification:classes"]
+    )
+    assert (
+        "https://stac-extensions.github.io/classification/v2.0.0/schema.json"
+        in collection["stac_extensions"]
+    )
 
 
 def build_catalog(
