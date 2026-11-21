@@ -879,6 +879,7 @@ class TestBandLineChips:
         monkeypatch: pytest.MonkeyPatch,
         km_size: float = 2.0,
         min_chip_area: float | None = 99.5,
+        local: bool = False,
     ):
         from ftw_dataset_tools.api import field_stats
 
@@ -891,12 +892,13 @@ class TestBandLineChips:
             fields
         )
         gpio.read(str(fields)).add_bbox().write(str(fields))
+        source = {"grid_file": grid} if local else {"grid_source": str(grid)}
         result = field_stats.add_field_stats(
             fields_file=fields,
-            grid_source=str(grid),
             output_file=tmp_path / "chips.parquet",
             min_chip_area=min_chip_area,
             km_size=km_size,
+            **source,
         )
         return result, sorted(_chip_ids(result.output_path))
 
@@ -904,6 +906,10 @@ class TestBandLineChips:
         result, ids = self._run(tmp_path, monkeypatch)
         assert ids == ["ftw-33TWP0016"]
         assert result.cells_dropped_undersized == 0
+
+    def test_local_grid_file_is_joined_too(self, tmp_path: Path, monkeypatch) -> None:
+        _, ids = self._run(tmp_path, monkeypatch, local=True)
+        assert ids == ["ftw-33TWP0016"]
 
     def test_cut_chips_join_on_the_line_only(self, tmp_path: Path, monkeypatch) -> None:
         # 1 km chips: the row on 48°N is joined, the rows wholly north or south are not cut.

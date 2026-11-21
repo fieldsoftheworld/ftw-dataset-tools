@@ -297,15 +297,15 @@ def join_band_pieces(
         FROM pairs
     """)
     before = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
-    sets = [f'"{geom_col}" = p.g::{columns[geom_col]}'] + [
-        f'"{name}" = STRUCT_PACK(xmin := ST_XMin(p.g), ymin := ST_YMin(p.g), '
-        f"xmax := ST_XMax(p.g), ymax := ST_YMax(p.g))::{ctype}"
+    sets = [f'"{geom_col}" = _bp.g::{columns[geom_col]}'] + [
+        f'"{name}" = STRUCT_PACK(xmin := ST_XMin(_bp.g), ymin := ST_YMin(_bp.g), '
+        f"xmax := ST_XMax(_bp.g), ymax := ST_YMax(_bp.g))::{ctype}"
         for name, ctype in columns.items()
         if _BBOX_STRUCT.fullmatch(ctype)
     ]
     conn.execute(f"""
         UPDATE "{table}" SET {", ".join(sets)}
-        FROM _band_pairs p WHERE "{table}".rowid = p.south
+        FROM _band_pairs _bp WHERE "{table}".rowid = _bp.south
     """)
     conn.execute(f'DELETE FROM "{table}" WHERE rowid IN (SELECT north FROM _band_pairs)')
     conn.execute("DROP TABLE _band_pairs")
