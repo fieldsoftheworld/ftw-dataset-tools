@@ -52,6 +52,14 @@ LABEL_COLORS: dict[str, str] = {
     "boundary": "D55E00",
 }
 
+# Human-readable class labels; Portolan wants a title on every class (PTL-CLS-002).
+CLASS_TITLES = {
+    "background": "Background",
+    "field": "Field",
+    "boundary": "Field boundary",
+    "unknown": "Unknown",
+}
+
 # (value, name, description) per classified mask kind. The background value is
 # substituted at call time ONLY for the semantic kinds: presence-only masks use
 # background=3 there, while the DECODE layers fold presence-only into 0.
@@ -320,10 +328,49 @@ def add_raster_bands(asset: pystac.Asset, path: Path) -> None:
     RasterExtension.ext(asset, add_if_missing=True).bands = bands
 
 
+def _class_title(name: str, description: str) -> str:
+    """A class's title; presence-only 2-class masks keep 0 for boundary lines."""
+    if description == PRESENCE_ONLY_LINE_DESCRIPTION:
+        return "Field boundary line"
+    return CLASS_TITLES[name]
+
+
+def mask_class_list(
+    mask_kind: str, background_value: int = 0, *, label_extent: bool = False
+) -> list[dict] | None:
+    """The ``classification:classes`` of a mask kind, or None for one without classes.
+
+    ``mask_kind`` is a key of ``MASK_CLASSES`` or ``MASK_DESCRIPTIONS``; see
+    ``add_mask_classification`` for ``background_value`` and ``label_extent``.
+    """
+    if mask_kind in MASK_DESCRIPTIONS:
+        return None
+    try:
+        spec = MASK_CLASSES[mask_kind]
+    except KeyError as err:
+        raise ValueError(f"Unknown mask kind: {mask_kind}") from err
+    colors = (
+        {**LABEL_COLORS, "unknown": LABEL_EXTENT_UNKNOWN_COLOR} if label_extent else LABEL_COLORS
+    )
+    return [
+        Classification.create(
+            value=value,
+            name=name,
+            title=_class_title(name, description),
+            description=description,
+            color_hint=colors.get(name),
+        ).to_dict()
+        for value, name, description in _class_spec(mask_kind, spec, background_value, label_extent)
+    ]
+
+
 def add_mask_classification(
     asset: pystac.Asset, mask_kind: str, background_value: int = 0, *, label_extent: bool = False
 ) -> None:
-    """Describe the classes of a mask asset on its first raster band.
+    """Describe the classes of a mask asset, on the asset and on its first raster band.
+
+    Portolan reads a single-band asset's class list from the asset itself, next to
+    its nodata (PTL-CLS-005); the copy on ``raster:bands`` stays for older readers.
 
     ``mask_kind`` is a key of ``MASK_CLASSES`` or ``MASK_DESCRIPTIONS``.
     ``label_extent`` marks a dataset built with a label extent, whose semantic masks
@@ -336,26 +383,16 @@ def add_mask_classification(
         raise ValueError("add_raster_bands must be called before add_mask_classification")
     band = bands[0]
 
-    if mask_kind in MASK_DESCRIPTIONS:
+    classes = mask_class_list(mask_kind, background_value, label_extent=label_extent)
+    if classes is None:
         band.properties["description"] = MASK_DESCRIPTIONS[mask_kind]
         raster.bands = bands
         return
 
-    try:
-        spec = MASK_CLASSES[mask_kind]
-    except KeyError as err:
-        raise ValueError(f"Unknown mask kind: {mask_kind}") from err
-
-    colors = (
-        {**LABEL_COLORS, "unknown": LABEL_EXTENT_UNKNOWN_COLOR} if label_extent else LABEL_COLORS
-    )
-    classes = [
-        Classification.create(
-            value=value, name=name, description=description, color_hint=colors.get(name)
-        )
-        for value, name, description in _class_spec(mask_kind, spec, background_value, label_extent)
+    ClassificationExtension.ext(band, add_if_missing=True).classes = [
+        Classification(dict(c)) for c in classes
     ]
-    ClassificationExtension.ext(band, add_if_missing=True).classes = classes
+    asset.extra_fields["classification:classes"] = classes
     owner = asset.owner
     if owner is not None:
         ClassificationExtension.add_to(owner)
