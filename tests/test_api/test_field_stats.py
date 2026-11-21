@@ -846,6 +846,65 @@ def _middle_field(path: Path) -> Path:
     return path
 
 
+def _band_line_grid_source(path: Path) -> tuple[Path, float, float]:
+    """A stand-in remote grid holding one 2 km chip that 48°N cuts into two pieces.
+
+    Returns the path, and the chip's southern edge and 48°N as UTM northings.
+    """
+    from pyproj import Transformer
+
+    _, y48 = Transformer.from_crs("OGC:CRS84", _UTM_CRS, always_xy=True).transform(15.0, 48.0)
+    y = y48 // 2000 * 2000
+    full = gpd.GeoSeries([box(_SQ_X0, y, _SQ_X0 + 2000, y + 2000)], crs=_UTM_CRS).to_crs(4326)[0]
+    gdf = gpd.GeoDataFrame(
+        {"gzd": ["33T", "33U"], "mgrs_10km": ["33TWP01", "33UWP01"]},
+        geometry=[
+            full.intersection(box(-180, -90, 180, 48)),
+            full.intersection(box(-180, 48, 180, 90)),
+        ],
+        crs="EPSG:4326",
+    )
+    gdf.insert(2, "id", ["ftw-33TWP0016", "ftw-33UWP0016"])
+    gdf.to_parquet(path)
+    gpio.read(str(path)).add_bbox().write(str(path))
+    return path, y, y48
+
+
+class TestBandLineChips:
+    """A chip cut in two by a latitude-band line is joined and kept."""
+
+    def _run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, km_size: float = 2.0):
+        from ftw_dataset_tools.api import field_stats
+
+        monkeypatch.setattr(field_stats, "configure_source_coop_s3", lambda _conn: None)
+        grid, y, y48 = _band_line_grid_source(tmp_path / "grid.parquet")
+        # The field lies in the southern piece only, so the northern piece is beyond its bounds.
+        field = box(_SQ_X0 + 200, y + 100, _SQ_X0 + 1800, y48 - 100)
+        fields = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame({"fid": [1]}, geometry=[field], crs=_UTM_CRS).to_crs(4326).to_parquet(
+            fields
+        )
+        gpio.read(str(fields)).add_bbox().write(str(fields))
+        result = field_stats.add_field_stats(
+            fields_file=fields,
+            grid_source=str(grid),
+            output_file=tmp_path / "chips.parquet",
+            min_chip_area=99.5,
+            km_size=km_size,
+        )
+        return result, sorted(_chip_ids(result.output_path))
+
+    def test_joined_chip_keeps_the_southern_id(self, tmp_path: Path, monkeypatch) -> None:
+        result, ids = self._run(tmp_path, monkeypatch)
+        assert ids == ["ftw-33TWP0016"]
+        assert result.cells_dropped_undersized == 0
+
+    def test_cut_chips_join_on_the_line_only(self, tmp_path: Path, monkeypatch) -> None:
+        # 1 km chips: the row on 48°N is joined, the rows wholly north or south are not cut.
+        _, ids = self._run(tmp_path, monkeypatch, km_size=1)
+        assert ids == ["ftw-33TWP0016", "ftw-33TWP0116"]
+
+
 class TestRemoteGridChipSize:
     """The remote 2 km grid is cut to km_size."""
 

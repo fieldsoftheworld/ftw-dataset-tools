@@ -397,7 +397,7 @@ A chip id is `ftw-{mgrs_square}{easting}{northing}`, the chip's south-west corne
 | Multiples of 10 m (`0.25`) | 4 (10 m) | `ftw-33UXP04101000` |
 | Any other whole metre (`0.256`) | 5 (1 m) | `ftw-33UXP0410010000` |
 
-Chips never cross an MGRS 100 km square, UTM zone or latitude band, so those on a boundary are clipped and dropped by `--min-chip-area`. A size that does not divide 100 km evenly (e.g. `0.3`) also clips the last row and column of each square. The collection records the size as `ftw:chip_size_km`.
+Chips never cross an MGRS 100 km square or UTM zone, so those on a boundary are clipped and dropped by `--min-chip-area`. A chip that a latitude-band line cuts in two (e.g. 48°N, between bands T and U) is joined back into one full chip under the southern band's id. A size that does not divide 100 km evenly (e.g. `0.3`) also clips the last row and column of each square. The collection records the size as `ftw:chip_size_km`.
 
 ### create-chips
 

@@ -34,6 +34,7 @@ __all__ = [
     "cut_grid",
     "expand_bounds",
     "id_digits",
+    "join_band_pieces",
     "parse_chip_ids",
     "reprojector",
     "utm_crs_for_cell",
@@ -221,6 +222,66 @@ def cut_grid(
     conn.execute(f'DROP TABLE "{table}"')
     conn.execute(f'ALTER TABLE "{table}_cut" RENAME TO "{table}"')
     return conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+
+
+# MGRS latitude bands, south to north (no I or O).
+_BANDS = "CDEFGHJKLMNPQRSTUVWX"
+# An FTW chip id split into zone, band, and the rest (square letters and offset digits).
+_BAND_PIECE_PATTERN = r"^ftw-(\d{1,2})([C-HJ-NP-X])([A-HJ-NP-Z]{2}(?:\d\d){2,5})$"
+
+
+def join_band_pieces(
+    conn: duckdb.DuckDBPyConnection, table: str, geom_col: str = "geometry"
+) -> int:
+    """Join the two pieces of each chip that a latitude-band line cuts in two, in place.
+
+    The MGRS band changes every 8 degrees of latitude inside a UTM zone, so the grid
+    splits each chip on a band line into a piece per band, under ids that differ only
+    in the band letter (ftw-33TWP0016 and ftw-33UWP0016). Neither piece passes the
+    minimum chip area filter alone, which left a strip without chips along every band
+    line. The joined chip keeps the southern piece's row and id (MGRS names a point by
+    the band it lies in, and the chip's south-west corner is in the southern band) and
+    takes the union of both pieces. A ``bbox`` struct column is updated to match. Rows
+    without FTW chip ids are left alone.
+
+    Returns:
+        Number of chips joined.
+    """
+    columns = {row[0]: row[1] for row in conn.execute(f'DESCRIBE "{table}"').fetchall()}
+    if "id" not in columns:
+        return 0
+    pattern = _BAND_PIECE_PATTERN
+    conn.execute(f"""
+        CREATE OR REPLACE TEMP TABLE _band_pairs AS
+        WITH pieces AS (
+            SELECT
+                rowid AS rid,
+                CAST(regexp_extract(id, '{pattern}', 1) AS INTEGER) AS zone,
+                strpos('{_BANDS}', regexp_extract(id, '{pattern}', 2)) AS band,
+                regexp_extract(id, '{pattern}', 3) AS rest,
+                "{geom_col}" AS g
+            FROM "{table}"
+            WHERE regexp_full_match(id, '{pattern}')
+        )
+        SELECT s.rid AS south, n.rid AS north, ST_Union(s.g, n.g) AS g
+        FROM pieces s
+        JOIN pieces n ON n.zone = s.zone AND n.rest = s.rest AND n.band = s.band + 1
+    """)
+    joined = conn.execute("SELECT COUNT(*) FROM _band_pairs").fetchone()[0]
+    if joined:
+        bbox = ""
+        if columns.get("bbox", "").startswith("STRUCT"):
+            bbox = (
+                ", bbox = STRUCT_PACK(xmin := ST_XMin(p.g), ymin := ST_YMin(p.g), "
+                f"xmax := ST_XMax(p.g), ymax := ST_YMax(p.g))::{columns['bbox']}"
+            )
+        conn.execute(f"""
+            UPDATE "{table}" SET "{geom_col}" = p.g::{columns[geom_col]}{bbox}
+            FROM _band_pairs p WHERE "{table}".rowid = p.south
+        """)
+        conn.execute(f'DELETE FROM "{table}" WHERE rowid IN (SELECT north FROM _band_pairs)')
+    conn.execute("DROP TABLE _band_pairs")
+    return joined
 
 
 # The square origin is the centroid less the id's offset, not the bounds: a few published
