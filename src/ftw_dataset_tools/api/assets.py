@@ -55,6 +55,14 @@ LABEL_COLORS: dict[str, str] = {
 # (value, name, description) per classified mask kind. The background value is
 # substituted at call time ONLY for the semantic kinds: presence-only masks use
 # background=3 there, while the DECODE layers fold presence-only into 0.
+# Human-readable class labels; Portolan wants a title on every class (PTL-CLS-002).
+CLASS_TITLES = {
+    "background": "Background",
+    "field": "Field",
+    "boundary": "Field boundary",
+    "unknown": "Unknown",
+}
+
 MASK_CLASSES: dict[str, list[tuple[int, str, str]]] = {
     "semantic_2class": [
         (0, "background", "Not a field"),
@@ -323,7 +331,10 @@ def add_raster_bands(asset: pystac.Asset, path: Path) -> None:
 def add_mask_classification(
     asset: pystac.Asset, mask_kind: str, background_value: int = 0, *, label_extent: bool = False
 ) -> None:
-    """Describe the classes of a mask asset on its first raster band.
+    """Describe the classes of a mask asset, on the asset and on its first raster band.
+
+    Portolan reads a single-band asset's class list from the asset itself, next to
+    its nodata (PTL-CLS-005); the copy on ``raster:bands`` stays for older readers.
 
     ``mask_kind`` is a key of ``MASK_CLASSES`` or ``MASK_DESCRIPTIONS``.
     ``label_extent`` marks a dataset built with a label extent, whose semantic masks
@@ -351,11 +362,16 @@ def add_mask_classification(
     )
     classes = [
         Classification.create(
-            value=value, name=name, description=description, color_hint=colors.get(name)
+            value=value,
+            name=name,
+            title=CLASS_TITLES[name],
+            description=description,
+            color_hint=colors.get(name),
         )
         for value, name, description in _class_spec(mask_kind, spec, background_value, label_extent)
     ]
     ClassificationExtension.ext(band, add_if_missing=True).classes = classes
+    asset.extra_fields["classification:classes"] = [c.to_dict() for c in classes]
     owner = asset.owner
     if owner is not None:
         ClassificationExtension.add_to(owner)

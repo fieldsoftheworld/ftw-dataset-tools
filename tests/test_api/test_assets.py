@@ -214,6 +214,33 @@ class TestAddMaskClassification:
             in item.stac_extensions
         )
 
+    @pytest.mark.parametrize(
+        ("kind", "background", "label_extent"),
+        [
+            ("semantic_2class", 0, False),
+            ("semantic_3class", 3, False),
+            ("semantic_3class", 0, True),
+            ("decode_boundary", 0, False),
+        ],
+    )
+    def test_classes_have_titles_and_sit_on_the_asset(
+        self, tmp_path: Path, kind: str, background: int, label_extent: bool
+    ) -> None:
+        # Portolan v0.3: each class has a title (PTL-CLS-002), and a single-band
+        # asset carries the list itself (PTL-CLS-005); the band copy stays for old readers.
+        from ftw_dataset_tools.api.assets import add_mask_classification, add_raster_bands
+
+        p = tmp_path / "m.tif"
+        _write_cog(p, np.array([[0, 1], [3, 0]], dtype=np.uint8))
+        _, asset = _item_with_asset(p, ["labels"])
+        add_raster_bands(asset, p)
+
+        add_mask_classification(asset, kind, background_value=background, label_extent=label_extent)
+
+        on_asset = asset.extra_fields["classification:classes"]
+        assert on_asset == asset.extra_fields["raster:bands"][0]["classification:classes"]
+        assert all(c["title"] for c in on_asset)
+
     def test_presence_only_background_value(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.assets import add_mask_classification, add_raster_bands
 

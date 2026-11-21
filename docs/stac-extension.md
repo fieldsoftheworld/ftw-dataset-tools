@@ -352,7 +352,10 @@ stddev, and valid_percent whenever a value was excluded from them). The same sta
 COG as GDAL `STATISTICS_*` band tags, never in an `.aux.xml` sidecar.
 
 Semantic mask assets add `classification:classes`
-([classification extension](https://github.com/stac-extensions/classification)):
+([classification extension](https://github.com/stac-extensions/classification)) on the
+asset, as Portolan v0.3 reads it for a single-band asset, with a copy on
+`raster:bands[0]` for older readers. Every class has a `name` and a `title`
+(Background, Field, Field boundary, Unknown):
 
 | Mask | Classes |
 |------|---------|
