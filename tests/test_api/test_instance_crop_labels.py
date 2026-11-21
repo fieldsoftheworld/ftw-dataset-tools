@@ -10,7 +10,7 @@ import pytest
 import rasterio
 from click.testing import CliRunner
 from rasterio.warp import transform
-from shapely.geometry import box, mapping
+from shapely.geometry import MultiPolygon, box, mapping
 
 from ftw_dataset_tools.api import masks, pipeline, stac
 from ftw_dataset_tools.api.config import ConfigError, DatasetConfig
@@ -112,7 +112,19 @@ def test_resume_requires_matching_lookup_and_stac_exposes_it(tmp_path):
         path.parent,
     )
     assert item.assets["instance_labels"].href == "./grid_2024_instance_labels.json"
+    # Without a crop column the string ids still need a lookup, now without crops.
     kwargs["crop_column"] = None
+    masks.create_masks(**kwargs)
+    labels = json.loads(masks.instance_labels_path(path).read_text(encoding="utf-8"))
+    assert labels["crop_column"] is None
+    assert [set(r) for r in labels["instances"]] == [{"instance_value", "field_id"}] * 2
+
+
+def test_disabling_labels_removes_the_lookup_when_ids_are_the_values(tmp_path):
+    kwargs = inputs(tmp_path, ids=(3, 4))
+    path, _ = create(kwargs)
+    kwargs["crop_column"] = None
+    kwargs["skip_existing"] = True
     masks.create_masks(**kwargs)
     assert not masks.instance_labels_path(path).exists()
 
@@ -235,3 +247,129 @@ def test_pipeline_matches_api(tmp_path):
     assert json.loads(masks.instance_labels_path(actual).read_text()) == labels
     with rasterio.open(path) as a, rasterio.open(actual) as b:
         np.testing.assert_array_equal(a.read(1), b.read(1))
+
+
+def _instances(tmp_path, ids, geometries, crop_column=None, counts=False):
+    """Burn an instance mask: (pixel values, or {value: pixel count}, and lookup or None)."""
+    kwargs = inputs(tmp_path, crops=(None, None))
+    write_geoparquet(
+        kwargs["boundaries_file"],
+        gdf=gpd.GeoDataFrame(
+            {"id": list(ids), "crop:name": [f"crop-{i}" for i in ids]},
+            geometry=list(geometries),
+            crs=4326,
+        ),
+    )
+    kwargs["crop_column"] = crop_column
+    result = masks.create_masks(**kwargs)[masks.MaskType.INSTANCE]
+    path = result.masks_created[0].output_path
+    with rasterio.open(path) as src:
+        pixels = src.read(1)
+    found, n = np.unique(pixels[pixels > 0], return_counts=True)
+    values = dict(zip(found.tolist(), n.tolist(), strict=True)) if counts else set(found.tolist())
+    lookup_path = masks.instance_labels_path(path)
+    lookup = json.loads(lookup_path.read_text(encoding="utf-8")) if lookup_path.exists() else None
+    return values, lookup
+
+
+_LEFT = box(10.001, 50.001, 10.004, 50.004)
+_RIGHT = box(10.006, 50.001, 10.009, 50.004)
+
+
+class TestInstancePerPiece:
+    def test_unique_ids_stay_the_pixel_values(self, tmp_path) -> None:
+        values, lookup = _instances(tmp_path, (3, 4), (_LEFT, _RIGHT))
+        assert values == {3, 4}
+        assert lookup is None
+
+    def test_repeated_id_gets_one_instance_per_polygon(self, tmp_path) -> None:
+        values, lookup = _instances(tmp_path, (7, 7), (_LEFT, _RIGHT))
+        assert values == {1, 2}
+        assert lookup["crop_column"] is None
+        assert sorted((r["instance_value"], r["field_id"]) for r in lookup["instances"]) == [
+            (1, "7"),
+            (2, "7"),
+        ]
+
+    def test_parts_that_do_not_touch_are_separate_instances(self, tmp_path) -> None:
+        values, lookup = _instances(tmp_path, (5,), (MultiPolygon([_LEFT, _RIGHT]),))
+        assert values == {1, 2}
+        assert {r["field_id"] for r in lookup["instances"]} == {"5"}
+
+    def test_touching_parts_stay_one_field(self, tmp_path) -> None:
+        touching = box(10.004, 50.001, 10.006, 50.004)
+        values, lookup = _instances(tmp_path, (5,), (MultiPolygon([_LEFT, touching]),))
+        assert values == {5}
+        assert lookup is None
+
+    def test_overlapping_fields_burn_in_file_order(self, tmp_path) -> None:
+        # Where fields overlap the later row wins, as before; the values stay field ids.
+        wide = box(10.001, 50.001, 10.006, 50.004)
+        values, lookup = _instances(tmp_path, (4, 3), (wide, _LEFT), counts=True)
+        assert lookup is None
+        assert values[3] > values[4]
+
+    def test_corner_touching_parts_stay_one_field(self, tmp_path) -> None:
+        corner = box(10.004, 50.004, 10.007, 50.007)
+        values, lookup = _instances(tmp_path, (5,), (MultiPolygon([_LEFT, corner]),))
+        assert values == {5}
+        assert lookup is None
+
+    def test_parts_outside_the_chip_do_not_renumber_it(self, tmp_path) -> None:
+        outside = box(10.02, 50.001, 10.023, 50.004)
+        values, lookup = _instances(tmp_path, (5, 6), (MultiPolygon([_LEFT, outside]), _RIGHT))
+        assert values == {5, 6}
+        assert lookup is None
+
+    def test_values_are_contiguous_when_a_piece_is_hidden(self, tmp_path) -> None:
+        # Field 7's second polygon lies under field 8, so it shows no pixels.
+        values, lookup = _instances(tmp_path, (7, 7, 8), (_LEFT, _RIGHT, _RIGHT))
+        assert values == {1, 2}
+        assert sorted((r["instance_value"], r["field_id"]) for r in lookup["instances"]) == [
+            (1, "7"),
+            (2, "8"),
+        ]
+
+    def test_many_parts_group_quickly(self) -> None:
+        # 2,000 separate parts and 1,000 touching pairs, grouped through the index.
+        apart = [box(i * 3, 0, i * 3 + 1, 1) for i in range(2000)]
+        pairs = [box(i * 3 + 1, 5, i * 3 + 2, 6) for i in range(1000)]
+        pairs += [box(i * 3, 5, i * 3 + 1, 6) for i in range(1000)]
+        extent = box(-1, -1, 7000, 7)
+        assert len(masks._connected_pieces(MultiPolygon(apart), extent)) == 2000
+        assert len(masks._connected_pieces(MultiPolygon(pairs), extent)) == 1000
+
+    def test_crop_labels_follow_the_pieces(self, tmp_path) -> None:
+        values, lookup = _instances(
+            tmp_path, (5,), (MultiPolygon([_LEFT, _RIGHT]),), crop_column="crop:name"
+        )
+        assert values == {1, 2}
+        assert {(r["field_id"], r["crop_value"]) for r in lookup["instances"]} == {("5", "crop-5")}
+
+    @pytest.mark.parametrize("raw", ["12.7", "inf"])
+    def test_ids_that_are_not_whole_numbers_are_renumbered(self, tmp_path, raw) -> None:
+        values, lookup = _instances(tmp_path, (raw, "4"), (_LEFT, _RIGHT))
+        assert values == {1, 2}
+        assert {r["field_id"] for r in lookup["instances"]} == {raw, "4"}
+
+    def test_a_missing_lookup_is_rewritten_on_resume(self, tmp_path) -> None:
+        kwargs = inputs(tmp_path, ids=(7, 7))
+        kwargs["crop_column"] = None
+        path = masks.create_masks(**kwargs)[masks.MaskType.INSTANCE].masks_created[0].output_path
+        masks.instance_labels_path(path).unlink()
+        kwargs["skip_existing"] = True
+        result = masks.create_masks(**kwargs)[masks.MaskType.INSTANCE]
+        assert result.masks_existing == 0
+        assert masks.instance_labels_path(path).exists()
+
+    def test_masks_from_before_are_rewritten_on_resume(self, tmp_path) -> None:
+        kwargs = inputs(tmp_path, ids=(3, 4))
+        kwargs["crop_column"] = None
+        path = masks.create_masks(**kwargs)[masks.MaskType.INSTANCE].masks_created[0].output_path
+        # Strip the tag, as on a mask written before instances were numbered per piece.
+        with rasterio.open(path, "r+", IGNORE_COG_LAYOUT_BREAK="YES") as dst:
+            dst.update_tags(**{masks.INSTANCE_VALUES_TAG: ""})
+        kwargs["skip_existing"] = True
+        result = masks.create_masks(**kwargs)[masks.MaskType.INSTANCE]
+        assert result.masks_existing == 0
+        assert len(result.masks_created) == 1

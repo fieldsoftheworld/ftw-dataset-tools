@@ -511,6 +511,8 @@ def _get_geometries_in_bounds(
         )
     """
 
+    # Without a crop column rows keep the file's order (DuckDB preserves it): where
+    # fields overlap the later row wins, and a chip numbered 1..n follows that order.
     if crop_column is not None:
         query += " ORDER BY id, wkt, crop"
 
@@ -523,6 +525,13 @@ def _wkt_to_geometry(wkt: str):
 
     return shapely_wkt.loads(wkt)
 
+
+# Instance masks give each connected piece of a field its own value, and say in this tag
+# whether the values are field ids or need the lookup. Masks from before carry no tag,
+# so a rerun with skip_existing writes them again; so does a lookup that went missing.
+INSTANCE_VALUES_TAG = "ftw_instance_values"
+INSTANCE_IDS = "piece-id"
+INSTANCE_WITH_LOOKUP = "piece-lookup"
 
 # Instance masks are stored as uint32; a raw id outside this range can't be
 # burned in directly.
@@ -542,25 +551,90 @@ def _instance_value(raw: object) -> int | None:
         return raw
     if isinstance(raw, str | float):
         try:
-            return int(float(raw))
+            value = float(raw)
         except (TypeError, ValueError):
             return None
+        # A fractional or infinite id can't be a pixel value without changing it.
+        return int(value) if value.is_integer() else None
     return None
 
 
-def _instance_ids_for_shapes(boundaries: list[tuple]) -> list[int]:
-    """Return uint32-safe instance ids, one per boundary row.
+def _connected_pieces(geometry, extent) -> list:
+    """The groups of a field's parts that touch each other, within ``extent``.
 
-    Falls back to stable sequential ids 1..n (in the order rows come back) for the
-    *entire* cell when any raw id is missing, non-numeric, non-positive, or too
-    large for uint32 - a partial fallback could collide with valid ids already
-    present in the same cell.
+    Parts are grouped by whether they intersect, so parts sharing an edge or a corner
+    stay one piece and no geometry is altered. Parts outside the raster ``extent`` are
+    left out, so they don't make a chip renumber for an instance it can't show.
     """
-    values = [_instance_value(row[0]) for row in boundaries]
-    needs_fallback = any(v is None or v <= 0 or v > _UINT32_MAX for v in values)
-    if needs_fallback:
-        return list(range(1, len(boundaries) + 1))
-    return values
+    parts = [p for p in shapely.get_parts(geometry) if not p.is_empty and p.intersects(extent)]
+    if len(parts) <= 1:
+        return parts
+    group = list(range(len(parts)))
+
+    def root(k: int) -> int:
+        while group[k] != k:
+            group[k] = group[group[k]]
+            k = group[k]
+        return k
+
+    try:
+        pairs = shapely.STRtree(parts).query(parts, predicate="intersects").T
+    except shapely.errors.GEOSException:
+        # A predicate GEOS can't evaluate on broken input: keep the field whole.
+        pairs = [(0, k) for k in range(1, len(parts))]
+    for a, b in pairs:
+        group[root(int(b))] = root(int(a))
+    members: dict[int, list] = {}
+    for k, part in enumerate(parts):
+        members.setdefault(root(k), []).append(part)
+    return [ms[0] if len(ms) == 1 else shapely.GeometryCollection(ms) for ms in members.values()]
+
+
+def _instance_shapes(
+    boundaries: list[tuple], geometries: list, crop_column: str | None, extent
+) -> tuple[list[tuple], list[dict] | None, bool]:
+    """The (shape, value) pairs to burn into an instance mask, its lookup rows, and
+    whether the values were renumbered.
+
+    Each field's id is its value, so the mask joins back to the fields file. When a
+    chip's ids cannot stand for one instance each (a repeated id, a field in parts
+    that don't touch, or an id that isn't a usable uint32), every connected piece is
+    numbered from 1 in row order instead, and the lookup rows give each value's field
+    id. Lookup rows are also returned whenever ``crop_column`` is set; otherwise None.
+    ``extent`` is the raster's footprint, in the raster CRS the geometries are already in.
+    """
+    pieces = [_connected_pieces(geometry, extent) for geometry in geometries]
+    shown = [(row, parts) for row, parts in zip(boundaries, pieces, strict=True) if parts]
+    ids = [_instance_value(row[0]) for row, _ in shown]
+    usable = all(v is not None and 0 < v <= _UINT32_MAX for v in ids)
+    renumber = not usable or len(set(ids)) != len(ids) or any(len(p) > 1 for _, p in shown)
+    burned: list[tuple] = []  # (shape, value, boundary row)
+    for (row, parts), field_value in zip(shown, ids, strict=True):
+        for part in parts:
+            burned.append((part, len(burned) + 1 if renumber else field_value, row))
+    shapes = [(part, value) for part, value, _ in burned]
+    if not renumber and crop_column is None:
+        return shapes, None, False
+    lookup = [
+        {
+            "instance_value": value,
+            "field_id": str(row[0]) if row[0] is not None else None,
+            **({"crop_value": row[2]} if crop_column is not None else {}),
+        }
+        for _, value, row in burned
+    ]
+    return shapes, lookup, renumber
+
+
+def _compact_instances(mask: np.ndarray, lookup: list[dict]) -> np.ndarray:
+    """Renumber a 1..n mask's visible values to 1..k, in order, and its lookup to match."""
+    values = np.unique(mask[mask > 0])
+    remap = {int(old): new for new, old in enumerate(values, start=1)}
+    table = np.zeros(int(values.max()) + 1 if values.size else 1, dtype=mask.dtype)
+    table[values] = np.arange(1, values.size + 1, dtype=mask.dtype)
+    for row in lookup:
+        row["instance_value"] = remap.get(row["instance_value"], row["instance_value"])
+    return table[mask]
 
 
 # Mask types derived from an already-rasterized semantic mask rather than burned
@@ -714,6 +788,7 @@ def _rasterize_mask(
         to_raster_crs=to_raster_crs,
     )
 
+    renumbered = False
     # Get boundaries within bounds
     if mask_type == MaskType.INSTANCE and (id_col or crop_column is not None):
         boundaries = _get_geometries_in_bounds(
@@ -726,22 +801,14 @@ def _rasterize_mask(
         )
         # Rasterize with ID values
         if boundaries:
-            ids = _instance_ids_for_shapes(boundaries)
-            # A lookup must identify exactly one polygon per raster value.
-            if crop_column is not None and len(set(ids)) != len(ids):
-                ids = list(range(1, len(boundaries) + 1))
-            geometries = shapes_of([row[1] for row in boundaries])
-            shapes = list(zip(geometries, ids, strict=True))
-            features.rasterize(shapes, out=mask, transform=transform, all_touched=False)
-            if instance_labels is not None and crop_column is not None:
-                instance_labels.extend(
-                    {
-                        "instance_value": value,
-                        "field_id": str(row[0]) if row[0] is not None else None,
-                        "crop_value": row[2],
-                    }
-                    for row, value in zip(boundaries, ids, strict=True)
-                )
+            extent = shapely.box(*array_bounds(height, width, transform))
+            shapes, lookup, renumbered = _instance_shapes(
+                boundaries, shapes_of([row[1] for row in boundaries]), crop_column, extent
+            )
+            if shapes:
+                features.rasterize(shapes, out=mask, transform=transform, all_touched=False)
+            if instance_labels is not None and lookup is not None:
+                instance_labels.extend(lookup)
     else:
         boundaries = _get_geometries_in_bounds(conn, boundaries_path, boundaries_geom_col, bounds)
         # Rasterize with value 1
@@ -770,6 +837,8 @@ def _rasterize_mask(
     if instance_labels is not None:
         visible = set(np.unique(mask)) - {background_class_value}
         instance_labels[:] = [r for r in instance_labels if r["instance_value"] in visible]
+        if renumbered:
+            mask = _compact_instances(mask, instance_labels)
     return mask
 
 
@@ -929,7 +998,9 @@ def instance_labels_path(mask_path: Path) -> Path:
     return mask_path.with_name(f"{mask_path.stem}_labels.json")
 
 
-def _write_instance_labels(mask_path: Path, crop_column: str, background: int, rows: list) -> None:
+def _write_instance_labels(
+    mask_path: Path, crop_column: str | None, background: int, rows: list
+) -> None:
     path = instance_labels_path(mask_path)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
@@ -951,10 +1022,18 @@ def _write_instance_labels(mask_path: Path, crop_column: str, background: int, r
         tmp.unlink(missing_ok=True)
 
 
-def _lookup_matches(mask_path: Path, crop_column: str | None) -> bool:
+def _instance_reusable(mask_path: Path, crop_column: str | None) -> bool:
+    """Whether an instance mask on disk, and the lookup its tag says it has, can be kept."""
+    try:
+        with rasterio.open(mask_path) as src:
+            kind = src.tags().get(INSTANCE_VALUES_TAG)
+    except rasterio.errors.RasterioIOError:
+        return False
     path = instance_labels_path(mask_path)
-    if crop_column is None:
-        return not path.exists()
+    if kind == INSTANCE_IDS:
+        return crop_column is None and not path.exists()
+    if kind != INSTANCE_WITH_LOOKUP:
+        return False
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data["crop_column"] == crop_column and isinstance(data["instances"], list)
@@ -1013,7 +1092,7 @@ def _create_masks_for_cell(
         id_col=id_col,
         background_class_value=background_class_value,
         crop_column=crop_column,
-        instance_labels=instance_labels if crop_column is not None else None,
+        instance_labels=instance_labels if source_type == MaskType.INSTANCE else None,
         to_raster_crs=to_raster_crs,
         label_extent=label_extent,
     )
@@ -1026,9 +1105,12 @@ def _create_masks_for_cell(
             # Instance ids are arbitrary and often global, so a viewer needs the chip's own
             # id range to stretch over: keeping the background out of the embedded statistics
             # makes the render's rescale start at the smallest field id.
+            write_lookup = crop_column is not None or bool(instance_labels)
             if mask_type == MaskType.INSTANCE:
                 # Missing lookups trigger regeneration on resume; stale ones must not survive.
                 instance_labels_path(output_path).unlink(missing_ok=True)
+                kind = INSTANCE_WITH_LOOKUP if write_lookup else INSTANCE_IDS
+                tags = {**tags, INSTANCE_VALUES_TAG: kind}
             _write_mask_raster(
                 mask,
                 output_path,
@@ -1037,7 +1119,7 @@ def _create_masks_for_cell(
                 tags=tags,
                 nodata=0 if mask_type == MaskType.INSTANCE else None,
             )
-            if mask_type == MaskType.INSTANCE and crop_column is not None:
+            if mask_type == MaskType.INSTANCE and write_lookup:
                 # Instance masks always use 0 as background, whatever the semantic masks use.
                 _write_instance_labels(output_path, crop_column, 0, instance_labels)
         except Exception as e:
@@ -1450,7 +1532,7 @@ def _outputs_to_write(
             skip_existing
             and mask_path.exists()
             and mask_path.stat().st_size > 0
-            and (mask_type != MaskType.INSTANCE or _lookup_matches(mask_path, crop_column))
+            and (mask_type != MaskType.INSTANCE or _instance_reusable(mask_path, crop_column))
             and _reusable(mask_path, grid, _extent_tag(mask_type, label_extent))
         ):
             existing[mask_type] += 1

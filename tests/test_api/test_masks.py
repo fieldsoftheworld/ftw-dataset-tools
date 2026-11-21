@@ -1461,10 +1461,17 @@ class TestInstanceValue:
 
         assert _instance_value(42) == 42
 
-    def test_float_is_truncated(self) -> None:
+    def test_whole_float_is_kept(self) -> None:
         from ftw_dataset_tools.api.masks import _instance_value
 
-        assert _instance_value(42.9) == 42
+        assert _instance_value(42.0) == 42
+
+    @pytest.mark.parametrize("raw", [42.9, "42.9", float("inf"), "inf", "nan"])
+    def test_fractional_or_infinite_id_is_none(self, raw: object) -> None:
+        # Truncating would burn a value that joins back to the wrong field.
+        from ftw_dataset_tools.api.masks import _instance_value
+
+        assert _instance_value(raw) is None
 
     def test_non_numeric_string_is_none(self) -> None:
         from ftw_dataset_tools.api.masks import _instance_value
