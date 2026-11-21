@@ -697,6 +697,20 @@ class TestSingleCollectionLayout:
         )
         assert "q1_image" not in scenes
 
+    @pytest.mark.parametrize(("background", "label_extent"), [(0, False), (3, False), (0, True)])
+    def test_item_assets_carry_the_items_class_lists(self, background, label_extent) -> None:
+        # Portolan PTL-CLS-006: the collection's template matches its items.
+        from ftw_dataset_tools.api.assets import mask_class_list
+        from ftw_dataset_tools.api.stac import _build_item_assets
+
+        defs = _build_item_assets(background_value=background, label_extent=label_extent)
+        for name in ("semantic_2class", "semantic_3class", "decode_boundary"):
+            assert defs[f"{name}_mask"].properties["classification:classes"] == mask_class_list(
+                name, background, label_extent=label_extent
+            )
+        for name in ("instance", "decode_distance"):
+            assert "classification:classes" not in defs[f"{name}_mask"].properties
+
     def test_item_assets_declare_only_the_built_masks(self) -> None:
         """A presence-only build writes the semantic masks only, so only those are declared."""
         from ftw_dataset_tools.api.stac import _build_item_assets

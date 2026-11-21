@@ -25,6 +25,7 @@ from pystac import (
     SpatialExtent,
     TemporalExtent,
 )
+from pystac.extensions.classification import ClassificationExtension
 from pystac.extensions.version import VersionExtension
 from pystac.layout import TemplateLayoutStrategy
 
@@ -34,6 +35,7 @@ from ftw_dataset_tools.api.assets import (
     add_mask_classification,
     add_raster_bands,
     add_table_columns,
+    mask_class_list,
 )
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.logging_config import get_logger, success
@@ -689,7 +691,11 @@ def _group_items_by_square(items: list[Item], squares: dict[str, str]) -> dict[s
 
 
 def _build_item_assets(
-    imagery_modes: Sequence[str] = (), mask_types: Sequence[str] | None = None
+    imagery_modes: Sequence[str] = (),
+    mask_types: Sequence[str] | None = None,
+    *,
+    background_value: int = 0,
+    label_extent: bool = False,
 ) -> dict[str, ItemAssetDefinition]:
     """Declare the assets a chip item may carry (core ``item_assets`` collection field).
 
@@ -697,7 +703,9 @@ def _build_item_assets(
     selects, so a mosaics-only collection does not advertise planting/harvest scenes.
     Masks are declared only for ``mask_types`` (``MaskType`` values), the masks the
     build writes, so a presence-only collection does not advertise instance or
-    DECODE masks; None declares every mask type.
+    DECODE masks; None declares every mask type. Classified masks carry the class
+    list their items carry, so a client can draw a legend from the collection
+    (Portolan PTL-CLS-006).
     """
     # Imported here: api.imagery's package init imports this module back.
     from ftw_dataset_tools.api.imagery.slots import MOSAIC_SLOTS, SCENE_SLOTS
@@ -707,9 +715,11 @@ def _build_item_assets(
     for mask_name, mask_type in _MASK_TYPE_BY_ASSET_NAME.items():
         if mask_types is not None and mask_type.value not in mask_types:
             continue
-        defs[f"{mask_name}_mask"] = ItemAssetDefinition(
-            {"type": MEDIA_TYPE_COG, "roles": ["labels"], "title": _MASK_TITLES[mask_name]}
-        )
+        definition = {"type": MEDIA_TYPE_COG, "roles": ["labels"], "title": _MASK_TITLES[mask_name]}
+        classes = mask_class_list(mask_name, background_value, label_extent=label_extent)
+        if classes is not None:
+            definition["classification:classes"] = classes
+        defs[f"{mask_name}_mask"] = ItemAssetDefinition(definition)
     if "scenes" in imagery_modes:
         for season in SCENE_SLOTS:
             defs[f"{season}_image"] = ItemAssetDefinition(
@@ -852,6 +862,7 @@ def _create_collection(
     background_class_value: int = 0,
     imagery_modes: Sequence[str] = (),
     mask_types: Sequence[str] | None = None,
+    label_extent: bool = False,
 ) -> Collection:
     """
     Create the single dataset collection with source-data and chip-definition assets.
@@ -910,7 +921,14 @@ def _create_collection(
         checksums=checksums,
     )
 
-    collection.item_assets = _build_item_assets(imagery_modes, mask_types)
+    collection.item_assets = _build_item_assets(
+        imagery_modes,
+        mask_types,
+        background_value=background_class_value,
+        label_extent=label_extent,
+    )
+    if any("classification:classes" in d.properties for d in collection.item_assets.values()):
+        ClassificationExtension.add_to(collection)
     # A Collection carries renders at its top level (the schema's Collection branch).
     collection.extra_fields["renders"] = build_collection_renders(
         background_value=background_class_value, mask_types=mask_types
@@ -1365,6 +1383,7 @@ def generate_stac_catalog(
         background_class_value=background_class_value,
         imagery_modes=_declared_imagery_modes(config, items),
         mask_types=config.stages.masks.mask_types if config is not None else None,
+        label_extent=label_extent,
     )
 
     _apply_collection_context(collection, config, metadata, previous, provenance)
