@@ -489,6 +489,8 @@ crop_by_instance = {row["instance_value"]: row["crop_value"] for row in labels["
 
 Keys match pixels in `instance_mask`; missing crops are null. See the [lookup format](docs/stac-extension.md#instance-crop-labels).
 
+Without a crop column, an instance pixel is its field's id. A chip where that can't give one instance per field piece (repeated ids, a MultiPolygon in parts that don't touch, or non-numeric ids) is numbered 1..n and gets the same lookup, mapping each value to its `field_id`.
+
 ### create-boundaries
 
 Convert polygon geometries to boundary lines using ST_Boundary.

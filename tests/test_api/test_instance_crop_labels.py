@@ -10,7 +10,7 @@ import pytest
 import rasterio
 from click.testing import CliRunner
 from rasterio.warp import transform
-from shapely.geometry import box, mapping
+from shapely.geometry import MultiPolygon, box, mapping
 
 from ftw_dataset_tools.api import masks, pipeline, stac
 from ftw_dataset_tools.api.config import ConfigError, DatasetConfig
@@ -112,7 +112,19 @@ def test_resume_requires_matching_lookup_and_stac_exposes_it(tmp_path):
         path.parent,
     )
     assert item.assets["instance_labels"].href == "./grid_2024_instance_labels.json"
+    # Without a crop column the string ids still need a lookup, now without crops.
     kwargs["crop_column"] = None
+    masks.create_masks(**kwargs)
+    labels = json.loads(masks.instance_labels_path(path).read_text(encoding="utf-8"))
+    assert labels["crop_column"] is None
+    assert [set(r) for r in labels["instances"]] == [{"instance_value", "field_id"}] * 2
+
+
+def test_disabling_labels_removes_the_lookup_when_ids_are_the_values(tmp_path):
+    kwargs = inputs(tmp_path, ids=(3, 4))
+    path, _ = create(kwargs)
+    kwargs["crop_column"] = None
+    kwargs["skip_existing"] = True
     masks.create_masks(**kwargs)
     assert not masks.instance_labels_path(path).exists()
 
@@ -235,3 +247,63 @@ def test_pipeline_matches_api(tmp_path):
     assert json.loads(masks.instance_labels_path(actual).read_text()) == labels
     with rasterio.open(path) as a, rasterio.open(actual) as b:
         np.testing.assert_array_equal(a.read(1), b.read(1))
+
+
+def _instances(tmp_path, ids, geometries):
+    """Burn an instance mask without crop labels: (pixel values, lookup or None)."""
+    kwargs = inputs(tmp_path, crops=(None, None))
+    write_geoparquet(
+        kwargs["boundaries_file"],
+        gdf=gpd.GeoDataFrame({"id": list(ids)}, geometry=list(geometries), crs=4326),
+    )
+    kwargs["crop_column"] = None
+    result = masks.create_masks(**kwargs)[masks.MaskType.INSTANCE]
+    path = result.masks_created[0].output_path
+    with rasterio.open(path) as src:
+        values = set(np.unique(src.read(1))) - {0}
+    lookup_path = masks.instance_labels_path(path)
+    lookup = json.loads(lookup_path.read_text(encoding="utf-8")) if lookup_path.exists() else None
+    return values, lookup
+
+
+_LEFT = box(10.001, 50.001, 10.004, 50.004)
+_RIGHT = box(10.006, 50.001, 10.009, 50.004)
+
+
+class TestInstancePerPiece:
+    def test_unique_ids_stay_the_pixel_values(self, tmp_path) -> None:
+        values, lookup = _instances(tmp_path, (3, 4), (_LEFT, _RIGHT))
+        assert values == {3, 4}
+        assert lookup is None
+
+    def test_repeated_id_gets_one_instance_per_polygon(self, tmp_path) -> None:
+        values, lookup = _instances(tmp_path, (7, 7), (_LEFT, _RIGHT))
+        assert values == {1, 2}
+        assert lookup["crop_column"] is None
+        assert sorted((r["instance_value"], r["field_id"]) for r in lookup["instances"]) == [
+            (1, "7"),
+            (2, "7"),
+        ]
+
+    def test_parts_that_do_not_touch_are_separate_instances(self, tmp_path) -> None:
+        values, lookup = _instances(tmp_path, (5,), (MultiPolygon([_LEFT, _RIGHT]),))
+        assert values == {1, 2}
+        assert {r["field_id"] for r in lookup["instances"]} == {"5"}
+
+    def test_touching_parts_stay_one_field(self, tmp_path) -> None:
+        touching = box(10.004, 50.001, 10.006, 50.004)
+        values, lookup = _instances(tmp_path, (5,), (MultiPolygon([_LEFT, touching]),))
+        assert values == {5}
+        assert lookup is None
+
+    def test_masks_from_before_are_rewritten_on_resume(self, tmp_path) -> None:
+        kwargs = inputs(tmp_path, ids=(3, 4))
+        kwargs["crop_column"] = None
+        path = masks.create_masks(**kwargs)[masks.MaskType.INSTANCE].masks_created[0].output_path
+        # Strip the tag, as on a mask written before instances were numbered per piece.
+        with rasterio.open(path, "r+", IGNORE_COG_LAYOUT_BREAK="YES") as dst:
+            dst.update_tags(**{masks.INSTANCE_VALUES_TAG: ""})
+        kwargs["skip_existing"] = True
+        result = masks.create_masks(**kwargs)[masks.MaskType.INSTANCE]
+        assert result.masks_existing == 0
+        assert len(result.masks_created) == 1

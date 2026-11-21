@@ -1011,7 +1011,7 @@ def _create_chip_item(
                 labels = Asset(
                     href=f"./{labels_path.name}",
                     media_type="application/json",
-                    title="Field instance crop labels",
+                    title="Field instance lookup",
                     roles=["labels", "metadata"],
                 )
                 item.add_asset("instance_labels", labels)
