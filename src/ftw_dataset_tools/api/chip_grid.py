@@ -228,24 +228,44 @@ def cut_grid(
 _BANDS = "CDEFGHJKLMNPQRSTUVWX"
 # An FTW chip id split into zone, band, and the rest (square letters and offset digits).
 _BAND_PIECE_PATTERN = r"^ftw-(\d{1,2})([C-HJ-NP-X])([A-HJ-NP-Z]{2}(?:\d\d){2,5})$"
+# A bbox covering column: a struct of xmin, ymin, xmax, ymax.
+_BBOX_STRUCT = re.compile(
+    r"STRUCT\(xmin (DOUBLE|FLOAT), ymin (DOUBLE|FLOAT), xmax (DOUBLE|FLOAT), ymax (DOUBLE|FLOAT)\)"
+)
 
 
 def join_band_pieces(
-    conn: duckdb.DuckDBPyConnection, table: str, geom_col: str = "geometry"
+    conn: duckdb.DuckDBPyConnection,
+    table: str,
+    max_area: float,
+    area_expr: str,
+    geom_col: str = "geometry",
 ) -> int:
     """Join the two pieces of each chip that a latitude-band line cuts in two, in place.
 
     The MGRS band changes every 8 degrees of latitude inside a UTM zone, so the grid
     splits each chip on a band line into a piece per band, under ids that differ only
-    in the band letter (ftw-33TWP0016 and ftw-33UWP0016). Neither piece passes the
-    minimum chip area filter alone, which left a strip without chips along every band
-    line. The joined chip keeps the southern piece's row and id (MGRS names a point by
-    the band it lies in, and the chip's south-west corner is in the southern band) and
-    takes the union of both pieces. A ``bbox`` struct column is updated to match. Rows
+    in the band letter (ftw-33TWP0016 and ftw-33UWP0016). When both pieces are smaller
+    than ``max_area`` the minimum chip area filter would drop both, leaving a strip
+    without chips along the line; those pairs are joined. A pair with a piece of full
+    size is left as it is, so chips that pass the filter never change.
+
+    The joined chip keeps the southern piece's row and id (MGRS names a point by the
+    band it lies in, and the chip's south-west corner is in the southern band) and
+    takes the outer ring of both pieces' union, which closes the slivers between their
+    edges. Pieces must touch: row letters repeat every 2,000 km, which bands W and X
+    together exceed. Struct columns of xmin/ymin/xmax/ymax are updated to match. Rows
     without FTW chip ids are left alone.
 
+    Args:
+        conn: DuckDB connection with the spatial extension loaded
+        table: Grid table with FTW chip ids in ``id``
+        max_area: Pieces are joined only when both are smaller than this
+        area_expr: SQL for a piece's area, in the units of ``max_area``, over column ``g``
+        geom_col: Geometry column of ``table``
+
     Returns:
-        Number of chips joined.
+        Number of rows removed, one per joined chip.
     """
     columns = {row[0]: row[1] for row in conn.execute(f'DESCRIBE "{table}"').fetchall()}
     if "id" not in columns:
@@ -262,26 +282,34 @@ def join_band_pieces(
                 "{geom_col}" AS g
             FROM "{table}"
             WHERE regexp_full_match(id, '{pattern}')
+        ),
+        small AS (SELECT * FROM pieces WHERE {area_expr} < {max_area}),
+        pairs AS (
+            SELECT s.rid AS south, n.rid AS north, ST_Union(s.g, n.g) AS u
+            FROM small s
+            JOIN small n ON n.zone = s.zone AND n.rest = s.rest AND n.band = s.band + 1
+            WHERE ST_Intersects(s.g, n.g)
         )
-        SELECT s.rid AS south, n.rid AS north, ST_Union(s.g, n.g) AS g
-        FROM pieces s
-        JOIN pieces n ON n.zone = s.zone AND n.rest = s.rest AND n.band = s.band + 1
+        SELECT
+            south, north,
+            CASE WHEN ST_GeometryType(u) = 'POLYGON'
+                THEN ST_MakePolygon(ST_ExteriorRing(u)) ELSE u END AS g
+        FROM pairs
     """)
-    joined = conn.execute("SELECT COUNT(*) FROM _band_pairs").fetchone()[0]
-    if joined:
-        bbox = ""
-        if columns.get("bbox", "").startswith("STRUCT"):
-            bbox = (
-                ", bbox = STRUCT_PACK(xmin := ST_XMin(p.g), ymin := ST_YMin(p.g), "
-                f"xmax := ST_XMax(p.g), ymax := ST_YMax(p.g))::{columns['bbox']}"
-            )
-        conn.execute(f"""
-            UPDATE "{table}" SET "{geom_col}" = p.g::{columns[geom_col]}{bbox}
-            FROM _band_pairs p WHERE "{table}".rowid = p.south
-        """)
-        conn.execute(f'DELETE FROM "{table}" WHERE rowid IN (SELECT north FROM _band_pairs)')
+    before = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+    sets = [f'"{geom_col}" = p.g::{columns[geom_col]}'] + [
+        f'"{name}" = STRUCT_PACK(xmin := ST_XMin(p.g), ymin := ST_YMin(p.g), '
+        f"xmax := ST_XMax(p.g), ymax := ST_YMax(p.g))::{ctype}"
+        for name, ctype in columns.items()
+        if _BBOX_STRUCT.fullmatch(ctype)
+    ]
+    conn.execute(f"""
+        UPDATE "{table}" SET {", ".join(sets)}
+        FROM _band_pairs p WHERE "{table}".rowid = p.south
+    """)
+    conn.execute(f'DELETE FROM "{table}" WHERE rowid IN (SELECT north FROM _band_pairs)')
     conn.execute("DROP TABLE _band_pairs")
-    return joined
+    return before - conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
 
 
 # The square origin is the centroid less the id's offset, not the bounds: a few published

@@ -873,7 +873,13 @@ def _band_line_grid_source(path: Path) -> tuple[Path, float, float]:
 class TestBandLineChips:
     """A chip cut in two by a latitude-band line is joined and kept."""
 
-    def _run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, km_size: float = 2.0):
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        km_size: float = 2.0,
+        min_chip_area: float | None = 99.5,
+    ):
         from ftw_dataset_tools.api import field_stats
 
         monkeypatch.setattr(field_stats, "configure_source_coop_s3", lambda _conn: None)
@@ -889,7 +895,7 @@ class TestBandLineChips:
             fields_file=fields,
             grid_source=str(grid),
             output_file=tmp_path / "chips.parquet",
-            min_chip_area=99.5,
+            min_chip_area=min_chip_area,
             km_size=km_size,
         )
         return result, sorted(_chip_ids(result.output_path))
@@ -903,6 +909,18 @@ class TestBandLineChips:
         # 1 km chips: the row on 48°N is joined, the rows wholly north or south are not cut.
         _, ids = self._run(tmp_path, monkeypatch, km_size=1)
         assert ids == ["ftw-33TWP0016", "ftw-33TWP0116"]
+
+    def test_pieces_stay_apart_without_the_area_filter(self, tmp_path: Path, monkeypatch) -> None:
+        # min_chip_area off keeps every piece, so the northern one (beyond the fields'
+        # bounds, without coverage) is trimmed and the southern one keeps its own shape.
+        result, ids = self._run(tmp_path, monkeypatch, min_chip_area=None)
+        assert ids == ["ftw-33TWP0016"]
+        con = duckdb.connect()
+        con.execute("LOAD spatial")
+        area = con.execute(
+            f"SELECT ST_Area_Spheroid(ST_FlipCoordinates(geometry)) FROM '{result.output_path}'"
+        ).fetchone()[0]
+        assert area < 0.5 * 4_000_000
 
 
 class TestRemoteGridChipSize:

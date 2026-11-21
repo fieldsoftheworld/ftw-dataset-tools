@@ -292,6 +292,16 @@ def _rows(conn: duckdb.DuckDBPyConnection) -> dict[str, tuple]:
     return {cid: (gzd, wkt.loads(text), bbox) for cid, gzd, text, bbox in rows}
 
 
+# Pieces are joined only when both are under 99.5% of a 2 km chip.
+_MAX_AREA = 0.995 * 4_000_000
+
+
+def _join(conn: duckdb.DuckDBPyConnection) -> int:
+    return join_band_pieces(
+        conn, "grid_table", _MAX_AREA, 'ST_Area_Spheroid(ST_FlipCoordinates("g"))'
+    )
+
+
 class TestJoinBandPieces:
     def test_pieces_join_under_the_southern_id(self) -> None:
         full, south, north = _band_line_pieces()
@@ -299,7 +309,7 @@ class TestJoinBandPieces:
         conn = _lonlat_grid(
             {"ftw-33TWP0016": south, "ftw-33UWP0016": north, "ftw-33TWP0014": below}
         )
-        assert join_band_pieces(conn, "grid_table") == 1
+        assert _join(conn) == 1
         rows = _rows(conn)
         assert set(rows) == {"ftw-33TWP0016", "ftw-33TWP0014"}
         gzd, geom, bbox = rows["ftw-33TWP0016"]
@@ -318,26 +328,52 @@ class TestJoinBandPieces:
             "grid_7": north,
         }
         conn = _lonlat_grid(cells)
-        assert join_band_pieces(conn, "grid_table") == 0
+        assert _join(conn) == 0
         assert set(_rows(conn)) == set(cells)
 
-    def test_equator_pieces_join_under_the_southern_band(self) -> None:
+    def test_far_apart_chips_with_the_same_rest_do_not_join(self) -> None:
+        # Row letters repeat every 2,000 km, so a W chip at 64.5°N and an X chip at
+        # 82.4°N of zone 25 share everything but the band. Both small, but apart.
         conn = _lonlat_grid(
             {
-                "ftw-37MBV0000": box(36.0, -0.01, 36.02, 0.0),
-                "ftw-37NBV0000": box(36.0, 0.0, 36.02, 0.01),
+                "ftw-25WEN0010": box(-33.0, 64.5, -32.99, 64.501),
+                "ftw-25XEN0010": box(-33.0, 82.43, -32.99, 82.431),
             }
         )
-        assert join_band_pieces(conn, "grid_table") == 1
-        assert set(_rows(conn)) == {"ftw-37MBV0000"}
+        assert _join(conn) == 0
+
+    @pytest.mark.parametrize("north_share", [0.002, 0.998])
+    def test_a_full_size_piece_is_never_joined(self, north_share: float) -> None:
+        # A band line that clips only a corner off a chip leaves one piece that passes
+        # the area filter on its own; that chip must keep its id and extent.
+        full, _, _ = _band_line_pieces()
+        _, ymin, _, ymax = full.bounds
+        line = ymax - north_share * (ymax - ymin)
+        south = full.intersection(box(-180, -90, 180, line))
+        north = full.intersection(box(-180, line, 180, 90))
+        conn = _lonlat_grid({"ftw-33TWP0016": south, "ftw-33UWP0016": north})
+        assert _join(conn) == 0
+        assert set(_rows(conn)) == {"ftw-33TWP0016", "ftw-33UWP0016"}
+
+    def test_gap_between_the_pieces_is_closed(self) -> None:
+        _, south, north = _band_line_pieces()
+        # A notch in the middle of the northern piece's bottom edge: the union then
+        # has a hole where neither piece reaches the line.
+        x0, y0, x1, _ = north.bounds
+        mid = (x0 + x1) / 2
+        notch = box(mid - 0.001, y0 - 0.0001, mid + 0.001, y0 + 0.00001)
+        conn = _lonlat_grid({"ftw-33TWP0016": south, "ftw-33UWP0016": north.difference(notch)})
+        assert _join(conn) == 1
+        geom = _rows(conn)["ftw-33TWP0016"][1]
+        assert len(geom.interiors) == 0
 
     def test_sub_km_chip_ids(self) -> None:
         _, south, north = _band_line_pieces()
         conn = _lonlat_grid({"ftw-33TWP005160": south, "ftw-33UWP005160": north})
-        assert join_band_pieces(conn, "grid_table") == 1
+        assert _join(conn) == 1
 
     def test_grid_without_ids_is_left_alone(self) -> None:
         conn = duckdb.connect()
         conn.execute("INSTALL spatial; LOAD spatial;")
         conn.execute("CREATE TABLE grid_table AS SELECT ST_Point(0, 0) AS geometry")
-        assert join_band_pieces(conn, "grid_table") == 0
+        assert _join(conn) == 0
