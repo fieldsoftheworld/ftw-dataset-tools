@@ -330,6 +330,15 @@ class TestInstancePerPiece:
             (2, "8"),
         ]
 
+    def test_many_parts_group_quickly(self) -> None:
+        # 2,000 separate parts and 1,000 touching pairs, grouped through the index.
+        apart = [box(i * 3, 0, i * 3 + 1, 1) for i in range(2000)]
+        pairs = [box(i * 3 + 1, 5, i * 3 + 2, 6) for i in range(1000)]
+        pairs += [box(i * 3, 5, i * 3 + 1, 6) for i in range(1000)]
+        extent = box(-1, -1, 7000, 7)
+        assert len(masks._connected_pieces(MultiPolygon(apart), extent)) == 2000
+        assert len(masks._connected_pieces(MultiPolygon(pairs), extent)) == 1000
+
     def test_crop_labels_follow_the_pieces(self, tmp_path) -> None:
         values, lookup = _instances(
             tmp_path, (5,), (MultiPolygon([_LEFT, _RIGHT]),), crop_column="crop:name"

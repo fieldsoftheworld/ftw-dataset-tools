@@ -577,10 +577,13 @@ def _connected_pieces(geometry, extent) -> list:
             k = group[k]
         return k
 
-    for a in range(len(parts)):
-        for b in range(a + 1, len(parts)):
-            if parts[a].intersects(parts[b]):
-                group[root(b)] = root(a)
+    try:
+        pairs = shapely.STRtree(parts).query(parts, predicate="intersects").T
+    except shapely.errors.GEOSException:
+        # A predicate GEOS can't evaluate on broken input: keep the field whole.
+        pairs = [(0, k) for k in range(1, len(parts))]
+    for a, b in pairs:
+        group[root(int(b))] = root(int(a))
     members: dict[int, list] = {}
     for k, part in enumerate(parts):
         members.setdefault(root(k), []).append(part)
@@ -598,7 +601,7 @@ def _instance_shapes(
     that don't touch, or an id that isn't a usable uint32), every connected piece is
     numbered from 1 in row order instead, and the lookup rows give each value's field
     id. Lookup rows are also returned whenever ``crop_column`` is set; otherwise None.
-    ``extent`` is the raster's footprint in the geometries' CRS.
+    ``extent`` is the raster's footprint, in the raster CRS the geometries are already in.
     """
     pieces = [_connected_pieces(geometry, extent) for geometry in geometries]
     shown = [(row, parts) for row, parts in zip(boundaries, pieces, strict=True) if parts]
