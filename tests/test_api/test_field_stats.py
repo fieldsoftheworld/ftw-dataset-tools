@@ -5,8 +5,9 @@ from pathlib import Path
 import duckdb
 import geopandas as gpd
 import geoparquet_io as gpio
+import pandas as pd
 import pytest
-from shapely.geometry import box
+from shapely.geometry import MultiPolygon, box
 
 from ftw_dataset_tools.api.field_stats import FieldStatsResult
 from ftw_dataset_tools.api.geo import CRSInfo
@@ -979,6 +980,35 @@ class TestRemoteGridChipSize:
     def test_size_not_dividing_100_km_warns(self, tmp_path: Path, monkeypatch, caplog) -> None:
         _, _, messages = self._run(tmp_path, monkeypatch, caplog, 0.3)
         assert any("does not divide an MGRS 100 km square evenly" in msg for msg in messages)
+
+    def test_cell_with_a_part_far_outside_its_gzd_is_trimmed(
+        self, tmp_path: Path, monkeypatch, caplog
+    ) -> None:
+        # Grid v0.2's GZD 33C has cells with a second part far outside band C; one over
+        # the field would match it and become a chip.
+        from ftw_dataset_tools.api import field_stats
+
+        grid = _ftw_grid_source(tmp_path / "grid.parquet")
+        middle = gpd.read_parquet(grid).set_index("id").geometry["ftw-33UXP0202"]
+        junk = MultiPolygon([box(15.0, -72.26, 15.0000001, -72.2599999), middle])
+        cells = gpd.read_parquet(grid)
+        extra = gpd.GeoDataFrame(
+            {"gzd": ["33C"], "mgrs_10km": ["33CUV97"], "id": ["ftw-33CUV9678"]},
+            geometry=[junk],
+            crs="EPSG:4326",
+        )
+        pd.concat([cells, extra]).to_parquet(grid)
+        gpio.read(str(grid)).add_bbox().write(str(grid))
+        monkeypatch.setattr(field_stats, "configure_source_coop_s3", lambda _conn: None)
+        caplog.set_level("INFO")
+        result = field_stats.add_field_stats(
+            fields_file=_middle_field(tmp_path / "fields.parquet"),
+            grid_source=str(grid),
+            output_file=tmp_path / "chips.parquet",
+            min_coverage=0.01,
+        )
+        assert _chip_ids(result.output_path) == ["ftw-33UXP0202"]
+        assert any("1 trimmed to their part in their GZD" in msg for msg in caplog.messages)
 
     def test_invalid_size_rejected_before_reading_inputs(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.chip_grid import InvalidChipSizeError
