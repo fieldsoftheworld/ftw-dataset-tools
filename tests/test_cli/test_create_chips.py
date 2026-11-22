@@ -349,16 +349,3 @@ class TestCli:
         assert result.exit_code == 0
         assert "FTW Dataset Tools" in result.output
         assert "create-chips" in result.output
-        assert "add-field-stats" not in result.output
-
-    def test_removed_add_field_stats_points_to_create_chips(
-        self, sample_fields_geoparquet: Path, sample_grid_geoparquet: Path
-    ) -> None:
-        """The old command fails with the create-chips equivalent instead of 'No such command'."""
-        runner = CliRunner()
-        result = runner.invoke(
-            cli, ["add-field-stats", str(sample_grid_geoparquet), str(sample_fields_geoparquet)]
-        )
-        assert result.exit_code == 2
-        assert "'add-field-stats' was removed" in result.output
-        assert "ftwd create-chips FIELDS_FILE --grid-file GRID_FILE" in result.output

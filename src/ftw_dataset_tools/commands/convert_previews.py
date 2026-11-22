@@ -7,12 +7,11 @@ from pathlib import Path
 import click
 
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
-from ftw_dataset_tools.commands.cli_logging import is_verbose, verbose_alias_option
+from ftw_dataset_tools.commands.cli_logging import is_verbose
 
 
 @click.command("convert-previews")
 @click.argument("catalog_dir", type=click.Path(exists=True, file_okay=False))
-@verbose_alias_option
 @click.option(
     "--dry-run",
     is_flag=True,

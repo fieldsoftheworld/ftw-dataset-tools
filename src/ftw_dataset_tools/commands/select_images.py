@@ -32,7 +32,7 @@ from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES
 from ftw_dataset_tools.api.imagery.summary import selection_summary_lines
 from ftw_dataset_tools.api.stac import refresh_item_assets
 from ftw_dataset_tools.api.stac_items import copy_catalog
-from ftw_dataset_tools.commands.cli_logging import is_verbose, verbose_alias_option
+from ftw_dataset_tools.commands.cli_logging import is_verbose
 from ftw_dataset_tools.commands.imagery_mode import (
     imagery_mode_option,
     reject_scene_only_options,
@@ -275,7 +275,6 @@ def _write_report(
 
 @click.command("select-images")
 @click.argument("input_path", type=click.Path(exists=True))
-@verbose_alias_option
 @imagery_mode_option
 @click.option(
     "--year",

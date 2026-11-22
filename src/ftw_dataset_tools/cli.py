@@ -29,17 +29,9 @@ COMMAND_MODULES = (
 )
 _COMMANDS = {module.replace("_", "-"): module for module in COMMAND_MODULES}
 
-REMOVED_COMMANDS = {
-    "add-field-stats": (
-        "use 'ftwd create-chips FIELDS_FILE --grid-file GRID_FILE' instead "
-        "(add --min-chip-area 0 to keep truncated chips)"
-    ),
-}
-
 
 class FtwdGroup(click.Group):
-    """Click group that loads commands on first use and points removed ones at their
-    replacement."""
+    """Click group that loads commands on first use."""
 
     def list_commands(self, ctx: click.Context) -> list[str]:
         return sorted({*super().list_commands(ctx), *_COMMANDS})
@@ -49,13 +41,6 @@ class FtwdGroup(click.Group):
         if module is None:
             return super().get_command(ctx, cmd_name)
         return getattr(importlib.import_module(f"ftw_dataset_tools.commands.{module}"), module)
-
-    def resolve_command(
-        self, ctx: click.Context, args: list[str]
-    ) -> tuple[str | None, click.Command | None, list[str]]:
-        if args and args[0] in REMOVED_COMMANDS:
-            ctx.fail(f"'{args[0]}' was removed; {REMOVED_COMMANDS[args[0]]}.")
-        return super().resolve_command(ctx, args)
 
 
 @click.group(cls=FtwdGroup)
