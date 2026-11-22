@@ -42,7 +42,6 @@ from ftw_dataset_tools.api.imagery.thumbnails import (
 from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
-
     from ftw_dataset_tools.api.imagery.parallel import ParallelOutcome
 
 __all__ = [
