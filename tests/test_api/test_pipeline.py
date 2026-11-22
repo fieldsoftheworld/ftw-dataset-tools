@@ -307,13 +307,6 @@ class TestMasksSkippedReporting:
 
         pipeline.stage_masks(ctx)
 
-        assert ctx.masks_skipped == [
-            ("instance", "g1", recurring_reason),
-            ("instance", "g2", recurring_reason),
-            ("instance", "g3", recurring_reason),
-            ("instance", "g4", "TimeoutError: boom"),
-        ]
-
         skip_logs = [r for r in caplog.records if r.message.startswith("Skipped")]
         assert all(r.levelname == "WARNING" for r in skip_logs)
         skip_logs = [r.message for r in skip_logs]
@@ -363,7 +356,6 @@ class TestMasksSkippedReporting:
 
         pipeline.stage_masks(ctx)
 
-        assert ctx.masks_skipped == []
         assert not any(msg.startswith("Skipped") for msg in caplog.messages)
 
     def test_pool_restarts_are_logged(

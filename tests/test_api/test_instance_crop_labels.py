@@ -242,7 +242,7 @@ def test_pipeline_matches_api(tmp_path):
     ):
         shutil.copyfile(source, target)
     pipeline.stage_masks(ctx)
-    assert not ctx.masks_skipped
+    assert not ctx.masks_results["instance"].masks_skipped
     actual = ctx.masks_results["instance"].masks_created[0].output_path
     assert json.loads(masks.instance_labels_path(actual).read_text()) == labels
     with rasterio.open(path) as a, rasterio.open(actual) as b:

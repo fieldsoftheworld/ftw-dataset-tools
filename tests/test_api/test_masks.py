@@ -111,27 +111,9 @@ class TestMaskOutputPath:
             grid_id="grid_001",
             mask_type=MaskType.INSTANCE,
             chip_dirs=chip_dirs,
-            output_dir=Path("/output/masks"),
-            field_dataset="test_dataset",
         )
 
         assert path == Path("/output/chips/grid_001/grid_001_instance.tif")
-
-    def test_output_path_without_chip_dirs(self) -> None:
-        """Test mask path uses output_dir with dataset prefix when chip_dirs is None."""
-        from pathlib import Path
-
-        from ftw_dataset_tools.api.masks import MaskType, get_mask_output_path
-
-        path = get_mask_output_path(
-            grid_id="grid_001",
-            mask_type=MaskType.INSTANCE,
-            chip_dirs=None,
-            output_dir=Path("/output/masks"),
-            field_dataset="test_dataset",
-        )
-
-        assert path == Path("/output/masks/test_dataset_grid_001_instance.tif")
 
     def test_output_path_with_year_and_chip_dirs(self) -> None:
         """Test mask path with year uses item_id for chip_dirs lookup."""
@@ -148,29 +130,22 @@ class TestMaskOutputPath:
             grid_id="grid_001",
             mask_type=MaskType.INSTANCE,
             chip_dirs=chip_dirs,
-            output_dir=Path("/output/masks"),
-            field_dataset="test_dataset",
             year=2024,
         )
 
         assert path == Path("/output/chips/grid_001_2024/grid_001_2024_instance.tif")
 
-    def test_output_path_with_year_without_chip_dirs(self) -> None:
-        """Test mask path with year includes year in filename."""
+    def test_output_path_for_unknown_item_raises(self) -> None:
         from pathlib import Path
 
         from ftw_dataset_tools.api.masks import MaskType, get_mask_output_path
 
-        path = get_mask_output_path(
-            grid_id="grid_001",
-            mask_type=MaskType.INSTANCE,
-            chip_dirs=None,
-            output_dir=Path("/output/masks"),
-            field_dataset="test_dataset",
-            year=2024,
-        )
-
-        assert path == Path("/output/masks/test_dataset_grid_001_2024_instance.tif")
+        with pytest.raises(KeyError, match="grid_002"):
+            get_mask_output_path(
+                grid_id="grid_002",
+                mask_type=MaskType.INSTANCE,
+                chip_dirs={"grid_001": Path("/output/chips/grid_001")},
+            )
 
 
 class TestCreateMasksChipDirs:
