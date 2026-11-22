@@ -13,9 +13,6 @@ from ftw_dataset_tools.api.imagery import download_workflow, selection_workflow
 from ftw_dataset_tools.api.imagery.catalog_ops import (
     clear_chip_selections,
     has_mode_selection,
-    mosaic_requested_year,
-    normalize_imagery_properties,
-    preserve_imagery_selection,
     selected_modes,
     selection_conflict,
 )
@@ -100,13 +97,10 @@ def _rels(item: pystac.Item) -> set[str]:
 
 @pytest.fixture
 def both(tmp_path: Path, mock_selection_result: SceneSelectionResult) -> Path:
-    """A chip holding scenes (2024) and then mosaics (requested 2024, used 2025).
-
-    Older ftwd fell back to a nearby mosaic year like this; ftwd no longer does.
-    """
+    """A chip holding scenes and then mosaics, both for 2024."""
     _parent, path = _chip(tmp_path)
     _add_scenes(path, mock_selection_result)
-    _add_mosaics(path, year=2025)
+    _add_mosaics(path)
     return path
 
 
@@ -133,12 +127,16 @@ class TestCoexistence:
         assert props["ftw:calendar_year"] == 2024
         assert props["ftw:planting_cloud_cover"] == 1.5
         assert props["ftw:mosaic_requested_year"] == 2024
-        assert props["ftw:mosaic_year"] == 2025
+        assert props["ftw:mosaic_year"] == 2024
         for slot in ("planting", "harvest", *MOSAIC_SLOTS):
             assert (both.parent / f"chip_001_{slot}_s2.json").exists()
 
-    def test_temporal_range_spans_both_modes(self, both: Path) -> None:
-        props = pystac.Item.from_file(str(both)).properties
+    def test_temporal_range_spans_both_modes(
+        self, tmp_path: Path, mock_selection_result: SceneSelectionResult
+    ) -> None:
+        _parent, path = _chip(tmp_path)
+        _add_scenes(path, mock_selection_result)
+        props = _add_mosaics(path, year=2025, requested=2025).properties
         assert props["start_datetime"] == "2024-06-15T10:00:00+00:00"  # planting scene
         assert props["end_datetime"].startswith("2025-12-31")  # end of the 2025 Q4 mosaic
 
@@ -156,7 +154,7 @@ class TestCoexistence:
         self, tmp_path: Path, mock_selection_result: SceneSelectionResult
     ) -> None:
         _parent, path = _chip(tmp_path)
-        _add_mosaics(path, year=2025)
+        _add_mosaics(path, year=2025, requested=2025)
         parent = pystac.Item.from_file(str(path))
         with patch.object(pystac.Item, "from_file", side_effect=AssertionError("read")):
             create_child_items_from_selection(
@@ -175,7 +173,7 @@ class TestCoexistence:
     ) -> None:
         saved = _add_scenes(both, mock_selection_result)
         assert has_mode_selection(saved, "mosaics")
-        assert saved.properties["ftw:mosaic_year"] == 2025
+        assert saved.properties["ftw:mosaic_year"] == 2024
         assert sum(link.rel == "ftw:q1" for link in saved.links) == 1
 
     def test_reselecting_mosaics_leaves_scenes_and_their_assets(self, both: Path) -> None:
@@ -207,11 +205,6 @@ class TestPerModeConflicts:
         assert selection_conflict(item, "mosaics", 2024) is None
         assert selection_conflict(item, "scenes", 2030) == "has scenes for 2024"
         assert selection_conflict(item, "mosaics", 2026) == "has mosaics for 2024"
-
-    def test_mosaics_from_a_nearby_year_conflict(self, both: Path) -> None:
-        """Requested 2024 but used 2025: the imagery doesn't show the labels' year."""
-        item = pystac.Item.from_file(str(both))
-        assert selection_conflict(item, "mosaics", 2024) == "has mosaics for 2025"
 
     def test_force_clears_only_the_conflicting_mode(self, both: Path) -> None:
         item = pystac.Item.from_file(str(both))
@@ -246,60 +239,6 @@ class TestPerModeConflicts:
         assert run.call_count == 1
 
 
-class TestLegacySingleModeCatalog:
-    """Catalogs written before a chip could hold both modes."""
-
-    def _legacy_mosaic_chip(self, tmp_path: Path) -> Path:
-        _parent, path = _chip(tmp_path)
-        item = _add_mosaics(path)
-        props = item.properties
-        props.pop("ftw:imagery_modes")
-        props["ftw:imagery_mode"] = "mosaics"
-        props["ftw:requested_year"] = props.pop("ftw:mosaic_requested_year")
-        props["ftw:imagery_year"] = props.pop("ftw:mosaic_year")
-        item.save_object(dest_href=str(path))
-        return path
-
-    def test_is_read(self, tmp_path: Path) -> None:
-        item = pystac.Item.from_file(str(self._legacy_mosaic_chip(tmp_path)))
-        assert selected_modes(item) == ("mosaics",)
-        assert mosaic_requested_year(item) == 2024
-        assert selection_conflict(item, "mosaics", 2025) == "has mosaics for 2024"
-        assert selection_conflict(item, "scenes", 2024) is None
-
-    def test_legacy_scene_chip_is_read(self) -> None:
-        item = _bare_item("c")
-        for rel in _SCENE_RELS:
-            item.add_link(pystac.Link(rel=rel, target="./x.json"))
-        assert selected_modes(item) == ("scenes",)
-
-    def test_is_migrated_when_scenes_are_added(
-        self, tmp_path: Path, mock_selection_result: SceneSelectionResult
-    ) -> None:
-        saved = _add_scenes(self._legacy_mosaic_chip(tmp_path), mock_selection_result)
-        props = saved.properties
-        assert props["ftw:imagery_modes"] == ["scenes", "mosaics"]
-        assert props["ftw:mosaic_requested_year"] == 2024
-        assert props["ftw:mosaic_year"] == 2024
-        assert not {"ftw:imagery_mode", "ftw:requested_year", "ftw:imagery_year"} & set(props)
-
-    def test_is_migrated_across_catalog_regeneration(self, tmp_path: Path) -> None:
-        path = self._legacy_mosaic_chip(tmp_path)
-        fresh = _bare_item("chip_001")
-        assert preserve_imagery_selection(fresh, path)
-        assert fresh.properties["ftw:imagery_modes"] == ["mosaics"]
-        assert fresh.properties["ftw:mosaic_requested_year"] == 2024
-        assert "ftw:imagery_mode" not in fresh.properties
-
-    def test_normalize_keeps_a_current_key_over_a_legacy_one(self) -> None:
-        item = _bare_item("c")
-        item.properties.update({"ftw:mosaic_year": 2025, "ftw:imagery_year": 2019})
-        normalize_imagery_properties(item)
-        assert item.properties["ftw:mosaic_year"] == 2025
-        assert "ftw:imagery_year" not in item.properties
-        assert "ftw:imagery_modes" not in item.properties
-
-
 class TestClearPerMode:
     def _with_preview(self, path: Path) -> pystac.Item:
         _preview(path, "planting")
@@ -330,10 +269,10 @@ class TestClearPerMode:
         saved = pystac.Item.from_file(str(both))
         assert selected_modes(saved) == ("mosaics",)
         assert "ftw:calendar_year" not in saved.properties
-        assert saved.properties["ftw:mosaic_year"] == 2025
+        assert saved.properties["ftw:mosaic_year"] == 2024
         assert "thumbnail" not in saved.assets
         assert not (both.parent / "chip_001_overlay.webp").exists()
-        assert saved.properties["start_datetime"].startswith("2025-01-01")
+        assert saved.properties["start_datetime"].startswith("2024-01-01")
 
     def test_clearing_scenes_falls_back_to_the_q3_preview(self, both: Path) -> None:
         _preview(both, "q3")
@@ -579,15 +518,6 @@ class TestPreviewDrawnFromPlanting:
     def test_q3_does_not_draw_over_the_planting_preview(self, both: Path) -> None:
         _preview(both, "planting")
         self._download_q3(both).assert_not_called()
-
-    def test_the_parent_it_writes_drops_legacy_mode_keys(self, tmp_path: Path) -> None:
-        path = TestLegacySingleModeCatalog()._legacy_mosaic_chip(tmp_path)
-        self._download_q3(path)
-        props = self.parent.properties
-        assert props["ftw:imagery_modes"] == ["mosaics"]
-        assert props["ftw:mosaic_requested_year"] == 2024
-        assert "ftw:imagery_mode" not in props
-        assert "ftw:requested_year" not in props
 
     def test_q3_draws_while_planting_has_no_preview(self, both: Path) -> None:
         self._download_q3(both).assert_called_once()

@@ -121,14 +121,8 @@ drew the preview redraws it from the other mode.
 Without an explicit year each mode keeps the year its selection on the chip recorded
 (`ftw:calendar_year`, `ftw:mosaic_requested_year`), else uses the chip id's year. A chip
 with neither is skipped. Mosaics are only ever selected for that one year, never a nearby
-one. A selection recorded for another year conflicts, as do mosaics whose `ftw:mosaic_year`
-(older ftwd could fill a request with a nearby year) is not the year being selected.
+one. A selection recorded for another year conflicts.
 
-Catalogs written before multi-mode support carry a scalar `ftw:imagery_mode` (`mosaics`;
-absent meant scenes) and the un-namespaced mosaic years `ftw:requested_year` /
-`ftw:imagery_year` on the parent. ftwd still reads them, and rewrites them to
-`ftw:imagery_modes`, `ftw:mosaic_requested_year` and `ftw:mosaic_year` whenever it writes
-the chip item again.
 Clipped mosaic images keep the source encoding: `int16`, nodata `-32768`, reflectance =
 value x 0.0001 with no offset, recorded as GDAL scale/offset and in `raster:bands`.
 
