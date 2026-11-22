@@ -215,12 +215,15 @@ def test_a_failing_chip_is_reported_not_raised(
     def boom(*_a, **_k):
         raise RuntimeError("bad shape")
 
+    fields = _fields(tmp_path)
+    write_chip_fields(fields, dataset)
     monkeypatch.setattr(chip_fields, "_clipped", boom)
 
-    result = write_chip_fields(_fields(tmp_path), dataset)
+    result = write_chip_fields(fields, dataset)
 
     assert result.failed == [("ftw-a_2024", "RuntimeError: bad shape")]
     assert "failed for 1 chip(s)" in chip_fields.summary_lines(result)[-1]
+    assert not chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024").exists()
 
 
 def test_remove_chip_fields(tmp_path: Path, dataset: Path) -> None:

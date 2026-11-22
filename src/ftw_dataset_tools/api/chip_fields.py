@@ -200,6 +200,7 @@ def _write_chip(source: _Source, chip_dir: Path, skip_existing: bool) -> tuple[s
         table, crs = _clipped(source, mask_path)
         _write(table, source.geom_col, crs, out)
     except Exception as err:  # one bad chip must not cost every other chip's outlines
+        out.unlink(missing_ok=True)  # nor leave an earlier run's outlines to be published
         return "failed", f"{type(err).__name__}: {err}"
     return "written", ""
 
