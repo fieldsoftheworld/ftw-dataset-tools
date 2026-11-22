@@ -225,45 +225,6 @@ def get_bbox_column_name(
             conn.close()
 
 
-def format_crs(crs: pyproj.CRS | None) -> str:
-    """
-    Format a CRS object as a concise authority:code string.
-
-    Args:
-        crs: A pyproj CRS object (from geopandas GeoDataFrame.crs)
-
-    Returns:
-        A string like "EPSG:4326" or "unknown" if CRS cannot be determined
-    """
-    if crs is None:
-        return "unknown"
-
-    # Try to get authority:code format
-    try:
-        authority = crs.to_authority()
-        if authority:
-            return f"{authority[0]}:{authority[1]}"
-    except Exception:
-        pass
-
-    # Fallback: try to get EPSG code
-    try:
-        epsg = crs.to_epsg()
-        if epsg:
-            return f"EPSG:{epsg}"
-    except Exception:
-        pass
-
-    # Last resort: return name if available
-    try:
-        if crs.name:
-            return crs.name
-    except Exception:
-        pass
-
-    return "unknown"
-
-
 class CRSMismatchError(Exception):
     """Raised when two datasets have different coordinate reference systems."""
 
@@ -437,41 +398,6 @@ def geoparquet_crs(path: str | Path, geom_col: str) -> pyproj.CRS:
             if not info.authority_code:  # a minimal PROJJSON of just an id falls through
                 raise
     return pyproj.CRS.from_user_input(info.authority_code or "EPSG:4326")
-
-
-def validate_crs_match(
-    file1: str | Path,
-    file2: str | Path,
-    geom_col1: str = "geometry",
-    geom_col2: str = "geometry",
-) -> tuple[CRSInfo, CRSInfo]:
-    """
-    Validate that two files have matching CRS.
-
-    Args:
-        file1: Path to first file
-        file2: Path to second file
-        geom_col1: Geometry column name in first file
-        geom_col2: Geometry column name in second file
-
-    Returns:
-        Tuple of (crs1, crs2) if they match
-
-    Raises:
-        CRSMismatchError: If CRS don't match
-    """
-    crs1 = detect_crs(file1, geom_col1)
-    crs2 = detect_crs(file2, geom_col2)
-
-    if not crs1.is_equivalent_to(crs2):
-        raise CRSMismatchError(
-            crs1=str(crs1),
-            crs2=str(crs2),
-            file1=str(file1),
-            file2=str(file2),
-        )
-
-    return crs1, crs2
 
 
 @dataclass

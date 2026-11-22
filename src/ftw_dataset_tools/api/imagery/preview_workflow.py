@@ -215,10 +215,3 @@ def preview_imagery_for_catalog(
             progress_bar.close()
 
     return result
-
-
-def preview_summary_line(result: PreviewWorkflowResult) -> str:
-    """One-line summary for the run report."""
-    return (
-        f"Chip previews: {result.successful} ok, {result.skipped} skipped, {result.failed} failed"
-    )

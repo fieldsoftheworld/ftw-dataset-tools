@@ -149,11 +149,3 @@ class ImageryProgressBar:
         remaining = len(failed_details) - MAX_REPORTED_FAILURES
         if remaining > 0:
             tqdm.write(f"    ... and {remaining} more")
-
-    def get_stats_dict(self) -> dict:
-        """Return stats as a dictionary for backward compatibility."""
-        return {
-            "successful": self.stats.successful,
-            "skipped": self.stats.skipped,
-            "failed": self.stats.failed,
-        }

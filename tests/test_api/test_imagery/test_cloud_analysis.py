@@ -5,10 +5,7 @@ import pytest
 import rasterio
 from rasterio.transform import from_origin
 
-from ftw_dataset_tools.api.imagery.cloud_analysis import (
-    calculate_pixel_cloud_cover,
-    read_scl_chip_stats,
-)
+from ftw_dataset_tools.api.imagery.cloud_analysis import read_scl_chip_stats
 
 # A 10x10 SCL raster in EPSG:32633 whose top-left 100 m square is the chip.
 PIXEL = 20.0
@@ -71,12 +68,6 @@ class TestReadSCLChipStats:
         # Rows 0-2: 12 pixels, 8 valid, 2 of those cloud.
         stats = read_scl_chip_stats(scl_path, _bbox_for(4, 3))
         assert stats.cloud_pct == pytest.approx(100 * 2 / 8)
-
-    def test_cloud_matches_the_standalone_cloud_function(self, scl_path):
-        bbox = _bbox_for(4, 3)
-        assert read_scl_chip_stats(scl_path, bbox).cloud_pct == pytest.approx(
-            calculate_pixel_cloud_cover(cloud_href=scl_path, bbox=bbox, cloud_type="scl")
-        )
 
     def test_shadow_and_cirrus_count_as_cloud(self, tmp_path):
         path = _write_scl(tmp_path / "mixed.tif", [[3, 8, 9, 10], [4, 4, 4, 4]])

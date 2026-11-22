@@ -13,7 +13,6 @@ from rasterio.transform import from_bounds
 from ftw_dataset_tools.api.imagery.preview_workflow import (
     build_preview_task,
     preview_imagery_for_catalog,
-    preview_summary_line,
 )
 
 CRS = "EPSG:32633"
@@ -231,12 +230,6 @@ class TestPreviewImageryForCatalog:
         assert result.successful == 0
         assert result.failed == 1
         assert result.failed_details[0]["chip"] == "chip_a"
-
-    def test_summary_line_reports_all_three_counts(self) -> None:
-        from ftw_dataset_tools.api.imagery.preview_workflow import PreviewWorkflowResult
-
-        line = preview_summary_line(PreviewWorkflowResult(successful=3, skipped=2, failed=1))
-        assert line == "Chip previews: 3 ok, 2 skipped, 1 failed"
 
 
 class TestPipelineDispatchesOnMode:

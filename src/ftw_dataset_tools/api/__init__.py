@@ -18,7 +18,6 @@ __getattr__, __all__ = lazy_exports(
             "ReprojectResult",
             "detect_crs",
             "reproject",
-            "validate_crs_match",
         ),
         "grid": ("CRSError", "GetGridResult", "get_grid"),
         "stac": (

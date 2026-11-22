@@ -209,15 +209,6 @@ def _count(con: duckdb.DuckDBPyConnection, path: Path) -> int:
     return int(row[0]) if row else 0
 
 
-def run_query(sql: str, output_dir: Path | str) -> list[tuple]:
-    """Run one SQL statement with the collection directory as the working directory."""
-    con = _connect(Path(output_dir))
-    try:
-        return con.execute(sql).fetchall()
-    finally:
-        con.close()
-
-
 # --------------------------------------------------------------------------- #
 # Measurement
 # --------------------------------------------------------------------------- #
