@@ -292,7 +292,9 @@ class TestMasksSkippedReporting:
                 "output_dir": str(tmp_path / "out"),
                 "name": "ds",
                 "year": 2024,
-                "stages": {"masks": {"resolution": 2.5, "boundary_width_m": 10}},
+                "stages": {
+                    "masks": {"resolution": 2.5, "boundary_width_m": 10, "field_vectors": False}
+                },
             }
         )
         ctx = pipeline.build_context(config)
@@ -339,7 +341,7 @@ class TestMasksSkippedReporting:
                 "output_dir": str(tmp_path / "out"),
                 "name": "ds",
                 "year": 2024,
-                "stages": {"masks": {"mask_types": ["instance"]}},
+                "stages": {"masks": {"mask_types": ["instance"], "field_vectors": False}},
             }
         )
         ctx = pipeline.build_context(config)
@@ -388,7 +390,7 @@ class TestMasksSkippedReporting:
                 "output_dir": str(tmp_path / "out"),
                 "name": "ds",
                 "year": 2024,
-                "stages": {"masks": {"mask_types": ["instance"]}},
+                "stages": {"masks": {"mask_types": ["instance"], "field_vectors": False}},
             }
         )
         ctx = pipeline.build_context(config)
@@ -427,7 +429,7 @@ class TestMasksSkippedReporting:
                 "output_dir": str(tmp_path / "out"),
                 "name": "ds",
                 "year": 2024,
-                "stages": {"masks": {"mask_types": ["instance"]}},
+                "stages": {"masks": {"mask_types": ["instance"], "field_vectors": False}},
             }
         )
         ctx = pipeline.build_context(config)
@@ -469,7 +471,7 @@ class TestMasksSkippedReporting:
                 "output_dir": str(tmp_path / "out"),
                 "name": "ds",
                 "year": 2024,
-                "stages": {"masks": {"mask_types": ["instance"]}},
+                "stages": {"masks": {"mask_types": ["instance"], "field_vectors": False}},
             }
         )
         ctx = pipeline.build_context(config)
@@ -818,6 +820,8 @@ class TestMasksStage:
         assert paths["semantic_2class"].parent == paths["decode_distance"].parent
         assert paths["semantic_2class"].name == "cell_001_2024_semantic_2_class.tif"
         assert paths["decode_distance"].name == "cell_001_2024_decode_distance.tif"
+        # Field outlines are on by default and sit beside the masks.
+        assert (paths["semantic_2class"].parent / "cell_001_2024_fields.parquet").is_file()
 
     def test_matches_create_masks_when_year_is_derived(self, tmp_path: Path) -> None:
         """Without a year, the pipeline and create-masks write the same chip layout."""

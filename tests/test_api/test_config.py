@@ -330,6 +330,17 @@ class TestFromDict:
         with pytest.raises(ConfigError, match=message):
             DatasetConfig.from_dict({"fields_file": "f.parquet", "stages": {"masks": masks_cfg}})
 
+    def test_masks_field_vectors_default_true(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+
+        assert config.stages.masks.field_vectors is True
+
+    def test_masks_field_vectors_non_bool_raises(self) -> None:
+        with pytest.raises(ConfigError, match=r"stages\.masks\.field_vectors must be true"):
+            DatasetConfig.from_dict(
+                {"fields_file": "f.parquet", "stages": {"masks": {"field_vectors": 1}}}
+            )
+
     def test_download_resume_defaults_true(self) -> None:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
 

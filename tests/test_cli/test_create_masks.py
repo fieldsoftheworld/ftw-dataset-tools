@@ -1,5 +1,6 @@
 """Tests for the create-masks CLI command."""
 
+import json
 from pathlib import Path
 
 import click
@@ -172,6 +173,34 @@ class TestCreateMasksCommand:
             assert (
                 output_dir / "chips" / "other" / "grid_001_2024" / f"grid_001_2024_{mask_type}.tif"
             ).exists()
+
+    @pytest.mark.parametrize("flag", [(), ("--no-field-vectors",)])
+    def test_field_outlines_beside_the_masks(
+        self,
+        flag: tuple[str, ...],
+        sample_chips_with_coverage: Path,
+        sample_boundaries_geoparquet: Path,
+        sample_boundary_lines_geoparquet: Path,
+        tmp_path: Path,
+    ) -> None:
+        out = tmp_path / "masks"
+        args = _create_masks_args(
+            sample_chips_with_coverage,
+            sample_boundaries_geoparquet,
+            sample_boundary_lines_geoparquet,
+            out,
+            "--year",
+            "2024",
+            *flag,
+        )
+
+        result = CliRunner().invoke(cli, args)
+
+        assert result.exit_code == 0, result.output
+        outlines = out / "chips" / "other" / "grid_001_2024" / "grid_001_2024_fields.parquet"
+        assert outlines.is_file() is (not flag)
+        item = json.loads(outlines.with_name("grid_001_2024.json").read_text())
+        assert ("field_boundaries" in item["assets"]) is (not flag)
 
     def test_boundary_width_reaches_the_masks(
         self,

@@ -37,6 +37,7 @@ from ftw_dataset_tools.api.assets import (
     add_table_columns,
     mask_class_list,
 )
+from ftw_dataset_tools.api.chip_fields import CHIP_FIELDS_SUFFIX
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.logging_config import get_logger, success
 from ftw_dataset_tools.api.masks import MaskType, get_mgrs_square, instance_labels_path
@@ -704,6 +705,7 @@ def _build_item_assets(
     *,
     background_value: int = 0,
     label_extent: bool = False,
+    chip_fields: bool = False,
 ) -> dict[str, ItemAssetDefinition]:
     """Declare the assets a chip item may carry (core ``item_assets`` collection field).
 
@@ -753,6 +755,10 @@ def _build_item_assets(
                     "title": f"{quarter.upper()} quarterly mosaic imagery",
                 }
             )
+    if chip_fields:
+        defs[CHIP_FIELDS_ASSET] = ItemAssetDefinition(
+            {"type": MEDIA_TYPE_PARQUET, "roles": ["labels", "data"], "title": _CHIP_FIELDS_TITLE}
+        )
     # Validators require a type on every definition.
     defs["thumbnail"] = ItemAssetDefinition(
         {"type": PREVIEW_MEDIA_TYPE, "roles": ["thumbnail"], "title": "Chip preview"}
@@ -869,6 +875,7 @@ def _create_collection(
     imagery_modes: Sequence[str] = (),
     mask_types: Sequence[str] | None = None,
     label_extent: bool = False,
+    chip_fields: bool = False,
 ) -> Collection:
     """
     Create the single dataset collection with source-data and chip-definition assets.
@@ -932,6 +939,7 @@ def _create_collection(
         mask_types,
         background_value=background_class_value,
         label_extent=label_extent,
+        chip_fields=chip_fields,
     )
     if any("classification:classes" in d.properties for d in collection.item_assets.values()):
         ClassificationExtension.add_to(collection)
@@ -1041,6 +1049,8 @@ def _create_chip_item(
                 item.add_asset("instance_labels", labels)
                 add_file_info(labels, labels_path, checksum=checksums)
 
+    _add_chip_fields(item, chip_dir, checksums=checksums)
+
     # Season children survive a STAC rerun on disk; put their links and imagery
     # assets back onto the item this run rebuilt from the mask files alone.
     _reattach_existing_seasons(item, chip_dir, checksums=checksums)
@@ -1058,6 +1068,25 @@ def _create_chip_item(
             item.properties[RENDER_ORDER_PROP] = render_order
 
     return item
+
+
+CHIP_FIELDS_ASSET = "field_boundaries"
+_CHIP_FIELDS_TITLE = "Field outlines clipped to the chip"
+
+
+def _add_chip_fields(item: Item, chip_dir: Path, *, checksums: bool) -> None:
+    """Register the chip's ``_fields.parquet`` (written by the masks stage), if any."""
+    path = chip_dir / f"{chip_dir.name}{CHIP_FIELDS_SUFFIX}"
+    if not path.is_file():
+        return
+    asset = Asset(
+        href=f"./{path.name}",
+        media_type=MEDIA_TYPE_PARQUET,
+        title=_CHIP_FIELDS_TITLE,
+        roles=["labels", "data"],
+    )
+    item.add_asset(CHIP_FIELDS_ASSET, asset)
+    add_file_info(asset, path, checksum=checksums)
 
 
 def _reattach_existing_seasons(item: Item, chip_dir: Path, *, checksums: bool = False) -> None:
@@ -1390,6 +1419,7 @@ def generate_stac_catalog(
         imagery_modes=_declared_imagery_modes(config, items),
         mask_types=config.stages.masks.mask_types if config is not None else None,
         label_extent=label_extent,
+        chip_fields=any(CHIP_FIELDS_ASSET in item.assets for item in items),
     )
 
     _apply_collection_context(collection, config, metadata, previous, provenance)

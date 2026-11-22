@@ -346,6 +346,8 @@ class MasksConfig:
     # Width in metres to burn boundary lines at (UTM only). Unset, they are one pixel
     # wide, so their width scales with `resolution`.
     boundary_width_m: float | None = None
+    # Write each chip's field outlines (<chip>_fields.parquet) beside its masks.
+    field_vectors: bool = True
     # Path to EPSG:4326 polygons (GeoParquet, resolved relative to the config file)
     # inside which the labels are complete. Inside, unlabelled pixels are background
     # (0); outside, unknown (3). Chips wholly outside are dropped. Optional; an
@@ -835,6 +837,8 @@ class DatasetConfig:
                 "stages.masks.boundary_width_m must be at least two mask pixels "
                 "(2 x stages.masks.resolution); leave it unset for one-pixel lines"
             )
+        if not isinstance(self.stages.masks.field_vectors, bool):
+            raise ConfigError("stages.masks.field_vectors must be true or false")
 
         self._validate_label_extent()
 

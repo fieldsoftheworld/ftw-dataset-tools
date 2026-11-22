@@ -481,6 +481,11 @@ ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spa
 - `--utm/--no-utm` - Rasterize each chip on its own UTM zone's grid, so pixels are square and every chip of one size has the same shape (default). `--no-utm` uses the chips file's CRS, where the resolution in metres becomes degrees on both axes
 - `--workers` - Number of parallel workers (default: CPU count, capped at 8)
 - `--skip-existing` - Reuse masks already on disk instead of recreating them
+- `--field-vectors/--no-field-vectors` - Write each chip's field outlines beside its masks (default: on; `stages.masks.field_vectors` in `ftwd run`)
+
+#### Field outlines per chip
+
+`{item_id}_fields.parquet` (the STAC item's `field_boundaries` asset) holds the fields that overlap the chip, cut to the masks' footprint, in the masks' CRS, with every column of the fields file. A field that only touches the edge is left out. Its `id` is the instance mask's pixel value, or the `field_id` in the instance lookup when the chip was renumbered.
 
 ### Finer masks with 10 m imagery
 

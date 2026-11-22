@@ -8,6 +8,7 @@ import click
 
 from ftw_dataset_tools.api import (
     assets,
+    chip_fields,
     crop_stats,
     field_embeddings,
     label_extent,
@@ -172,6 +173,7 @@ def run_cmd(
         RuntimeError,
         pipeline.StageInputError,
         assets.MaskReadError,
+        chip_fields.ChipFieldsError,
         source.SourceFetchError,
     ) as err:
         click.echo(click.style(f"\nError: {err}", fg="red"))
