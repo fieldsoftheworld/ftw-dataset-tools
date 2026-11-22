@@ -750,3 +750,14 @@ def test_build_leaves_no_temp_files(world: World, later: Path) -> None:
     assert later.exists()
     leftovers = [p for p in world.root.iterdir() if p.name.startswith("tmp")]
     assert not leftovers
+
+
+def test_local_reads_never_load_httpfs(monkeypatch: pytest.MonkeyPatch) -> None:
+    # threads reading local files used to race to INSTALL httpfs on a fresh machine
+    calls: list[str] = []
+    monkeypatch.setattr(chips_table, "configure_source_coop_s3", lambda con: calls.append("s3"))
+    chips_table._connect("/data/aa_2021_chips.parquet").close()
+    chips_table._connect("https://data.example.org/aa_2021_chips.parquet").close()
+    assert calls == []
+    chips_table._connect("s3://bucket/aa_2021_chips.parquet").close()
+    assert calls == ["s3"]

@@ -50,9 +50,8 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from ftw_dataset_tools.api import admin_names
 from ftw_dataset_tools.api.blocks import block_scores, chip_block_ids
-from ftw_dataset_tools.api.geo import sql_path
+from ftw_dataset_tools.api.geo import configure_source_coop_s3, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -333,8 +332,19 @@ def _check_local_split(item: DatasetInput, cols: set[str]) -> None:
         )
 
 
+def _connect(source: str) -> duckdb.DuckDBPyConnection:
+    """A connection that reads ``source``; httpfs only for an S3 source, so threads reading
+    local files never race to install it."""
+    con = duckdb.connect(":memory:")
+    con.execute("SET enable_progress_bar = false")
+    ensure_spatial_loaded(con)
+    if source.startswith("s3://"):
+        configure_source_coop_s3(con)
+    return con
+
+
 def _copy_dataset(item: DatasetInput, out: Path) -> None:
-    con = admin_names.connect()
+    con = _connect(item.chips)
     try:
         cols = _columns(con, item.chips)
         _check_local_split(item, cols)
@@ -751,7 +761,7 @@ def build_chips_table(
         parts = [Path(tmp) / f"{item.dataset}.parquet" for item in inputs]
         with ThreadPoolExecutor(workers) as pool:
             list(pool.map(_read_dataset, inputs, parts))
-        con = admin_names.connect()
+        con = _connect(str(previous))
         try:
             _assemble(con, parts, inputs, str(previous), set(drop))
             return _write(con, Path(tmp) / "joined.parquet", out)
