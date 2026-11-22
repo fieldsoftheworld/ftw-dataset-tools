@@ -21,9 +21,9 @@ import pystac
 from ftw_dataset_tools.api.imagery import parquet_search
 from ftw_dataset_tools.api.imagery.catalog_ops import (
     SelectionConflictError,
+    chip_item_files,
     clear_chip_selections,
     has_mode_selection,
-    iter_chip_dirs,
     mosaic_requested_year,
     selection_conflict,
 )
@@ -43,7 +43,6 @@ from ftw_dataset_tools.api.imagery.scene_selection import select_scenes_for_chip
 from ftw_dataset_tools.api.imagery.slots import (
     DEFAULT_IMAGERY_MODE,
     normalize_imagery_modes,
-    parse_child_id,
 )
 from ftw_dataset_tools.api.imagery.stac_child_items import (
     create_child_items_from_selection,
@@ -205,17 +204,9 @@ class SelectionWorkflowResult:
     failed_details: list[dict] = field(default_factory=list)
 
 
-def _chip_item_files(catalog_dir: Path) -> Iterator[Path]:
-    """Each parent chip item's JSON file, skipping the imagery child items."""
-    for subdir in iter_chip_dirs(catalog_dir):
-        for json_file in subdir.glob("*.json"):
-            if parse_child_id(json_file.stem) is None:
-                yield json_file
-
-
 def iter_chip_items(catalog_dir: Path) -> Iterator[pystac.Item]:
     """Each readable parent chip item, read lazily; unreadable ones are passed over."""
-    for json_file in _chip_item_files(catalog_dir):
+    for json_file in chip_item_files(catalog_dir):
         try:
             yield pystac.Item.from_file(str(json_file))
         except Exception:  # find_chip_items reports unreadable chips
@@ -245,7 +236,7 @@ def find_chip_items(
         Returns empty list if no items found.
     """
     chip_items = []
-    for json_file in _chip_item_files(catalog_dir):
+    for json_file in chip_item_files(catalog_dir):
         try:
             item = pystac.Item.from_file(str(json_file))
         except Exception as e:

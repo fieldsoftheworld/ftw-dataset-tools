@@ -119,6 +119,16 @@ def iter_chip_dirs(collection_dir: Path) -> list[Path]:
     return sorted(dirs)
 
 
+def chip_item_files(collection_dir: Path) -> list[Path]:
+    """Each chip's item JSON, ``<chip_id>/<chip_id>.json``, sorted by chip.
+
+    A chip folder holds other JSON too (imagery child items, an instance mask's
+    ``_labels.json``), so the item is found by name rather than by globbing.
+    """
+    paths = (chip / f"{chip.name}.json" for chip in iter_chip_dirs(collection_dir))
+    return [path for path in paths if path.is_file()]
+
+
 def find_collection_dir(path: Path) -> Path:
     """The collection directory for a user-supplied path (must hold collection.json)."""
     path = Path(path)
