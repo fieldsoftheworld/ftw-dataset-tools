@@ -56,8 +56,8 @@ VALID_BANDS: tuple[str, ...] = (
     default=10.0,
     show_default=True,
     help=(
-        "Target resolution in meters when no reference mask grid is found. "
-        "If a co-located mask exists, its CRS/transform/size is used instead."
+        "Target resolution in meters. Finer masks at integer subdivisions keep "
+        "their footprint without upsampling imagery. Other reference grids are used exactly."
     ),
 )
 @click.option(

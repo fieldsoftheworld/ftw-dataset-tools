@@ -534,6 +534,8 @@ def _collection_ftw_properties(config: DatasetConfig) -> dict:
     }
     if stages.masks.label_extent is not None:
         props["ftw:label_extent"] = True
+    if stages.masks.boundary_width_m is not None:
+        props["ftw:mask_boundary_width_m"] = stages.masks.boundary_width_m
     if stages.scale.percent < 100:
         props.update(
             {

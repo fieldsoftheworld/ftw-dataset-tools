@@ -108,10 +108,7 @@ def _selection_year(fields_file: Path, year: int | None) -> int | None:
     type=float,
     default=10.0,
     show_default=True,
-    help=(
-        "Pixel resolution in meters for masks; also used as imagery fallback "
-        "when no reference mask grid is found."
-    ),
+    help=("Pixel resolution in meters for masks. Imagery defaults to 10 m independently."),
 )
 @click.option(
     "--workers",
@@ -484,7 +481,7 @@ def create_dataset_cmd(
             download_stats = download_imagery_for_catalog(
                 catalog_dir=catalog_dir,
                 bands=["red", "green", "blue", "nir"],
-                resolution=resolution,
+                resolution=10.0,
                 resume=True,
                 workers=image_workers,
             )

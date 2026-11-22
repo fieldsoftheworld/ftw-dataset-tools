@@ -856,6 +856,7 @@ def stage_masks(ctx: PipelineContext) -> None:
         skip_existing=masks_cfg.skip_existing,
         crop_column=masks_cfg.crop_column,
         utm=masks_cfg.utm,
+        boundary_width=masks_cfg.boundary_width_m,
         label_extent_file=masks_cfg.label_extent,
         on_progress=ctx.on_mask_progress,
         on_start=ctx.on_mask_start,

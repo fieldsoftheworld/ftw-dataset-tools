@@ -917,6 +917,21 @@ class TestCollectionMetadata:
         links = [link for link in coll["links"] if link["rel"] == "license"]
         assert links and links[0]["href"] == "https://rkg.gov.si/vstop/"
 
+    def test_boundary_width_on_collection(self) -> None:
+        from ftw_dataset_tools.api.config import DatasetConfig
+        from ftw_dataset_tools.api.stac import _collection_ftw_properties
+
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "unused.parquet",
+                "stages": {"masks": {"resolution": 2.5, "boundary_width_m": 10}},
+            }
+        )
+
+        props = _collection_ftw_properties(config)
+
+        assert (props["ftw:mask_resolution_m"], props["ftw:mask_boundary_width_m"]) == (2.5, 10)
+
     def test_ftw_properties_and_provenance_on_collection(self, tmp_path: Path) -> None:
         import json
 
@@ -930,6 +945,7 @@ class TestCollectionMetadata:
         assert coll["ftw:split_percents"] == [80, 10, 10]
         assert coll["ftw:mask_types"] == ["instance", "semantic_2_class", "semantic_3_class"]
         assert coll["ftw:mask_resolution_m"] == 10.0
+        assert "ftw:mask_boundary_width_m" not in coll
         assert coll["ftw:chip_size_km"] == 2.0
         assert "ftw:cloud_cover_chip_threshold" in coll  # select_images enabled by default
         assert coll["ftw:config"]["config"]["metadata"]["license"] == "CC0-1.0"

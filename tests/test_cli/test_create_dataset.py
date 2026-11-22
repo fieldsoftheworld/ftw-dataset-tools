@@ -791,13 +791,14 @@ class TestCreateDatasetImageDownload:
         assert "Failed: 2" in result.output
 
     @pytest.mark.usefixtures("stub_pipeline")
-    def test_resolution_passed_through(
-        self, download_calls: list[dict[str, Any]], sample_fields_geoparquet: Path
+    @pytest.mark.parametrize("resolution", ["10", "5", "2.5", "1.25", "20"])
+    def test_mask_resolution_does_not_upsample_imagery(
+        self, download_calls: list[dict[str, Any]], sample_fields_geoparquet: Path, resolution: str
     ) -> None:
-        result = _invoke(sample_fields_geoparquet, "--download-images", "--resolution", "20")
+        result = _invoke(sample_fields_geoparquet, "--download-images", "--resolution", resolution)
 
         assert result.exit_code == 0, result.output
-        assert download_calls[0]["resolution"] == 20.0
+        assert download_calls[0]["resolution"] == 10.0
 
     def test_invalid_image_workers_rejected(self, sample_fields_geoparquet: Path) -> None:
         result = _invoke(sample_fields_geoparquet, "--image-workers", "0")

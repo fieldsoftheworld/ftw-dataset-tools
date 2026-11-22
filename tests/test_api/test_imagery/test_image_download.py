@@ -23,6 +23,7 @@ from ftw_dataset_tools.api.imagery.image_download import (
     download_and_clip_scene,
     find_reference_mask_for_output,
     on_reference_grid,
+    validate_alignment,
 )
 from ftw_dataset_tools.api.imagery.settings import BANDS_OF_INTEREST
 
@@ -120,6 +121,66 @@ class TestComputeTargetGrid:
         assert (transform.c, transform.f) == pytest.approx((500_000, 5_542_000))
         assert reference is None
 
+    def test_non_integer_resolution_keeps_legacy_reference_grid(self, tmp_path: Path) -> None:
+        reference = tmp_path / "mask.tif"
+        transform = from_origin(500_001, 5_542_002, 3, 3)
+        _write_raster(reference, "EPSG:32632", transform, (7, 9))
+        grid, error = compute_target_grid((0, 0, 1, 1), tmp_path / "image.tif", 10, reference)
+        assert error is None
+        assert grid[1:4] == (transform, 7, 9)
+
+    @pytest.mark.parametrize("resolution", [20, 30])
+    @pytest.mark.parametrize("size", [(200, 200), (199, 197)])
+    def test_10m_reference_keeps_precedence_over_coarser_requests(
+        self, tmp_path: Path, resolution: float, size: tuple[int, int]
+    ) -> None:
+        reference = tmp_path / "mask.tif"
+        transform = from_origin(500_000, 5_542_000, 10, 10)
+        _write_raster(reference, "EPSG:32632", transform, size)
+
+        grid, error = compute_target_grid(
+            (0, 0, 1, 1), tmp_path / "image.tif", resolution, reference
+        )
+
+        assert error is None
+        assert grid[1:4] == (transform, *size)
+
+    @pytest.mark.parametrize(
+        ("mask_resolution", "resolution"),
+        [(20, 40), (3, 6), (6, 12)],
+    )
+    def test_non_subdivision_reference_keeps_precedence(
+        self, tmp_path: Path, mask_resolution: float, resolution: float
+    ) -> None:
+        reference = tmp_path / "mask.tif"
+        transform = from_origin(500_000, 5_542_000, mask_resolution, mask_resolution)
+        _write_raster(reference, "EPSG:32632", transform, (8, 8))
+
+        grid, error = compute_target_grid(
+            (0, 0, 1, 1), tmp_path / "image.tif", resolution, reference
+        )
+
+        assert error is None
+        assert grid[1:4] == (transform, 8, 8)
+
+    def test_non_square_reference_keeps_precedence(self, tmp_path: Path) -> None:
+        reference = tmp_path / "mask.tif"
+        transform = from_origin(500_000, 5_542_000, 5, 2.5)
+        _write_raster(reference, "EPSG:32632", transform, (8, 8))
+
+        grid, error = compute_target_grid((0, 0, 1, 1), tmp_path / "image.tif", 10, reference)
+
+        assert error is None
+        assert grid[1:4] == (transform, 8, 8)
+
+    def test_indivisible_reference_shape_is_an_actionable_failure(self, tmp_path: Path) -> None:
+        reference = tmp_path / "mask.tif"
+        _write_raster(reference, "EPSG:32632", from_origin(500_000, 5_542_000, 2.5, 2.5), (7, 8))
+        grid, error = compute_target_grid((0, 0, 1, 1), tmp_path / "image.tif", 10, reference)
+        assert grid is None
+        assert "not divisible" in error
+        assert "regenerate masks" in error
+
 
 class TestOnReferenceGrid:
     """A resumed download keeps an image only when it is on its mask's grid."""
@@ -140,6 +201,16 @@ class TestOnReferenceGrid:
         _write_raster(image, "EPSG:32632", from_origin(500_000, 5_542_000, 10, 10), (200, 200))
 
         assert on_reference_grid(image)
+
+    def test_shifted_image_beside_fine_mask_is_rejected(self, tmp_path: Path) -> None:
+        image = self._chip(tmp_path)
+        mask = image.parent / "ftw-32UMA0101_2024_semantic_3_class.tif"
+        _write_raster(mask, "EPSG:32632", from_origin(500_000, 5_542_000, 2.5, 2.5), (800, 800))
+        _write_raster(image, "EPSG:32632", from_origin(500_010, 5_542_000, 10, 10), (200, 200))
+
+        assert not on_reference_grid(image)
+        assert "does not match" in validate_alignment(image, mask)
+        assert not image.exists()
 
     def test_lonlat_image_beside_a_utm_mask_is_not(self, tmp_path: Path) -> None:
         image = self._chip(tmp_path)
@@ -187,6 +258,31 @@ class TestOnReferenceGrid:
         assert "select-images --force" in reason
         _write_raster(image, "EPSG:32632", from_origin(500_000, 5_542_000, 10, 10), (200, 200))
         assert skip_download_reason(item, item_path, resume=True) == "Already downloaded"
+
+    def test_resume_keeps_a_10m_image_beside_regenerated_25m_masks(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.imagery.download_workflow import skip_download_reason
+
+        image = self._chip(tmp_path)
+        _write_raster(image, "EPSG:32632", from_origin(500_000, 5_542_000, 10, 10), (200, 200))
+        # A rebuild at 2.5 m replaced the 10 m mask on the same footprint.
+        _write_raster(
+            image.parent / "ftw-32UMA0101_2024_semantic_3_class.tif",
+            "EPSG:32632",
+            from_origin(500_000, 5_542_000, 2.5, 2.5),
+            (800, 800),
+        )
+        item = pystac.Item(
+            "ftw-32UMA0101_2024_planting_s2",
+            mapping(_ftw_chip()),
+            list(_ftw_chip().bounds),
+            datetime(2024, 5, 1, tzinfo=UTC),
+            {},
+        )
+        item.add_asset("image", pystac.Asset(href=f"./{image.name}"))
+
+        reason = skip_download_reason(item, image.parent / f"{item.id}.json", resume=True)
+
+        assert reason == "Already downloaded"
 
 
 class TestDownloadAndClipScene:
