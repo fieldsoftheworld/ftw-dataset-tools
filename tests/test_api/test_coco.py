@@ -5,13 +5,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pystac
 import pytest
 import rasterio
 from rasterio.transform import from_origin
 
 from ftw_dataset_tools.api.assets import MaskReadError
-from ftw_dataset_tools.api.coco import encode_rle, export_coco, mask_annotations
+from ftw_dataset_tools.api.coco import (
+    SplitsTableError,
+    _chip_id,
+    encode_rle,
+    export_coco,
+    mask_annotations,
+)
 
 
 def decode_rle(rle: dict) -> np.ndarray:
@@ -142,3 +149,64 @@ class TestExportCoco:
         (dataset / "chips" / "32VJH" / "ftw-a" / "ftw-a_instance.tif").write_text("bad")
         with pytest.raises(MaskReadError):
             export_coco(dataset)
+
+
+def write_table(path: Path, rows: list[tuple[str, str, str | None]], column: str) -> Path:
+    """A stand-in root chips table: (dataset, id, split) rows."""
+    pd.DataFrame(rows, columns=["dataset", "id", column]).to_parquet(path)
+    return path
+
+
+class TestSplitsFromTheChipsTable:
+    def test_table_split_wins_then_item_split(self, dataset: Path, tmp_path: Path) -> None:
+        table = write_table(
+            tmp_path / "chips.parquet",
+            [("ds", "ftw-a", "test"), ("other", "ftw-b", "test"), ("ds", "ftw-b", None)],
+            "split_admin2_v1",
+        )
+
+        result = export_coco(dataset, splits=table)
+
+        # ftw-a takes the table's split; ftw-b has none there and keeps its item's
+        assert result.images == {"test": 1, "val": 1}
+
+    def test_split_column(self, dataset: Path, tmp_path: Path) -> None:
+        table = write_table(tmp_path / "c.parquet", [("ds", "ftw-a", "val")], "split_hash_v1")
+
+        result = export_coco(dataset, splits=table, split_column="split_hash_v1")
+
+        assert result.images == {"val": 2}
+
+    def test_missing_column(self, dataset: Path, tmp_path: Path) -> None:
+        table = write_table(tmp_path / "c.parquet", [("ds", "ftw-a", "val")], "split_hash_v1")
+        with pytest.raises(SplitsTableError, match="has no split_admin2_v1 column"):
+            export_coco(dataset, splits=table)
+
+    def test_no_chips_of_the_dataset(self, dataset: Path, tmp_path: Path) -> None:
+        table = write_table(tmp_path / "c.parquet", [("xx", "ftw-a", "val")], "split_admin2_v1")
+        with pytest.raises(SplitsTableError, match="no chips of dataset ds"):
+            export_coco(dataset, splits=table)
+
+    def test_unreadable_table(self, dataset: Path, tmp_path: Path) -> None:
+        with pytest.raises(SplitsTableError, match="Cannot read the chips table"):
+            export_coco(dataset, splits=tmp_path / "missing.parquet")
+
+    def test_collection_id_names_the_dataset(self, dataset: Path, tmp_path: Path) -> None:
+        (dataset / "collection.json").write_text(json.dumps({"id": "at_2024"}))
+        table = write_table(
+            tmp_path / "c.parquet", [("at_2024", "ftw-a", "test")], "split_admin2_v1"
+        )
+
+        assert export_coco(dataset, splits=table).images == {"test": 1, "val": 1}
+
+    def test_chip_id_drops_the_year(self) -> None:
+        item = pystac.Item(
+            "ftw-33UXP0410_2024",
+            None,
+            None,
+            datetime(2024, 1, 1, tzinfo=UTC),
+            {"ftw:calendar_year": 2024},
+        )
+        assert _chip_id(item) == "ftw-33UXP0410"
+        item.properties.pop("ftw:calendar_year")
+        assert _chip_id(item) == "ftw-33UXP0410_2024"

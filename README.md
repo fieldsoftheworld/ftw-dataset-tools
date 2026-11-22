@@ -570,7 +570,16 @@ Write a dataset's instance masks as COCO instance segmentation JSON (`instances_
 
 ```bash
 ftwd export-coco ./austria-dataset -o ./coco --min-area 10
+
+# Splits from the benchmark's root chips table, matched on the collection id
+ftwd export-coco ./at_2024 --splits https://data.source.coop/ftw/benchmark-data/chips.parquet
+ftwd export-coco ./at_2024 --splits chips.parquet --split-column split_hash_v1
 ```
+
+`--splits` reads each chip's split from `--split-column` (default `split_admin2_v1`) of the
+rows whose `dataset` is the collection id, matching a chip item to its row by the chip id
+(the item id without its `_<year>` suffix). A chip the table has no split for falls back to
+its item's `ftw:split`, and a chip with neither goes to `instances_all.json`.
 
 ### chips-table
 
