@@ -444,6 +444,12 @@ def _fetch_grid_cells(
           AND bbox.ymin <= {ymax}
           AND bbox.ymax >= {ymin}
     """)
+    repaired, deleted = chip_grid.drop_stray_parts(conn, "grid_table")
+    if repaired or deleted:
+        logger.info(
+            f"Grid cells with stray parts: {repaired:,} trimmed to their part in their GZD, "
+            f"{deleted:,} with no part there dropped"
+        )
     if recut:
         _cut_remote_grid(conn, km_size)
     _join_band_pieces(conn, "geometry", min_chip_area, km_size, is_geographic=True)

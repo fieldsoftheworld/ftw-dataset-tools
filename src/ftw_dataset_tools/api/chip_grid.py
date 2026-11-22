@@ -12,6 +12,7 @@ import re
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pyarrow as pa
 import shapely
 from pyproj import Transformer
 from rasterio.crs import CRS
@@ -32,6 +33,7 @@ __all__ = [
     "chip_size_label",
     "chip_size_m",
     "cut_grid",
+    "drop_stray_parts",
     "expand_bounds",
     "id_digits",
     "join_band_pieces",
@@ -310,6 +312,115 @@ def join_band_pieces(
     conn.execute(f'DELETE FROM "{table}" WHERE rowid IN (SELECT north FROM _band_pairs)')
     conn.execute("DROP TABLE _band_pairs")
     return before - conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+
+
+# Parts within this distance (degrees) of a cell's main part belong to the cell.
+_STRAY_TOLERANCE_DEG = 1e-6
+# Slack (degrees) on a GZD's extent: band pieces are joined to the south, and the
+# Norway and Svalbard zones are up to 3 degrees wider than standard.
+_BAND_SLACK_DEG = 0.05
+_ZONE_SLACK_DEG = 3.05
+
+
+def _gzd_extent(zone: int, band: str) -> tuple[float, float, float, float]:
+    """A standard GZD's lon/lat box (band X is 12 degrees tall)."""
+    west = -180.0 + 6.0 * (zone - 1)
+    south = -80.0 + 8.0 * _BANDS.index(band)
+    return west, south, west + 6.0, 84.0 if band == "X" else south + 8.0
+
+
+def _in_gzd(part: BaseGeometry, extent: tuple[float, float, float, float]) -> bool:
+    west, south, east, north = extent
+    point = part.representative_point()
+    return (
+        west - _ZONE_SLACK_DEG <= point.x <= east + _ZONE_SLACK_DEG
+        and south - _BAND_SLACK_DEG <= point.y <= north + _BAND_SLACK_DEG
+    )
+
+
+def _clean_cell(cell_id: str | None, geom: BaseGeometry) -> BaseGeometry | None:
+    """The cell's main part and the parts touching it; None if no part is in its GZD.
+
+    The main part is the largest one inside the GZD the id names (any part, for a
+    cell without an FTW chip id).
+    """
+    parts = sorted(shapely.get_parts(geom), key=lambda p: p.area, reverse=True)
+    match = re.match(_BAND_PIECE_PATTERN, cell_id or "")
+    if match:
+        extent = _gzd_extent(int(match.group(1)), match.group(2))
+        parts_in_gzd = [p for p in parts if _in_gzd(p, extent)]
+        if not parts_in_gzd:
+            return None
+        main = parts_in_gzd[0]
+    else:
+        main = parts[0]
+    return shapely.union_all([p for p in parts if p.distance(main) <= _STRAY_TOLERANCE_DEG])
+
+
+def drop_stray_parts(
+    conn: duckdb.DuckDBPyConnection, table: str, geom_col: str = "geometry"
+) -> tuple[int, int]:
+    """Cut stray parts off the grid's multipart cells, in place.
+
+    Grid v0.2 has about 405,000 such cells. In GZDs 18K, 18L and 20E every cell has a
+    copy 72 or 36 degrees of longitude away. Others add a near-empty sliver about
+    100 km off, in the top row of some 100 km squares, or a part in the other
+    hemisphere (33C, 42X). A cell like that matches every field across its bbox in a
+    coverage join and can become a chip far bigger than it should be. Each cell keeps
+    its largest part inside the GZD its id names, and the parts touching that; a cell
+    with no part there is deleted. Bbox struct columns are updated to match.
+
+    Returns:
+        (cells trimmed, cells deleted)
+    """
+    columns = {row[0]: row[1] for row in conn.execute(f'DESCRIBE "{table}"').fetchall()}
+    id_expr = '"id"' if "id" in columns else "NULL"
+    rows = conn.execute(f"""
+        SELECT rowid, {id_expr}, ST_AsWKB("{geom_col}") FROM "{table}"
+        WHERE ST_NumGeometries("{geom_col}") > 1
+    """).fetchall()
+    fixed: list[tuple[int, bytes]] = []
+    dropped: list[int] = []
+    for rowid, cell_id, wkb in rows:
+        geom = shapely.from_wkb(bytes(wkb))
+        clean = _clean_cell(cell_id, geom)
+        if clean is None:
+            dropped.append(rowid)
+        elif not shapely.equals(clean, geom):  # a part was cut off
+            fixed.append((rowid, shapely.to_wkb(clean)))
+    if dropped:
+        conn.register("_stray_drop", pa.table({"rid": pa.array(dropped, pa.int64())}))
+        conn.execute(f'DELETE FROM "{table}" WHERE rowid IN (SELECT rid FROM _stray_drop)')
+        conn.unregister("_stray_drop")
+    if fixed:
+        _replace_geometries(conn, table, geom_col, columns, fixed)
+    return len(fixed), len(dropped)
+
+
+def _replace_geometries(
+    conn: duckdb.DuckDBPyConnection,
+    table: str,
+    geom_col: str,
+    columns: dict[str, str],
+    rows: list[tuple[int, bytes]],
+) -> None:
+    """Set the geometry (and bbox struct columns) of each (rowid, wkb) in ``rows``."""
+    rids, wkbs = zip(*rows, strict=True)
+    conn.register(
+        "_stray", pa.table({"rid": pa.array(rids, pa.int64()), "wkb": pa.array(wkbs, pa.binary())})
+    )
+    g = "ST_GeomFromWKB(_stray.wkb)"
+    sets = [f'"{geom_col}" = {g}::{columns[geom_col]}'] + [
+        f'"{name}" = STRUCT_PACK(xmin := ST_XMin({g}), ymin := ST_YMin({g}), '
+        f"xmax := ST_XMax({g}), ymax := ST_YMax({g}))::{ctype}"
+        for name, ctype in columns.items()
+        if _BBOX_STRUCT.fullmatch(ctype)
+    ]
+    conn.execute(f"""
+        UPDATE "{table}" SET {", ".join(sets)}
+        FROM _stray WHERE "{table}".rowid = _stray.rid
+    """)
+    conn.unregister("_stray")
 
 
 # The square origin is the centroid less the id's offset, not the bounds: a few published

@@ -7,6 +7,7 @@ import math
 import duckdb
 import pandas as pd
 import pytest
+import shapely.affinity
 from pyproj import Transformer
 from shapely import wkt
 from shapely.geometry import MultiPolygon, box
@@ -18,6 +19,7 @@ from ftw_dataset_tools.api.chip_grid import (
     chip_size_label,
     chip_size_m,
     cut_grid,
+    drop_stray_parts,
     expand_bounds,
     id_digits,
     join_band_pieces,
@@ -377,3 +379,69 @@ class TestJoinBandPieces:
         conn.execute("INSTALL spatial; LOAD spatial;")
         conn.execute("CREATE TABLE grid_table AS SELECT ST_Point(0, 0) AS geometry")
         assert _join(conn) == 0
+
+
+def _stray_cell() -> tuple[object, object]:
+    """A 2 km cell of 33UXP and the same cell with a near-empty sliver 100 km south."""
+    cell = _to_lonlat(_cell(10, 98))
+    sliver = _to_lonlat(box(X0 + 10_000, Y0 - 98_000, X0 + 12_000, Y0 - 97_999.9))
+    return cell, MultiPolygon([cell, sliver])
+
+
+class TestDropStrayParts:
+    def test_sliver_is_cut_off_and_bbox_follows(self) -> None:
+        cell, stray = _stray_cell()
+        other = _to_lonlat(_cell(20, 20))
+        conn = _lonlat_grid({"ftw-33UXP1098": stray, "ftw-33UXP2020": other})
+        assert drop_stray_parts(conn, "grid_table") == (1, 0)
+        rows = _rows(conn)
+        _, geom, bbox = rows["ftw-33UXP1098"]
+        assert geom.geom_type == "Polygon"
+        assert geom.equals_exact(cell, 1e-9)
+        assert tuple(bbox.values()) == pytest.approx(cell.bounds)
+        assert rows["ftw-33UXP2020"][1].equals_exact(other, 1e-9)
+
+    def test_touching_parts_stay(self) -> None:
+        # Row 90 of the square is inside band U (the square's origin is at 47.8°N).
+        left, right = _to_lonlat(_cell(0, 90, 1)), _to_lonlat(_cell(1, 90, 1))
+        conn = _lonlat_grid({"ftw-33UXP0090": MultiPolygon([left, right])})
+        assert drop_stray_parts(conn, "grid_table") == (0, 0)
+        assert _rows(conn)["ftw-33UXP0090"][1].area == pytest.approx((left.union(right)).area)
+
+    def test_part_in_another_hemisphere_is_cut_off(self) -> None:
+        # As in GZD 33C of grid v0.2: a speck in Antarctica and a bigger part at 72°N.
+        speck = box(12.0, -72.26, 12.0000001, -72.2599999)
+        far = box(12.0, 71.88, 12.06, 71.9)
+        conn = _lonlat_grid({"ftw-33CUV9678": MultiPolygon([speck, far])})
+        assert drop_stray_parts(conn, "grid_table") == (1, 0)
+        assert _rows(conn)["ftw-33CUV9678"][1].equals_exact(speck, 1e-12)
+
+    def test_cell_with_no_part_in_its_gzd_is_dropped(self) -> None:
+        _, stray = _stray_cell()
+        outside = MultiPolygon([box(68.0, -0.09, 68.01, -0.07), box(40.0, 72.0, 40.04, 72.01)])
+        conn = _lonlat_grid({"ftw-42XUE9690": outside, "ftw-33UXP1098": stray})
+        assert drop_stray_parts(conn, "grid_table") == (1, 1)
+        assert set(_rows(conn)) == {"ftw-33UXP1098"}
+
+    def test_copy_in_another_zone_is_cut_off_even_when_listed_first(self) -> None:
+        # As in GZDs 18K, 18L and 20E of grid v0.2: an equal copy 72 degrees west.
+        cell = _to_lonlat(_cell(10, 90))
+        copy = shapely.affinity.translate(cell, xoff=-72)
+        conn = _lonlat_grid({"ftw-33UXP1090": MultiPolygon([copy, cell])})
+        assert drop_stray_parts(conn, "grid_table") == (1, 0)
+        assert _rows(conn)["ftw-33UXP1090"][1].equals_exact(cell, 1e-9)
+
+    def test_single_part_cells_are_untouched(self) -> None:
+        conn = _lonlat_grid({"ftw-33UXP0000": _to_lonlat(_cell(0, 0))})
+        assert drop_stray_parts(conn, "grid_table") == (0, 0)
+
+    def test_grid_without_ids_or_bbox(self) -> None:
+        _, stray = _stray_cell()
+        conn = duckdb.connect()
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute(
+            "CREATE TABLE grid_table AS SELECT ST_GeomFromText(?::VARCHAR) AS geometry", [stray.wkt]
+        )
+        assert drop_stray_parts(conn, "grid_table") == (1, 0)
+        geom_type = conn.execute("SELECT ST_GeometryType(geometry) FROM grid_table").fetchone()[0]
+        assert geom_type == "POLYGON"
