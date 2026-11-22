@@ -343,6 +343,18 @@ def _connect(source: str) -> duckdb.DuckDBPyConnection:
     return con
 
 
+def _install_extensions(sources: Sequence[str]) -> None:
+    """Install spatial (and httpfs for remote sources) once, before the pool's threads
+    each load them: concurrent INSTALLs race on a machine that has neither yet."""
+    con = duckdb.connect(":memory:")
+    try:
+        con.execute("INSTALL spatial")
+        if any("://" in s for s in sources):
+            con.execute("INSTALL httpfs")
+    finally:
+        con.close()
+
+
 def _copy_dataset(item: DatasetInput, out: Path) -> None:
     con = _connect(item.chips)
     try:
@@ -755,6 +767,7 @@ def build_chips_table(
     out entirely, or chips a rebuild no longer has.
     """
     inputs = _keep_predefined(inputs, str(previous), frozenset(drop))
+    _install_extensions([item.chips for item in inputs] + [str(previous)])
     out = Path(out).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=out.parent) as tmp:

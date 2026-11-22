@@ -755,9 +755,27 @@ def test_build_leaves_no_temp_files(world: World, later: Path) -> None:
 def test_local_reads_never_load_httpfs(monkeypatch: pytest.MonkeyPatch) -> None:
     # threads reading local files used to race to INSTALL httpfs on a fresh machine
     calls: list[str] = []
-    monkeypatch.setattr(chips_table, "configure_source_coop_s3", lambda con: calls.append("s3"))
+    monkeypatch.setattr(chips_table, "configure_source_coop_s3", lambda _con: calls.append("s3"))
     chips_table._connect("/data/aa_2021_chips.parquet").close()
     chips_table._connect("https://data.example.org/aa_2021_chips.parquet").close()
     assert calls == []
     chips_table._connect("s3://bucket/aa_2021_chips.parquet").close()
     assert calls == ["s3"]
+
+
+def test_extensions_are_installed_once_before_the_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    run: list[str] = []
+
+    class Con:
+        def execute(self, sql: str) -> None:
+            run.append(sql)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(chips_table.duckdb, "connect", lambda *_a: Con())
+    chips_table._install_extensions(["/data/a.parquet"])
+    assert run == ["INSTALL spatial"]
+    run.clear()
+    chips_table._install_extensions(["/data/a.parquet", "https://x.org/b.parquet"])
+    assert run == ["INSTALL spatial", "INSTALL httpfs"]
