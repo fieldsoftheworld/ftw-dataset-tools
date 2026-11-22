@@ -173,8 +173,9 @@ def export_coco(
     Each chip becomes one COCO image whose ``file_name`` is its STAC item path,
     relative to the dataset directory. A chip's split comes from ``split_column`` of the
     root chips table ``splits`` (rows whose ``dataset`` is the collection id) when one is
-    given, else from the item's ``ftw:split``; chips with neither go to
-    ``instances_all.json``. Instance masks are expected to use 0 as background.
+    given, else from the item's ``ftw:split``. With a table, a chip it has no split for goes
+    to ``instances_all.json`` rather than mixing in the item's own split scheme; so does a
+    chip with no split at all. Instance masks are expected to use 0 as background.
     """
     collection_dir = find_collection_dir(Path(dataset_dir)).resolve()
     out = Path(output_dir) if output_dir else collection_dir / "coco"
@@ -187,7 +188,10 @@ def export_coco(
         if mask_path is None or not mask_path.exists():
             result.skipped_chips.append(item.id)
             continue
-        split = table.get(_chip_id(item)) or item.properties.get("ftw:split") or UNSPLIT
+        if splits is not None:
+            split = table.get(_chip_id(item)) or UNSPLIT
+        else:
+            split = item.properties.get("ftw:split") or UNSPLIT
         dataset = datasets.setdefault(split, _empty_dataset())
         _add_chip(dataset, item_path, mask_path, collection_dir, min_area)
 

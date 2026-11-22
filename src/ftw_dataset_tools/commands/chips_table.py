@@ -22,7 +22,9 @@ def _parse_groups(values: tuple[str, ...]) -> dict[str, str]:
     default=None,
     help="Where the catalog's data files are served, e.g. "
     "https://data.source.coop/ftw/benchmark-data. Relative chips hrefs resolve against it "
-    "plus the collection's folder. Default: the catalog's own folder.",
+    "plus the collection's folder. Default: the catalog's own folder, which only works when "
+    "the data files sit next to the catalog; a catalog whose data is served elsewhere (like "
+    "the benchmark catalog) needs this.",
 )
 @click.option(
     "--local",

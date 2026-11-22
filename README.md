@@ -578,8 +578,9 @@ ftwd export-coco ./at_2024 --splits chips.parquet --split-column split_hash_v1
 
 `--splits` reads each chip's split from `--split-column` (default `split_admin2_v1`) of the
 rows whose `dataset` is the collection id, matching a chip item to its row by the chip id
-(the item id without its `_<year>` suffix). A chip the table has no split for falls back to
-its item's `ftw:split`, and a chip with neither goes to `instances_all.json`.
+(the item id without its `_<year>` suffix). A chip the table has no split for goes to
+`instances_all.json`; it never falls back to its item's `ftw:split`, so one export never
+mixes two split schemes. Without `--splits`, each chip's `ftw:split` is used.
 
 ### chips-table
 
@@ -613,7 +614,8 @@ published ones for that id. A local dataset the catalog doesn't have yet needs
 
 A collection without `ftw:split_type` (built with the splits stage off) whose dataset has
 `split_predefined` values in the previous table counts as predefined, so that column is never
-dropped silently: a published one carries it, and a `--local` one must have `split`.
+dropped silently: a published one carries it, and a `--local` one must have `split`. One
+whose collection now names another split type is refused unless `--drop` names it.
 
 Under `split_admin2_v1`, a row with no admin2 name joins its admin1's unit. Rows without a
 country or admin1, and countries with fewer than three admin2 units to balance, use their

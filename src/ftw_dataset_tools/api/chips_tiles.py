@@ -168,6 +168,8 @@ def write_overview(locations: Path, out: Path, split: str) -> int:
                          ST_Centroid(geometry) AS geometry {where})
             TO {_sql(str(out))} WITH (FORMAT GDAL, DRIVER 'GeoJSONSeq')""")
         return con.execute(f"SELECT count(*) {where}").fetchone()[0]
+    except duckdb.Error as err:
+        raise ChipsTilesError(f"can't write the {split} overview: {err}") from err
     finally:
         con.close()
 

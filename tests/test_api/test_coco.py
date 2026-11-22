@@ -158,7 +158,9 @@ def write_table(path: Path, rows: list[tuple[str, str, str | None]], column: str
 
 
 class TestSplitsFromTheChipsTable:
-    def test_table_split_wins_then_item_split(self, dataset: Path, tmp_path: Path) -> None:
+    def test_table_split_wins_and_never_mixes_item_splits(
+        self, dataset: Path, tmp_path: Path
+    ) -> None:
         table = write_table(
             tmp_path / "chips.parquet",
             [("ds", "ftw-a", "test"), ("other", "ftw-b", "test"), ("ds", "ftw-b", None)],
@@ -167,15 +169,16 @@ class TestSplitsFromTheChipsTable:
 
         result = export_coco(dataset, splits=table)
 
-        # ftw-a takes the table's split; ftw-b has none there and keeps its item's
-        assert result.images == {"test": 1, "val": 1}
+        # ftw-a takes the table's split; ftw-b has none there, so it is unsplit rather
+        # than taking its item's own split
+        assert result.images == {"test": 1, "all": 1}
 
     def test_split_column(self, dataset: Path, tmp_path: Path) -> None:
         table = write_table(tmp_path / "c.parquet", [("ds", "ftw-a", "val")], "split_hash_v1")
 
         result = export_coco(dataset, splits=table, split_column="split_hash_v1")
 
-        assert result.images == {"val": 2}
+        assert result.images == {"val": 1, "all": 1}
 
     def test_missing_column(self, dataset: Path, tmp_path: Path) -> None:
         table = write_table(tmp_path / "c.parquet", [("ds", "ftw-a", "val")], "split_hash_v1")
@@ -197,7 +200,7 @@ class TestSplitsFromTheChipsTable:
             tmp_path / "c.parquet", [("at_2024", "ftw-a", "test")], "split_admin2_v1"
         )
 
-        assert export_coco(dataset, splits=table).images == {"test": 1, "val": 1}
+        assert export_coco(dataset, splits=table).images == {"test": 1, "all": 1}
 
     def test_chip_id_drops_the_year(self) -> None:
         item = pystac.Item(

@@ -108,6 +108,11 @@ def test_overview_points_sum_every_count(tmp_path: Path, locations: Path) -> Non
         assert all(p["geometry"]["type"] == "Point" for p in points)
 
 
+def test_overview_read_error_is_a_domain_error(tmp_path: Path) -> None:
+    with pytest.raises(chips_tiles.ChipsTilesError, match="can't write the val overview"):
+        chips_tiles.write_overview(tmp_path / "missing.parquet", tmp_path / "o.seq", "val")
+
+
 def test_overview_command(tmp_path: Path) -> None:
     cmd = chips_tiles.overview_command(tmp_path / "s", tmp_path / "o.pmtiles", "overview_test")
     assert all(f"--accumulate-attribute={k}:sum" in cmd for k in chips_tiles.OVERVIEW_SUMS)

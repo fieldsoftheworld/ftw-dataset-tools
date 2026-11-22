@@ -694,12 +694,15 @@ def _write(con: duckdb.DuckDBPyConnection, joined: Path, out: Path) -> int:
     return written
 
 
-def _keep_predefined(inputs: list[DatasetInput], previous: str) -> list[DatasetInput]:
+def _keep_predefined(
+    inputs: list[DatasetInput], previous: str, drop: frozenset[str] = frozenset()
+) -> list[DatasetInput]:
     """Treat a dataset with a published ``split_predefined`` as predefined.
 
     A collection built with the splits stage off has no ``ftw:split_type``, so without
     this its frozen ``split_predefined`` would be dropped without a word. As predefined,
     a published one is carried from ``previous`` and a local one must have ``split``.
+    One whose collection now names another split type is refused unless ``drop`` names it.
     """
     con = duckdb.connect(":memory:")
     try:
@@ -712,6 +715,16 @@ def _keep_predefined(inputs: list[DatasetInput], previous: str) -> list[DatasetI
     finally:
         con.close()
     had = {r[0] for r in rows}
+    changed = sorted(
+        i.dataset
+        for i in inputs
+        if i.dataset in had and i.split_type not in (None, "predefined") and i.dataset not in drop
+    )
+    if changed:
+        raise ChipsTableError(
+            f"{', '.join(changed)}: the previous table has split_predefined, but the collection "
+            f"now says another split type, so it would be lost (--drop it if that is intended)"
+        )
     return [
         replace(i, split_type="predefined") if i.dataset in had and i.split_type is None else i
         for i in inputs
@@ -731,7 +744,7 @@ def build_chips_table(
     ``split_admin2_v1``. ``drop`` names datasets whose frozen splits may be lost: left
     out entirely, or chips a rebuild no longer has.
     """
-    inputs = _keep_predefined(inputs, str(previous))
+    inputs = _keep_predefined(inputs, str(previous), frozenset(drop))
     out = Path(out).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=out.parent) as tmp:

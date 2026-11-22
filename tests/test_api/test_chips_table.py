@@ -327,6 +327,16 @@ def test_published_predefined_without_split_type_keeps_its_split(world: World, l
     assert t[("bb_2022", "ftw-33TUN2020")][1] == "val"
 
 
+def test_predefined_switched_to_another_split_type_is_refused(world: World, later: Path) -> None:
+    """A dataset with split_predefined whose collection now names another split type
+    would lose that column; it is refused unless --drop names it."""
+    world.write_catalog({"aa_2021": ("zz", "block3x3"), "bb_2022": ("bb", "block3x3-hash")})
+    with pytest.raises(ChipsTableError, match="bb_2022: the previous table has split_predefined"):
+        world.build(later, local=("aa_2021",))
+    t = table(world.build(later, local=("aa_2021",), drop={"bb_2022"}))
+    assert t[("bb_2022", "ftw-33TUN2020")][1] is None
+
+
 def test_local_predefined_without_split_type_needs_a_split(world: World, later: Path) -> None:
     world.local("bb_2022", None, None)
     strip_split(
