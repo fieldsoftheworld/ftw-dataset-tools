@@ -847,7 +847,6 @@ class TestProcessDownloadedSceneParentFailure:
 
                 result = download_imagery_for_catalog(
                     catalog_dir=tmp_path,
-                    show_progress_bar=False,
                 )
         finally:
             parent_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
@@ -907,11 +906,11 @@ class TestProcessDownloadedSceneParentFailure:
 
             parent_path.chmod(stat.S_IRUSR)
             try:
-                first = download_imagery_for_catalog(catalog_dir=tmp_path, show_progress_bar=False)
+                first = download_imagery_for_catalog(catalog_dir=tmp_path)
             finally:
                 parent_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
-            second = download_imagery_for_catalog(catalog_dir=tmp_path, show_progress_bar=False)
+            second = download_imagery_for_catalog(catalog_dir=tmp_path)
 
         assert first.failed == 1
         assert second.skipped == 0

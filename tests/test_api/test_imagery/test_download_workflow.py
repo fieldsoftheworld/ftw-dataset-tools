@@ -146,7 +146,6 @@ class TestDownloadImageryForCatalog:
 
             download_imagery_for_catalog(
                 catalog_dir=mock_catalog_with_s2_children,
-                show_progress_bar=False,
             )
 
             # Check that default bands were passed to download function
@@ -182,7 +181,6 @@ class TestDownloadImageryForCatalog:
 
         result = download_imagery_for_catalog(
             catalog_dir=tmp_path,
-            show_progress_bar=False,
         )
 
         assert result.skipped == 1
@@ -219,7 +217,6 @@ class TestDownloadImageryForCatalog:
         result = download_imagery_for_catalog(
             catalog_dir=tmp_path,
             resume=True,
-            show_progress_bar=False,
         )
 
         assert result.skipped == 1
@@ -262,7 +259,6 @@ class TestDownloadImageryForCatalog:
             result = download_imagery_for_catalog(
                 catalog_dir=tmp_path,
                 resume=True,
-                show_progress_bar=False,
             )
 
             assert result.successful == 1
@@ -284,7 +280,6 @@ class TestDownloadImageryForCatalog:
 
             download_imagery_for_catalog(
                 catalog_dir=mock_catalog_with_s2_children,
-                show_progress_bar=False,
             )
 
             # Check that some calls have "planting" season
@@ -309,7 +304,6 @@ class TestDownloadImageryForCatalog:
 
             download_imagery_for_catalog(
                 catalog_dir=mock_catalog_with_s2_children,
-                show_progress_bar=False,
             )
 
             # Check that some calls have "harvest" season
@@ -334,7 +328,6 @@ class TestDownloadImageryForCatalog:
 
             result = download_imagery_for_catalog(
                 catalog_dir=mock_catalog_with_s2_children,
-                show_progress_bar=False,
             )
 
             assert result.successful == 4  # 2 chips x 2 seasons
@@ -354,7 +347,6 @@ class TestDownloadImageryForCatalog:
 
             result = download_imagery_for_catalog(
                 catalog_dir=mock_catalog_with_s2_children,
-                show_progress_bar=False,
             )
 
             assert result.successful == 0
@@ -374,41 +366,13 @@ class TestDownloadImageryForCatalog:
 
             result = download_imagery_for_catalog(
                 catalog_dir=mock_catalog_with_s2_children,
-                show_progress_bar=False,
             )
 
             assert result.failed == 4
             assert "Network error" in result.failed_details[0]["error"]
 
-    def test_progress_callbacks(self, mock_catalog_with_s2_children: Path) -> None:
-        """Test that progress callbacks are called."""
-        with (
-            patch(
-                "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene"
-            ) as mock_download,
-            patch("ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene"),
-            patch("ftw_dataset_tools.api.imagery.download_workflow.has_rgb_bands") as mock_has_rgb,
-        ):
-            mock_download.return_value = MagicMock(success=True)
-            mock_has_rgb.return_value = True
-
-            progress_calls = []
-
-            def on_progress(current: int, total: int) -> None:
-                progress_calls.append((current, total))
-
-            download_imagery_for_catalog(
-                catalog_dir=mock_catalog_with_s2_children,
-                on_progress=on_progress,
-                show_progress_bar=False,
-            )
-
-            # Should have 4 progress calls (2 chips x 2 seasons)
-            assert len(progress_calls) == 4
-            assert progress_calls[-1] == (4, 4)
-
     def test_progress_bar_integration(self, mock_catalog_with_s2_children: Path) -> None:
-        """Test that tqdm progress bar is used when show_progress_bar=True."""
+        """Test that the tqdm progress bar is created, updated and closed."""
         with (
             patch(
                 "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene"
@@ -424,7 +388,6 @@ class TestDownloadImageryForCatalog:
 
             download_imagery_for_catalog(
                 catalog_dir=mock_catalog_with_s2_children,
-                show_progress_bar=True,
             )
 
             # Progress bar should be created
@@ -451,7 +414,6 @@ class TestDownloadImageryForCatalog:
             download_imagery_for_catalog(
                 catalog_dir=mock_catalog_with_s2_children,
                 generate_thumbnails=True,
-                show_progress_bar=False,
             )
 
             # Check that generate_thumbnails was passed to process function
@@ -475,7 +437,6 @@ class TestDownloadImageryForCatalog:
             download_imagery_for_catalog(
                 catalog_dir=mock_catalog_with_s2_children,
                 generate_thumbnails=True,  # Requested but can't do
-                show_progress_bar=False,
             )
 
             # Check that generate_thumbnails is False when no RGB bands
@@ -499,7 +460,6 @@ class TestDownloadImageryForCatalog:
             download_imagery_for_catalog(
                 catalog_dir=mock_catalog_with_s2_children,
                 bands=custom_bands,
-                show_progress_bar=False,
             )
 
             call_kwargs = mock_download.call_args_list[0][1]
@@ -520,7 +480,6 @@ class TestDownloadImageryForCatalog:
             download_imagery_for_catalog(
                 catalog_dir=mock_catalog_with_s2_children,
                 resolution=20.0,
-                show_progress_bar=False,
             )
 
             call_kwargs = mock_download.call_args_list[0][1]
@@ -606,7 +565,6 @@ class TestUnreadableItemsAreReported:
 
             result = download_imagery_for_catalog(
                 catalog_dir=catalog_dir,
-                show_progress_bar=False,
             )
 
         assert result.successful == 1
@@ -619,7 +577,7 @@ class TestUnreadableItemsAreReported:
         broken_dir.mkdir(parents=True)
         (broken_dir / "broken_planting_s2.json").write_text("{ invalid json }")
 
-        result = download_imagery_for_catalog(catalog_dir=tmp_path, show_progress_bar=False)
+        result = download_imagery_for_catalog(catalog_dir=tmp_path)
 
         assert result.successful == 0
         assert result.failed == 1
@@ -675,9 +633,7 @@ class TestParallelDownload:
             lambda **_kwargs: None,
         )
 
-        result = download_imagery_for_catalog(
-            catalog_dir=catalog, show_progress_bar=False, workers=4
-        )
+        result = download_imagery_for_catalog(catalog_dir=catalog, workers=4)
 
         assert result.successful == 8
         assert result.failed == 0
@@ -699,9 +655,7 @@ class TestParallelDownload:
             lambda **_kwargs: threads.append(threading.current_thread().name),
         )
 
-        result = download_imagery_for_catalog(
-            catalog_dir=catalog, show_progress_bar=False, workers=4
-        )
+        result = download_imagery_for_catalog(catalog_dir=catalog, workers=4)
 
         assert result.successful == 6
         assert set(threads) == {threading.main_thread().name}
@@ -726,18 +680,19 @@ class TestParallelDownload:
             lambda **_kwargs: None,
         )
 
-        result = download_imagery_for_catalog(
-            catalog_dir=catalog, show_progress_bar=False, workers=4
-        )
+        result = download_imagery_for_catalog(catalog_dir=catalog, workers=4)
 
         assert result.successful == 3
         assert result.failed_details == [{"item": "chip_001_harvest_s2", "error": "boom"}]
 
-    def test_progress_callback_counts_every_item(
+    def test_progress_bar_counts_every_item(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         catalog = _write_s2_catalog(tmp_path, ["chip_000", "chip_001"])
-        seen: list[tuple[int, int]] = []
+        bar = MagicMock()
+        monkeypatch.setattr(
+            "ftw_dataset_tools.api.imagery.download_workflow.tqdm", lambda **_kwargs: bar
+        )
 
         monkeypatch.setattr(
             "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
@@ -748,14 +703,10 @@ class TestParallelDownload:
             lambda **_kwargs: None,
         )
 
-        download_imagery_for_catalog(
-            catalog_dir=catalog,
-            show_progress_bar=False,
-            workers=4,
-            on_progress=lambda current, total: seen.append((current, total)),
-        )
+        download_imagery_for_catalog(catalog_dir=catalog, workers=4)
 
-        assert seen == [(1, 4), (2, 4), (3, 4), (4, 4)]
+        assert bar.update.call_count == 4
+        bar.close.assert_called_once()
 
 
 class TestKeepRemoteRefsAndLogs:
@@ -774,9 +725,7 @@ class TestKeepRemoteRefsAndLogs:
             "ftw_dataset_tools.api.imagery.download_workflow.process_downloaded_scene", process
         )
 
-        result = download_imagery_for_catalog(
-            catalog_dir=catalog, show_progress_bar=False, keep_remote_refs=True
-        )
+        result = download_imagery_for_catalog(catalog_dir=catalog, keep_remote_refs=True)
 
         assert result.successful == 2
         process.assert_not_called()
@@ -798,9 +747,7 @@ class TestKeepRemoteRefsAndLogs:
             MagicMock(side_effect=OSError("disk full")),
         )
 
-        result = download_imagery_for_catalog(
-            catalog_dir=catalog, show_progress_bar=False, keep_remote_refs=True
-        )
+        result = download_imagery_for_catalog(catalog_dir=catalog, keep_remote_refs=True)
 
         assert result.successful == 0
         assert result.failed == 2
@@ -828,7 +775,7 @@ class TestKeepRemoteRefsAndLogs:
             lambda **_kwargs: None,
         )
 
-        download_imagery_for_catalog(catalog_dir=catalog, show_progress_bar=False)
+        download_imagery_for_catalog(catalog_dir=catalog)
 
         grid_lines = [msg for msg in caplog.messages if msg.startswith("Grid:")]
         assert sorted(grid_lines) == ["Grid: chip_000_harvest_s2", "Grid: chip_000_planting_s2"]

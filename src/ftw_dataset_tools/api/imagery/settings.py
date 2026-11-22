@@ -32,12 +32,6 @@ os.environ.update(
 # STAC configuration - EarthSearch is the only supported host
 STAC_URL = "https://earth-search.aws.element84.com/v1"
 
-# Sentinel-2 collection identifiers
-S2_COLLECTIONS = {
-    "old-baseline": "sentinel-2-l2a",
-    "c1": "sentinel-2-c1-l2a",
-}
-
 # Default bands of interest
 BANDS_OF_INTEREST = ["red", "green", "blue", "nir"]
 
@@ -77,8 +71,6 @@ MOSAIC_BASE_URL = "https://data.source.coop/tge-labs/sentinel-2-quarterly-cloudl
 MOSAIC_NODATA = -32768
 MOSAIC_SCALE = 0.0001
 
-# Cloud probability band (for pixel-level cloud filtering)
-CLOUD_PROBABILITY_BAND = "cloud_probability"
 
 # Crop Calendar Configuration
 CROP_CALENDAR_BASE_URL = "https://data.source.coop/ftw/ftw-inference-input/global-crop-calendar/"

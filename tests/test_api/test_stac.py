@@ -1799,56 +1799,6 @@ class TestImageryReattachedOnStacRerun:
         assert thumbnail["type"] == "image/webp"
         assert thumbnail["file:size"] == 4
 
-    def test_legacy_jpeg_overlay_still_comes_back(self, tmp_path: Path) -> None:
-        """A catalog built before the WebP switch must not lose its thumbnail.
-
-        Its previews are still ``.jpg`` on disk, and a STAC rerun that only looked
-        for ``.webp`` would silently drop the asset from every item.
-        """
-        import json
-
-        build_catalog(tmp_path)
-        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
-        _write_season_child(chip_dir, CHIP_ID, "planting")
-        (chip_dir / f"{CHIP_ID}_overlay.jpg").write_bytes(b"\xff\xd8\xff\xd9")
-
-        build_catalog(tmp_path)
-
-        thumbnail = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())["assets"]["thumbnail"]
-        assert thumbnail["href"] == f"./{CHIP_ID}_overlay.jpg"
-        assert thumbnail["type"] == "image/jpeg"
-
-    def test_webp_wins_when_both_formats_are_on_disk(self, tmp_path: Path) -> None:
-        """Mid-conversion, the new format is the one the item points at."""
-        import json
-
-        build_catalog(tmp_path)
-        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
-        _write_season_child(chip_dir, CHIP_ID, "planting")
-        (chip_dir / f"{CHIP_ID}_overlay.jpg").write_bytes(b"\xff\xd8\xff\xd9")
-        (chip_dir / f"{CHIP_ID}_overlay.webp").write_bytes(b"RIFF")
-
-        build_catalog(tmp_path)
-
-        thumbnail = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())["assets"]["thumbnail"]
-        assert thumbnail["href"] == f"./{CHIP_ID}_overlay.webp"
-        assert thumbnail["type"] == "image/webp"
-
-    def test_legacy_planting_preview_is_still_the_fallback(self, tmp_path: Path) -> None:
-        """The plain-season fallback needs the same compatibility as the overlay."""
-        import json
-
-        build_catalog(tmp_path)
-        chip_dir = tmp_path / "chips" / "33UXP" / CHIP_ID
-        _write_season_child(chip_dir, CHIP_ID, "planting")
-        (chip_dir / f"{CHIP_ID}_planting_image_s2.jpg").write_bytes(b"\xff\xd8\xff\xd9")
-
-        build_catalog(tmp_path)
-
-        thumbnail = json.loads((chip_dir / f"{CHIP_ID}.json").read_text())["assets"]["thumbnail"]
-        assert thumbnail["href"] == f"./{CHIP_ID}_planting_image_s2.jpg"
-        assert thumbnail["type"] == "image/jpeg"
-
     def test_plain_season_thumbnail_is_the_fallback(self, tmp_path: Path) -> None:
         import json
 
@@ -1905,15 +1855,13 @@ class TestImageryReattachedOnStacRerun:
 
 
 @pytest.mark.parametrize(
-    "suffixes",
+    ("suffixes", "expected"),
     [
-        ("_overlay.jpeg",),
-        ("_planting_image_s2.jpeg",),
-        ("_overlay.jpg", "_planting_image_s2.webp"),
-        ("_overlay.webp", "_planting_image_s2.webp", "_overlay.jpg"),
+        (("_planting_image_s2.webp",), "_planting_image_s2.webp"),
+        (("_overlay.webp", "_planting_image_s2.webp"), "_overlay.webp"),
     ],
 )
-def test_thumbnail_candidates_support_legacy_and_mixed_formats(tmp_path, suffixes):
+def test_thumbnail_prefers_the_overlay(tmp_path, suffixes, expected):
     import pystac
 
     from ftw_dataset_tools.api.imagery.chip_preview import refresh_chip_preview
@@ -1925,10 +1873,9 @@ def test_thumbnail_candidates_support_legacy_and_mixed_formats(tmp_path, suffixe
 
     refresh_chip_preview(item, tmp_path)
 
-    expected = next((s for s in suffixes if s.endswith(".webp")), suffixes[0])
     asset = item.assets["thumbnail"]
     assert asset.href == f"./chip_a{expected}"
-    assert asset.media_type == ("image/webp" if expected.endswith(".webp") else "image/jpeg")
+    assert asset.media_type == "image/webp"
     definition = _build_item_assets()["thumbnail"].to_dict()
     assert definition["type"] == "image/webp"
     assert definition["roles"] == ["thumbnail"]

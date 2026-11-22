@@ -190,9 +190,6 @@ class PipelineContext:
     splits_result: splits.CreateSplitsResult | None = None
     boundaries_result: boundaries.CreateBoundariesResult | None = None
     masks_results: dict[str, masks.CreateMasksResult] = field(default_factory=dict)
-    # (mask type, grid id, reason) for every mask a create_masks call could not
-    # produce, accumulated across all mask types run in this pipeline invocation.
-    masks_skipped: list[tuple[str, str, str]] = field(default_factory=list)
     stac_result: stac.STACGenerationResult | None = None
     selection_result: Any = None
     download_result: Any = None
@@ -791,10 +788,8 @@ _SKIPPED_REASON_MAX_LEN = 160
 _SKIPPED_REASONS_TO_LOG = 3
 
 
-def _log_skipped_masks(
-    ctx: PipelineContext, mask_type: MaskType, mask_result: masks.CreateMasksResult
-) -> None:
-    """Log the top skipped-mask reasons and accumulate them on the context.
+def _log_skipped_masks(mask_type: MaskType, mask_result: masks.CreateMasksResult) -> None:
+    """Log the top skipped-mask reasons.
 
     Per-cell failures are otherwise silent: create_masks only returns counts,
     so without this a build can lose masks (e.g. Austria's non-numeric field
@@ -804,8 +799,7 @@ def _log_skipped_masks(
         return
 
     reason_counts: dict[str, int] = {}
-    for grid_id, reason in mask_result.masks_skipped:
-        ctx.masks_skipped.append((mask_type.value, grid_id, reason))
+    for _grid_id, reason in mask_result.masks_skipped:
         truncated = reason[:_SKIPPED_REASON_MAX_LEN]
         reason_counts[truncated] = reason_counts.get(truncated, 0) + 1
 
@@ -864,7 +858,7 @@ def stage_masks(ctx: PipelineContext) -> None:
     for mask_type, mask_result in mask_results.items():
         ctx.masks_results[subdir_by_type[mask_type]] = mask_result
         logger.info(f"Created {mask_result.total_created} {mask_type.value} masks")
-        _log_skipped_masks(ctx, mask_type, mask_result)
+        _log_skipped_masks(mask_type, mask_result)
 
     # Every type shares one worker pool, so the count is the same on each result.
     pool_restarts = max((r.pool_restarts for r in mask_results.values()), default=0)

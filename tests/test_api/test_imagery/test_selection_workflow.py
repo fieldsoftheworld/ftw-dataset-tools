@@ -974,9 +974,6 @@ class TestSelectionYear:
         both = {"ftw:mosaic_requested_year": 2024, "ftw:calendar_year": 2023}
         assert selection_year(_chip("c_2022", properties=both), "scenes") == 2023
         assert selection_year(_chip("c_2022", properties=both), "mosaics") == 2024
-        legacy = _chip("c_2022", properties={"ftw:requested_year": 2025})
-        assert selection_year(legacy, "mosaics") == 2025
-        assert selection_year(legacy, "scenes") == 2022
 
     def test_from_id_suffix(self) -> None:
         assert selection_year(_chip("ftw-34UFF1628_2024"), "scenes") == 2024

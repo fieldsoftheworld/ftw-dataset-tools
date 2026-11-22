@@ -121,14 +121,8 @@ drew the preview redraws it from the other mode.
 Without an explicit year each mode keeps the year its selection on the chip recorded
 (`ftw:calendar_year`, `ftw:mosaic_requested_year`), else uses the chip id's year. A chip
 with neither is skipped. Mosaics are only ever selected for that one year, never a nearby
-one. A selection recorded for another year conflicts, as do mosaics whose `ftw:mosaic_year`
-(older ftwd could fill a request with a nearby year) is not the year being selected.
+one. A selection recorded for another year conflicts.
 
-Catalogs written before multi-mode support carry a scalar `ftw:imagery_mode` (`mosaics`;
-absent meant scenes) and the un-namespaced mosaic years `ftw:requested_year` /
-`ftw:imagery_year` on the parent. ftwd still reads them, and rewrites them to
-`ftw:imagery_modes`, `ftw:mosaic_requested_year` and `ftw:mosaic_year` whenever it writes
-the chip item again.
 Clipped mosaic images keep the source encoding: `int16`, nodata `-32768`, reflectance =
 value x 0.0001 with no offset, recorded as GDAL scale/offset and in `raster:bands`.
 
@@ -550,16 +544,15 @@ the mask overlay (`{item_id}_overlay.webp`) when it could be drawn, otherwise th
 planting preview (`{item_id}_planting_image_s2.webp`). A browser rendering a collection
 loads one per card, so this is the most-fetched image in a catalog; WebP runs 25-35%
 smaller than JPEG at equivalent quality. Catalogs built before that switch carry `.jpg`
-previews and are still described correctly (`image/jpeg`); convert one in place with
+previews, which the rest of ftwd no longer reads; convert one in place with
 `ftwd convert-previews <catalog_dir>`, which re-renders each preview from the imagery it
 was made from and removes the superseded `.jpg`.
 
-Preview-stage reruns retain old JPEGs; use `convert-previews` for local cleanup.
-Start with `--dry-run -v` to inspect planned work and skips; remote reads can still
-fail during conversion. Existing thumbnail checksums are recomputed for WebP.
-Missing local JPEG references are repaired when source imagery is available.
-Upload the converted catalog before separately removing old objects from the bucket.
-Rebuild STAC to refresh existing collection asset definitions for mixed formats.
+Start with `ftwd -v convert-previews <catalog_dir> --dry-run` to inspect planned work and
+skips; remote reads can still fail during conversion. Existing thumbnail checksums are
+recomputed for WebP. Missing local JPEG references are repaired when source imagery is
+available. Upload the converted catalog before separately removing old objects from the
+bucket, then rebuild STAC to refresh the collection's asset definitions.
 
 **Collection reference:** Every chip item carries a `collection` field and link pointing to the dataset collection (the one holding `collection.json`). The collection's `root` link points to itself (downstream Portolan catalogs rewrite `root` when ingesting the output).
 

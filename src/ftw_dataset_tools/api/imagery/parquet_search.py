@@ -2,7 +2,7 @@
 
 Queries the partitioned STAC-GeoParquet catalog published at
 source.coop/portolan-mirrors/sentinel-2-catalog instead of the Earth Search
-API. The mirror indexes every Earth Search ``sentinel-2-l2a`` scene, and the
+API. The mirror indexes every Earth Search ``sentinel-2-c1-l2a`` scene, and the
 items reconstructed here carry the same sentinel-cogs COG hrefs the API would
 return (rebuilt from the scene id), with no rate limit anywhere in the path.
 """
@@ -29,10 +29,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "COLLECTION_C1",
-    "COLLECTION_OLD",
     "DEFAULT_MIRROR_ROOT",
-    "DEFAULT_PARQUET_URL",
-    "PARQUET_COLLECTION",
     "build_local_index",
     "index_years",
     "local_index",
@@ -44,23 +41,13 @@ __all__ = [
 
 DEFAULT_MIRROR_ROOT = "https://data.source.coop/portolan-mirrors/sentinel-2-catalog"
 
-# The two Earth Search collections the mirror carries. Collection 1 is ESA's
-# reprocessing of the whole archive to one processing baseline and is the
-# default; the old collection remains for the earlier zone-part layout.
+# Earth Search's Collection 1: ESA's reprocessing of the whole archive to one
+# processing baseline. The mirror holds it as one whole-world part per year.
 COLLECTION_C1 = "sentinel-2-c1-l2a"
-COLLECTION_OLD = "sentinel-2-l2a"
+_BASE_URL = f"{DEFAULT_MIRROR_ROOT}/{COLLECTION_C1}"
 
-DEFAULT_PARQUET_URL = f"{DEFAULT_MIRROR_ROOT}/{COLLECTION_OLD}"
-PARQUET_COLLECTION = COLLECTION_OLD  # kept for backwards compatibility
-
-# First archive year per collection (old: November 2016; c1: late 2015).
-_FIRST_YEAR = 2016
+# First archive year (late 2015).
 _FIRST_YEAR_C1 = 2015
-
-# UTM zone ranges per part file, by year vintage (see the catalog README's
-# layout table; both sets are fixed for the life of the catalog).
-_RANGES_FOUR = [(1, 20), (21, 35), (36, 46), (47, 60)]
-_RANGES_EIGHT = [(1, 15), (16, 20), (21, 31), (32, 35), (36, 40), (41, 46), (47, 52), (53, 60)]
 
 _local = threading.local()
 
@@ -145,7 +132,8 @@ def _zone_tiles(bbox: tuple[float, float, float, float], zone: int, south: bool)
                 band = _lat_band(lat)
                 tiles.add(f"{zone}{band}{col}{row}")
                 if zone < 10:
-                    # c1 ids zero-pad the zone, the old ids do not: emit both
+                    # The mirror's _tile column mostly leaves a single-digit zone
+                    # unpadded but zero-pads it on some rows: emit both
                     tiles.add(f"{zone:02d}{band}{col}{row}")
             northing += 1e5
         easting += 1e5
@@ -169,60 +157,29 @@ def mgrs_tiles_for_bbox(bbox: tuple[float, float, float, float]) -> set[str]:
     return tiles
 
 
-def _part_name(year: int, zone: int) -> str:
-    """Part file name holding a UTM zone's scenes for a year."""
-    if year <= 2018:
-        return "items.parquet"
-    ranges = _RANGES_FOUR if year <= 2020 else _RANGES_EIGHT
-    for lo, hi in ranges:
-        if lo <= zone <= hi:
-            return f"z{lo:02d}-{hi:02d}.parquet"
-    raise ValueError(f"UTM zone out of range: {zone}")
-
-
 def part_urls_for_query(
-    bbox: tuple[float, float, float, float],
     start: datetime,
     end: datetime,
     *,
-    collection: str = COLLECTION_C1,
     base_url: str | None = None,
     today: date | None = None,
 ) -> list[str]:
-    """Catalog part URLs a bbox + date-window query must read.
+    """Catalog part URLs a date-window query must read.
 
-    The c1 collection is one ``items.parquet`` per year; the old collection
-    splits a year by UTM zone ranges. Years outside the archive are dropped;
-    the current year also reads ``live.parquet``, the rolling tail.
+    The collection is one whole-world ``items.parquet`` per year; queries prune
+    by tile within it. Years outside the archive are dropped; the current year
+    also reads ``live.parquet``, the rolling tail.
     """
-    base_url = base_url or f"{DEFAULT_MIRROR_ROOT}/{collection}"
-    first_year = _FIRST_YEAR_C1 if collection == COLLECTION_C1 else _FIRST_YEAR
+    base_url = base_url or _BASE_URL
     today = today or date.today()
     urls: list[str] = []
     for year in range(start.year, end.year + 1):
-        if year < first_year or year > today.year:
+        if year < _FIRST_YEAR_C1 or year > today.year:
             continue
-        if collection == COLLECTION_C1:
-            urls.append(f"{base_url}/year={year}/items.parquet")
-        else:
-            names = {_part_name(year, zone) for zone in zones_for_bbox(bbox)}
-            urls.extend(f"{base_url}/year={year}/{name}" for name in sorted(names))
+        urls.append(f"{base_url}/year={year}/items.parquet")
         if year == today.year:
             urls.append(f"{base_url}/year={year}/live.parquet")
     return urls
-
-
-def _months_in_window(start: datetime, end: datetime) -> list[int]:
-    """Calendar months the window touches, for ``_month`` row-group pruning."""
-    months: list[int] = []
-    year, month = start.year, start.month
-    while (year, month) <= (end.year, end.month):
-        if month not in months:
-            months.append(month)
-        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
-        if len(months) == 12:
-            break
-    return months
 
 
 def _connection() -> duckdb.DuckDBPyConnection:
@@ -267,23 +224,8 @@ def _connection() -> duckdb.DuckDBPyConnection:
 
 _active_index: Path | None = None
 
-
-def _tile_column(collection: str) -> str:
-    """The column holding a row's MGRS tile id, which differs by collection."""
-    return "_tile" if collection == COLLECTION_C1 else '"s2:mgrs_tile"'
-
-
-def _index_columns(collection: str) -> str:
-    """Exactly the columns `_scene_sql` reads for a collection.
-
-    The old collection prunes row groups by ``_month``, so the index has to
-    carry it; c1 prunes by tile and never looks at it.
-    """
-    cols = ["id", "bbox", "datetime", '"eo:cloud_cover"', '"s2:nodata_pixel_percentage"']
-    if collection != COLLECTION_C1:
-        cols.append("_month")
-    cols.append(_tile_column(collection))
-    return ", ".join(cols)
+# Exactly the columns `_scene_sql` reads.
+_INDEX_COLUMNS = 'id, bbox, datetime, "eo:cloud_cover", "s2:nodata_pixel_percentage", _tile'
 
 
 def index_years(year: int) -> list[int]:
@@ -302,7 +244,6 @@ def build_local_index(
     bbox: tuple[float, float, float, float],
     years: Sequence[int],
     *,
-    collection: str = COLLECTION_C1,
     base_url: str | None = None,
     cache_dir: Path | None = None,
     today: date | None = None,
@@ -314,7 +255,7 @@ def build_local_index(
     area reuses it; returns ``None`` when the area resolves to no catalog
     parts at all (every year outside the archive).
     """
-    base_url = base_url or f"{DEFAULT_MIRROR_ROOT}/{collection}"
+    base_url = base_url or _BASE_URL
     today = today or date.today()
     wanted = sorted(set(years))
     if not wanted:
@@ -327,10 +268,8 @@ def build_local_index(
     # Exactly the parts a chip query would read across the whole span, so the
     # index can never be missing a row the direct path would have found.
     urls = part_urls_for_query(
-        bbox,
         datetime(wanted[0], 1, 1, tzinfo=UTC),
         datetime(wanted[-1], 12, 31, tzinfo=UTC),
-        collection=collection,
         base_url=base_url,
         today=today,
     )
@@ -340,13 +279,12 @@ def build_local_index(
     cache_dir = cache_dir or _default_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
     key = hashlib.sha256(
-        "|".join([collection, base_url, *tiles, *(str(y) for y in wanted)]).encode()
+        "|".join([COLLECTION_C1, base_url, *tiles, *(str(y) for y in wanted)]).encode()
     ).hexdigest()[:16]
-    path = cache_dir / f"scenes-{collection}-{key}.parquet"
+    path = cache_dir / f"scenes-{COLLECTION_C1}-{key}.parquet"
     if path.exists():
         return path
 
-    tile_col = _tile_column(collection)
     url_list = ", ".join("'" + u.replace("'", "''") + "'" for u in urls)
     tile_list = ", ".join("'" + t + "'" for t in tiles)
     # Written to a temp name and renamed, so a crashed or concurrent build can
@@ -355,9 +293,9 @@ def build_local_index(
     # The tile column keeps its own name, so `_scene_sql` reads the index with
     # exactly the SQL it would run against the mirror.
     _connection().execute(
-        f"""COPY (SELECT {_index_columns(collection)}
+        f"""COPY (SELECT {_INDEX_COLUMNS}
                   FROM read_parquet([{url_list}], union_by_name = true)
-                  WHERE {tile_col} IN ({tile_list}))
+                  WHERE _tile IN ({tile_list}))
             TO '{tmp}' (FORMAT parquet)"""
     )
     tmp.replace(path)
@@ -396,7 +334,7 @@ def _bbox_polygon(bbox: list[float]) -> dict:
     }
 
 
-# sentinel-cogs bucket files per Earth Search asset key. The upstream hrefs
+# Bucket files per Earth Search asset key. The upstream hrefs
 # follow this layout exactly, so they can be rebuilt from a scene id without
 # reading the mirror's wide `assets` column (a bulk read of which costs tens
 # of seconds per query - see the catalog README's advice to fetch it only for
@@ -418,7 +356,6 @@ _ASSET_FILES = {
     "visual": "TCI",
 }
 
-_COG_BASE = "https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs"
 _C1_COG_BASE = "https://e84-earth-search-sentinel-data.s3.us-west-2.amazonaws.com/sentinel-2-c1-l2a"
 # Extra COGs c1 products carry beyond the shared band set.
 _C1_EXTRA_FILES = {"aot": "AOT", "wvp": "WVP", "cloud": "CLD_20m", "snow": "SNW_20m"}
@@ -437,20 +374,6 @@ def _assets_from_layout(base: str, files: dict[str, str]) -> dict[str, pystac.As
 
 
 def _synthesize_assets(item_id: str) -> dict[str, pystac.Asset]:
-    """Rebuild an old-collection scene's COG assets from its id.
-
-    An id like ``S2B_33TVL_20250610_0_L2A`` names tile 33TVL acquired
-    2025-06-10, whose files live under
-    ``{bucket}/33/T/VL/2025/6/S2B_33TVL_20250610_0_L2A/``.
-    """
-    _, tile, date_s = item_id.split("_")[:3]
-    zone, band, square = tile[:-3], tile[-3], tile[-2:]
-    year, month = int(date_s[:4]), int(date_s[4:6])
-    base = f"{_COG_BASE}/{zone}/{band}/{square}/{year}/{month}/{item_id}"
-    return _assets_from_layout(base, _ASSET_FILES)
-
-
-def _synthesize_assets_c1(item_id: str) -> dict[str, pystac.Asset]:
     """Rebuild a c1 scene's COG assets from its id.
 
     An id like ``S2B_T31UGR_20250403T103147_L2A`` names tile 31UGR acquired
@@ -472,7 +395,6 @@ def _row_to_item(
     tile: str,
     cloud_cover: float | None,
     nodata_pct: float | None,
-    collection: str,
 ) -> pystac.Item:
     """Reconstruct a pystac Item from a mirror row."""
     properties: dict = {"s2:mgrs_tile": tile}
@@ -490,35 +412,26 @@ def _row_to_item(
     # Selection reads cloud cover through EOExtension, which requires the
     # extension to be declared on the item.
     EOExtension.ext(item, add_if_missing=True)
-    synthesize = _synthesize_assets_c1 if collection == COLLECTION_C1 else _synthesize_assets
-    for key, asset in synthesize(item_id).items():
+    for key, asset in _synthesize_assets(item_id).items():
         item.add_asset(key, asset)
     # A stable provenance URL for the scene; never used for search.
-    item.set_self_href(f"{STAC_URL}/collections/{collection}/items/{item_id}")
+    item.set_self_href(f"{STAC_URL}/collections/{COLLECTION_C1}/items/{item_id}")
     return item
 
 
-def _scene_sql(collection: str, urls: list[str], bbox, start, end) -> str:
-    """The candidate-scene query for a collection's layout.
+def _scene_sql(urls: list[str], bbox) -> str:
+    """The candidate-scene query.
 
-    The old collection's parts are ``(_month, _hilbert)``-sorted, so month
-    membership prunes row groups. The c1 parts are ``(_tile, datetime)``-sorted
-    whole-world year files, so a tile-set filter is what prunes; a bbox scan
-    there would read the entire year.
+    The parts are ``(_tile, datetime)``-sorted whole-world year files, so a
+    tile-set filter is what prunes; a bbox scan would read the entire year.
     """
     url_list = ", ".join("'" + u.replace("'", "''") + "'" for u in urls)
-    if collection == COLLECTION_C1:
-        tiles = mgrs_tiles_for_bbox(bbox)
-        tile_list = ", ".join("'" + t + "'" for t in sorted(tiles))
-        tile_col, prune = "_tile", f"_tile IN ({tile_list})"
-    else:
-        months = ", ".join(str(m) for m in _months_in_window(start, end))
-        tile_col, prune = '"s2:mgrs_tile"', f"_month IN ({months})"
+    tile_list = ", ".join("'" + t + "'" for t in sorted(mgrs_tiles_for_bbox(bbox)))
     return f"""
-        SELECT id, bbox, datetime, {tile_col}, "eo:cloud_cover",
+        SELECT id, bbox, datetime, _tile, "eo:cloud_cover",
                "s2:nodata_pixel_percentage"
         FROM read_parquet([{url_list}], union_by_name = true)
-        WHERE {prune}
+        WHERE _tile IN ({tile_list})
           AND datetime BETWEEN ? AND ?
           AND "eo:cloud_cover" < ?
           AND bbox[1] <= ? AND bbox[3] >= ?
@@ -533,7 +446,6 @@ def query_scenes(
     end: datetime,
     cloud_cover_max: int,
     *,
-    collection: str = COLLECTION_C1,
     base_url: str | None = None,
     today: date | None = None,
 ) -> list[pystac.Item]:
@@ -549,13 +461,11 @@ def query_scenes(
         # and date filters still narrow it to this chip's window.
         urls = [str(index)]
     else:
-        urls = part_urls_for_query(
-            bbox, start, end, collection=collection, base_url=base_url, today=today
-        )
+        urls = part_urls_for_query(start, end, base_url=base_url, today=today)
     if not urls:
         return []
     west, south, east, north = bbox
-    sql = _scene_sql(collection, urls, bbox, start, end)
+    sql = _scene_sql(urls, bbox)
     rows = (
         _connection()
         .execute(sql, [start, end, cloud_cover_max, east, west, north, south])
@@ -567,5 +477,5 @@ def query_scenes(
         if item_id in seen:
             continue
         seen.add(item_id)
-        items.append(_row_to_item(item_id, row_bbox, dt, tile, cloud, nodata, collection))
+        items.append(_row_to_item(item_id, row_bbox, dt, tile, cloud, nodata))
     return items

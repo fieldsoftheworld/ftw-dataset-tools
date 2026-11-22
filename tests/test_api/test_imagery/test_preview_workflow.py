@@ -13,7 +13,6 @@ from rasterio.transform import from_bounds
 from ftw_dataset_tools.api.imagery.preview_workflow import (
     build_preview_task,
     preview_imagery_for_catalog,
-    preview_summary_line,
 )
 
 CRS = "EPSG:32633"
@@ -148,7 +147,7 @@ class TestPreviewImageryForCatalog:
         scene = _scene(tmp_path / "scene.tif")
         _chip(out, "chip_a", scene=scene)
 
-        result = preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
+        result = preview_imagery_for_catalog(out, workers=1)
 
         assert (result.successful, result.skipped, result.failed) == (1, 0, 0)
         overlay = out / "chips" / "33TXM" / "chip_a" / "chip_a_overlay.webp"
@@ -163,7 +162,7 @@ class TestPreviewImageryForCatalog:
         out = _collection(tmp_path)
         scene = _scene(tmp_path / "scene.tif")
         chip_dir = _chip(out, "chip_a", scene=scene)
-        preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
+        preview_imagery_for_catalog(out, workers=1)
         leftovers = [p.name for p in chip_dir.iterdir() if p.name.startswith(".")]
         assert leftovers == [], leftovers
 
@@ -171,9 +170,9 @@ class TestPreviewImageryForCatalog:
         out = _collection(tmp_path)
         scene = _scene(tmp_path / "scene.tif")
         _chip(out, "chip_a", scene=scene)
-        preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
+        preview_imagery_for_catalog(out, workers=1)
 
-        again = preview_imagery_for_catalog(out, resume=True, show_progress_bar=False, workers=1)
+        again = preview_imagery_for_catalog(out, resume=True, workers=1)
         assert again.successful == 0
         assert again.skipped == 1
         assert again.skipped_details[0]["reason"] == "Already rendered"
@@ -184,7 +183,7 @@ class TestPreviewImageryForCatalog:
 
         out = _collection(tmp_path)
         chip_dir = _chip(out, "chip_a", scene=_scene(tmp_path / "scene.tif"))
-        preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
+        preview_imagery_for_catalog(out, workers=1)
 
         assert (chip_dir / "chip_a_planting_image_s2.webp").stat().st_size > 0
         assert (
@@ -200,7 +199,7 @@ class TestPreviewImageryForCatalog:
         chip_dir = _chip(out, "chip_a", scene=_scene(tmp_path / "scene.tif"))
         (chip_dir / "chip_a_q3_image_s2.webp").write_bytes(b"q3")
 
-        again = preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
+        again = preview_imagery_for_catalog(out, workers=1)
 
         assert again.successful == 1
         assert (
@@ -213,9 +212,9 @@ class TestPreviewImageryForCatalog:
         out = _collection(tmp_path)
         scene = _scene(tmp_path / "scene.tif")
         _chip(out, "chip_a", scene=scene)
-        preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
+        preview_imagery_for_catalog(out, workers=1)
 
-        again = preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
+        again = preview_imagery_for_catalog(out, workers=1)
 
         assert (again.successful, again.skipped) == (0, 1)
         assert again.skipped_details[0]["reason"] == "Already rendered"
@@ -226,17 +225,11 @@ class TestPreviewImageryForCatalog:
         broken.write_bytes(b"not a raster")
         _chip(out, "chip_a", scene=broken)
 
-        result = preview_imagery_for_catalog(out, show_progress_bar=False, workers=1)
+        result = preview_imagery_for_catalog(out, workers=1)
 
         assert result.successful == 0
         assert result.failed == 1
         assert result.failed_details[0]["chip"] == "chip_a"
-
-    def test_summary_line_reports_all_three_counts(self) -> None:
-        from ftw_dataset_tools.api.imagery.preview_workflow import PreviewWorkflowResult
-
-        line = preview_summary_line(PreviewWorkflowResult(successful=3, skipped=2, failed=1))
-        assert line == "Chip previews: 3 ok, 2 skipped, 1 failed"
 
 
 class TestPipelineDispatchesOnMode:

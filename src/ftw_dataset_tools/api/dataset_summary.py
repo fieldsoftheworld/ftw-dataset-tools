@@ -13,7 +13,7 @@ import pystac
 
 from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
 from ftw_dataset_tools.api.imagery.slots import parse_child_id
-from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_EXTENSIONS
+from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_SUFFIX
 from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -302,7 +302,7 @@ def _collect_stac_metadata(dataset_dir: Path) -> dict:
 
 
 def _find_preview(chip_dir: Path, stem: str) -> Path | None:
-    """The chip's preview file for ``stem``, whichever format it was written in.
+    """The chip's preview file for ``stem``.
 
     Args:
         chip_dir: Directory holding the chip's files
@@ -311,20 +311,12 @@ def _find_preview(chip_dir: Path, stem: str) -> Path | None:
     Returns:
         The preview path, or None if the chip has no preview by that name
     """
-    for ext in PREVIEW_EXTENSIONS:
-        candidate = chip_dir / f"{stem}{ext}"
-        if candidate.exists():
-            return candidate
-    return None
+    candidate = chip_dir / f"{stem}{PREVIEW_SUFFIX}"
+    return candidate if candidate.exists() else None
 
 
 def _select_example_chips(planting_items: list[Path], num_examples: int) -> list[str]:
-    """Select example chips with imagery.
-
-    Previews are matched across every known extension: a catalog built before the
-    WebP switch still has ``.jpg`` on disk, and matching only one format would drop
-    every example chip from the summary.
-    """
+    """Select example chips with imagery."""
     example_chips = []
     chip_dir_by_id: dict[str, Path] = {}
 

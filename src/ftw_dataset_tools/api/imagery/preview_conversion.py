@@ -22,7 +22,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from ftw_dataset_tools.api.assets import add_file_info
-from ftw_dataset_tools.api.imagery.chip_preview import refresh_chip_preview
+from ftw_dataset_tools.api.imagery.chip_preview import redraw_chip_preview, refresh_chip_preview
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, run_in_parallel
 from ftw_dataset_tools.api.imagery.preview_workflow import (
     PreviewTask,
@@ -32,7 +32,6 @@ from ftw_dataset_tools.api.imagery.preview_workflow import (
 from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
 from ftw_dataset_tools.api.imagery.stac_child_items import SEASONS
 from ftw_dataset_tools.api.imagery.thumbnails import (
-    LEGACY_PREVIEW_SUFFIXES,
     PREVIEW_MEDIA_TYPE,
     PREVIEW_SUFFIX,
     REFERENCE_MASK_SUFFIX,
@@ -42,8 +41,6 @@ from ftw_dataset_tools.api.imagery.thumbnails import (
 from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from ftw_dataset_tools.api.imagery.parallel import ParallelOutcome
 
 __all__ = [
@@ -51,6 +48,9 @@ __all__ = [
     "conversion_summary_line",
     "convert_previews_for_catalog",
 ]
+
+#: Previews written before the WebP switch.
+LEGACY_PREVIEW_SUFFIXES = (".jpg", ".jpeg")
 
 
 @dataclass
@@ -252,7 +252,14 @@ def commit_chip_conversion(plan: _ConversionPlan) -> int:
     chip_dir = item_path.parent
     thumbnail = item.assets.get("thumbnail")
     checksums = thumbnail is not None and "file:checksum" in thumbnail.extra_fields
-    refresh_chip_preview(item, chip_dir, checksums=checksums)
+    # The recorded slot may have no WebP (its scene stayed remote): draw from the best
+    # slot that converted, and keep the old thumbnail when none did.
+    if (
+        refresh_chip_preview(item, chip_dir, checksums=checksums) is None
+        and redraw_chip_preview(item, chip_dir, checksums=checksums) is None
+        and thumbnail is not None
+    ):
+        item.assets["thumbnail"] = thumbnail
     write_item(item, item_path)
     _repoint_child_items(plan)
 
@@ -267,8 +274,6 @@ def convert_previews_for_catalog(
     catalog_dir: Path,
     *,
     dry_run: bool = False,
-    on_progress: Callable[[int, int], None] | None = None,
-    show_progress_bar: bool = True,
     workers: int = DEFAULT_WORKERS,
 ) -> ConversionResult:
     """Convert every JPEG chip preview in a catalog to WebP.
@@ -279,8 +284,6 @@ def convert_previews_for_catalog(
     Args:
         catalog_dir: The collection directory holding ``collection.json``.
         dry_run: Report what would be converted without writing or deleting.
-        on_progress: Optional ``(done, total)`` callback.
-        show_progress_bar: Show a tqdm bar.
         workers: Number of chips to render concurrently.
 
     Returns:
@@ -299,20 +302,10 @@ def convert_previews_for_catalog(
     if dry_run or not pending:
         return result
 
-    progress_bar = (
-        tqdm(total=len(pending), desc="Converting previews", unit="chip", leave=False)
-        if show_progress_bar
-        else None
-    )
-    done = 0
+    progress_bar = tqdm(total=len(pending), desc="Converting previews", unit="chip", leave=False)
 
     def advance() -> None:
-        nonlocal done
-        done += 1
-        if progress_bar:
-            progress_bar.update(1)
-        if on_progress:
-            on_progress(done, len(pending))
+        progress_bar.update(1)
 
     def apply(outcome: ParallelOutcome[_ConversionPlan, tuple[Path, ...]]) -> None:
         plan = outcome.task
@@ -344,8 +337,7 @@ def convert_previews_for_catalog(
     try:
         run_in_parallel(pending, render_chip_previews, apply, workers=workers)
     finally:
-        if progress_bar:
-            progress_bar.close()
+        progress_bar.close()
 
     return result
 

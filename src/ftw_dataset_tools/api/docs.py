@@ -151,9 +151,6 @@ ITEM_PROPERTY_NOTES = {
     "ftw:mosaic_requested_year": "mosaic year the selection asked for",
     "ftw:mosaic_year": "mosaic year used",
     "ftw:imagery_year": "mosaic year used",
-    # Written by ftwd before a chip could hold both modes; still read.
-    "ftw:imagery_mode": "scenes (planting/harvest) or mosaics (quarterly, Q1-Q4)",
-    "ftw:requested_year": "mosaic year the selection asked for",
     "ftw:mosaic_tile": "quarterly mosaic tile the imagery came from",
     "ftw:nodata_pct": "share of the chip (0-100) the quarter's mosaic has no data for",
     "ftw:buffer_days": "half-width of the search window around the target day, in days",
@@ -207,15 +204,6 @@ def _columns(con: duckdb.DuckDBPyConnection, path: Path) -> list[str]:
 def _count(con: duckdb.DuckDBPyConnection, path: Path) -> int:
     row = con.execute(f"SELECT COUNT(*) FROM read_parquet('{sql_path(path)}')").fetchone()
     return int(row[0]) if row else 0
-
-
-def run_query(sql: str, output_dir: Path | str) -> list[tuple]:
-    """Run one SQL statement with the collection directory as the working directory."""
-    con = _connect(Path(output_dir))
-    try:
-        return con.execute(sql).fetchall()
-    finally:
-        con.close()
 
 
 # --------------------------------------------------------------------------- #

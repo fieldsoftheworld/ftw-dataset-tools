@@ -187,46 +187,33 @@ def build_chip_dirs(
 def get_mask_output_path(
     grid_id: str,
     mask_type: MaskType,
-    chip_dirs: dict[str, Path] | None,
-    output_dir: Path,
-    field_dataset: str,
+    chip_dirs: dict[str, Path],
     year: int | None = None,
 ) -> Path:
     """
-    Get the output path for a mask file.
+    Get the output path for a mask file, next to its chip's STAC item.
 
     Args:
         grid_id: The grid cell ID
         mask_type: Type of mask
-        chip_dirs: Optional dict mapping item_id (grid_id or grid_id_year) to chip directory.
-                   If provided, the item_id MUST exist in the mapping.
-        output_dir: Fallback output directory (used when chip_dirs is None)
-        field_dataset: Dataset name (used in filename when chip_dirs is None)
+        chip_dirs: Dict mapping item_id (grid_id or grid_id_year) to chip directory.
+                   The item_id MUST exist in the mapping.
         year: Optional year for year-based naming convention
 
     Returns:
         Full path for the mask file
 
     Raises:
-        KeyError: If chip_dirs is provided but item_id is not in the mapping.
-                  Callers should handle/skip grid cells not present in chip_dirs.
+        KeyError: If item_id is not in the mapping.
     """
     item_id = get_item_id(grid_id, year)
-
-    if chip_dirs is not None:
-        if item_id not in chip_dirs:
-            raise KeyError(
-                f"Item ID '{item_id}' not found in chip_dirs mapping for mask type "
-                f"'{mask_type.value}'. Caller should skip this grid cell or ensure "
-                f"chip_dirs contains all expected item IDs."
-            )
-        # Co-located with STAC item: simple filename
-        return chip_dirs[item_id] / get_mask_filename(grid_id, mask_type, year)
-    else:
-        # Legacy: dataset prefix in filename
-        if year is not None:
-            return output_dir / f"{field_dataset}_{grid_id}_{year}_{mask_type.value}.tif"
-        return output_dir / f"{field_dataset}_{grid_id}_{mask_type.value}.tif"
+    if item_id not in chip_dirs:
+        raise KeyError(
+            f"Item ID '{item_id}' not found in chip_dirs mapping for mask type "
+            f"'{mask_type.value}'. Caller should skip this grid cell or ensure "
+            f"chip_dirs contains all expected item IDs."
+        )
+    return chip_dirs[item_id] / get_mask_filename(grid_id, mask_type, year)
 
 
 @dataclass
@@ -1494,9 +1481,7 @@ def _outputs_to_write(
     grid_id: str,
     group: list[MaskType],
     *,
-    chip_dirs: dict[str, Path] | None,
-    output_path: Path,
-    field_dataset: str,
+    chip_dirs: dict[str, Path],
     year: int | None,
     skip_existing: bool,
     existing: dict[MaskType, int],
@@ -1513,17 +1498,9 @@ def _outputs_to_write(
     outputs: list[tuple[MaskType, str]] = []
     for mask_type in group:
         mask_path = get_mask_output_path(
-            grid_id=grid_id,
-            mask_type=mask_type,
-            chip_dirs=chip_dirs,
-            output_dir=output_path,
-            field_dataset=field_dataset,
-            year=year,
+            grid_id=grid_id, mask_type=mask_type, chip_dirs=chip_dirs, year=year
         )
-
-        # Ensure parent directory exists when using chip_dirs
-        if chip_dirs is not None:
-            mask_path.parent.mkdir(parents=True, exist_ok=True)
+        mask_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Filter per output rather than per group: a group whose 2-class
         # mask is already on disk still has to burn when one of the
@@ -1663,7 +1640,7 @@ def create_masks(
         boundaries_file: Path to boundaries GeoParquet file (polygons)
         boundary_lines_file: Path to boundary lines GeoParquet file
         output_dir: Output directory for masks (default: ./masks)
-        field_dataset: Name of the field dataset (used in output filenames)
+        field_dataset: Name of the field dataset (reported in the results)
         grid_id_col: Column name for grid cell ID (default: "id")
         mask_types: Types of mask to create (default: [semantic_2_class]). Types that
                     share a rasterization are burned once and written N times.
@@ -1805,8 +1782,6 @@ def create_masks(
             "label_extent": extent,
         },
         chip_dirs=chip_dirs,
-        output_path=output_path,
-        field_dataset=field_dataset,
         year=year,
         skip_existing=skip_existing,
         existing=existing,

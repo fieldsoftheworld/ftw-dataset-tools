@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 __all__ = [
     "MOSAIC_BAND_ASSETS",
     "containing_tiles",
-    "find_containing_tile",
     "index_url",
     "year_available",
 ]
@@ -170,18 +169,6 @@ def containing_tiles(
             ranked.append(((tile.crs == crs, margin), tile))
     ranked.sort(key=lambda pair: pair[0], reverse=True)
     return [_to_item(tile, year, quarter) for _, tile in ranked]
-
-
-def find_containing_tile(
-    bbox: tuple[float, float, float, float],
-    year: int,
-    quarter: int,
-    footprint: Mapping[str, Any] | None = None,
-    crs: str | None = None,
-) -> pystac.Item | None:
-    """The best mosaic tile that fully contains the chip (see :func:`containing_tiles`)."""
-    tiles = containing_tiles(bbox, year, quarter, footprint, crs)
-    return tiles[0] if tiles else None
 
 
 def _to_item(tile: _Tile, year: int, quarter: int) -> pystac.Item:

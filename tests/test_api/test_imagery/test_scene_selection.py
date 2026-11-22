@@ -164,28 +164,16 @@ class TestSearchBackendDispatch:
                 search_backend="bogus",
             )
 
-    @pytest.mark.parametrize(
-        ("s2_collection", "expected"),
-        [("c1", "sentinel-2-c1-l2a"), ("old-baseline", "sentinel-2-l2a")],
-    )
-    def test_parquet_backend_maps_s2_collection(self, monkeypatch, s2_collection, expected):
+    def test_parquet_backend_reports_the_c1_collection(self, monkeypatch):
         from datetime import UTC, datetime
 
-        seen = {}
-
-        def fake_query_scenes(**kwargs):
-            seen.update(kwargs)
+        def fake_query_scenes(**_kwargs):
             return [_canned_item("S2A_T33TVM_fake", datetime(2021, 5, 30, 10, 0, tzinfo=UTC))]
 
         monkeypatch.setattr(scene_selection.parquet_search, "query_scenes", fake_query_scenes)
-        scene_selection.select_scenes_for_chip(
-            chip_id="chip_001",
-            bbox=self.BBOX,
-            year=2021,
-            s2_collection=s2_collection,
-            search_backend="parquet",
-        )
-        assert seen["collection"] == expected
+        result = scene_selection._query_parquet(self.BBOX, datetime(2021, 5, 30), 75, 14)
+        assert result.collection == "sentinel-2-c1-l2a"
+        assert result.catalog_url.endswith("/sentinel-2-c1-l2a")
 
 
 class TestBufferExpansion:
@@ -217,7 +205,7 @@ class TestBufferExpansion:
         """Answer each search with scenes_for(season, buffer_days); record the calls."""
         calls: list[tuple[str, int]] = []
 
-        def fake_query_parquet(bbox, center_date, cloud_cover_max, buffer_days, _collection):
+        def fake_query_parquet(bbox, center_date, cloud_cover_max, buffer_days):
             season = "planting" if center_date.month < 7 else "harvest"
             calls.append((season, buffer_days))
             return scene_selection.STACQueryResult(

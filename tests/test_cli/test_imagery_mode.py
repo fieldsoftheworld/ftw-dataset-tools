@@ -115,7 +115,7 @@ class TestSelectImagesMosaics:
     def test_other_year_in_workspace_errors_and_points_to_force(self, tmp_path: Path) -> None:
         catalog = _catalog(
             tmp_path,
-            {"ftw:imagery_mode": "mosaics", "ftw:requested_year": 2024},
+            {"ftw:imagery_modes": ["mosaics"], "ftw:mosaic_requested_year": 2024},
             links=("ftw:q1", "ftw:q2", "ftw:q3", "ftw:q4"),
         )
         with (
@@ -134,7 +134,7 @@ class TestSelectImagesMosaics:
     def test_force_replaces_the_other_year(self, tmp_path: Path) -> None:
         catalog = _catalog(
             tmp_path,
-            {"ftw:imagery_mode": "mosaics", "ftw:requested_year": 2024},
+            {"ftw:imagery_modes": ["mosaics"], "ftw:mosaic_requested_year": 2024},
             links=("ftw:q1", "ftw:q2", "ftw:q3", "ftw:q4"),
         )
         with (
@@ -157,10 +157,10 @@ class TestSelectImagesMosaics:
         assert "Cleared imagery from a different run: 1" in result.output
         assert run.call_args.args[0].year == 2025
 
-    def test_scenes_join_a_legacy_mosaics_chip(self, tmp_path: Path) -> None:
+    def test_scenes_join_a_mosaics_chip(self, tmp_path: Path) -> None:
         catalog = _catalog(
             tmp_path,
-            {"ftw:imagery_mode": "mosaics", "ftw:requested_year": 2024},
+            {"ftw:imagery_modes": ["mosaics"], "ftw:mosaic_requested_year": 2024},
             links=("ftw:q1", "ftw:q2", "ftw:q3", "ftw:q4"),
         )
         with (
@@ -277,7 +277,7 @@ class TestSelectImagesMosaics:
     def test_clear_selections_removes_quarter_items(self, tmp_path: Path) -> None:
         catalog = _catalog(
             tmp_path,
-            {"ftw:imagery_mode": "mosaics", "ftw:requested_year": 2024},
+            {"ftw:imagery_modes": ["mosaics"], "ftw:mosaic_requested_year": 2024},
             links=("ftw:q1", "ftw:q2", "ftw:q3", "ftw:q4"),
         )
         chip_dir = catalog / "chips" / "32UNA" / "chip_001_2024"

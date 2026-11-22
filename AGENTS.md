@@ -12,9 +12,8 @@ Follow the [Development](README.md#development) section of the README. In additi
   `logging.getLogger`), with no colours or `Warning:` prefixes in messages. On a thread pool,
   wrap each task in `capture_logs(task.logs)` and `replay` them in the caller so each task's
   lines stay together. Only numeric progress callbacks stay callbacks.
-- `ftwd -v` is global and commands read it with `is_verbose()`; don't add `-v/--verbose` to new
-  commands. The aliases on `select-images`, `convert-previews` and `create-dataset-summary` stay
-  for old scripts.
+- `ftwd -v` is global and commands read it with `is_verbose()`; don't add `-v/--verbose` to
+  commands.
 - `ftwd run`, `create-dataset` and the standalone commands share one `api/` function per
   operation (e.g. `download_imagery_for_catalog()`). Change it there and test every caller.
 - DuckDB for queries, geoparquet-io (`gpio.read(...).write(...)`) for GeoParquet I/O, rasterio

@@ -10,7 +10,6 @@ import pytest
 from click.testing import CliRunner
 
 import ftw_dataset_tools
-import ftw_dataset_tools.api
 import ftw_dataset_tools.api.imagery
 from ftw_dataset_tools.cli import COMMAND_MODULES, cli
 
@@ -55,21 +54,22 @@ class TestCommandGroup:
 class TestLazyExports:
     """Tests for package-level re-exports."""
 
-    @pytest.mark.parametrize(
-        "package", [ftw_dataset_tools, ftw_dataset_tools.api, ftw_dataset_tools.api.imagery]
-    )
-    def test_all_names_resolve(self, package) -> None:
+    def test_all_names_resolve(self) -> None:
+        package = ftw_dataset_tools.api.imagery
         for name in package.__all__:
             assert getattr(package, name) is not None
 
     def test_unknown_name_raises(self) -> None:
         with pytest.raises(AttributeError, match="no_such_name"):
-            _ = ftw_dataset_tools.api.no_such_name
+            _ = ftw_dataset_tools.api.imagery.no_such_name
 
     def test_submodule_import_still_works(self) -> None:
-        from ftw_dataset_tools.api import field_stats
+        from ftw_dataset_tools.api.imagery import download_workflow
 
-        assert field_stats.add_field_stats is ftw_dataset_tools.api.add_field_stats
+        assert (
+            download_workflow.download_imagery_for_catalog
+            is ftw_dataset_tools.api.imagery.download_imagery_for_catalog
+        )
 
 
 class TestStartupImports:

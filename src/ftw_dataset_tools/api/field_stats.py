@@ -45,13 +45,6 @@ DEFAULT_FTW_GRID_SOURCE = (
 # never depends on the order DuckDB happens to emit rows in.
 CHIP_ID_COLUMN = "id"
 
-# An id naming an MGRS 100 km square, with or without digits after it. Those that do
-# not also match chip_grid.CHIP_ID_PATTERN (an even count of 4 to 10 digits) have no
-# easting/northing, so no 3x3 block can hold them and the splits stage rejects them.
-# FTW grid v0.1 had 265 such cells (ftw-44RJM at 78°E); v0.2 has none, but local copies
-# of v0.1 may still be in use.
-# Ids that do not start with an MGRS square, as in custom grids, are left alone.
-_MGRS_SQUARE_ID_PATTERN = r"^ftw-\d{1,2}[A-Z]{3}\d*$"
 
 # Grid cells per coverage batch (see _compute_coverage_in_batches).
 DEFAULT_COVERAGE_BATCH_SIZE = 2000
@@ -99,9 +92,6 @@ class FieldStatsResult:
     # Cells dropped for being truncated below the minimum chip area (0 when the
     # size filter is disabled).
     cells_dropped_undersized: int = 0
-    # Cells dropped because their id names an MGRS square but carries no valid
-    # easting/northing (see _drop_malformed_chip_ids).
-    cells_dropped_malformed: int = 0
 
     @property
     def coverage_percentage(self) -> float:
@@ -368,35 +358,6 @@ def _chip_area_expr(geom_col: str, is_geographic: bool) -> str:
     return f'ST_Area("{geom_col}")'
 
 
-def _drop_malformed_chip_ids(conn: duckdb.DuckDBPyConnection) -> int:
-    """Remove grid cells whose MGRS-style id has no valid easting/northing digits.
-
-    Returns the number of cells removed; 0 when the grid has no id column.
-    """
-    columns = [row[0] for row in conn.execute("DESCRIBE grid_table").fetchall()]
-    if CHIP_ID_COLUMN not in columns:
-        return 0
-    col = f'"{CHIP_ID_COLUMN}"'
-    malformed = (
-        f"regexp_full_match({col}, '{_MGRS_SQUARE_ID_PATTERN}') "
-        f"AND NOT regexp_full_match({col}, '{chip_grid.CHIP_ID_PATTERN}')"
-    )
-    ids = [
-        row[0]
-        for row in conn.execute(
-            f"SELECT {col} FROM grid_table WHERE {malformed} ORDER BY {col}"
-        ).fetchall()
-    ]
-    if not ids:
-        return 0
-    conn.execute(f"DELETE FROM grid_table WHERE {malformed}")
-    logger.warning(
-        f"dropped {len(ids):,} grid cell(s) whose id has no easting/northing digits, "
-        f"a defect in the grid: {', '.join(ids[:5])}{' ...' if len(ids) > 5 else ''}"
-    )
-    return len(ids)
-
-
 def _drop_undersized_chips(
     conn: duckdb.DuckDBPyConnection,
     grid_geom_col: str,
@@ -460,14 +421,13 @@ def _fetch_grid_cells(
     bounds: tuple[float, float, float, float],
     km_size: float,
     min_chip_area: float | None,
-) -> int:
+) -> None:
     """Load the remote grid cells over ``bounds`` into grid_table, cut to ``km_size``.
 
     Cells up to two chips beyond ``bounds`` are fetched, then trimmed back: cutting
     the 2 km source grid to another size needs them to finish the chips on the edge,
     and a chip cut by a band line can have its other piece there (one chip is not
-    always enough where the grid is rotated). Cells with malformed ids are dropped
-    first, since cutting cannot place them; returns how many were dropped.
+    always enough where the grid is rotated).
     """
     recut = km_size != SOURCE_GRID_KM_SIZE
     xmin, ymin, xmax, ymax = chip_grid.expand_bounds(
@@ -484,7 +444,6 @@ def _fetch_grid_cells(
           AND bbox.ymin <= {ymax}
           AND bbox.ymax >= {ymin}
     """)
-    dropped = _drop_malformed_chip_ids(conn)
     if recut:
         _cut_remote_grid(conn, km_size)
     _join_band_pieces(conn, "geometry", min_chip_area, km_size, is_geographic=True)
@@ -494,7 +453,6 @@ def _fetch_grid_cells(
         WHERE NOT (bbox.xmin <= {xmax} AND bbox.xmax >= {xmin}
                    AND bbox.ymin <= {ymax} AND bbox.ymax >= {ymin})
     """)
-    return dropped
 
 
 def _cut_remote_grid(conn: duckdb.DuckDBPyConnection, km_size: float) -> None:
@@ -604,10 +562,10 @@ def _load_remote_grid(
     grid_source: str,
     km_size: float,
     min_chip_area: float | None = None,
-) -> tuple[str, int]:
+) -> str:
     """Fetch the grid cells overlapping the fields' bounds into grid_table, cut to km_size.
 
-    Returns the grid geometry column and the number of cells dropped for malformed ids.
+    Returns the grid geometry column.
 
     Raises:
         ValueError: If the fields are not in EPSG:4326 degrees, which the remote grid needs.
@@ -648,12 +606,12 @@ def _load_remote_grid(
             "EPSG:4326."
         )
 
-    dropped = _fetch_grid_cells(conn, grid_source, (xmin, ymin, xmax, ymax), km_size, min_chip_area)
+    _fetch_grid_cells(conn, grid_source, (xmin, ymin, xmax, ymax), km_size, min_chip_area)
 
     if grid_geom_col is None:
         grid_geom_col = "geometry"
         logger.info(f"Using grid geometry column: {grid_geom_col}")
-    return grid_geom_col, dropped
+    return grid_geom_col
 
 
 def _detect_join_bbox_columns(
@@ -848,7 +806,6 @@ def add_field_stats(
         logger.info(f"Loaded {fields_count:,} field polygons")
 
         # Handle grid loading - either from local file or S3
-        cells_dropped_malformed = 0
         if grid_path is not None:
             grid_path, fields_path, grid_geom_col = _load_local_grid(
                 conn,
@@ -861,7 +818,7 @@ def add_field_stats(
                 temp_files=temp_files,
             )
         else:
-            grid_geom_col, cells_dropped_malformed = _load_remote_grid(
+            grid_geom_col = _load_remote_grid(
                 conn,
                 fields_path,
                 fields_file,
@@ -876,10 +833,6 @@ def add_field_stats(
         grid_count = conn.execute("SELECT COUNT(*) FROM grid_table").fetchone()[0]
         logger.info(f"Loaded {grid_count:,} grid cells")
 
-        # A remote grid was checked before it was cut; a local one is checked here.
-        dropped_here = _drop_malformed_chip_ids(conn)
-        grid_count -= dropped_here
-        cells_dropped_malformed += dropped_here
         # A remote grid was joined before it was trimmed to the fields' bounds.
         if grid_path is not None:
             grid_count -= _join_band_pieces(
@@ -967,7 +920,6 @@ def add_field_stats(
             average_coverage=avg_coverage or 0.0,
             max_coverage=max_coverage or 0.0,
             cells_dropped_undersized=cells_dropped_undersized,
-            cells_dropped_malformed=cells_dropped_malformed,
         )
     finally:
         # Clean up temp files from reprojection

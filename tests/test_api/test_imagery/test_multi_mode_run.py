@@ -69,13 +69,6 @@ class TestOneYearForBothModes:
         assert _years(run) == [("scenes", 2024)]
         assert result.by_mode["mosaics"].skipped_details[0]["code"] == "already_selected"
 
-    def test_mosaics_from_a_nearby_year_stop_a_rerun(self, tmp_path: Path) -> None:
-        # Older ftwd filled a 2024 request with 2023 mosaics.
-        _parent, path = _chip(tmp_path, "chip_001_2024")
-        _add_mosaics(path, year=2023, requested=2024)
-        with pytest.raises(SelectionConflictError, match="has mosaics for 2023"):
-            _run(tmp_path, lambda _year: True)
-
     def test_explicit_years_per_mode_then_a_plain_run_changes_nothing(
         self, tmp_path: Path, mock_selection_result: SceneSelectionResult
     ) -> None:

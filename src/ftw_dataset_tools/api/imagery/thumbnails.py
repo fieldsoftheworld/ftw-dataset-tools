@@ -25,17 +25,6 @@ PREVIEW_FORMAT = "WEBP"
 PREVIEW_SUFFIX = ".webp"
 PREVIEW_MEDIA_TYPE = "image/webp"
 
-#: Previews written before the WebP switch. Nothing produces these any more, but
-#: they are still read: a catalog built earlier has them on disk, and its STAC must
-#: keep describing them correctly until it is converted.
-LEGACY_PREVIEW_SUFFIXES = (".jpg", ".jpeg")
-LEGACY_PREVIEW_MEDIA_TYPE = "image/jpeg"
-
-#: Every extension a chip preview may carry on disk, current format first. Use this
-#: wherever previews are looked up rather than written, so a catalog part-way through
-#: conversion is still handled whole.
-PREVIEW_EXTENSIONS = (PREVIEW_SUFFIX, *LEGACY_PREVIEW_SUFFIXES)
-
 REFERENCE_MASK_SUFFIX = "_semantic_3_class.tif"
 
 #: Slowest, smallest setting of the WebP encoder. A preview is written once and
@@ -56,24 +45,6 @@ RGB_BAND_SETS = [
     ("red", "green", "blue"),
     ("nir", "red", "green"),  # False color composite
 ]
-
-
-def preview_media_type(filename: str | Path) -> str:
-    """The media type to describe a preview file with, taken from its extension.
-
-    Previews are written as WebP; a ``.jpg`` left from an earlier build is still
-    described as JPEG rather than mislabelled, so a catalog stays correct between
-    the format switch and its conversion.
-
-    Args:
-        filename: Preview filename or path
-
-    Returns:
-        The asset media type for that file
-    """
-    if str(filename).lower().endswith(LEGACY_PREVIEW_SUFFIXES):
-        return LEGACY_PREVIEW_MEDIA_TYPE
-    return PREVIEW_MEDIA_TYPE
 
 
 def has_rgb_bands(band_list: list[str]) -> bool:

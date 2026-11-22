@@ -15,7 +15,7 @@ import pystac
 
 from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, redraw_chip_preview
 from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES, IMAGERY_SLOTS, SLOTS_BY_MODE
-from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_EXTENSIONS
+from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_SUFFIX
 from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
@@ -88,26 +88,9 @@ MOSAIC_PROPERTIES = ("ftw:mosaic_requested_year", "ftw:mosaic_year")
 #: Derived from the slot links, which stay the source of truth.
 IMAGERY_MODES_PROPERTY = "ftw:imagery_modes"
 
-# Catalogs written before a chip could hold both modes carry one scalar
-# ``ftw:imagery_mode`` and un-namespaced mosaic years. They are still read, and are
-# rewritten to the per-mode keys whenever the chip's item is written again.
-_LEGACY_MODE_PROPERTY = "ftw:imagery_mode"
-_LEGACY_MOSAIC_PROPERTIES = {
-    "ftw:requested_year": "ftw:mosaic_requested_year",
-    "ftw:imagery_year": "ftw:mosaic_year",
-}
+PROPERTIES_BY_MODE = {"scenes": SCENE_PROPERTIES, "mosaics": MOSAIC_PROPERTIES}
 
-PROPERTIES_BY_MODE = {
-    "scenes": SCENE_PROPERTIES,
-    "mosaics": (*MOSAIC_PROPERTIES, *_LEGACY_MOSAIC_PROPERTIES),
-}
-
-IMAGERY_PROPERTIES = (
-    IMAGERY_MODES_PROPERTY,
-    _LEGACY_MODE_PROPERTY,
-    *SCENE_PROPERTIES,
-    *PROPERTIES_BY_MODE["mosaics"],
-)
+IMAGERY_PROPERTIES = (IMAGERY_MODES_PROPERTY, *SCENE_PROPERTIES, *MOSAIC_PROPERTIES)
 
 # Selection narrows these to the actual scene acquisition dates; a freshly
 # generated item carries the dataset-wide extent instead.
@@ -160,31 +143,17 @@ def has_existing_scenes(item: pystac.Item) -> bool:
     return bool(selected_modes(item))
 
 
-def mosaic_year(item: pystac.Item) -> int | None:
-    """The year of the chip's selected mosaics, from the current or legacy property."""
-    props = item.properties
-    year = props.get("ftw:mosaic_year")
-    return year if year is not None else props.get("ftw:imagery_year")
-
-
 def mosaic_requested_year(item: pystac.Item) -> int | None:
-    """The year the chip's mosaic selection asked for, read from current or legacy keys."""
-    props = item.properties
-    year = props.get("ftw:mosaic_requested_year")
-    return year if year is not None else props.get("ftw:requested_year")
+    """The year the chip's mosaic selection asked for."""
+    return item.properties.get("ftw:mosaic_requested_year")
 
 
 def normalize_imagery_properties(item: pystac.Item) -> None:
-    """Record ``ftw:imagery_modes`` from the links and retire the legacy single-mode keys.
+    """Record ``ftw:imagery_modes`` from the links.
 
     Call after any change to a chip's selection, right before the item is written.
     """
     props = item.properties
-    for legacy, current in _LEGACY_MOSAIC_PROPERTIES.items():
-        value = props.pop(legacy, None)
-        if value is not None and current not in props:
-            props[current] = value
-    props.pop(_LEGACY_MODE_PROPERTY, None)
     modes = selected_modes(item)
     if modes:
         props[IMAGERY_MODES_PROPERTY] = list(modes)
@@ -197,18 +166,17 @@ def selection_conflict(item: pystac.Item, imagery_mode: str, year: int) -> str |
 
     Only a selection of the same mode can conflict: a chip holding scenes takes
     mosaics alongside them, and the other way round, as long as both are for the
-    same year. A selection that recorded no year never conflicts. Mosaics also
-    conflict when the year actually used differs from the one asked for, which
-    older ftwd allowed by falling back to a nearby year.
+    same year. A selection that recorded no year never conflicts.
     """
     if not has_mode_selection(item, imagery_mode):
         return None
     if imagery_mode == "scenes":
-        recorded = [item.properties.get("ftw:calendar_year")]
+        recorded = item.properties.get("ftw:calendar_year")
     else:
-        recorded = [mosaic_requested_year(item), mosaic_year(item)]
-    other = next((y for y in recorded if y is not None and y != year), None)
-    return None if other is None else f"has {imagery_mode} for {other}"
+        recorded = mosaic_requested_year(item)
+    if recorded is None or recorded == year:
+        return None
+    return f"has {imagery_mode} for {recorded}"
 
 
 def item_window(item: pystac.Item) -> tuple[datetime, datetime] | None:
@@ -427,12 +395,8 @@ def _delete_slot_files(chip_dir: Path, chip_id: str, slot: str, result: ClearRes
         tif.unlink()
         result.geotiffs_deleted += 1
 
-    # Both extensions: previews are written as WebP, but a catalog built before
-    # that switch still has .jpg here, and leaving either behind strands a preview
-    # for imagery that no longer exists.
-    for ext in PREVIEW_EXTENSIONS:
-        for thumb in chip_dir.glob(f"{chip_id}_{slot}_*{ext}"):
-            thumb.unlink()
+    for thumb in chip_dir.glob(f"{chip_id}_{slot}_*{PREVIEW_SUFFIX}"):
+        thumb.unlink()
 
 
 def _restore_datetime(item: pystac.Item, calendar_year: int | None) -> None:

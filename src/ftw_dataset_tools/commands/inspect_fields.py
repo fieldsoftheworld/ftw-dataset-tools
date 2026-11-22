@@ -109,7 +109,7 @@ def _print_text(summary: FieldSummary) -> None:
         click.echo(click.style("Class-filter candidates:", fg="cyan", bold=True))
         click.echo(
             "  Low-cardinality categorical columns you could filter on "
-            "(see 'ftwd run --class-filter'):"
+            "(see stages.masks.class_filter in the ftwd run config):"
         )
         by_name = {c.name: c for c in summary.columns}
         for name in summary.class_filter_candidates:

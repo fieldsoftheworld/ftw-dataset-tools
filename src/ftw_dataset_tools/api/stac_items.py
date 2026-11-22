@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from dataclasses import dataclass
 from pathlib import Path  # noqa: TC003 - used at runtime for path operations
 from urllib.parse import unquote, urlparse
 
@@ -76,40 +75,6 @@ def write_item(item: pystac.Item, path: Path) -> Path:
     base.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(document, indent=2) + "\n")
     return path
-
-
-@dataclass
-class STACSaveContext:
-    """Context for saving STAC items after download."""
-
-    item: pystac.Item
-    item_dir: Path
-    season: str
-    band_list: list[str]
-    output_filename: str
-
-
-def save_child_item(ctx: STACSaveContext) -> None:
-    """Save a child STAC item with cleanup on failure.
-
-    Deletes the downloaded TIF if the JSON save fails.
-
-    Args:
-        ctx: Context containing item and path information
-
-    Raises:
-        STACSaveError: If the save operation fails
-    """
-    tif_path = ctx.item_dir / ctx.output_filename
-    json_path = ctx.item_dir / f"{ctx.item.id}.json"
-
-    try:
-        write_item(ctx.item, json_path)
-    except Exception as e:
-        # Cleanup: delete the downloaded TIF
-        if tif_path.exists():
-            tif_path.unlink()
-        raise STACSaveError(f"Failed to save STAC item {ctx.item.id} at {ctx.item_dir}: {e}") from e
 
 
 def update_parent_item(

@@ -194,7 +194,7 @@ def test_forwards_options_and_reports_dry_run_skips(tmp_path, monkeypatch):
     monkeypatch.setattr(preview_conversion, "convert_previews_for_catalog", convert)
 
     result = CliRunner().invoke(
-        cli, ["convert-previews", str(tmp_path), "--dry-run", "--workers", "2", "-v"]
+        cli, ["-v", "convert-previews", str(tmp_path), "--dry-run", "--workers", "2"]
     )
 
     assert result.exit_code == 0
@@ -215,7 +215,7 @@ def test_failure_is_a_click_error(tmp_path, monkeypatch, dry_run):
             )
         ),
     )
-    args = ["convert-previews", str(tmp_path), "-v"]
+    args = ["-v", "convert-previews", str(tmp_path)]
     if dry_run:
         args.append("--dry-run")
 

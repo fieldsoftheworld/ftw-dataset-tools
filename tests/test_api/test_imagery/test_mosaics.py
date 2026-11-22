@@ -173,10 +173,16 @@ def local_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mosaic_search, "_indexes", {})
 
 
+def _best_tile(*args) -> pystac.Item | None:
+    """The first of :func:`mosaic_search.containing_tiles`, or None."""
+    tiles = mosaic_search.containing_tiles(*args)
+    return tiles[0] if tiles else None
+
+
 @pytest.mark.usefixtures("local_index")
-class TestFindContainingTile:
+class TestContainingTiles:
     def test_returns_the_tile_containing_the_chip(self) -> None:
-        item = mosaic_search.find_containing_tile((10.0, 50.0, 10.01, 50.01), 2024, 1)
+        item = _best_tile((10.0, 50.0, 10.01, 50.01), 2024, 1)
         assert item is not None
         assert item.properties["ftw:mosaic_tile"] == "32UNA_0_0"
         assert set(item.assets) == {"red", "green", "blue", "nir"}
@@ -185,13 +191,13 @@ class TestFindContainingTile:
 
     def test_picks_the_subtile_that_holds_the_chip(self) -> None:
         # Around easting 640 km, inside only the second tile.
-        item = mosaic_search.find_containing_tile((10.95, 50.0, 10.96, 50.01), 2024, 1)
+        item = _best_tile((10.95, 50.0, 10.96, 50.01), 2024, 1)
         assert item is not None
         assert item.properties["ftw:mosaic_tile"] == "32UNA_1_0"
 
     def test_chip_across_a_tile_edge_has_no_tile(self) -> None:
         # Straddles easting 600.08 km, the end of the first tile.
-        item = mosaic_search.find_containing_tile((10.39, 50.0, 10.41, 50.01), 2024, 1)
+        item = _best_tile((10.39, 50.0, 10.41, 50.01), 2024, 1)
         assert item is None
 
     @staticmethod
@@ -209,14 +215,14 @@ class TestFindContainingTile:
 
     def test_chip_on_a_tile_edge_fits_by_its_footprint(self) -> None:
         footprint, bbox = self._edge_chip()
-        item = mosaic_search.find_containing_tile(bbox, 2024, 1, footprint)
+        item = _best_tile(bbox, 2024, 1, footprint)
         assert item is not None
         assert item.properties["ftw:mosaic_tile"] == "32UNA_0_0"
 
     def test_chip_on_a_tile_edge_misses_by_its_bbox(self) -> None:
         """Why selection passes the footprint: the bbox envelope overhangs the tile."""
         _, bbox = self._edge_chip()
-        assert mosaic_search.find_containing_tile(bbox, 2024, 1) is None
+        assert _best_tile(bbox, 2024, 1) is None
 
     @staticmethod
     def _utm_chip(x0: float, y0: float) -> tuple[dict, tuple[float, float, float, float]]:
@@ -230,14 +236,14 @@ class TestFindContainingTile:
     def test_chip_exactly_on_a_tile_edge_fits(self) -> None:
         # Starts at easting 600 km, the second tile's west edge.
         footprint, bbox = self._utm_chip(600000, 5550000)
-        item = mosaic_search.find_containing_tile(bbox, 2024, 1, footprint)
+        item = _best_tile(bbox, 2024, 1, footprint)
         assert item is not None
         assert item.properties["ftw:mosaic_tile"] == "32UNA_1_0"
 
     def test_chip_a_metre_past_every_tile_has_none(self) -> None:
         # Ends at easting 600.081 km, 1 m past the first tile; starts before the second.
         footprint, bbox = self._utm_chip(598081, 5550000)
-        assert mosaic_search.find_containing_tile(bbox, 2024, 1, footprint) is None
+        assert _best_tile(bbox, 2024, 1, footprint) is None
 
     def test_the_tile_holding_the_chip_deepest_wins(self, monkeypatch) -> None:
         """Of two tiles that both contain the chip, the first in index order loses
@@ -258,7 +264,7 @@ class TestFindContainingTile:
         )
         monkeypatch.setitem(mosaic_search._indexes, (2024, 1), [shallow, deep])
         footprint, bbox = self._utm_chip(604000, 5550000)
-        item = mosaic_search.find_containing_tile(bbox, 2024, 1, footprint)
+        item = _best_tile(bbox, 2024, 1, footprint)
         assert item is not None
         assert item.properties["ftw:mosaic_tile"] == "deep"
 
@@ -280,11 +286,11 @@ class TestFindContainingTile:
         )
         footprint, bbox = self._utm_chip(604000, 5550000)
         monkeypatch.setitem(mosaic_search._indexes, (2024, 1), [short, other])
-        item = mosaic_search.find_containing_tile(bbox, 2024, 1, footprint, "EPSG:32632")
+        item = _best_tile(bbox, 2024, 1, footprint, "EPSG:32632")
         assert item is not None
         assert item.properties["ftw:mosaic_tile"] == "other"
         monkeypatch.setitem(mosaic_search._indexes, (2024, 1), [short])
-        assert mosaic_search.find_containing_tile(bbox, 2024, 1, footprint, "EPSG:32632") is None
+        assert _best_tile(bbox, 2024, 1, footprint, "EPSG:32632") is None
 
     def test_a_tile_in_the_chips_own_crs_wins(self, monkeypatch) -> None:
         """At a zone seam the chip's own zone beats a neighbour it sits deeper in."""
@@ -304,12 +310,7 @@ class TestFindContainingTile:
         footprint, bbox = self._utm_chip(604000, 5550000)
         tiles = mosaic_search.containing_tiles(bbox, 2024, 1, footprint, "EPSG:32632")
         assert [t.properties["ftw:mosaic_tile"] for t in tiles] == ["own", "other"]
-        assert (
-            mosaic_search.find_containing_tile(bbox, 2024, 1, footprint).properties[
-                "ftw:mosaic_tile"
-            ]
-            == "other"
-        )
+        assert _best_tile(bbox, 2024, 1, footprint).properties["ftw:mosaic_tile"] == "other"
 
 
 class TestSelectMosaicsForChip:
@@ -840,13 +841,13 @@ class TestMosaicSearchEdges:
     @pytest.mark.usefixtures("local_index")
     def test_index_is_read_once_per_quarter(self) -> None:
         with patch.object(mosaic_search, "_connection", wraps=mosaic_search._connection) as conn:
-            mosaic_search.find_containing_tile(CHIP_BBOX, 2024, 1)
-            mosaic_search.find_containing_tile(CHIP_BBOX, 2024, 1)
+            _best_tile(CHIP_BBOX, 2024, 1)
+            _best_tile(CHIP_BBOX, 2024, 1)
         assert conn.call_count == 1
 
     @pytest.mark.usefixtures("local_index")
     def test_tiles_outside_the_chip_latitude_are_skipped(self) -> None:
-        assert mosaic_search.find_containing_tile((10.0, 60.0, 10.01, 60.01), 2024, 1) is None
+        assert _best_tile((10.0, 60.0, 10.01, 60.01), 2024, 1) is None
 
     def test_antimeridian_tile_overlaps_both_sides(self) -> None:
         assert mosaic_search._lon_overlaps(178.0, -179.0, 179.5, 179.6)

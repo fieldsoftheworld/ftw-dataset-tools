@@ -745,9 +745,7 @@ def _build_item_assets(
                     "title": f"{quarter.upper()} quarterly mosaic imagery",
                 }
             )
-    # Validators require a type on every definition. ftwd writes WebP previews; a
-    # tree still holding legacy JPEGs describes them on each item's own asset
-    # (``ftwd convert-previews`` replaces them).
+    # Validators require a type on every definition.
     defs["thumbnail"] = ItemAssetDefinition(
         {"type": PREVIEW_MEDIA_TYPE, "roles": ["thumbnail"], "title": "Chip preview"}
     )
