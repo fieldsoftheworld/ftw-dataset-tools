@@ -302,8 +302,8 @@ class TestSelectExampleChips:
         chip1_dir.mkdir(parents=True)
 
         # Create JPG files
-        (chip1_dir / "chip1_planting_image_s2.jpg").touch()
-        (chip1_dir / "chip1_harvest_image_s2.jpg").touch()
+        (chip1_dir / "chip1_planting_image_s2.webp").touch()
+        (chip1_dir / "chip1_harvest_image_s2.webp").touch()
 
         planting_items = [chip1_dir / "chip1_planting_s2.json"]
 
@@ -320,7 +320,7 @@ class TestSelectExampleChips:
         chip1_dir.mkdir(parents=True)
 
         # Only create planting image
-        (chip1_dir / "chip1_planting_image_s2.jpg").touch()
+        (chip1_dir / "chip1_planting_image_s2.webp").touch()
 
         planting_items = [chip1_dir / "chip1_planting_s2.json"]
 
@@ -336,8 +336,8 @@ class TestSelectExampleChips:
         for i in range(5):
             chip_dir = tmp_path / "chips" / "33UXP" / f"chip{i}"
             chip_dir.mkdir(parents=True)
-            (chip_dir / f"chip{i}_planting_image_s2.jpg").touch()
-            (chip_dir / f"chip{i}_harvest_image_s2.jpg").touch()
+            (chip_dir / f"chip{i}_planting_image_s2.webp").touch()
+            (chip_dir / f"chip{i}_harvest_image_s2.webp").touch()
             planting_items.append(chip_dir / f"chip{i}_planting_s2.json")
 
         result = _select_example_chips(planting_items, 3)
@@ -391,8 +391,8 @@ class TestCreateDatasetSummaryIntegration:
         (chip1_dir / "chip1_harvest_s2.json").write_text(json.dumps(stac_item))
 
         # Create image files
-        (chip1_dir / "chip1_planting_image_s2.jpg").touch()
-        (chip1_dir / "chip1_harvest_image_s2.jpg").touch()
+        (chip1_dir / "chip1_planting_image_s2.webp").touch()
+        (chip1_dir / "chip1_harvest_image_s2.webp").touch()
 
         output_path = dataset_dir / "summary.md"
 

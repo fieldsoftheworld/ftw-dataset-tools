@@ -32,7 +32,6 @@ from ftw_dataset_tools.api.imagery.preview_workflow import (
 from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
 from ftw_dataset_tools.api.imagery.stac_child_items import SEASONS
 from ftw_dataset_tools.api.imagery.thumbnails import (
-    LEGACY_PREVIEW_SUFFIXES,
     PREVIEW_MEDIA_TYPE,
     PREVIEW_SUFFIX,
     REFERENCE_MASK_SUFFIX,
@@ -49,6 +48,9 @@ __all__ = [
     "conversion_summary_line",
     "convert_previews_for_catalog",
 ]
+
+#: Previews written before the WebP switch.
+LEGACY_PREVIEW_SUFFIXES = (".jpg", ".jpeg")
 
 
 @dataclass

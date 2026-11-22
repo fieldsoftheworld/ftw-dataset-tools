@@ -16,12 +16,11 @@ import pystac
 from ftw_dataset_tools.api.assets import add_file_info
 from ftw_dataset_tools.api.imagery.slots import THUMBNAIL_SLOTS, slot_title
 from ftw_dataset_tools.api.imagery.thumbnails import (
-    PREVIEW_EXTENSIONS,
+    PREVIEW_MEDIA_TYPE,
     PREVIEW_SUFFIX,
     REFERENCE_MASK_SUFFIX,
     ThumbnailError,
     generate_overlay_thumbnail,
-    preview_media_type,
 )
 
 if TYPE_CHECKING:
@@ -42,12 +41,9 @@ OVERLAY_TITLE = "Chip preview with field overlay"
 
 
 def _existing(chip_dir: Path, stem: str) -> Path | None:
-    """``{stem}.webp``, or a pre-WebP ``.jpg`` of it, if one is on disk."""
-    for ext in PREVIEW_EXTENSIONS:
-        path = chip_dir / f"{stem}{ext}"
-        if path.exists():
-            return path
-    return None
+    """``{stem}.webp``, if it is on disk."""
+    path = chip_dir / f"{stem}{PREVIEW_SUFFIX}"
+    return path if path.exists() else None
 
 
 def _best_slot_preview(chip_dir: Path, chip_id: str) -> str | None:
@@ -112,23 +108,14 @@ def refresh_chip_preview(
     base = _existing(chip_dir, f"{item.id}_{slot}_image_s2")
     if redraw and base is not None:
         _redraw_overlay(chip_dir, item.id, base)
-    # A WebP beats a pre-WebP JPEG left behind; then the overlay beats the plain preview.
-    stems = (f"{item.id}_overlay", f"{item.id}_{slot}_image_s2")
-    target = next(
-        (
-            chip_dir / f"{stem}{ext}"
-            for ext in PREVIEW_EXTENSIONS
-            for stem in stems
-            if (chip_dir / f"{stem}{ext}").exists()
-        ),
-        None,
-    )
+    # The overlay beats the plain preview.
+    target = _existing(chip_dir, f"{item.id}_overlay") or base
     if target is None:
         return None
     is_overlay = target.stem == f"{item.id}_overlay"
     asset = pystac.Asset(
         href=f"./{target.name}",
-        media_type=preview_media_type(target.name),
+        media_type=PREVIEW_MEDIA_TYPE,
         title=OVERLAY_TITLE if is_overlay else f"Chip preview ({slot_title(slot).lower()})",
         roles=["thumbnail"],
         extra_fields={PREVIEW_SLOT_FIELD: slot},
@@ -144,20 +131,18 @@ def redraw_chip_preview(item: pystac.Item, chip_dir: Path) -> str | None:
     For when the slot that drew it is gone: removes the old overlay and thumbnail,
     then draws from the first of ``THUMBNAIL_SLOTS`` that still has a preview image.
     """
-    for ext in PREVIEW_EXTENSIONS:
-        (chip_dir / f"{item.id}_overlay{ext}").unlink(missing_ok=True)
+    (chip_dir / f"{item.id}_overlay{PREVIEW_SUFFIX}").unlink(missing_ok=True)
     item.assets.pop("thumbnail", None)
     best = _best_slot_preview(chip_dir, item.id)
     return None if best is None else refresh_chip_preview(item, chip_dir, best, redraw=True)
 
 
 def _redraw_overlay(chip_dir: Path, chip_id: str, base: Path) -> None:
-    for ext in PREVIEW_EXTENSIONS:
-        (chip_dir / f"{chip_id}_overlay{ext}").unlink(missing_ok=True)
+    overlay = chip_dir / f"{chip_id}_overlay{PREVIEW_SUFFIX}"
+    overlay.unlink(missing_ok=True)
     mask = chip_dir / f"{chip_id}{REFERENCE_MASK_SUFFIX}"
     if not mask.exists():
         return
-    overlay = chip_dir / f"{chip_id}_overlay{PREVIEW_SUFFIX}"
     try:
         generate_overlay_thumbnail(base, mask, overlay)
     except ThumbnailError:

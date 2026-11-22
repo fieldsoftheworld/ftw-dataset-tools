@@ -15,7 +15,7 @@ import pystac
 
 from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, redraw_chip_preview
 from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES, IMAGERY_SLOTS, SLOTS_BY_MODE
-from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_EXTENSIONS
+from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_SUFFIX
 from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
@@ -395,12 +395,8 @@ def _delete_slot_files(chip_dir: Path, chip_id: str, slot: str, result: ClearRes
         tif.unlink()
         result.geotiffs_deleted += 1
 
-    # Both extensions: previews are written as WebP, but a catalog built before
-    # that switch still has .jpg here, and leaving either behind strands a preview
-    # for imagery that no longer exists.
-    for ext in PREVIEW_EXTENSIONS:
-        for thumb in chip_dir.glob(f"{chip_id}_{slot}_*{ext}"):
-            thumb.unlink()
+    for thumb in chip_dir.glob(f"{chip_id}_{slot}_*{PREVIEW_SUFFIX}"):
+        thumb.unlink()
 
 
 def _restore_datetime(item: pystac.Item, calendar_year: int | None) -> None:
