@@ -35,7 +35,6 @@ from ftw_dataset_tools.api.imagery.settings import (
     DEFAULT_NODATA_MAX,
     DEFAULT_NUM_BUFFER_EXPANSIONS,
     PIXEL_CHECK_SKIP_THRESHOLD,
-    S2_COLLECTIONS,
     STAC_URL,
 )
 from ftw_dataset_tools.api.logging_config import get_logger
@@ -64,11 +63,6 @@ class SelectedScene:
     def id(self) -> str:
         """Scene ID."""
         return self.item.id
-
-    def get_asset_href(self, band: str) -> str | None:
-        """Get href for a specific band asset."""
-        asset = self.item.assets.get(band)
-        return asset.href if asset else None
 
 
 @dataclass
@@ -153,7 +147,6 @@ def _query_stac(
     center_date: datetime,
     cloud_cover_max: int,
     buffer_days: int,
-    s2_collection: str = "c1",
     max_retries: int = 3,
 ) -> STACQueryResult:
     """
@@ -164,7 +157,6 @@ def _query_stac(
         center_date: Center date for the search
         cloud_cover_max: Maximum cloud cover percentage
         buffer_days: Days to search around center_date
-        s2_collection: Sentinel-2 collection identifier ("c1" or "old-baseline")
         max_retries: Maximum number of retries for transient errors
 
     Returns:
@@ -177,7 +169,7 @@ def _query_stac(
 
     date_range = _format_date_range(center_date, buffer_days)
     catalog_url = STAC_URL
-    collection = S2_COLLECTIONS.get(s2_collection, "sentinel-2-c1-l2a")
+    collection = parquet_search.COLLECTION_C1
 
     last_error = None
     for attempt in range(max_retries):
@@ -239,7 +231,6 @@ def _query_parquet(
     center_date: datetime,
     cloud_cover_max: int,
     buffer_days: int,
-    s2_collection: str = "c1",
 ) -> STACQueryResult:
     """Query the Sentinel-2 STAC-GeoParquet mirror for scenes.
 
@@ -254,9 +245,9 @@ def _query_parquet(
     end = (center_date + timedelta(days=buffer_days)).replace(
         hour=23, minute=59, second=59, microsecond=0
     )
-    collection = S2_COLLECTIONS.get(s2_collection, parquet_search.COLLECTION_C1)
+    collection = parquet_search.COLLECTION_C1
     items = parquet_search.query_scenes(
-        bbox=bbox, start=start, end=end, cloud_cover_max=cloud_cover_max, collection=collection
+        bbox=bbox, start=start, end=end, cloud_cover_max=cloud_cover_max
     )
     return STACQueryResult(
         items=items,
@@ -403,8 +394,7 @@ def _select_best_scene(
         short_dt = _short_date(item)
 
         # Scene-level nodata says nothing about this chip, so always check its
-        # pixels. A non-zero value may sit far from the chip (old-baseline
-        # products carry granule-edge nodata on most scenes), and a value of zero
+        # pixels. A non-zero value may sit far from the chip, and a value of zero
         # does not mean the scene covers the chip at all: candidates match on the
         # scene's lon/lat bbox, which at high latitudes reaches well past the
         # granule into the neighbouring tile.
@@ -556,7 +546,6 @@ def select_scenes_for_chip(
     cloud_cover_chip: float = DEFAULT_CLOUD_COVER_CHIP,
     nodata_max: float = DEFAULT_NODATA_MAX,
     buffer_days: int = DEFAULT_BUFFER_DAYS,
-    s2_collection: str = "c1",
     num_buffer_expansions: int = DEFAULT_NUM_BUFFER_EXPANSIONS,
     buffer_expansion_size: int = DEFAULT_BUFFER_EXPANSION_SIZE,
     search_backend: str = "parquet",
@@ -572,8 +561,6 @@ def select_scenes_for_chip(
         cloud_cover_chip: Maximum chip-level cloud cover percentage (0-100)
         nodata_max: Maximum nodata percentage (0-100). Default 0 rejects any nodata.
         buffer_days: Days to search around crop calendar dates
-        s2_collection: Sentinel-2 collection identifier ("c1" or "old-baseline"),
-            used by both backends
         num_buffer_expansions: Number of times to expand buffer for seasons without cloud-free scenes
         buffer_expansion_size: Days to add to buffer on each expansion
         search_backend: "parquet" (the STAC-GeoParquet mirror, default) or
@@ -597,15 +584,12 @@ def select_scenes_for_chip(
 
     def _run_search(center_date: datetime, buffer: int) -> STACQueryResult:
         if search_backend == "parquet":
-            return _query_parquet(
-                bbox, center_date, DEFAULT_CLOUD_COVER_SCENE, buffer, s2_collection
-            )
+            return _query_parquet(bbox, center_date, DEFAULT_CLOUD_COVER_SCENE, buffer)
         return _query_stac(
             bbox=bbox,
             center_date=center_date,
             cloud_cover_max=DEFAULT_CLOUD_COVER_SCENE,
             buffer_days=buffer,
-            s2_collection=s2_collection,
         )
 
     # Get crop calendar dates
