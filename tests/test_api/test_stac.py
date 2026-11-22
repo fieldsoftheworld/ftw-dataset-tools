@@ -966,6 +966,8 @@ class TestCollectionMetadata:
 
         coll = json.loads(result.collection_path.read_text())
         assert "ftw:split_type" not in coll
+        assert "ftw:split_seed" not in coll
+        assert "ftw:split_percents" not in coll
 
     def test_scale_properties_only_for_scaled_datasets(self) -> None:
         from ftw_dataset_tools.api.config import DatasetConfig

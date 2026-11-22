@@ -69,9 +69,10 @@ def _selection_year(fields_file: Path, year: int | None) -> int | None:
 @click.option(
     "--split-type",
     type=click.Choice(splits.SPLIT_TYPE_CHOICES),
-    required=True,
+    default=None,
     help=(
-        "Dataset train/val/test split strategy. "
+        "Assign a per-chip train/val/test split (default: none; the benchmark's splits "
+        "live in its root chips table, see ftwd chips-table). "
         "Use 'block3x3' for spatially coherent 3x3 blocks, "
         "'block3x3-hash' for blocks that keep their split across scales, or "
         "'random-uniform' for random chip assignment across the dataset, or "
@@ -288,7 +289,7 @@ def create_dataset_cmd(
     fields_file: str,
     output_dir: str | None,
     field_dataset: str | None,
-    split_type: str,
+    split_type: str | None,
     split_percents: tuple[int, int, int],
     min_coverage: float,
     km_size: float,
@@ -324,7 +325,7 @@ def create_dataset_cmd(
 
     \b
     - Chips file with field coverage statistics
-    - Train/val/test split assignments
+    - Train/val/test split assignments (only with --split-type)
     - Boundary lines file
     - Mask types (instance, semantic_2_class, semantic_3_class) - configurable via --mask-types
       (decode_boundary and decode_distance are also available, off by default)
@@ -355,12 +356,12 @@ def create_dataset_cmd(
 
     \b
     Examples:
-        ftwd create-dataset austria_fields.parquet --split-type random-uniform --year 2023
+        ftwd create-dataset austria_fields.parquet --year 2023
         ftwd create-dataset fields.parquet --split-type block3x3 --field-dataset austria -o ./austria_dataset --year 2022
-        ftwd create-dataset fields.parquet --split-type random-uniform --min-coverage 1.0 --resolution 5.0 --year 2024
-        ftwd create-dataset fields.parquet --split-type block3x3 --mask-types semantic_2_class,semantic_3_class --year 2023
-        ftwd create-dataset fields.parquet --split-type block3x3 --presence-only --year 2023
-        ftwd create-dataset fields.parquet --split-type block3x3 --km-size 0.5 --year 2023
+        ftwd create-dataset fields.parquet --min-coverage 1.0 --resolution 5.0 --year 2024
+        ftwd create-dataset fields.parquet --mask-types semantic_2_class,semantic_3_class --year 2023
+        ftwd create-dataset fields.parquet --presence-only --year 2023
+        ftwd create-dataset fields.parquet --km-size 0.5 --year 2023
     """
     # Derive output directory from input filename if not specified
     if output_dir is None:

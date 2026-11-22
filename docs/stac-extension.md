@@ -133,7 +133,7 @@ independently of imagery:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `ftw:split` | string | Train/val/test split assignment: "train", "val", or "test" |
+| `ftw:split` | string | Train/val/test split assignment: "train", "val", or "test". Only on datasets built with `stages.splits.split_type`, which is off by default: the benchmark's splits live in its root chips table (`ftwd chips-table`) |
 | `ftw:field_coverage_pct` | number | Percentage of the chip covered by field polygons |
 | `ftw:label_extent_pct` | number | Percentage of the chip inside the label extent (present only for datasets built with `label_extent`) |
 | `ftw:hcat_dominant_code` | integer | HCAT code with the largest area share in the chip |
@@ -214,7 +214,7 @@ describing how the whole dataset was built:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `ftw:split_type` | string | Split strategy used: `random-uniform`, `block3x3`, `block3x3-hash` or `predefined` |
+| `ftw:split_type` | string | Split strategy used: `random-uniform`, `block3x3`, `block3x3-hash` or `predefined`. This and the next two are present only when a per-chip split was assigned (off by default) |
 | `ftw:split_seed` | integer | Random seed used for split assignment |
 | `ftw:split_percents` | integer[3] | Train/val/test split percentages |
 | `ftw:chip_size_km` | number | Chip edge length in kilometres (2 for the FTW grid; smaller chips have longer ids, see below) |
@@ -375,7 +375,7 @@ The docs stage adds two more asset shapes to the collection when it runs (see
 |-----------|------------|-------|--------------|
 | `chips_tiles` | `application/vnd.pmtiles` | `visual` | Vector tiles of the chips (`chips.pmtiles`) |
 | `fields_tiles` | `application/vnd.pmtiles` | `visual` | Vector tiles of the fields (`fields.pmtiles`) |
-| `style-<id>` | `application/vnd.mapbox.style+json` | `style`, plus `default` on the first style written | A MapLibre GL style JSON under `styles/`, e.g. `style-split` for `styles/split.json` |
+| `style-<id>` | `application/vnd.mapbox.style+json` | `style`, plus `default` on the first style written | A MapLibre GL style JSON under `styles/`, e.g. `style-field-coverage` for `styles/field-coverage.json` |
 
 `chips_tiles` and `fields_tiles` also carry `file:size`. Re-running the docs stage
 replaces these assets and the `describedby`/`agents` links in place (matched by key, or

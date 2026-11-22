@@ -95,11 +95,10 @@ class TestResolveStages:
     def test_full_run_gates_disabled_imagery(self) -> None:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
         stages = pipeline.resolve_stages(config=config)
-        # select_images defaults enabled; download_images defaults disabled.
+        # select_images defaults enabled; download_images and splits default disabled.
         assert stages == [
             "reproject",
             "chips",
-            "splits",
             "boundaries",
             "masks",
             "stac",
@@ -137,9 +136,20 @@ class TestResolveStages:
         with pytest.raises(ValueError, match="Unknown stage"):
             pipeline.resolve_stages(only="bogus")
 
+    def test_splits_run_only_with_a_split_type(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+        assert "splits" not in pipeline.resolve_stages(config=config)
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"splits": {"split_type": "predefined"}}}
+        )
+        assert "splits" in pipeline.resolve_stages(config=config)
+
     def test_scale_runs_only_below_100_percent(self) -> None:
         config = DatasetConfig.from_dict(
-            {"fields_file": "f.parquet", "stages": {"scale": {"percent": 10}}}
+            {
+                "fields_file": "f.parquet",
+                "stages": {"scale": {"percent": 10}, "splits": {"split_type": "block3x3-hash"}},
+            }
         )
         assert pipeline.resolve_stages(through_stage="splits", config=config) == [
             "reproject",
@@ -213,10 +223,12 @@ class TestBuildContext:
 class TestStageValidation:
     """Tests for front-loaded validation in run_pipeline."""
 
-    def test_splits_requires_split_type(self, sample_geoparquet_4326: Path, tmp_path: Path) -> None:
+    def test_forced_splits_without_split_type(
+        self, sample_geoparquet_4326: Path, tmp_path: Path
+    ) -> None:
         config = _config(sample_geoparquet_4326, tmp_path / "out", year=2023)
         ctx = pipeline.build_context(config)
-        with pytest.raises(ValueError, match="split_type is required"):
+        with pytest.raises(ValueError, match="The splits stage is off"):
             pipeline.run_pipeline(ctx, ["splits"])
 
     def test_year_stage_requires_temporal(
@@ -1492,6 +1504,48 @@ class TestStacStageStaleCropStats:
         pipeline.stage_stac(ctx)
 
         assert "hcat_dominant_code" in gpd.read_parquet(ctx.chips_path).columns
+
+
+class TestStacStageStaleSplit:
+    """With the splits stage off, the stac stage publishes no split an earlier run left."""
+
+    def _ctx(self, tmp_path: Path, monkeypatch, *, split_type: str | None):
+        from ftw_dataset_tools.api import stac
+
+        fields = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(
+            fields
+        )
+        stages = {"chips": {"crop_stats": False}, "splits": {"split_type": split_type}}
+        ctx = pipeline.build_context(_config(fields, tmp_path / "out", year=2024, stages=stages))
+        ctx.output_dir.mkdir()
+        gpd.GeoDataFrame(
+            {"id": ["ftw-33UXP0001"], "split": ["train"]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(ctx.chips_path)
+        ctx.output_fields_path.write_bytes(b"")
+        ctx.boundary_lines_path.write_bytes(b"")
+        result = stac.STACGenerationResult(
+            collection_path=tmp_path / "collection.json",
+            items_parquet_path=None,
+            subcatalog_paths={},
+            total_items=0,
+            temporal_extent=(datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 12, 31, tzinfo=UTC)),
+        )
+        monkeypatch.setattr(stac, "generate_stac_catalog", lambda **_kw: result)
+        return ctx
+
+    def test_off_drops_the_split(self, tmp_path: Path, monkeypatch, caplog) -> None:
+        ctx = self._ctx(tmp_path, monkeypatch, split_type=None)
+        pipeline.stage_stac(ctx)
+        assert "split" not in gpd.read_parquet(ctx.chips_path).columns
+        assert any("Dropped the split column" in m for m in caplog.messages)
+
+    def test_on_keeps_the_split(self, tmp_path: Path, monkeypatch) -> None:
+        ctx = self._ctx(tmp_path, monkeypatch, split_type="predefined")
+        pipeline.stage_stac(ctx)
+        assert "split" in gpd.read_parquet(ctx.chips_path).columns
 
 
 def _land_cover_ctx(

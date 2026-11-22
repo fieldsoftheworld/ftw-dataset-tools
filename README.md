@@ -64,10 +64,20 @@ ftwd run config.yaml --through stac
 ```
 
 Stages run in this order: `reproject`, `filter` (the class filter, a no-op without one),
-`chips`, `scale` (keeps `stages.scale.percent` of the chip blocks), `splits`, `boundaries`,
-`masks`, `stac`, `select_images`, `download_images`, `docs`. Intermediate outputs follow a fixed
+`chips`, `scale` (keeps `stages.scale.percent` of the chip blocks), `splits` (only with
+`stages.splits.split_type`), `boundaries`, `masks`, `stac`, `select_images`, `download_images`,
+`docs`. Intermediate outputs follow a fixed
 naming convention in the output directory, so individual stages can be re-run on
 their own as long as their inputs already exist.
+
+**Splits are off by default.** The benchmark's train/val/test splits live in its root chips
+table ([chips-table](#chips-table)), one column per split scheme, so a dataset build assigns
+none: the chips file has no `split` column, the items no `ftw:split`, the collection no
+`ftw:split_type` / `ftw:split_seed` / `ftw:split_percents`, and the generated README, AGENTS,
+styles and tiles say nothing about splits. Set `stages.splits.split_type` (or pass
+`--split-type` to `create-dataset`) to assign a per-chip split as before; `predefined` keeps
+the source's own split, which the root table reads as `split_predefined`. With the stage off,
+the stac stage drops a `split` column an earlier run left in the chips file.
 
 `select_images` searches for cloud-free Sentinel-2 scenes in the
 [Sentinel-2 STAC-GeoParquet mirror](https://source.coop/portolan-mirrors/sentinel-2-catalog)
@@ -95,7 +105,7 @@ source scene is mirrored onto the item as a `visual` asset, mask classes carry
 **docs stage.** The final stage turns what was measured about the collection into
 ready-to-browse outputs. With [tippecanoe](https://github.com/felt/tippecanoe) on
 `PATH` it tiles the chips and fields into `chips.pmtiles` / `fields.pmtiles`, then
-writes up to five MapLibre GL styles under `styles/` — split, field coverage,
+writes up to five MapLibre GL styles under `styles/` — split (with a per-chip split), field coverage,
 dominant crop, crops, and outline — each written only when the data and matching
 tiles it needs are actually present, and each checked against the data so a style
 never shows a legend entry that does not occur in the collection. Without
@@ -116,7 +126,7 @@ The output directory gains:
 ├── chips.pmtiles          # chip vector tiles (only if tippecanoe ran)
 ├── fields.pmtiles         # field vector tiles (only if tippecanoe ran)
 └── styles/
-    ├── split.json           # e.g. chips by train/val/test split
+    ├── split.json           # chips by train/val/test split (with a per-chip split)
     ├── field-coverage.json
     ├── dominant-crop.json
     ├── crops.json
@@ -273,8 +283,6 @@ name: austria
 year: 2023
 
 stages:
-  splits:
-    split_type: random-uniform
   select_images:
     enabled: true
   download_images:
@@ -314,8 +322,8 @@ Options: `--top N` (max values per categorical column; `0` = all, safety-capped)
 Create a complete training dataset from a single fields file. This is the main command that orchestrates the entire pipeline.
 
 ```bash
-# Basic usage with required split-type
-ftwd create-dataset austria_fields.parquet --split-type random-uniform
+# Basic usage (no per-chip split)
+ftwd create-dataset austria_fields.parquet
 
 # Specify output directory and dataset name
 ftwd create-dataset fields.parquet --field-dataset austria --split-type block3x3 -o ./austria_dataset
@@ -340,7 +348,7 @@ ftwd create-dataset fields.parquet --split-type block3x3 --km-size 0.5 --resolut
 ```
 
 **Options:**
-- `--split-type` - **Required.** Split strategy: `random-uniform` (random assignment of chips), `block3x3` (3x3 blocks of chips assigned together for spatial coherence), `block3x3-hash` (3x3 blocks assigned by a stable hash, so a block keeps its split across scales) or `predefined`
+- `--split-type` - Assign a per-chip split (default: none; see "Splits are off by default" under [run](#run-config-driven-workflow)). Strategy: `random-uniform` (random assignment of chips), `block3x3` (3x3 blocks of chips assigned together for spatial coherence), `block3x3-hash` (3x3 blocks assigned by a stable hash, so a block keeps its split across scales) or `predefined`
 - `--split-percents` - Train/val/test split percentages as three integers that sum to 100 (default: 80 10 10)
 - `--mask-types` - Comma-separated list of mask types to generate: `instance`, `semantic_2_class`, `semantic_3_class` (default: all three)
 - `--presence-only` - Flag indicating labels are presence-only; semantic mask background will be 3 instead of 0 (instance masks keep 0)

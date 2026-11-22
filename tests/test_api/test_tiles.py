@@ -42,6 +42,16 @@ class TestExportGeojsonseq:
         assert set(lines[0]["properties"]) == {"id", "split", "field_coverage_pct"}
         assert lines[0]["geometry"]["type"] == "Polygon"
 
+    def test_chips_without_split_tile_without_it(self, tmp_path: Path) -> None:
+        """The per-chip split is off by default, so a chips file often has no split."""
+        from ftw_dataset_tools.api.tiles import CHIPS_TILES, export_geojsonseq
+
+        chips = tmp_path / "nosplit.parquet"
+        gpd.read_parquet(_chips(tmp_path)).drop(columns=["split"]).to_parquet(chips)
+        kept = export_geojsonseq(chips, tmp_path / "c.geojsonseq", CHIPS_TILES.attributes)
+
+        assert kept == ["id", "field_coverage_pct"]
+
     def test_reprojects_to_4326(self, tmp_path: Path) -> None:
         import json
 

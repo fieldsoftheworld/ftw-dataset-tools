@@ -465,6 +465,15 @@ class TestWriteMarkdownSummary:
         content = output_file.read_text()
         assert "0" in content  # Should contain zero counts
 
+    def test_split_lines_only_with_a_split(self) -> None:
+        from ftw_dataset_tools.api.dataset_summary import _split_lines
+
+        assert _split_lines(10, 0, 0, 0) == "", "chips without a per-chip split"
+        assert _split_lines(10, 8, 1, 1) == (
+            "- **Train**: 8 (80.0%)\n- **Validation**: 1 (10.0%)\n- **Test**: 1 (10.0%)\n"
+        )
+        assert "Train**: 1\n" in _split_lines(0, 1, 0, 0)
+
 
 class TestCountEmptyMasks:
     """Tests for _count_empty_masks helper."""
