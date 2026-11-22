@@ -405,7 +405,7 @@ class TestDropStrayParts:
         # Row 90 of the square is inside band U (the square's origin is at 47.8°N).
         left, right = _to_lonlat(_cell(0, 90, 1)), _to_lonlat(_cell(1, 90, 1))
         conn = _lonlat_grid({"ftw-33UXP0090": MultiPolygon([left, right])})
-        assert drop_stray_parts(conn, "grid_table") == (1, 0)
+        assert drop_stray_parts(conn, "grid_table") == (0, 0)
         assert _rows(conn)["ftw-33UXP0090"][1].area == pytest.approx((left.union(right)).area)
 
     def test_part_in_another_hemisphere_is_cut_off(self) -> None:

@@ -12,6 +12,7 @@ import re
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pyarrow as pa
 import shapely
 from pyproj import Transformer
 from rasterio.crs import CRS
@@ -381,16 +382,16 @@ def drop_stray_parts(
     fixed: list[tuple[int, bytes]] = []
     dropped: list[int] = []
     for rowid, cell_id, wkb in rows:
-        clean = _clean_cell(cell_id, shapely.from_wkb(bytes(wkb)))
+        geom = shapely.from_wkb(bytes(wkb))
+        clean = _clean_cell(cell_id, geom)
         if clean is None:
             dropped.append(rowid)
-        else:
+        elif not shapely.equals(clean, geom):  # a part was cut off
             fixed.append((rowid, shapely.to_wkb(clean)))
     if dropped:
-        conn.execute("CREATE OR REPLACE TEMP TABLE _stray_drop (rid BIGINT)")
-        conn.executemany("INSERT INTO _stray_drop VALUES (?)", [(r,) for r in dropped])
+        conn.register("_stray_drop", pa.table({"rid": pa.array(dropped, pa.int64())}))
         conn.execute(f'DELETE FROM "{table}" WHERE rowid IN (SELECT rid FROM _stray_drop)')
-        conn.execute("DROP TABLE _stray_drop")
+        conn.unregister("_stray_drop")
     if fixed:
         _replace_geometries(conn, table, geom_col, columns, fixed)
     return len(fixed), len(dropped)
@@ -404,8 +405,10 @@ def _replace_geometries(
     rows: list[tuple[int, bytes]],
 ) -> None:
     """Set the geometry (and bbox struct columns) of each (rowid, wkb) in ``rows``."""
-    conn.execute("CREATE OR REPLACE TEMP TABLE _stray (rid BIGINT, wkb BLOB)")
-    conn.executemany("INSERT INTO _stray VALUES (?, ?)", rows)
+    rids, wkbs = zip(*rows, strict=True)
+    conn.register(
+        "_stray", pa.table({"rid": pa.array(rids, pa.int64()), "wkb": pa.array(wkbs, pa.binary())})
+    )
     g = "ST_GeomFromWKB(_stray.wkb)"
     sets = [f'"{geom_col}" = {g}::{columns[geom_col]}'] + [
         f'"{name}" = STRUCT_PACK(xmin := ST_XMin({g}), ymin := ST_YMin({g}), '
@@ -417,7 +420,7 @@ def _replace_geometries(
         UPDATE "{table}" SET {", ".join(sets)}
         FROM _stray WHERE "{table}".rowid = _stray.rid
     """)
-    conn.execute("DROP TABLE _stray")
+    conn.unregister("_stray")
 
 
 # The square origin is the centroid less the id's offset, not the bounds: a few published
