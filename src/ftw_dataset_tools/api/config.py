@@ -343,6 +343,8 @@ class MasksConfig:
     # Rasterize each chip on its own UTM zone's grid (square pixels, one shape per
     # chip size). False rasterizes in the chips file's CRS (lon/lat), as before.
     utm: bool = True
+    # Write each chip's field outlines (<chip>_fields.parquet) beside its masks.
+    field_vectors: bool = True
     # Path to EPSG:4326 polygons (GeoParquet, resolved relative to the config file)
     # inside which the labels are complete. Inside, unlabelled pixels are background
     # (0); outside, unknown (3). Chips wholly outside are dropped. Optional; an
@@ -820,6 +822,8 @@ class DatasetConfig:
             raise ConfigError("stages.masks.skip_existing must be true or false")
         if not isinstance(self.stages.masks.utm, bool):
             raise ConfigError("stages.masks.utm must be true or false")
+        if not isinstance(self.stages.masks.field_vectors, bool):
+            raise ConfigError("stages.masks.field_vectors must be true or false")
 
         self._validate_label_extent()
 

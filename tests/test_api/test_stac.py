@@ -115,6 +115,28 @@ class TestChipItemAssetHrefs:
         assert item.assets["semantic_2class_mask"].href == "./grid_001_semantic_2_class.tif"
         assert item.assets["semantic_3class_mask"].href == "./grid_001_semantic_3_class.tif"
 
+    def test_chip_field_outlines_are_an_asset(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.stac import ChipInfo, _build_item_assets, _create_chip_item
+
+        chip_dir = tmp_path / "chips" / "grid_001"
+        chip_dir.mkdir(parents=True)
+        _write_mask(chip_dir / "grid_001_semantic_2_class.tif", [[0, 1], [1, 0]])
+        (chip_dir / "grid_001_fields.parquet").write_bytes(b"PAR1")
+        chip_info = ChipInfo(
+            grid_id="grid_001",
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+            bbox=(0.0, 0.0, 1.0, 1.0),
+        )
+        extent = (datetime(2023, 1, 1, tzinfo=UTC), datetime(2023, 12, 31, tzinfo=UTC))
+
+        item = _create_chip_item(chip_info=chip_info, chip_dir=chip_dir, temporal_extent=extent)
+
+        asset = item.assets["field_boundaries"]
+        assert asset.href == "./grid_001_fields.parquet"
+        assert asset.media_type == "application/vnd.apache.parquet"
+        assert "field_boundaries" in _build_item_assets(chip_fields=True)
+        assert "field_boundaries" not in _build_item_assets()
+
     def test_decode_masks_registered_as_assets(self, tmp_path: Path) -> None:
         """DECODE layers become STAC assets with their own titles when present."""
         from ftw_dataset_tools.api.stac import ChipInfo, _create_chip_item

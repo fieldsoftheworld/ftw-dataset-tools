@@ -5,7 +5,7 @@ from pathlib import Path
 
 import click
 
-from ftw_dataset_tools.api import field_stats, masks, stac
+from ftw_dataset_tools.api import chip_fields, field_stats, masks, stac
 from ftw_dataset_tools.api.config import VALID_MASK_TYPES
 from ftw_dataset_tools.api.masks import MaskType
 
@@ -86,6 +86,12 @@ from ftw_dataset_tools.api.masks import MaskType
     help="Reuse masks that are already on disk instead of recreating them.",
 )
 @click.option(
+    "--field-vectors/--no-field-vectors",
+    default=True,
+    show_default=True,
+    help="Write each chip's field outlines (<chip>_fields.parquet) beside its masks.",
+)
+@click.option(
     "--crop-column",
     help="Source crop column to save alongside instance masks (requires --mask-type instance).",
 )
@@ -105,6 +111,7 @@ def create_masks_cmd(
     skip_existing: bool,
     crop_column: str | None,
     utm: bool,
+    field_vectors: bool,
 ) -> None:
     """Create raster masks from vector boundaries for each grid cell.
 
@@ -226,6 +233,12 @@ def create_masks_cmd(
             if len(result.masks_skipped) > 10:
                 click.echo(f"  ... and {len(result.masks_skipped) - 10} more")
 
+        if field_vectors:
+            outlines = chip_fields.write_chip_fields(
+                boundaries_file, output_dir, skip_existing=skip_existing, workers=num_workers or 8
+            )
+            click.echo(f"  Field outlines: {outlines.written} written, {outlines.skipped} kept")
+
         # Without this the command leaves the catalog's directory shape with no
         # catalog in it, and select-images/download-images both require a
         # collection.json to run against the output.
@@ -250,6 +263,8 @@ def create_masks_cmd(
         sys.stdout.write("\n")
         click.echo(click.style("Interrupted by user.", fg="yellow"))
         raise SystemExit(130) from None
+    except chip_fields.ChipFieldsError as e:
+        raise click.ClickException(str(e)) from e
     except FileNotFoundError as e:
         sys.stdout.write("\n")
         click.echo(click.style(f"Error: {e}", fg="red"))

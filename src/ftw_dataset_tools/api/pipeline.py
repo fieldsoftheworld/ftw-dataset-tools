@@ -28,6 +28,7 @@ import duckdb
 from ftw_dataset_tools.api import (
     admin_names,
     boundaries,
+    chip_fields,
     chips_io,
     class_filter,
     crop_stats,
@@ -866,6 +867,9 @@ def stage_masks(ctx: PipelineContext) -> None:
         logger.info(f"Created {mask_result.total_created} {mask_type.value} masks")
         _log_skipped_masks(mask_type, mask_result)
 
+    if masks_cfg.field_vectors:
+        _write_chip_fields(ctx, masks_cfg)
+
     # Every type shares one worker pool, so the count is the same on each result.
     pool_restarts = max((r.pool_restarts for r in mask_results.values()), default=0)
     if pool_restarts > 0:
@@ -873,6 +877,17 @@ def stage_masks(ctx: PipelineContext) -> None:
             f"Worker pool restarted {pool_restarts} time(s) "
             "(a worker died; lower stages.masks.workers if this repeats)"
         )
+
+
+def _write_chip_fields(ctx: PipelineContext, masks_cfg: config_module.MasksConfig) -> None:
+    logger.info("Writing each chip's field outlines...")
+    result = chip_fields.write_chip_fields(
+        ctx.field_polygons_path,
+        ctx.output_dir,
+        skip_existing=masks_cfg.skip_existing,
+        workers=masks_cfg.workers or 8,
+    )
+    logger.info(f"Field outlines: {result.written} written, {result.skipped} kept")
 
 
 def stage_stac(ctx: PipelineContext) -> None:
