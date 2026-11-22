@@ -33,7 +33,6 @@ from ftw_dataset_tools.api.imagery.thumbnails import (
 from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
 
     from ftw_dataset_tools.api.imagery.parallel import ParallelOutcome
 
@@ -126,8 +125,6 @@ def preview_imagery_for_catalog(
     catalog_dir: Path,
     *,
     resume: bool = True,
-    on_progress: Callable[[int, int], None] | None = None,
-    show_progress_bar: bool = True,
     workers: int = DEFAULT_WORKERS,
 ) -> PreviewWorkflowResult:
     """Render an overlay preview for every chip whose scene stays remote.
@@ -140,8 +137,6 @@ def preview_imagery_for_catalog(
         resume: Skip chips that already have a preview on disk. Defaults to True,
             so a second run picks up where the first stopped; pass False to
             re-render everything.
-        on_progress: Optional ``(done, total)`` callback.
-        show_progress_bar: Show a tqdm bar.
         workers: Number of scenes to read concurrently.
 
     Returns:
@@ -156,20 +151,10 @@ def preview_imagery_for_catalog(
     if not chip_items:
         return result
 
-    progress_bar = (
-        tqdm(total=len(chip_items), desc="Rendering previews", unit="chip", leave=False)
-        if show_progress_bar
-        else None
-    )
-    done = 0
+    progress_bar = tqdm(total=len(chip_items), desc="Rendering previews", unit="chip", leave=False)
 
     def advance() -> None:
-        nonlocal done
-        done += 1
-        if progress_bar:
-            progress_bar.update(1)
-        if on_progress:
-            on_progress(done, len(chip_items))
+        progress_bar.update(1)
 
     try:
         tasks: list[PreviewTask] = []
@@ -211,7 +196,6 @@ def preview_imagery_for_catalog(
 
         run_in_parallel(tasks, render_preview, apply, workers=workers)
     finally:
-        if progress_bar:
-            progress_bar.close()
+        progress_bar.close()
 
     return result

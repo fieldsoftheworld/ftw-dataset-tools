@@ -42,7 +42,6 @@ from ftw_dataset_tools.api.imagery.thumbnails import (
 from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
 
     from ftw_dataset_tools.api.imagery.parallel import ParallelOutcome
 
@@ -267,8 +266,6 @@ def convert_previews_for_catalog(
     catalog_dir: Path,
     *,
     dry_run: bool = False,
-    on_progress: Callable[[int, int], None] | None = None,
-    show_progress_bar: bool = True,
     workers: int = DEFAULT_WORKERS,
 ) -> ConversionResult:
     """Convert every JPEG chip preview in a catalog to WebP.
@@ -279,8 +276,6 @@ def convert_previews_for_catalog(
     Args:
         catalog_dir: The collection directory holding ``collection.json``.
         dry_run: Report what would be converted without writing or deleting.
-        on_progress: Optional ``(done, total)`` callback.
-        show_progress_bar: Show a tqdm bar.
         workers: Number of chips to render concurrently.
 
     Returns:
@@ -299,20 +294,10 @@ def convert_previews_for_catalog(
     if dry_run or not pending:
         return result
 
-    progress_bar = (
-        tqdm(total=len(pending), desc="Converting previews", unit="chip", leave=False)
-        if show_progress_bar
-        else None
-    )
-    done = 0
+    progress_bar = tqdm(total=len(pending), desc="Converting previews", unit="chip", leave=False)
 
     def advance() -> None:
-        nonlocal done
-        done += 1
-        if progress_bar:
-            progress_bar.update(1)
-        if on_progress:
-            on_progress(done, len(pending))
+        progress_bar.update(1)
 
     def apply(outcome: ParallelOutcome[_ConversionPlan, tuple[Path, ...]]) -> None:
         plan = outcome.task
@@ -344,8 +329,7 @@ def convert_previews_for_catalog(
     try:
         run_in_parallel(pending, render_chip_previews, apply, workers=workers)
     finally:
-        if progress_bar:
-            progress_bar.close()
+        progress_bar.close()
 
     return result
 

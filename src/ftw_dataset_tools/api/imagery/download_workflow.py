@@ -33,7 +33,7 @@ from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Callable, Iterable
+    from collections.abc import Iterable
     from pathlib import Path
 
     from ftw_dataset_tools.api.imagery.image_download import DownloadResult
@@ -114,8 +114,6 @@ def download_imagery_for_catalog(
     resolution: float = 10.0,
     generate_thumbnails: bool = True,
     resume: bool = True,
-    on_progress: Callable[[int, int], None] | None = None,
-    show_progress_bar: bool = True,
     workers: int = DEFAULT_WORKERS,
     keep_remote_refs: bool = False,
     slots: Iterable[str] | None = None,
@@ -139,8 +137,6 @@ def download_imagery_for_catalog(
             `image`, so re-attempting one leaves no band hrefs to fetch and fails.
             Pass False to force a re-download, which is what a changed `bands` or
             `resolution` needs - and which needs the remote band refs back first.
-        on_progress: Optional callback (current, total) for progress updates
-        show_progress_bar: If True, show tqdm progress bar
         workers: Number of scenes to download concurrently
         keep_remote_refs: Keep the remote band assets and add the local file as a
             `clipped` asset, instead of replacing them with a local `image`
@@ -164,20 +160,12 @@ def download_imagery_for_catalog(
     if not child_items:
         return result
 
-    progress_bar = (
-        tqdm(total=len(child_items), desc="Downloading imagery", unit="scene", leave=False)
-        if show_progress_bar
-        else None
+    progress_bar = tqdm(
+        total=len(child_items), desc="Downloading imagery", unit="scene", leave=False
     )
-    done = 0
 
     def advance() -> None:
-        nonlocal done
-        done += 1
-        if progress_bar:
-            progress_bar.update(1)
-        if on_progress:
-            on_progress(done, len(child_items))
+        progress_bar.update(1)
 
     try:
         tasks: list[DownloadTask] = []
@@ -206,8 +194,7 @@ def download_imagery_for_catalog(
         run_in_parallel(tasks, work=work, apply=apply, workers=workers)
 
     finally:
-        if progress_bar:
-            progress_bar.close()
+        progress_bar.close()
 
     return result
 

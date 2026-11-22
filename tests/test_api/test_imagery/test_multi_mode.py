@@ -609,6 +609,5 @@ class TestDownloadSlots:
             download_workflow.download_imagery_for_catalog(
                 both.parents[3],
                 slots=MOSAIC_SLOTS,
-                show_progress_bar=False,
             )
         assert sorted(seen) == sorted(MOSAIC_SLOTS)
