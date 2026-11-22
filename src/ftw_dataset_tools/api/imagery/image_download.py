@@ -166,14 +166,18 @@ def _masks_beside(output_path: Path) -> list[Path]:
 def _reference_output_grid(
     reference: rasterio.io.DatasetReader, resolution: float
 ) -> tuple[CRS, Affine, int, int]:
-    """Keep the reference footprint, coarsening integer subdivisions in metre CRSs."""
+    """Keep the reference grid, coarsening only finer square 10 m subdivisions."""
     if reference.crs is None:
         raise ValueError("Reference raster has no CRS")
     transform, width, height = reference.transform, reference.width, reference.height
     if reference.crs.is_projected and reference.crs.linear_units == "metre":
+        subdivision = 10.0 / reference.res[0]
         factor = resolution / reference.res[0]
         if (
-            math.isfinite(factor)
+            reference.res[0] < 10.0
+            and math.isfinite(subdivision)
+            and math.isclose(subdivision, round(subdivision))
+            and math.isfinite(factor)
             and factor > 1
             and math.isclose(factor, round(factor))
             and math.isclose(reference.res[0], reference.res[1])
@@ -199,8 +203,9 @@ def compute_target_grid(
 ) -> tuple[tuple[CRS, Affine, int, int, Path | None] | None, str | None]:
     """Compute output grid from a mask footprint or bbox+resolution fallback.
 
-    Integer subdivisions of the requested metre resolution keep the mask footprint,
-    not its pixel size. Other reference grids retain the legacy exact-grid behavior.
+    Finer 10 m subdivisions keep the mask footprint, not its pixel size, when the
+    requested metre resolution is an integer multiple. Other reference grids retain
+    the legacy exact-grid behavior.
     The fallback is the chip's own UTM grid, the one its masks are written on; pass the
     chip polygon as ``cell`` (lon/lat) so it matches them exactly.
     """
@@ -389,8 +394,8 @@ def download_and_clip_scene(
         output_path: Path for output GeoTIFF
         bands: Bands to download (default: red, green, blue, nir)
         resolution: Target resolution in meters (default: 10.0)
-        reference_raster: Optional mask raster defining the output footprint. Integer
-            subdivisions use the requested imagery resolution; other grids are copied
+        reference_raster: Optional mask raster defining the output footprint. Finer
+            10 m subdivisions use an integer multiple of their resolution; other grids are copied
             exactly for compatibility. If not provided, the
             function auto-detects a co-located mask from ``output_path``.
         cell: The chip polygon (lon/lat), for the chip's UTM grid when no mask is found.

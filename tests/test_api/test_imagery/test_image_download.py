@@ -129,6 +129,50 @@ class TestComputeTargetGrid:
         assert error is None
         assert grid[1:4] == (transform, 7, 9)
 
+    @pytest.mark.parametrize("resolution", [20, 30])
+    @pytest.mark.parametrize("size", [(200, 200), (199, 197)])
+    def test_10m_reference_keeps_precedence_over_coarser_requests(
+        self, tmp_path: Path, resolution: float, size: tuple[int, int]
+    ) -> None:
+        reference = tmp_path / "mask.tif"
+        transform = from_origin(500_000, 5_542_000, 10, 10)
+        _write_raster(reference, "EPSG:32632", transform, size)
+
+        grid, error = compute_target_grid(
+            (0, 0, 1, 1), tmp_path / "image.tif", resolution, reference
+        )
+
+        assert error is None
+        assert grid[1:4] == (transform, *size)
+
+    @pytest.mark.parametrize(
+        ("mask_resolution", "resolution"),
+        [(20, 40), (3, 6), (6, 12)],
+    )
+    def test_non_subdivision_reference_keeps_precedence(
+        self, tmp_path: Path, mask_resolution: float, resolution: float
+    ) -> None:
+        reference = tmp_path / "mask.tif"
+        transform = from_origin(500_000, 5_542_000, mask_resolution, mask_resolution)
+        _write_raster(reference, "EPSG:32632", transform, (8, 8))
+
+        grid, error = compute_target_grid(
+            (0, 0, 1, 1), tmp_path / "image.tif", resolution, reference
+        )
+
+        assert error is None
+        assert grid[1:4] == (transform, 8, 8)
+
+    def test_non_square_reference_keeps_precedence(self, tmp_path: Path) -> None:
+        reference = tmp_path / "mask.tif"
+        transform = from_origin(500_000, 5_542_000, 5, 2.5)
+        _write_raster(reference, "EPSG:32632", transform, (8, 8))
+
+        grid, error = compute_target_grid((0, 0, 1, 1), tmp_path / "image.tif", 10, reference)
+
+        assert error is None
+        assert grid[1:4] == (transform, 8, 8)
+
     def test_indivisible_reference_shape_is_an_actionable_failure(self, tmp_path: Path) -> None:
         reference = tmp_path / "mask.tif"
         _write_raster(reference, "EPSG:32632", from_origin(500_000, 5_542_000, 2.5, 2.5), (7, 8))
