@@ -519,7 +519,8 @@ def _create_split_map(df: pd.DataFrame, output_path: Path) -> None:
         else:
             df.plot(ax=ax, alpha=0.6, edgecolor="black", linewidth=0.5)
 
-        ax.set_title("Dataset Splits - Geographic Distribution")
+        title = "Dataset Splits" if "split" in df.columns else "Chips"
+        ax.set_title(f"{title} - Geographic Distribution")
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
         plt.tight_layout()
@@ -600,6 +601,20 @@ def _create_histogram(values: list[float], label: str, output_path: Path, bins: 
         logger.debug("Traceback:", exc_info=True)
 
 
+def _split_lines(total: int, train: int, val: int, test: int) -> str:
+    """The overview's split counts; nothing for chips without a per-chip split."""
+    if not (train or val or test):
+        return ""
+
+    def share(count: int) -> str:
+        return f" ({count / total * 100:.1f}%)" if total else ""
+
+    return "".join(
+        f"- **{label}**: {count:,}{share(count)}\n"
+        for label, count in (("Train", train), ("Validation", val), ("Test", test))
+    )
+
+
 def _write_markdown_summary(
     output_path: Path,
     dataset_dir: Path,
@@ -626,16 +641,7 @@ def _write_markdown_summary(
         f.write("## Overview\n\n")
         f.write(f"- **Dataset Directory**: `{dataset_dir.name}`\n")
         f.write(f"- **Total Chips**: {total_chips:,}\n")
-
-        # Avoid division by zero
-        if total_chips > 0:
-            f.write(f"- **Train**: {train_chips:,} ({train_chips / total_chips * 100:.1f}%)\n")
-            f.write(f"- **Validation**: {val_chips:,} ({val_chips / total_chips * 100:.1f}%)\n")
-            f.write(f"- **Test**: {test_chips:,} ({test_chips / total_chips * 100:.1f}%)\n\n")
-        else:
-            f.write(f"- **Train**: {train_chips:,}\n")
-            f.write(f"- **Validation**: {val_chips:,}\n")
-            f.write(f"- **Test**: {test_chips:,}\n\n")
+        f.write(_split_lines(total_chips, train_chips, val_chips, test_chips) + "\n")
 
         # Metadata
         if metadata:

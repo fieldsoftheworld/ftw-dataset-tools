@@ -64,10 +64,20 @@ ftwd run config.yaml --through stac
 ```
 
 Stages run in this order: `reproject`, `filter` (the class filter, a no-op without one),
-`chips`, `scale` (keeps `stages.scale.percent` of the chip blocks), `splits`, `boundaries`,
-`masks`, `stac`, `select_images`, `download_images`, `docs`. Intermediate outputs follow a fixed
+`chips`, `scale` (keeps `stages.scale.percent` of the chip blocks), `splits` (only with
+`stages.splits.split_type`), `boundaries`, `masks`, `stac`, `select_images`, `download_images`,
+`docs`. Intermediate outputs follow a fixed
 naming convention in the output directory, so individual stages can be re-run on
 their own as long as their inputs already exist.
+
+**Splits are off by default.** The benchmark's train/val/test splits live in its root chips
+table ([chips-table](#chips-table)), one column per split scheme, so a dataset build assigns
+none: the chips file has no `split` column, the items no `ftw:split`, the collection no
+`ftw:split_type` / `ftw:split_seed` / `ftw:split_percents`, and the generated README, AGENTS,
+styles and tiles say nothing about splits. Set `stages.splits.split_type` (or pass
+`--split-type` to `create-dataset`) to assign a per-chip split as before; `predefined` keeps
+the source's own split, which the root table reads as `split_predefined`. With the stage off,
+the stac stage drops a `split` column an earlier run left in the chips file.
 
 `select_images` searches for cloud-free Sentinel-2 scenes in the
 [Sentinel-2 STAC-GeoParquet mirror](https://source.coop/portolan-mirrors/sentinel-2-catalog)
@@ -95,7 +105,7 @@ source scene is mirrored onto the item as a `visual` asset, mask classes carry
 **docs stage.** The final stage turns what was measured about the collection into
 ready-to-browse outputs. With [tippecanoe](https://github.com/felt/tippecanoe) on
 `PATH` it tiles the chips and fields into `chips.pmtiles` / `fields.pmtiles`, then
-writes up to five MapLibre GL styles under `styles/` — split, field coverage,
+writes up to five MapLibre GL styles under `styles/` — split (with a per-chip split), field coverage,
 dominant crop, crops, and outline — each written only when the data and matching
 tiles it needs are actually present, and each checked against the data so a style
 never shows a legend entry that does not occur in the collection. Without
@@ -116,7 +126,7 @@ The output directory gains:
 ├── chips.pmtiles          # chip vector tiles (only if tippecanoe ran)
 ├── fields.pmtiles         # field vector tiles (only if tippecanoe ran)
 └── styles/
-    ├── split.json           # e.g. chips by train/val/test split
+    ├── split.json           # chips by train/val/test split (with a per-chip split)
     ├── field-coverage.json
     ├── dominant-crop.json
     ├── crops.json
@@ -273,8 +283,6 @@ name: austria
 year: 2023
 
 stages:
-  splits:
-    split_type: random-uniform
   select_images:
     enabled: true
   download_images:
@@ -314,8 +322,8 @@ Options: `--top N` (max values per categorical column; `0` = all, safety-capped)
 Create a complete training dataset from a single fields file. This is the main command that orchestrates the entire pipeline.
 
 ```bash
-# Basic usage with required split-type
-ftwd create-dataset austria_fields.parquet --split-type random-uniform
+# Basic usage (no per-chip split)
+ftwd create-dataset austria_fields.parquet
 
 # Specify output directory and dataset name
 ftwd create-dataset fields.parquet --field-dataset austria --split-type block3x3 -o ./austria_dataset
@@ -340,7 +348,7 @@ ftwd create-dataset fields.parquet --split-type block3x3 --km-size 0.5 --resolut
 ```
 
 **Options:**
-- `--split-type` - **Required.** Split strategy: `random-uniform` (random assignment of chips), `block3x3` (3x3 blocks of chips assigned together for spatial coherence), `block3x3-hash` (3x3 blocks assigned by a stable hash, so a block keeps its split across scales) or `predefined`
+- `--split-type` - Assign a per-chip split (default: none; see "Splits are off by default" under [run](#run-config-driven-workflow)). Strategy: `random-uniform` (random assignment of chips), `block3x3` (3x3 blocks of chips assigned together for spatial coherence), `block3x3-hash` (3x3 blocks assigned by a stable hash, so a block keeps its split across scales) or `predefined`
 - `--split-percents` - Train/val/test split percentages as three integers that sum to 100 (default: 80 10 10)
 - `--mask-types` - Comma-separated list of mask types to generate: `instance`, `semantic_2_class`, `semantic_3_class` (default: all three)
 - `--presence-only` - Flag indicating labels are presence-only; semantic mask background will be 3 instead of 0 (instance masks keep 0)
@@ -562,7 +570,98 @@ Write a dataset's instance masks as COCO instance segmentation JSON (`instances_
 
 ```bash
 ftwd export-coco ./austria-dataset -o ./coco --min-area 10
+
+# Splits from the benchmark's root chips table, matched on the collection id
+ftwd export-coco ./at_2024 --splits https://data.source.coop/ftw/benchmark-data/chips.parquet
+ftwd export-coco ./at_2024 --splits chips.parquet --split-column split_hash_v1
 ```
+
+`--splits` reads each chip's split from `--split-column` (default `split_admin2_v1`) of the
+rows whose `dataset` is the collection id, matching a chip item to its row by the chip id
+(the item id without its `_<year>` suffix). A chip the table has no split for goes to
+`instances_all.json`; it never falls back to its item's `ftw:split`, so one export never
+mixes two split schemes. Without `--splits`, each chip's `ftw:split` is used.
+
+### chips-table
+
+Build the root chips table of a benchmark catalog: every chip of every dataset, one row
+per (dataset, chip), with one column per split scheme. Model code picks the column.
+
+```bash
+ftwd chips-table catalog/catalog.json \
+    --data-base-url https://data.source.coop/ftw/benchmark-data \
+    --previous https://data.source.coop/ftw/benchmark-data/chips.parquet \
+    --local staging/pt_2021 \
+    --out work/chips.parquet
+```
+
+The datasets are the collections the root `catalog.json` links through its groups
+(`catalog.json` -> `<group>/catalog.json` -> `<group>/<id>/collection.json`). From each
+collection it reads the id, the group (the folder above the dataset), the chips asset,
+`ftw:chip_size_km` (default 2), the license and its own license link, `ftw:presence_only`
+and `ftw:split_type`. A relative chips href resolves against `--data-base-url` (default: the
+catalog's own folder) plus the collection's folder. `--local <dir>` (repeatable) reads a
+dataset written by `ftwd run` instead: its `collection.json` and chips file replace the
+published ones for that id. A local dataset the catalog doesn't have yet needs
+`--group <id>=<group>`.
+
+| Column | Split |
+|---|---|
+| `split_legacy` | What each dataset published before this table (seeded `block3x3` or `predefined`). Frozen, so chips added later get null |
+| `split_predefined` | The source's own split, for collections with `ftw:split_type: predefined`. Read from a `--local` dataset's chips file; carried from the previous table for the others |
+| `split_hash_v1` | `block3x3-hash` at 80/10/10 with the salt `ftw-split-v1`. A location has the same split in every dataset and year, and new chips never move existing ones |
+| `split_admin2_v1` | Whole admin2 units (`unit_admin2_v1`), balanced to 80/10/10 of locations within each country, so a country with three units or more gets all three splits when first assigned. A unit with a presence-only chip is train. Frozen once published; new units fill the split furthest below its share |
+
+A collection without `ftw:split_type` (built with the splits stage off) whose dataset has
+`split_predefined` values in the previous table counts as predefined, so that column is never
+dropped silently: a published one carries it, and a `--local` one must have `split`. One
+whose collection now names another split type is refused unless `--drop` names it.
+
+Under `split_admin2_v1`, a row with no admin2 name joins its admin1's unit. Rows without a
+country or admin1, and countries with fewer than three admin2 units to balance, use their
+block as the unit; a country keeps its kind of unit once published.
+
+`license` and `license_url` (the dataset's own license link, not the embeddings'; the SPDX
+page for a standard id) come from each collection, and `license_category` sorts them for
+filtering: `public-domain`, `attribution` and `share-alike` are open (any use, including
+commercial); then `non-commercial`, `restricted`, and `unknown` for a license nobody has
+judged yet. A judgment goes in `LICENSES` in `api/chips_table.py`. `presence_only` is the
+collection's `ftw:presence_only`.
+
+The other columns are `dataset`, `group`, `id`, `block` (the chip's 3x3 grid block), the
+admin names, `geometry` and `bbox`. Rows are sorted by group, dataset and id, so
+`read_parquet(...) WHERE dataset = 'at_2024'` reads few row groups. The file is GeoParquet.
+
+`--previous` (required, path or URL) is the published table the frozen splits are carried
+from, and must have `split_admin2_v1`. The build refuses to lose a frozen split (a dataset
+of the previous table left out, or chips that vanish from one) unless `--drop <id>` allows
+it for that dataset; to change a carried chip's block or `split_hash_v1`; a duplicate chip;
+a split value other than train, val or test; a `--local` predefined dataset whose chips file
+has no `split`; a predefined dataset no chip of which has a split; and a presence-only chip
+in a frozen val or test admin2 unit.
+
+### chips-tiles
+
+Tile the root chips table into PMTiles, every chip location at every zoom (needs
+tippecanoe and tile-join on `PATH`):
+
+```bash
+ftwd chips-tiles --table work/chips.parquet --out work/chips.pmtiles
+ftwd chips-tiles --thumbnail catalog/thumbnail.webp --style catalog/chips.style.json \
+    --tiles-url https://data.source.coop/ftw/benchmark-data/chips.pmtiles
+```
+
+A location is in every collection that covers it, so the table repeats it; the tiles have
+one feature per location: `chips` (zoom 7-12, one polygon per location with `id`, `block`,
+`split_hash_v1`, `split_admin2_v1`, `datasets`, `presence_only`, `legacy_conflict` and
+`admin0_name`) and `overview_train`, `overview_val` and `overview_test` (zoom 0-6, the chip
+centres of each `split_admin2_v1` clustered on their own where they crowd, each summing
+`chips`, `conflicts` and `datasets`). The build refuses a table without the columns it
+needs, a chip id with more than one hash or admin2 split or footprint, a chip without an
+admin2 split, a footprint below 0.5 km2, and an archive where tippecanoe dropped features
+at any zoom. `--thumbnail` renders `--style` over the tiles at `--tiles-url` with a running
+[chiitiler](https://github.com/Kanahiro/chiitiler) (`--server`, default
+`http://localhost:13579`) into a WebP, and refuses a blank image.
 
 ### Reprojection
 

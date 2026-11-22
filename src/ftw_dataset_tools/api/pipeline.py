@@ -28,6 +28,7 @@ import duckdb
 from ftw_dataset_tools.api import (
     admin_names,
     boundaries,
+    chips_io,
     class_filter,
     crop_stats,
     docs,
@@ -389,6 +390,8 @@ def _stage_enabled(stage: str, config: DatasetConfig) -> bool:
         return config.class_filter is not None
     if stage == "scale":
         return config.stages.scale.percent < 100
+    if stage == "splits":
+        return config.stages.splits.split_type is not None
     if stage == "select_images":
         return config.stages.select_images.enabled
     if stage == "download_images":
@@ -437,7 +440,10 @@ def _validate_stage_selection(ctx: PipelineContext, stages_to_run: list[str]) ->
     if "splits" in stages_to_run:
         split_type = ctx.config.stages.splits.split_type
         if split_type is None:
-            raise ValueError("split_type is required and cannot be None")
+            # Only reachable with --only splits: a full or ranged run skips the stage.
+            raise ValueError(
+                "The splits stage is off: set stages.splits.split_type to assign a per-chip split"
+            )
         if split_type not in splits.SPLIT_TYPE_CHOICES:
             raise ValueError(f"split_type must be one of: {splits.SPLIT_TYPE_CHOICES_STR}")
 
@@ -878,24 +884,7 @@ def stage_stac(ctx: PipelineContext) -> None:
         _require(ctx.field_polygons_path, stage="stac", produced_by="filter")
     _require_label_extent_match(ctx, stage="stac")
 
-    # The chips stage drops the composition columns when the step is off, but a run
-    # starting at or after splits never reaches it, so a chips file left by an earlier
-    # run would republish that run's composition onto every item. Dropping here, at the
-    # only stage that publishes them, is a no-op when they are absent.
-    if not ctx.config.stages.chips.crop_stats and crop_stats.drop_crop_stats(ctx.chips_path):
-        logger.info("Dropped stale crop composition columns from the chips file")
-    # The same holds for land cover, including columns added by ``ftwd add-land-cover``:
-    # the config decides what is published, so a backfill needs land_cover: true.
-    if not ctx.config.stages.chips.land_cover and land_cover.drop_land_cover(ctx.chips_path):
-        logger.info(
-            "Dropped land cover columns from the chips file "
-            "(set stages.chips.land_cover: true to publish them)"
-        )
-    if not ctx.config.stages.chips.admin_names and admin_names.drop_admin_names(ctx.chips_path):
-        logger.info(
-            "Dropped admin name columns from the chips file "
-            "(set stages.chips.admin_names: true to publish them)"
-        )
+    _drop_unpublished_columns(ctx)
 
     logger.info("Generating STAC catalog...")
     ctx.stac_result = stac.generate_stac_catalog(
@@ -919,6 +908,38 @@ def stage_stac(ctx: PipelineContext) -> None:
     n = ctx.stac_result.total_items
     k = len(ctx.stac_result.subcatalog_paths)
     logger.info(f"Created STAC collection with {n} items in {k} sub-catalog(s)")
+
+
+def _drop_unpublished_columns(ctx: PipelineContext) -> None:
+    """Drop chips columns the config doesn't publish, so no stale ones reach the items.
+
+    The chips stage drops the composition columns when the step is off, but a run
+    starting at or after splits never reaches it, so a chips file left by an earlier
+    run would republish that run's composition onto every item. Dropping here, at the
+    only stage that publishes them, is a no-op when they are absent.
+    """
+    chips_cfg = ctx.config.stages.chips
+    if not chips_cfg.crop_stats and crop_stats.drop_crop_stats(ctx.chips_path):
+        logger.info("Dropped stale crop composition columns from the chips file")
+    # The same holds for land cover, including columns added by ``ftwd add-land-cover``:
+    # the config decides what is published, so a backfill needs land_cover: true.
+    if not chips_cfg.land_cover and land_cover.drop_land_cover(ctx.chips_path):
+        logger.info(
+            "Dropped land cover columns from the chips file "
+            "(set stages.chips.land_cover: true to publish them)"
+        )
+    if not chips_cfg.admin_names and admin_names.drop_admin_names(ctx.chips_path):
+        logger.info(
+            "Dropped admin name columns from the chips file "
+            "(set stages.chips.admin_names: true to publish them)"
+        )
+    # And for a split an earlier run assigned: with the stage off, chips carry none.
+    no_split = ctx.config.stages.splits.split_type is None
+    if no_split and chips_io.drop_columns(ctx.chips_path, ("split",)):
+        logger.info(
+            "Dropped the split column from the chips file "
+            "(set stages.splits.split_type to publish a per-chip split)"
+        )
 
 
 def _published_field_embeddings(ctx: PipelineContext) -> Path | None:

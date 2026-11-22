@@ -11,6 +11,8 @@ from ftw_dataset_tools.commands.cli_logging import configure_cli_logging
 COMMAND_MODULES = (
     "add_field_embeddings",
     "add_land_cover",
+    "chips_table",
+    "chips_tiles",
     "convert_previews",
     "create_boundaries",
     "create_chips",

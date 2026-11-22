@@ -144,6 +144,31 @@ class TestWriteDocs:
         assert "-- result:" in agents  # queries were executed and results inlined
         assert "```sql" in agents
 
+    def test_no_split_means_no_split_counts_or_query(self, tmp_path: Path) -> None:
+        """The per-chip split is off by default: no split column, no ftw:split, no
+        ftw:split_type, and the documents say nothing about splits."""
+        import geopandas as gpd
+
+        from ftw_dataset_tools.api.docs import write_docs
+
+        coll_path, chips, fields = _collection_dir(tmp_path)
+        gpd.read_parquet(chips).drop(columns=["split"]).to_parquet(chips)
+        items = tmp_path / "items.parquet"
+        gpd.read_parquet(items).drop(columns=["ftw:split"]).to_parquet(items)
+        collection = json.loads(coll_path.read_text())
+        del collection["ftw:split_type"]
+        coll_path.write_text(json.dumps(collection))
+
+        write_docs(tmp_path, coll_path, chips, fields, [], {"stages": {"splits": {}}})
+
+        readme = (tmp_path / "README.md").read_text()
+        agents = (tmp_path / "AGENTS.md").read_text()
+        assert "benchmark split" not in readme
+        assert "Splits assigned" not in readme
+        assert "Chips per split" not in agents
+        assert "ftw:split" not in agents
+        assert "pre-assigned" not in readme + agents
+
     def test_agents_only(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.docs import write_docs
 

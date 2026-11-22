@@ -164,7 +164,7 @@ ITEM_PROPERTY_NOTES = {
 
 ASSET_NOTES = {
     "fields": "field boundary polygons, one row per field (GeoParquet)",
-    "chips": "one row per chip, with its split, field coverage and dominant crop (GeoParquet)",
+    "chips": "one row per chip, with its field coverage, dominant crop and any split (GeoParquet)",
     "items": "stac-geoparquet mirror of every chip item, for querying the whole collection",
     "chips_tiles": "vector tiles of the chips, for maps (PMTiles)",
     "fields_tiles": "vector tiles of the fields, for maps (PMTiles)",

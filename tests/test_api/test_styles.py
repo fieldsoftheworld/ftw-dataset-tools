@@ -8,12 +8,14 @@ import geopandas as gpd
 from shapely.geometry import box
 
 
-def _chips(tmp_path: Path, *, hcat: bool = True) -> Path:
+def _chips(tmp_path: Path, *, hcat: bool = True, split: bool = True) -> Path:
     data = {
         "id": [f"ftw-33UXP000{i}" for i in range(6)],
         "split": ["train", "train", "train", "val", "test", "test"],
         "field_coverage_pct": [1.0, 12.0, 35.0, 60.0, 88.0, 99.0],
     }
+    if not split:
+        del data["split"]
     if hcat:
         data["hcat_dominant_code"] = [
             3301010101,
@@ -180,6 +182,19 @@ class TestWriteStyles:
         for r in results:
             assert r.path == tmp_path / "styles" / f"{r.style_id}.json"
             assert json.loads(r.path.read_text())["version"] == 8
+
+    def test_no_split_style_without_a_split_column(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.styles import split_counts, write_styles
+
+        chips = _chips(tmp_path, split=False)
+        results = write_styles(
+            tmp_path, "lu", chips, None, chips_tiles="../chips.pmtiles", fields_tiles=None
+        )
+
+        assert split_counts(chips) == {}
+        assert [r.style_id for r in results] == ["field-coverage", "dominant-crop"]
+        assert [r.default for r in results] == [True, False]
+        assert not (tmp_path / "styles" / "split.json").exists()
 
     def test_skips_crop_styles_without_hcat_and_fields_styles_without_tiles(
         self, tmp_path: Path

@@ -90,8 +90,10 @@ stages:
     min_blocks_per_square: 1
 
   splits:
-    # One of: block3x3, block3x3-hash, predefined, random-uniform.
-    split_type: random-uniform
+    # Off by default: the benchmark's splits live in its root chips table
+    # (ftwd chips-table). Set one of block3x3, block3x3-hash, predefined,
+    # random-uniform to write a per-chip split into the chips file and items.
+    # split_type: predefined
     # Train / val / test percentages (must sum to 100).
     split_percents: [80, 10, 10]
     random_seed: 42

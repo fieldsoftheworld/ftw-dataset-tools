@@ -273,6 +273,27 @@ class TestCreateDatasetStageOrder:
 
         assert "docs" in seen and "imagery" not in seen
 
+    def test_no_split_type_skips_the_splits_stage(self, monkeypatch, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api import dataset as dataset_module
+        from ftw_dataset_tools.api import pipeline
+
+        fields_path = tmp_path / "f.parquet"
+        gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(
+            fields_path
+        )
+        seen: list[str] = []
+        for name in pipeline.STAGE_ORDER:
+            monkeypatch.setitem(
+                pipeline._STAGE_FUNCS, name, lambda _ctx, name=name: seen.append(name)
+            )
+
+        result = dataset_module.create_dataset(
+            fields_file=fields_path, output_dir=tmp_path / "out", year=2024
+        )
+
+        assert "splits" not in seen and "chips" in seen and "stac" in seen
+        assert result.splits_result is None
+
     def test_scale_runs_between_chips_and_splits(self, monkeypatch, tmp_path: Path) -> None:
         from ftw_dataset_tools.api import dataset as dataset_module
         from ftw_dataset_tools.api import pipeline

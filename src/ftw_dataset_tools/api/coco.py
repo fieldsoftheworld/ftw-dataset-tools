@@ -7,11 +7,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import duckdb
 import numpy as np
 import rasterio
 from rasterio.errors import RasterioIOError
 
 from ftw_dataset_tools.api.assets import MaskReadError
+from ftw_dataset_tools.api.geo import sql_path
 from ftw_dataset_tools.api.imagery.catalog_ops import find_collection_dir
 from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
 
@@ -20,6 +22,11 @@ if TYPE_CHECKING:
 
 FIELD_CATEGORY = {"id": 1, "name": "field", "supercategory": "field"}
 UNSPLIT = "all"
+DEFAULT_SPLIT_COLUMN = "split_admin2_v1"
+
+
+class SplitsTableError(Exception):
+    """The chips table given for the splits can't be read for this dataset."""
 
 
 @dataclass
@@ -109,28 +116,82 @@ def _add_chip(
         dataset["annotations"].append(ann)
 
 
+def _query_splits(
+    con: duckdb.DuckDBPyConnection, table: str | Path, dataset: str, column: str
+) -> list[tuple]:
+    source = f"read_parquet('{sql_path(table)}')"
+    columns = {r[0] for r in con.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()}
+    missing = [c for c in ("dataset", "id", column) if c not in columns]
+    if missing:
+        raise SplitsTableError(f"{table} has no {', '.join(missing)} column")
+    return con.execute(
+        f'SELECT id, "{column}" FROM {source} WHERE dataset = ?', [dataset]
+    ).fetchall()
+
+
+def read_table_splits(table: str | Path, dataset: str, column: str) -> dict[str, str]:
+    """Chip id -> split for ``dataset`` from the root chips table (path or URL)."""
+    con = duckdb.connect(":memory:")
+    try:
+        rows = _query_splits(con, table, dataset, column)
+    except duckdb.Error as err:
+        raise SplitsTableError(f"Cannot read the chips table {table}: {err}") from err
+    finally:
+        con.close()
+    if not rows:
+        raise SplitsTableError(f"{table} has no chips of dataset {dataset}")
+    return {chip: split for chip, split in rows if split}
+
+
+def _chip_id(item: pystac.Item) -> str:
+    """The chip id an item was made from: its id without the ``_<year>`` suffix."""
+    year = item.properties.get("ftw:calendar_year")
+    suffix = f"_{year}"
+    return item.id.removesuffix(suffix) if year is not None else item.id
+
+
+def _collection_id(collection_dir: Path) -> str:
+    collection = json.loads((collection_dir / "collection.json").read_text())
+    return collection.get("id") or collection_dir.name
+
+
+def _table_splits(splits: str | Path | None, collection_dir: Path, column: str) -> dict:
+    if splits is None:
+        return {}
+    return read_table_splits(splits, _collection_id(collection_dir), column)
+
+
 def export_coco(
     dataset_dir: str | Path,
     output_dir: str | Path | None = None,
     min_area: int = 0,
+    splits: str | Path | None = None,
+    split_column: str = DEFAULT_SPLIT_COLUMN,
 ) -> CocoExportResult:
     """Write ``instances_<split>.json`` for every split in a dataset's instance masks.
 
     Each chip becomes one COCO image whose ``file_name`` is its STAC item path,
-    relative to the dataset directory. Chips without a split go to ``instances_all.json``.
-    Instance masks are expected to use 0 as background.
+    relative to the dataset directory. A chip's split comes from ``split_column`` of the
+    root chips table ``splits`` (rows whose ``dataset`` is the collection id) when one is
+    given, else from the item's ``ftw:split``. With a table, a chip it has no split for goes
+    to ``instances_all.json`` rather than mixing in the item's own split scheme; so does a
+    chip with no split at all. Instance masks are expected to use 0 as background.
     """
     collection_dir = find_collection_dir(Path(dataset_dir)).resolve()
     out = Path(output_dir) if output_dir else collection_dir / "coco"
     result = CocoExportResult()
     datasets: dict[str, dict] = {}
+    table = _table_splits(splits, collection_dir, split_column)
 
     for item, item_path in sorted(find_chip_items(collection_dir), key=lambda x: x[0].id):
         mask_path = _instance_mask_path(item, item_path)
         if mask_path is None or not mask_path.exists():
             result.skipped_chips.append(item.id)
             continue
-        split = item.properties.get("ftw:split") or UNSPLIT
+        if splits is not None:
+            split = table.get(_chip_id(item)) or UNSPLIT
+        else:
+            split = item.properties.get("ftw:split") or UNSPLIT
         dataset = datasets.setdefault(split, _empty_dataset())
         _add_chip(dataset, item_path, mask_path, collection_dir, min_area)
 
