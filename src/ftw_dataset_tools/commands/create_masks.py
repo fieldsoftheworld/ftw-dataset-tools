@@ -237,7 +237,10 @@ def create_masks_cmd(
             outlines = chip_fields.write_chip_fields(
                 boundaries_file, output_dir, skip_existing=skip_existing, workers=num_workers or 8
             )
-            click.echo(f"  Field outlines: {outlines.written} written, {outlines.skipped} kept")
+            for line in chip_fields.summary_lines(outlines):
+                click.echo(f"  {line}")
+        else:
+            chip_fields.remove_chip_fields(output_dir)
 
         # Without this the command leaves the catalog's directory shape with no
         # catalog in it, and select-images/download-images both require a

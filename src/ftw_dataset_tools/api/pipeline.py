@@ -869,6 +869,8 @@ def stage_masks(ctx: PipelineContext) -> None:
 
     if masks_cfg.field_vectors:
         _write_chip_fields(ctx, masks_cfg)
+    elif removed := chip_fields.remove_chip_fields(ctx.output_dir):
+        logger.info(f"Removed {removed} field outline file(s) from an earlier run")
 
     # Every type shares one worker pool, so the count is the same on each result.
     pool_restarts = max((r.pool_restarts for r in mask_results.values()), default=0)
@@ -887,7 +889,8 @@ def _write_chip_fields(ctx: PipelineContext, masks_cfg: config_module.MasksConfi
         skip_existing=masks_cfg.skip_existing,
         workers=masks_cfg.workers or 8,
     )
-    logger.info(f"Field outlines: {result.written} written, {result.skipped} kept")
+    for line in chip_fields.summary_lines(result):
+        (logger.warning if "failed" in line else logger.info)(line)
 
 
 def stage_stac(ctx: PipelineContext) -> None:

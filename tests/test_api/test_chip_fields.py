@@ -127,3 +127,106 @@ def test_unreadable_fields_file(tmp_path: Path, dataset: Path) -> None:
     bad.write_text("not parquet")
     with pytest.raises(ChipFieldsError, match="Cannot read"):
         write_chip_fields(bad, dataset)
+
+
+def _fields_from(tmp_path: Path, gdf: gpd.GeoDataFrame, name: str = "f.parquet") -> Path:
+    return write_geoparquet(tmp_path / name, gdf=gdf.to_crs(4326))
+
+
+def test_an_invalid_field_is_made_valid(tmp_path: Path, dataset: Path) -> None:
+    from shapely.geometry import Polygon
+
+    bowtie = Polygon(
+        [(X0 + 10, Y0 + 10), (X0 + 50, Y0 + 50), (X0 + 50, Y0 + 10), (X0 + 10, Y0 + 50)]
+    )
+    fields = _fields_from(tmp_path, gpd.GeoDataFrame({"id": ["x"]}, geometry=[bowtie], crs=UTM))
+
+    result = write_chip_fields(fields, dataset)
+
+    assert (result.written, result.failed) == (1, [])
+    out = gpd.read_parquet(chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024"))
+    assert out.geometry.is_valid.all()
+    assert out.geometry.iloc[0].area == pytest.approx(800, rel=1e-3)
+
+
+def test_column_types_survive_including_empty_chips(tmp_path: Path) -> None:
+    import pandas as pd
+    import pyarrow.parquet as pq
+
+    root = tmp_path / "ds"
+    full, empty = (root / "chips" / "32UMA" / n for n in ("ftw-a_2024", "ftw-b_2024"))
+    _mask(full)
+    _mask(empty)
+    # move the empty chip's footprint far away
+    with rasterio.open(empty / "ftw-b_2024_semantic_2_class.tif", "r+") as dst:
+        dst.transform = from_origin(X0 + 5000, Y0 + 5100, 2.5, 2.5)
+    gdf = gpd.GeoDataFrame(
+        {
+            "id": ["a", "b"],
+            "n": pd.array([7, None], dtype="Int32"),
+            "when": pd.to_datetime(["2024-05-01", "2024-06-01"], utc=True),
+        },
+        geometry=[box(X0 + 10, Y0 + 10, X0 + 40, Y0 + 40), box(X0 + 50, Y0 + 50, X0 + 60, Y0 + 60)],
+        crs=UTM,
+    )
+    source = _fields_from(tmp_path, gdf)
+
+    write_chip_fields(source, root)
+
+    want = pq.read_schema(source)
+    for chip in (full, empty):
+        got = pq.read_schema(chip_fields_path(chip))
+        for name in ("id", "n", "when"):
+            assert got.field(name).type == want.field(name).type, (chip.name, name)
+    assert gpd.read_parquet(chip_fields_path(full))["n"].tolist()[0] == 7
+
+
+def test_skip_existing_rewrites_after_the_fields_change(tmp_path: Path, dataset: Path) -> None:
+    fields = _fields(tmp_path)
+    write_chip_fields(fields, dataset)
+    out = chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024")
+    later = out.stat().st_mtime + 10
+    os.utime(fields, (later, later))
+
+    assert write_chip_fields(fields, dataset, skip_existing=True).written == 1
+
+
+def test_a_differently_named_covering_column_is_dropped(tmp_path: Path, dataset: Path) -> None:
+    import geoparquet_io as gpio
+
+    plain = tmp_path / "plain.parquet"
+    gpd.GeoDataFrame(
+        {"id": ["a"]}, geometry=[box(X0 + 10, Y0 + 10, X0 + 40, Y0 + 40)], crs=UTM
+    ).to_crs(4326).to_parquet(plain)
+    fields = tmp_path / "covered.parquet"
+    gpio.read(str(plain)).add_bbox(column_name="geometry_bbox").write(str(fields))
+
+    write_chip_fields(fields, dataset)
+
+    out = gpd.read_parquet(chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024"))
+    assert "geometry_bbox" not in out.columns
+
+
+def test_a_failing_chip_is_reported_not_raised(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ftw_dataset_tools.api import chip_fields
+
+    def boom(*_a, **_k):
+        raise RuntimeError("bad shape")
+
+    monkeypatch.setattr(chip_fields, "_clipped", boom)
+
+    result = write_chip_fields(_fields(tmp_path), dataset)
+
+    assert result.failed == [("ftw-a_2024", "RuntimeError: bad shape")]
+    assert "failed for 1 chip(s)" in chip_fields.summary_lines(result)[-1]
+
+
+def test_remove_chip_fields(tmp_path: Path, dataset: Path) -> None:
+    from ftw_dataset_tools.api.chip_fields import remove_chip_fields
+
+    write_chip_fields(_fields(tmp_path), dataset)
+
+    assert remove_chip_fields(dataset) == 1
+    assert not chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024").exists()
