@@ -126,7 +126,9 @@ def refresh_chip_preview(
     return slot
 
 
-def redraw_chip_preview(item: pystac.Item, chip_dir: Path) -> str | None:
+def redraw_chip_preview(
+    item: pystac.Item, chip_dir: Path, *, checksums: bool = False
+) -> str | None:
     """Draw the chip preview afresh from the best slot preview left on disk.
 
     For when the slot that drew it is gone: removes the old overlay and thumbnail,
@@ -135,7 +137,9 @@ def redraw_chip_preview(item: pystac.Item, chip_dir: Path) -> str | None:
     (chip_dir / f"{item.id}_overlay{PREVIEW_SUFFIX}").unlink(missing_ok=True)
     item.assets.pop("thumbnail", None)
     best = _best_slot_preview(chip_dir, item.id)
-    return None if best is None else refresh_chip_preview(item, chip_dir, best, redraw=True)
+    if best is None:
+        return None
+    return refresh_chip_preview(item, chip_dir, best, redraw=True, checksums=checksums)
 
 
 def _redraw_overlay(chip_dir: Path, chip_id: str, base: Path) -> None:

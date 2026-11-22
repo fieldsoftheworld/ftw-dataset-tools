@@ -92,9 +92,7 @@ _SEASONS = ("planting", "harvest", "q3", "q1", "q2", "q4")
 #: Bands the true-colour render selects, in display order.
 _RGB_BANDS = ("red", "green", "blue")
 
-#: bidx for an image whose bands are not named at all; the download path writes the
-#: requested bands in order, and the RGB ones are requested first. Never used as a
-#: guess for a *named* stack -- see ``_rgb_bidx``.
+#: bidx of the remote ``visual`` COG, whose three bands are red, green and blue.
 _DEFAULT_RGB_BIDX = [1, 2, 3]
 
 #: Half-width of the true-colour stretch, in standard deviations about the mean.

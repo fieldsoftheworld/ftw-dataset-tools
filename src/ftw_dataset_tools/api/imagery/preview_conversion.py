@@ -22,7 +22,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from ftw_dataset_tools.api.assets import add_file_info
-from ftw_dataset_tools.api.imagery.chip_preview import refresh_chip_preview
+from ftw_dataset_tools.api.imagery.chip_preview import redraw_chip_preview, refresh_chip_preview
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, run_in_parallel
 from ftw_dataset_tools.api.imagery.preview_workflow import (
     PreviewTask,
@@ -252,7 +252,14 @@ def commit_chip_conversion(plan: _ConversionPlan) -> int:
     chip_dir = item_path.parent
     thumbnail = item.assets.get("thumbnail")
     checksums = thumbnail is not None and "file:checksum" in thumbnail.extra_fields
-    refresh_chip_preview(item, chip_dir, checksums=checksums)
+    # The recorded slot may have no WebP (its scene stayed remote): draw from the best
+    # slot that converted, and keep the old thumbnail when none did.
+    if (
+        refresh_chip_preview(item, chip_dir, checksums=checksums) is None
+        and redraw_chip_preview(item, chip_dir, checksums=checksums) is None
+        and thumbnail is not None
+    ):
+        item.assets["thumbnail"] = thumbnail
     write_item(item, item_path)
     _repoint_child_items(plan)
 

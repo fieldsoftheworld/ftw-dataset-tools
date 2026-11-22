@@ -527,3 +527,43 @@ def test_preserves_jpeg_referenced_by_another_asset(tmp_path, file_uri):
     assert dry == actual
     assert actual.legacy_removed == 2
     assert (chip / "chip_a_overlay.jpg").exists()
+
+
+def test_keeps_a_thumbnail_when_the_recorded_slot_has_no_webp(tmp_path):
+    """A chip whose recorded preview slot (planting) has no local image converts only
+    its harvest preview; the thumbnail moves to that slot instead of being dropped."""
+    collection = _collection(tmp_path)
+    chip_id = "ftw-33TXM0000_2024"
+    chip_dir = collection / "chips" / "33TXM" / chip_id
+    chip_dir.mkdir(parents=True)
+    data = np.random.default_rng(0).integers(0, 4000, (4, 32, 32)).astype("uint16")
+    with rasterio.open(
+        chip_dir / f"{chip_id}_harvest_image_s2.tif",
+        "w",
+        driver="GTiff",
+        width=32,
+        height=32,
+        count=4,
+        dtype="uint16",
+        crs="EPSG:32633",
+        transform=from_bounds(501000, 5001000, 501320, 5001320, 32, 32),
+    ) as dst:
+        dst.write(data)
+        for band, name in enumerate(["red", "green", "blue", "nir"], 1):
+            dst.set_band_description(band, name)
+    for slot in ("planting", "harvest"):
+        Image.new("RGB", (32, 32), (1, 2, 3)).save(chip_dir / f"{chip_id}_{slot}_image_s2.jpg")
+    item = _chip_item(chip_dir, chip_id)
+    item.add_asset(
+        "thumbnail",
+        pystac.Asset(
+            href=f"./{chip_id}_planting_image_s2.jpg", media_type="image/jpeg", roles=["thumbnail"]
+        ),
+    )
+    item.save_object(include_self_link=False, dest_href=str(chip_dir / f"{chip_id}.json"))
+
+    convert_previews_for_catalog(collection, workers=1)
+
+    thumbnail = pystac.Item.from_file(str(chip_dir / f"{chip_id}.json")).assets.get("thumbnail")
+    assert thumbnail is not None
+    assert (chip_dir / thumbnail.href).exists()
