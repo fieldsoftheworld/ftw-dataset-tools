@@ -572,6 +572,82 @@ Write a dataset's instance masks as COCO instance segmentation JSON (`instances_
 ftwd export-coco ./austria-dataset -o ./coco --min-area 10
 ```
 
+### chips-table
+
+Build the root chips table of a benchmark catalog: every chip of every dataset, one row
+per (dataset, chip), with one column per split scheme. Model code picks the column.
+
+```bash
+ftwd chips-table catalog/catalog.json \
+    --data-base-url https://data.source.coop/ftw/benchmark-data \
+    --previous https://data.source.coop/ftw/benchmark-data/chips.parquet \
+    --local staging/pt_2021 \
+    --out work/chips.parquet
+```
+
+The datasets are the collections the root `catalog.json` links through its groups
+(`catalog.json` -> `<group>/catalog.json` -> `<group>/<id>/collection.json`). From each
+collection it reads the id, the group (the folder above the dataset), the chips asset,
+`ftw:chip_size_km` (default 2), the license and its own license link, `ftw:presence_only`
+and `ftw:split_type`. A relative chips href resolves against `--data-base-url` (default: the
+catalog's own folder) plus the collection's folder. `--local <dir>` (repeatable) reads a
+dataset written by `ftwd run` instead: its `collection.json` and chips file replace the
+published ones for that id. A local dataset the catalog doesn't have yet needs
+`--group <id>=<group>`.
+
+| Column | Split |
+|---|---|
+| `split_legacy` | What each dataset published before this table (seeded `block3x3` or `predefined`). Frozen, so chips added later get null |
+| `split_predefined` | The source's own split, for collections with `ftw:split_type: predefined`. Read from a `--local` dataset's chips file; carried from the previous table for the others |
+| `split_hash_v1` | `block3x3-hash` at 80/10/10 with the salt `ftw-split-v1`. A location has the same split in every dataset and year, and new chips never move existing ones |
+| `split_admin2_v1` | Whole admin2 units (`unit_admin2_v1`), balanced to 80/10/10 of locations within each country, so a country with three units or more gets all three splits when first assigned. A unit with a presence-only chip is train. Frozen once published; new units fill the split furthest below its share |
+
+Under `split_admin2_v1`, a row with no admin2 name joins its admin1's unit. Rows without a
+country or admin1, and countries with fewer than three admin2 units to balance, use their
+block as the unit; a country keeps its kind of unit once published.
+
+`license` and `license_url` (the dataset's own license link, not the embeddings'; the SPDX
+page for a standard id) come from each collection, and `license_category` sorts them for
+filtering: `public-domain`, `attribution` and `share-alike` are open (any use, including
+commercial); then `non-commercial`, `restricted`, and `unknown` for a license nobody has
+judged yet. A judgment goes in `LICENSES` in `api/chips_table.py`. `presence_only` is the
+collection's `ftw:presence_only`.
+
+The other columns are `dataset`, `group`, `id`, `block` (the chip's 3x3 grid block), the
+admin names, `geometry` and `bbox`. Rows are sorted by group, dataset and id, so
+`read_parquet(...) WHERE dataset = 'at_2024'` reads few row groups. The file is GeoParquet.
+
+`--previous` (required, path or URL) is the published table the frozen splits are carried
+from, and must have `split_admin2_v1`. The build refuses to lose a frozen split (a dataset
+of the previous table left out, or chips that vanish from one) unless `--drop <id>` allows
+it for that dataset; to change a carried chip's block or `split_hash_v1`; a duplicate chip;
+a split value other than train, val or test; a `--local` predefined dataset whose chips file
+has no `split`; a predefined dataset no chip of which has a split; and a presence-only chip
+in a frozen val or test admin2 unit.
+
+### chips-tiles
+
+Tile the root chips table into PMTiles, every chip location at every zoom (needs
+tippecanoe and tile-join on `PATH`):
+
+```bash
+ftwd chips-tiles --table work/chips.parquet --out work/chips.pmtiles
+ftwd chips-tiles --thumbnail catalog/thumbnail.webp --style catalog/chips.style.json \
+    --tiles-url https://data.source.coop/ftw/benchmark-data/chips.pmtiles
+```
+
+A location is in every collection that covers it, so the table repeats it; the tiles have
+one feature per location: `chips` (zoom 7-12, one polygon per location with `id`, `block`,
+`split_hash_v1`, `split_admin2_v1`, `datasets`, `presence_only`, `legacy_conflict` and
+`admin0_name`) and `overview_train`, `overview_val` and `overview_test` (zoom 0-6, the chip
+centres of each `split_admin2_v1` clustered on their own where they crowd, each summing
+`chips`, `conflicts` and `datasets`). The build refuses a table without the columns it
+needs, a chip id with more than one hash or admin2 split or footprint, a chip without an
+admin2 split, a footprint below 0.5 km2, and an archive where tippecanoe dropped features
+at any zoom. `--thumbnail` renders `--style` over the tiles at `--tiles-url` with a running
+[chiitiler](https://github.com/Kanahiro/chiitiler) (`--server`, default
+`http://localhost:13579`) into a WebP, and refuses a blank image.
+
 ### Reprojection
 
 For reprojecting GeoParquet files to a different CRS, use [geoparquet-io](https://geoparquet.io/):
