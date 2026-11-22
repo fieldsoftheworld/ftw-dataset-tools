@@ -346,6 +346,36 @@ class TestUtmGridEdgeCases:
         assert len(result.masks_created) == 1
 
 
+class TestFinerGridsShareThe10mFootprint:
+    @pytest.mark.parametrize("factor", [2, 3, 4, 8])
+    @pytest.mark.parametrize(
+        ("x0", "y0", "size"),
+        [
+            (500_000, 5_540_000, 2000),  # full chip
+            (500_003.3, 5_540_001.7, 1234.5),  # clipped, off the lattice
+            (166_000, 5_540_000, 640),  # clipped at the zone's western edge
+        ],
+    )
+    def test_n_times_the_10m_grid(self, factor: int, x0: float, y0: float, size: float) -> None:
+        chip = _utm_chip("EPSG:32632", x0, y0, size=size)
+        crs10, t10, w10, h10 = utm_grid_for_cell(GRID_ID, chip.bounds, "EPSG:4326", 10.0, chip)
+
+        crs, t, w, h = utm_grid_for_cell(GRID_ID, chip.bounds, "EPSG:4326", 10 / factor, chip)
+
+        assert crs == crs10
+        assert (t.c, t.f) == (t10.c, t10.f)
+        assert (w, h) == (w10 * factor, h10 * factor)
+
+    @pytest.mark.parametrize("resolution", [4.0, 20.0])
+    def test_other_resolutions_keep_their_own_lattice(self, resolution: float) -> None:
+        chip = _utm_chip("EPSG:32632", 500_006, 5_540_006, size=1000)
+
+        _, t, w, h = utm_grid_for_cell(GRID_ID, chip.bounds, "EPSG:4326", resolution, chip)
+
+        assert t.c % resolution == 0 and t.f % resolution == 0
+        assert t.c <= 500_006 and t.c + resolution * w >= 501_006
+
+
 class TestNonDividingResolution:
     @pytest.mark.parametrize("x0", [500_000, 498_000, 166_000])
     def test_3m_grid_covers_the_chip_on_the_lattice(self, x0: int) -> None:

@@ -477,7 +477,9 @@ ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spa
 
 Set `stages.masks.resolution` to `10 / n` for any positive integer `n` (for example, 5, 2.5 or 1.25 m for factors 2, 4 or 8), and leave `stages.download_images.resolution` at its default of 10 m. No new flag is needed: standalone `create-masks --resolution 2.5` or `create-dataset --resolution 2.5` followed by `download-images` works too.
 
-With the default UTM masks, both rasters have the same CRS, origin and footprint, including clipped chips. A 2 km chip has 200×200 imagery pixels and 800×800 mask pixels at 2.5 m. Masks are rasterized directly from the vectors; imagery is not upsampled to the mask resolution, and class/boundary semantics are unchanged.
+With the default UTM masks, both rasters have the same CRS, origin and footprint, including clipped chips. A 2 km chip has 200×200 imagery pixels and 800×800 mask pixels at 2.5 m. Masks are rasterized directly from the vectors; imagery is not upsampled to the mask resolution.
+
+Classes are unchanged, but anything measured in mask pixels scales with the resolution: boundary lines are burned one to two mask pixels wide (about 2.5–5 m at 2.5 m instead of 10–20 m at 10 m), `decode_distance_max_px` counts mask pixels, and `export-coco` gives image sizes, boxes, areas and `--min-area` in mask pixels.
 
 Defaults remain 10 m for both. Masks at 10 m or coarser, arbitrary resolutions that are not subdivisions of 10 m (such as 3 m), and `--no-utm` retain the legacy exact-reference-grid imagery behavior even when another imagery resolution is requested. Only finer square metre masks at 10/n m are coarsened when the requested imagery resolution is an integer multiple of their pixel size. This requires divisible raster dimensions; incompatible existing finer masks produce an actionable error rather than a shifted footprint.
 

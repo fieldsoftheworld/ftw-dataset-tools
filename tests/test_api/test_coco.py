@@ -134,6 +134,24 @@ class TestExportCoco:
         assert result.files == {"all": tmp_path / "out" / "instances_all.json"}
         assert result.annotations == {"all": 1}
 
+    def test_sizes_and_boxes_are_in_mask_pixels(self, tmp_path: Path) -> None:
+        # A 2.5 m mask beside 10 m imagery: COCO describes the mask (800x800 for a
+        # 200x200 image), as the README says.
+        root = tmp_path / "ds"
+        root.mkdir()
+        (root / "collection.json").write_text("{}")
+        mask = np.zeros((8, 8), dtype=np.uint32)
+        mask[0:4, 0:4] = 5
+        write_chip(root, "ftw-a", mask, None)
+
+        result = export_coco(root, min_area=16)
+
+        coco = json.loads(result.files["all"].read_text())
+        assert (coco["images"][0]["width"], coco["images"][0]["height"]) == (8, 8)
+        (ann,) = coco["annotations"]
+        assert ann["bbox"] == [0, 0, 4, 4]
+        assert ann["area"] == 16
+
     def test_missing_collection(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
             export_coco(tmp_path)

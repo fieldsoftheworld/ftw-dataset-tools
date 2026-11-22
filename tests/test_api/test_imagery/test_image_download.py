@@ -259,6 +259,32 @@ class TestOnReferenceGrid:
         _write_raster(image, "EPSG:32632", from_origin(500_000, 5_542_000, 10, 10), (200, 200))
         assert skip_download_reason(item, item_path, resume=True) == "Already downloaded"
 
+    def test_resume_keeps_a_10m_image_beside_regenerated_25m_masks(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.imagery.download_workflow import skip_download_reason
+
+        image = self._chip(tmp_path)
+        _write_raster(image, "EPSG:32632", from_origin(500_000, 5_542_000, 10, 10), (200, 200))
+        # A rebuild at 2.5 m replaced the 10 m mask on the same footprint.
+        _write_raster(
+            image.parent / "ftw-32UMA0101_2024_semantic_3_class.tif",
+            "EPSG:32632",
+            from_origin(500_000, 5_542_000, 2.5, 2.5),
+            (800, 800),
+        )
+        item = pystac.Item(
+            "ftw-32UMA0101_2024_planting_s2",
+            mapping(_ftw_chip()),
+            list(_ftw_chip().bounds),
+            datetime(2024, 5, 1, tzinfo=UTC),
+            {},
+        )
+        item.add_asset("image", pystac.Asset(href=f"./{image.name}"))
+
+        reason = skip_download_reason(item, image.parent / f"{item.id}.json", resume=True)
+
+        assert reason == "Already downloaded"
+        assert image.exists()
+
 
 class TestDownloadAndClipScene:
     """Tests for download_and_clip_scene validation behavior."""
