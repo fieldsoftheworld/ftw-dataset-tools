@@ -487,6 +487,18 @@ ftwd create-masks chips.parquet fields.parquet lines.parquet --field-dataset spa
 
 `{item_id}_fields.parquet` (the STAC item's `field_boundaries` asset) holds the fields that overlap the chip, cut to the masks' footprint, in the masks' CRS, with every column of the fields file. A field that only touches the edge is left out. Its `id` is the instance mask's pixel value, or the `field_id` in the instance lookup when the chip was renumbered.
 
+### Finer masks with 10 m imagery
+
+Set `stages.masks.resolution` to `10 / n` for any positive integer `n` (for example, 5, 2.5 or 1.25 m for factors 2, 4 or 8), and leave `stages.download_images.resolution` at its default of 10 m. No new flag is needed: standalone `create-masks --resolution 2.5` or `create-dataset --resolution 2.5` followed by `download-images` works too.
+
+With the default UTM masks, both rasters have the same CRS, origin and footprint, including clipped chips. A 2 km chip has 200×200 imagery pixels and 800×800 mask pixels at 2.5 m. Masks are rasterized directly from the vectors; imagery is not upsampled to the mask resolution.
+
+Classes are unchanged, but anything measured in mask pixels scales with the resolution. Boundary lines are burned one to two mask pixels wide (about 2.5–5 m at 2.5 m instead of 10–20 m at 10 m) unless `stages.masks.boundary_width_m` (`create-masks --boundary-width`) gives their width in metres (at least two mask pixels; recorded as `ftw:mask_boundary_width_m` on the collection): `boundary_width_m: 10` keeps 10 m lines at 2.5 m. The DECODE boundary layer is a one-pixel ring and `decode_distance_max_px` counts mask pixels, and `export-coco` gives image sizes, boxes, areas and `--min-area` in mask pixels.
+
+Defaults remain 10 m for both. Masks at 10 m or coarser, arbitrary resolutions that are not subdivisions of 10 m (such as 3 m), and `--no-utm` retain the legacy exact-reference-grid imagery behavior even when another imagery resolution is requested. Only finer square metre masks at 10/n m are coarsened when the requested imagery resolution is an integer multiple of their pixel size. This requires divisible raster dimensions; incompatible existing finer masks produce an actionable error rather than a shifted footprint.
+
+Use a fresh output directory when changing mask resolution, or disable `stages.masks.skip_existing` to regenerate masks. Already downloaded imagery can be retained if it shares the finer masks' footprint; to replace imagery that was previously upsampled, run `select-images --force` and disable download resume (`stages.download_images.resume: false` or `download-images --no-resume`). Existing published datasets do not need rebuilding unless opting into finer masks.
+
 #### Crop labels for instance masks
 
 Use `--crop-column crop:name` with `create-dataset` or `create-masks --mask-type instance`.

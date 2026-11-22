@@ -86,6 +86,12 @@ from ftw_dataset_tools.api.masks import MaskType
     help="Reuse masks that are already on disk instead of recreating them.",
 )
 @click.option(
+    "--boundary-width",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Burn boundary lines this many metres wide (UTM only; default: one pixel).",
+)
+@click.option(
     "--field-vectors/--no-field-vectors",
     default=True,
     show_default=True,
@@ -111,6 +117,7 @@ def create_masks_cmd(
     skip_existing: bool,
     crop_column: str | None,
     utm: bool,
+    boundary_width: float | None,
     field_vectors: bool,
 ) -> None:
     """Create raster masks from vector boundaries for each grid cell.
@@ -206,6 +213,7 @@ def create_masks_cmd(
             skip_existing=skip_existing,
             crop_column=crop_column,
             utm=utm,
+            boundary_width=boundary_width,
             on_progress=on_progress,
             on_start=on_start,
         )

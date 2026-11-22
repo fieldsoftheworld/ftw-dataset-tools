@@ -31,6 +31,25 @@ class TestIterChipDirs:
         assert iter_chip_dirs(tmp_path) == []
 
 
+class TestChipItemFiles:
+    def test_only_the_item_named_after_its_folder(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.imagery.catalog_ops import chip_item_files
+
+        for chip in ("ftw-b", "ftw-a"):
+            folder = tmp_path / "chips" / "33UXP" / chip
+            folder.mkdir(parents=True)
+            for name in ("", "_instance_labels", "_q1_s2"):
+                (folder / f"{chip}{name}.json").write_text("{}")
+        (tmp_path / "chips" / "33UXP" / "ftw-c").mkdir()
+
+        files = chip_item_files(tmp_path)
+
+        assert [f.relative_to(tmp_path).as_posix() for f in files] == [
+            "chips/33UXP/ftw-a/ftw-a.json",
+            "chips/33UXP/ftw-b/ftw-b.json",
+        ]
+
+
 class TestFindCollectionDir:
     def test_returns_dir_with_collection(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.imagery.catalog_ops import find_collection_dir

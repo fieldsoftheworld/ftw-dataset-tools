@@ -11,8 +11,7 @@ import duckdb
 import numpy as np
 import pystac
 
-from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
-from ftw_dataset_tools.api.imagery.slots import parse_child_id
+from ftw_dataset_tools.api.imagery.catalog_ops import chip_item_files, iter_chip_dirs
 from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_SUFFIX
 from ftw_dataset_tools.api.logging_config import get_logger
 
@@ -241,9 +240,7 @@ def _collect_stac_metadata(dataset_dir: Path) -> dict:
     logger.debug(f"Found {len(chip_json_files)} JSON files in chip subdirectories")
 
     # Separate parent items and child items
-    parent_items = [
-        f for f in chip_json_files if parse_child_id(f.stem) is None and f.name != "collection.json"
-    ]
+    parent_items = chip_item_files(dataset_dir)
     planting_items = [f for f in chip_json_files if "_planting_s2" in f.stem]
     harvest_items = [f for f in chip_json_files if "_harvest_s2" in f.stem]
 

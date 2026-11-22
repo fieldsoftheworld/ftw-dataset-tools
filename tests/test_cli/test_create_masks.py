@@ -202,6 +202,36 @@ class TestCreateMasksCommand:
         item = json.loads(outlines.with_name("grid_001_2024.json").read_text())
         assert ("field_boundaries" in item["assets"]) is (not flag)
 
+    def test_boundary_width_reaches_the_masks(
+        self,
+        sample_chips_with_coverage: Path,
+        sample_boundaries_geoparquet: Path,
+        sample_boundary_lines_geoparquet: Path,
+        tmp_path: Path,
+    ) -> None:
+        import rasterio
+
+        out = tmp_path / "masks"
+        args = _create_masks_args(
+            sample_chips_with_coverage,
+            sample_boundaries_geoparquet,
+            sample_boundary_lines_geoparquet,
+            out,
+            "--year",
+            "2024",
+            "--resolution",
+            "2.5",
+            "--boundary-width",
+            "10",
+        )
+
+        result = CliRunner().invoke(cli, args)
+
+        assert result.exit_code == 0, result.output
+        mask = out / "chips" / "other" / "grid_001_2024" / "grid_001_2024_semantic_2_class.tif"
+        with rasterio.open(mask) as src:
+            assert src.tags()["FTW_BOUNDARY_WIDTH_M"] == "10"
+
     def test_workers_help_documents_the_cap(self) -> None:
         """The default is the CPU count capped at 8, not half of the CPUs."""
         runner = CliRunner()

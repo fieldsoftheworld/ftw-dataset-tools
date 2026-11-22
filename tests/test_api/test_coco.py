@@ -141,6 +141,42 @@ class TestExportCoco:
         assert result.files == {"all": tmp_path / "out" / "instances_all.json"}
         assert result.annotations == {"all": 1}
 
+    def test_sizes_and_boxes_are_in_mask_pixels(self, tmp_path: Path) -> None:
+        # A 2.5 m mask beside 10 m imagery: COCO describes the mask (800x800 for a
+        # 200x200 image), as the README says.
+        root = tmp_path / "ds"
+        root.mkdir()
+        (root / "collection.json").write_text("{}")
+        mask = np.zeros((8, 8), dtype=np.uint32)
+        mask[0:4, 0:4] = 5
+        item_path = write_chip(root, "ftw-a", mask, None)
+        chip_dir = item_path.parent
+        for name, shape, res in (
+            ("ftw-a_instance.tif", (8, 8), 2.5),
+            ("ftw-a_q3_s2.tif", (2, 2), 10),
+        ):
+            data = mask if res == 2.5 else np.ones(shape, dtype=np.uint32)
+            with rasterio.open(
+                chip_dir / name,
+                "w",
+                driver="GTiff",
+                height=shape[0],
+                width=shape[1],
+                count=1,
+                dtype="uint32",
+                crs="EPSG:32632",
+                transform=from_origin(0, 0, res, res),
+            ) as dst:
+                dst.write(data, 1)
+
+        result = export_coco(root, min_area=16)
+
+        coco = json.loads(result.files["all"].read_text())
+        assert (coco["images"][0]["width"], coco["images"][0]["height"]) == (8, 8)
+        (ann,) = coco["annotations"]
+        assert ann["bbox"] == [0, 0, 4, 4]
+        assert ann["area"] == 16
+
     def test_missing_collection(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
             export_coco(tmp_path)

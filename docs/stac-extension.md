@@ -220,6 +220,7 @@ describing how the whole dataset was built:
 | `ftw:chip_size_km` | number | Chip edge length in kilometres (2 for the FTW grid; smaller chips have longer ids, see below) |
 | `ftw:mask_types` | string[] | Mask types generated for the dataset |
 | `ftw:mask_resolution_m` | number | Mask pixel resolution in meters |
+| `ftw:mask_boundary_width_m` | number | Width in meters boundary lines are burned at; absent when they are one pixel wide |
 | `ftw:presence_only` | boolean | Whether labels are presence-only (semantic mask background is 3 instead of 0) |
 | `ftw:label_extent` | boolean | `true` when the labels are complete only inside a label extent: semantic masks use 0 inside it and 3 (unknown) outside it. Absent otherwise |
 | `ftw:min_coverage_pct` | number | Minimum field-coverage percentage required to keep a grid cell |

@@ -50,9 +50,8 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from ftw_dataset_tools.api import admin_names
 from ftw_dataset_tools.api.blocks import block_scores, chip_block_ids
-from ftw_dataset_tools.api.geo import sql_path
+from ftw_dataset_tools.api.geo import configure_source_coop_s3, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -333,8 +332,31 @@ def _check_local_split(item: DatasetInput, cols: set[str]) -> None:
         )
 
 
+def _connect(source: str) -> duckdb.DuckDBPyConnection:
+    """A connection that reads ``source``; httpfs only for an S3 source, so threads reading
+    local files never race to install it."""
+    con = duckdb.connect(":memory:")
+    con.execute("SET enable_progress_bar = false")
+    ensure_spatial_loaded(con)
+    if source.startswith("s3://"):
+        configure_source_coop_s3(con)
+    return con
+
+
+def _install_extensions(sources: Sequence[str]) -> None:
+    """Install spatial (and httpfs for remote sources) once, before the pool's threads
+    each load them: concurrent INSTALLs race on a machine that has neither yet."""
+    con = duckdb.connect(":memory:")
+    try:
+        con.execute("INSTALL spatial")
+        if any("://" in s for s in sources):
+            con.execute("INSTALL httpfs")
+    finally:
+        con.close()
+
+
 def _copy_dataset(item: DatasetInput, out: Path) -> None:
-    con = admin_names.connect()
+    con = _connect(item.chips)
     try:
         cols = _columns(con, item.chips)
         _check_local_split(item, cols)
@@ -745,13 +767,14 @@ def build_chips_table(
     out entirely, or chips a rebuild no longer has.
     """
     inputs = _keep_predefined(inputs, str(previous), frozenset(drop))
+    _install_extensions([item.chips for item in inputs] + [str(previous)])
     out = Path(out).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
         parts = [Path(tmp) / f"{item.dataset}.parquet" for item in inputs]
         with ThreadPoolExecutor(workers) as pool:
             list(pool.map(_read_dataset, inputs, parts))
-        con = admin_names.connect()
+        con = _connect(str(previous))
         try:
             _assemble(con, parts, inputs, str(previous), set(drop))
             return _write(con, Path(tmp) / "joined.parquet", out)

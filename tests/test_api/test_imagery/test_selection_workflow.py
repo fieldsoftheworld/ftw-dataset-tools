@@ -575,6 +575,19 @@ class TestUnreadableChipsAreReported:
         assert [detail["chip"] for detail in unreadable] == ["invalid_chip"]
         assert "Unreadable chip" in unreadable[0]["error"]
 
+    def test_other_json_beside_the_item_is_not_a_chip(
+        self, mock_catalog_with_invalid_json: Path
+    ) -> None:
+        # an instance mask's labels sidecar used to be read as a chip and fail selection
+        chip_dir = mock_catalog_with_invalid_json / "chips" / "33UXP" / "chip_001"
+        (chip_dir / "chip_001_instance_labels.json").write_text('{"instances": []}')
+        unreadable: list[dict] = []
+
+        items = find_chip_items(mock_catalog_with_invalid_json, unreadable=unreadable)
+
+        assert [item.id for item, _ in items] == ["chip_001"]
+        assert [detail["chip"] for detail in unreadable] == ["invalid_chip"]
+
     def test_find_chip_items_still_skips_silently_without_a_collector(
         self, mock_catalog_with_invalid_json: Path
     ) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -162,6 +163,37 @@ def _masks_beside(output_path: Path) -> list[Path]:
     return [candidate for candidate in candidates if candidate.exists()]
 
 
+def _reference_output_grid(
+    reference: rasterio.io.DatasetReader, resolution: float
+) -> tuple[CRS, Affine, int, int]:
+    """Keep the reference grid, coarsening only finer square 10 m subdivisions."""
+    if reference.crs is None:
+        raise ValueError("Reference raster has no CRS")
+    transform, width, height = reference.transform, reference.width, reference.height
+    if reference.crs.is_projected and reference.crs.linear_units == "metre":
+        subdivision = 10.0 / reference.res[0]
+        factor = resolution / reference.res[0]
+        if (
+            reference.res[0] < 10.0
+            and math.isfinite(subdivision)
+            and math.isclose(subdivision, round(subdivision))
+            and math.isfinite(factor)
+            and factor > 1
+            and math.isclose(factor, round(factor))
+            and math.isclose(reference.res[0], reference.res[1])
+        ):
+            factor = round(factor)
+            if width % factor or height % factor:
+                raise ValueError(
+                    f"Reference mask shape {width}x{height} is not divisible by "
+                    f"imagery/mask resolution ratio {factor}; regenerate masks on the "
+                    "10 m footprint or request the mask resolution."
+                )
+            transform *= transform.scale(factor, factor)
+            width, height = width // factor, height // factor
+    return reference.crs, transform, width, height
+
+
 def compute_target_grid(
     bbox: tuple[float, float, float, float],
     output_path: Path,
@@ -169,8 +201,11 @@ def compute_target_grid(
     reference_raster: Path | None,
     cell: BaseGeometry | None = None,
 ) -> tuple[tuple[CRS, Affine, int, int, Path | None] | None, str | None]:
-    """Compute output grid from reference mask or bbox+resolution fallback.
+    """Compute output grid from a mask footprint or bbox+resolution fallback.
 
+    Finer 10 m subdivisions keep the mask footprint, not its pixel size, when the
+    requested metre resolution is an integer multiple. Other reference grids retain
+    the legacy exact-grid behavior.
     The fallback is the chip's own UTM grid, the one its masks are written on; pass the
     chip polygon as ``cell`` (lon/lat) so it matches them exactly.
     """
@@ -180,22 +215,15 @@ def compute_target_grid(
     if reference_grid is not None:
         try:
             with rasterio.open(reference_grid) as reference_dataset:
-                target_crs = reference_dataset.crs
-                target_transform = reference_dataset.transform
-                target_width = reference_dataset.width
-                target_height = reference_dataset.height
-                if target_crs is None:
-                    raise ValueError("Reference raster has no CRS")
+                target_crs, target_transform, target_width, target_height = _reference_output_grid(
+                    reference_dataset, resolution
+                )
 
             logger.debug(
                 f"Grid: source=reference_mask path={reference_grid.name} "
                 f"crs={target_crs} width={target_width} height={target_height}"
             )
             logger.debug(f"Grid: using reference transform={target_transform}")
-            logger.debug(
-                f"Grid: requested resolution={resolution}m ignored because "
-                "reference mask defines output grid"
-            )
             logger.debug(
                 f"Using reference mask grid: {reference_grid.name} "
                 f"({target_width}x{target_height}, {target_crs})"
@@ -301,7 +329,7 @@ def write_cog(
 
 
 def on_reference_grid(image_path: Path) -> bool:
-    """Whether an image on disk is on the grid of every mask beside it (True if none).
+    """Whether an image shares every mask's grid or integer-subdivided footprint.
 
     Masks rebuilt on another grid (lon/lat to UTM) leave the old imagery behind; a
     resumed download must not keep it misregistered. Every mask is checked, since a
@@ -313,11 +341,12 @@ def on_reference_grid(image_path: Path) -> bool:
     try:
         with rasterio.open(image_path) as image:
             grid = (image.crs, image.transform, image.width, image.height)
+            resolution = image.res[0]
         for reference in references:
             with rasterio.open(reference) as mask:
-                if (mask.crs, mask.transform, mask.width, mask.height) != grid:
+                if _reference_output_grid(mask, resolution) != grid:
                     return False
-    except rasterio.errors.RasterioIOError:
+    except (rasterio.errors.RasterioIOError, ValueError):
         return False
     return True
 
@@ -333,11 +362,11 @@ def validate_alignment(output_path: Path, reference_grid: Path | None) -> str | 
             rasterio.open(reference_grid) as reference_dataset,
         ):
             if (
-                output_dataset.crs != reference_dataset.crs
-                or output_dataset.transform != reference_dataset.transform
-                or output_dataset.width != reference_dataset.width
-                or output_dataset.height != reference_dataset.height
-            ):
+                output_dataset.crs,
+                output_dataset.transform,
+                output_dataset.width,
+                output_dataset.height,
+            ) != _reference_output_grid(reference_dataset, output_dataset.res[0]):
                 output_path.unlink(missing_ok=True)
                 return f"Output image does not match reference mask grid ({reference_grid.name})"
     except Exception as error:
@@ -365,8 +394,9 @@ def download_and_clip_scene(
         output_path: Path for output GeoTIFF
         bands: Bands to download (default: red, green, blue, nir)
         resolution: Target resolution in meters (default: 10.0)
-        reference_raster: Optional mask raster path used as exact output grid
-            reference (CRS, transform, width, height). If not provided, the
+        reference_raster: Optional mask raster defining the output footprint. Finer
+            10 m subdivisions use an integer multiple of their resolution; other grids are copied
+            exactly for compatibility. If not provided, the
             function auto-detects a co-located mask from ``output_path``.
         cell: The chip polygon (lon/lat), for the chip's UTM grid when no mask is found.
 
