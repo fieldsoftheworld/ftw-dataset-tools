@@ -293,6 +293,21 @@ def test_check_no_drops_refuses(tmp_path: Path, strategies: list, zoom: int) -> 
         chips_tiles.check_no_drops(archive(tmp_path / "drop.pmtiles", strategies), "chips")
 
 
+def test_refuses_an_unreadable_table(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.parquet"
+    bad.write_text("not parquet")
+    with pytest.raises(ChipsTilesError, match=r"bad\.parquet"):
+        chips_tiles.write_locations(str(bad), tmp_path / "x.parquet")
+
+
+def test_refuses_an_overview_missing_locations(
+    tmp_path: Path, locations: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(chips_tiles, "write_overview", lambda *_args: 0)
+    with pytest.raises(ChipsTilesError, match="the overview has 0 of 3 locations"):
+        chips_tiles._build_overviews(locations, tmp_path, 3)
+
+
 def test_readme_gives_the_zooms() -> None:
     readme = " ".join((REPO_ROOT / "README.md").read_text().split())
     (c0, c1), (o0, o1) = chips_tiles.CHIPS_ZOOMS, chips_tiles.OVERVIEW_ZOOMS

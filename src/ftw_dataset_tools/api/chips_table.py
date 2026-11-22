@@ -42,7 +42,7 @@ import tempfile
 import urllib.request
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -153,11 +153,20 @@ def _join(base: str, href: str) -> str:
     return href if "://" in href else f"{base.rstrip('/')}/{href.removeprefix('./')}"
 
 
+def _location(path_or_url: str | Path) -> str:
+    """A URL as given, a path made absolute, so its folder is always ``rsplit("/")[0]``."""
+    text = str(path_or_url)
+    return text if "://" in text else str(Path(text).resolve())
+
+
 def _read_json(location: str) -> dict:
-    if "://" not in location:
-        return json.loads(Path(location).read_text())
-    with urllib.request.urlopen(location, timeout=60) as response:
-        return json.load(response)
+    try:
+        if "://" not in location:
+            return json.loads(Path(location).read_text())
+        with urllib.request.urlopen(location, timeout=60) as response:
+            return json.load(response)
+    except json.JSONDecodeError as err:
+        raise ChipsTableError(f"{location} is not valid JSON: {err}") from err
 
 
 def published_datasets(catalog_json: str, rel: str = "") -> list[str]:
@@ -166,7 +175,8 @@ def published_datasets(catalog_json: str, rel: str = "") -> list[str]:
     Follows ``rel: child`` links: a child ``catalog.json`` (a group) is walked in turn,
     a child ``collection.json`` is a published dataset.
     """
-    links = _read_json(catalog_json)["links"]
+    catalog_json = _location(catalog_json)
+    links = _read_json(catalog_json).get("links", [])
     base = catalog_json.rsplit("/", 1)[0]
     found: list[str] = []
     for link in links:
@@ -278,7 +288,7 @@ def resolve_inputs(
     build (a directory written by ``ftwd run``) replaces the published dataset of the
     same id; one the catalog doesn't have needs its group in ``groups``.
     """
-    catalog_json = str(catalog_json)
+    catalog_json = _location(catalog_json)
     base = data_base_url or catalog_json.rsplit("/", 1)[0]
     inputs = _published_inputs(catalog_json, base)
     _add_local(inputs, local_dirs, dict(groups or {}))
@@ -684,6 +694,30 @@ def _write(con: duckdb.DuckDBPyConnection, joined: Path, out: Path) -> int:
     return written
 
 
+def _keep_predefined(inputs: list[DatasetInput], previous: str) -> list[DatasetInput]:
+    """Treat a dataset with a published ``split_predefined`` as predefined.
+
+    A collection built with the splits stage off has no ``ftw:split_type``, so without
+    this its frozen ``split_predefined`` would be dropped without a word. As predefined,
+    a published one is carried from ``previous`` and a local one must have ``split``.
+    """
+    con = duckdb.connect(":memory:")
+    try:
+        rows = con.execute(
+            f"SELECT DISTINCT dataset FROM read_parquet({_sql(previous)}) "
+            f"WHERE split_predefined IS NOT NULL"
+        ).fetchall()
+    except duckdb.Error as err:
+        raise ChipsTableError(f"can't read the previous table {previous}: {err}") from err
+    finally:
+        con.close()
+    had = {r[0] for r in rows}
+    return [
+        replace(i, split_type="predefined") if i.dataset in had and i.split_type is None else i
+        for i in inputs
+    ]
+
+
 def build_chips_table(
     inputs: list[DatasetInput],
     out: Path | str,
@@ -697,6 +731,7 @@ def build_chips_table(
     ``split_admin2_v1``. ``drop`` names datasets whose frozen splits may be lost: left
     out entirely, or chips a rebuild no longer has.
     """
+    inputs = _keep_predefined(inputs, str(previous))
     out = Path(out).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=out.parent) as tmp:

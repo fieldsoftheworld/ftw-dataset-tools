@@ -319,6 +319,24 @@ def test_restaged_predefined_takes_new_splits(world: World, later: Path) -> None
     assert t[("bb_2022", SHARED)][0] == "test", "its legacy split stays frozen"
 
 
+def test_published_predefined_without_split_type_keeps_its_split(world: World, later: Path) -> None:
+    """A predefined dataset republished with the splits stage off has no ftw:split_type;
+    its split_predefined is still carried from the previous table."""
+    world.write_catalog({"aa_2021": ("zz", "block3x3"), "bb_2022": ("bb", None)})
+    t = table(world.build(later, local=("aa_2021",)))
+    assert t[("bb_2022", "ftw-33TUN2020")][1] == "val"
+
+
+def test_local_predefined_without_split_type_needs_a_split(world: World, later: Path) -> None:
+    world.local("bb_2022", None, None)
+    strip_split(
+        world.base / "bb/bb_2022/bb_2022_chips.parquet",
+        world.staging / "bb_2022" / "bb_2022_chips.parquet",
+    )
+    with pytest.raises(ChipsTableError, match="bb_2022: the collection uses predefined"):
+        world.build(later, local=("aa_2021", "bb_2022"))
+
+
 def test_drop_leaves_a_dataset_out(world: World) -> None:
     world.write_catalog({"aa_2021": ("zz", "block3x3")})
     out = world.build(world.root / "boot.parquet", drop={"bb_2022"})
@@ -478,9 +496,21 @@ def test_relative_chips_resolve_against_the_data_base_url(world: World) -> None:
     assert inputs[0].chips == "https://data.example.org/bench/zz/aa_2021/aa_2021_chips.parquet"
 
 
+def test_relative_catalog_path(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(world.catalog)
+    inputs = resolve_inputs("catalog.json")
+    assert inputs[0].chips == f"{world.catalog.resolve()}/zz/aa_2021/aa_2021_chips.parquet"
+
+
+def test_invalid_catalog_json(world: World) -> None:
+    (world.catalog / "zz" / "catalog.json").write_text("{not json")
+    with pytest.raises(ChipsTableError, match="is not valid JSON"):
+        world.inputs()
+
+
 def test_data_base_url_defaults_to_the_catalog_folder(world: World) -> None:
     inputs = resolve_inputs(world.catalog / "catalog.json")
-    assert inputs[0].chips == f"{world.catalog}/zz/aa_2021/aa_2021_chips.parquet"
+    assert inputs[0].chips == f"{world.catalog.resolve()}/zz/aa_2021/aa_2021_chips.parquet"
 
 
 def test_absolute_chips_href_is_kept(world: World) -> None:

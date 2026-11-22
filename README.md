@@ -611,6 +611,10 @@ published ones for that id. A local dataset the catalog doesn't have yet needs
 | `split_hash_v1` | `block3x3-hash` at 80/10/10 with the salt `ftw-split-v1`. A location has the same split in every dataset and year, and new chips never move existing ones |
 | `split_admin2_v1` | Whole admin2 units (`unit_admin2_v1`), balanced to 80/10/10 of locations within each country, so a country with three units or more gets all three splits when first assigned. A unit with a presence-only chip is train. Frozen once published; new units fill the split furthest below its share |
 
+A collection without `ftw:split_type` (built with the splits stage off) whose dataset has
+`split_predefined` values in the previous table counts as predefined, so that column is never
+dropped silently: a published one carries it, and a `--local` one must have `split`.
+
 Under `split_admin2_v1`, a row with no admin2 name joins its admin1's unit. Rows without a
 country or admin1, and countries with fewer than three admin2 units to balance, use their
 block as the unit; a country keeps its kind of unit once published.

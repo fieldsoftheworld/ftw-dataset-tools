@@ -29,14 +29,12 @@ import subprocess
 import tempfile
 import urllib.request
 from pathlib import Path
-from typing import TYPE_CHECKING
+
+import duckdb
 
 from ftw_dataset_tools.api import admin_names
 from ftw_dataset_tools.api.geo import sql_path
 from ftw_dataset_tools.api.tiles import TileSpec, build_pmtiles
-
-if TYPE_CHECKING:
-    import duckdb
 
 TILES_NAME = "chips.pmtiles"
 DEFAULT_SERVER = "http://localhost:13579"
@@ -153,6 +151,8 @@ def write_locations(table: str, out: Path) -> int:
         gpio.read(str(tmp)).write(str(out))
         tmp.unlink()
         return con.execute(f"SELECT count(*) FROM read_parquet({_sql(str(out))})").fetchone()[0]
+    except duckdb.Error as err:
+        raise ChipsTilesError(f"can't read {table}: {err}") from err
     finally:
         con.close()
 
