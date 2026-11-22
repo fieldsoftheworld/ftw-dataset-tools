@@ -185,13 +185,12 @@ def extent_fingerprint(path: str | Path) -> str:
 def chips_fingerprint(chips_file: str | Path) -> str | None:
     """The extent fingerprint a chips file was built with, or None if built without one.
 
-    A chips file carrying ``label_extent_pct`` but no fingerprint (an older build) gives
-    ``"unknown"``, which matches no configured extent.
+    A chips file whose rows disagree (or that has none) gives ``"unknown"``, which
+    matches no configured extent.
     """
     chips_path = Path(chips_file)
-    columns = parquet_columns(chips_path)
-    if LABEL_EXTENT_SHA_COLUMN not in columns:
-        return "unknown" if LABEL_EXTENT_COLUMN in columns else None
+    if LABEL_EXTENT_SHA_COLUMN not in parquet_columns(chips_path):
+        return None
     conn = duckdb.connect(":memory:")
     try:
         rows = conn.execute(
