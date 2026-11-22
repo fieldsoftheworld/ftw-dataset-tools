@@ -838,6 +838,7 @@ def _rasterize_mask(
         line_value = 2 if mask_type == MaskType.SEMANTIC_3_CLASS else 0
         lines = shapes_of([wkt for (wkt,) in boundary_lines])
         if boundary_width is not None:
+            lines = [line for line in lines if not line.is_empty]
             lines = list(shapely.buffer(np.array(lines, dtype=object), boundary_width / 2))
         features.rasterize(
             [(line, line_value) for line in lines],
@@ -1756,8 +1757,12 @@ def create_masks(
         or MaskType.INSTANCE not in mask_types
     ):
         raise ValueError("crop_column requires a non-empty column name and the instance mask type")
-    if boundary_width is not None and (boundary_width <= 0 or not utm):
-        raise ValueError("boundary_width must be a positive number of metres, on a UTM grid")
+    if boundary_width is not None and (boundary_width < 2 * resolution or not utm):
+        # Narrower, a buffered line misses pixel centres and breaks up.
+        raise ValueError(
+            "boundary_width must be at least two pixels (2 x resolution) in metres, "
+            "on a UTM grid; leave it unset for one-pixel lines"
+        )
 
     chips_path = Path(chips_file).resolve()
     boundaries_path = Path(boundaries_file).resolve()

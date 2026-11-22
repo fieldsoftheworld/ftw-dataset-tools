@@ -323,6 +323,7 @@ class TestFromDict:
             ({"boundary_width_m": "10"}, "positive number"),
             ({"boundary_width_m": True}, "positive number"),
             ({"boundary_width_m": 10, "utm": False}, "needs stages.masks.utm"),
+            ({"boundary_width_m": 10}, "at least two mask pixels"),
         ],
     )
     def test_bad_boundary_width(self, masks_cfg: dict, message: str) -> None:

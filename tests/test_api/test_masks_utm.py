@@ -451,7 +451,7 @@ class TestBoundaryWidth:
         window = row[centre - 20 : centre + 20]
         return float((window == 2).sum()) * resolution
 
-    @pytest.mark.parametrize("resolution", [2.5, 5.0, 10.0])
+    @pytest.mark.parametrize("resolution", [2.5, 5.0])
     def test_lines_are_the_given_width(self, tmp_path: Path, resolution: float) -> None:
         mask = self._burn(tmp_path, resolution=resolution, boundary_width=10.0)
 
@@ -487,7 +487,10 @@ class TestBoundaryWidth:
         mask = self._burn(tmp_path, resolution=2.5, boundary_width=5.0, skip_existing=True)
         assert self._shared_edge_width(mask, 2.5) == pytest.approx(5.0)
 
-    @pytest.mark.parametrize(("width", "utm"), [(0.0, True), (-1.0, True), (10.0, False)])
-    def test_bad_width(self, tmp_path: Path, width: float, utm: bool) -> None:
+    @pytest.mark.parametrize(
+        ("width", "resolution", "utm"),
+        [(0.0, 2.5, True), (-1.0, 2.5, True), (10.0, 10.0, True), (10.0, 2.5, False)],
+    )
+    def test_bad_width(self, tmp_path: Path, width: float, resolution: float, utm: bool) -> None:
         with pytest.raises(ValueError, match="boundary_width"):
-            self._burn(tmp_path, boundary_width=width, utm=utm)
+            self._burn(tmp_path, boundary_width=width, resolution=resolution, utm=utm)

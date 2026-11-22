@@ -190,6 +190,8 @@ class TestCreateMasksCommand:
             out,
             "--year",
             "2024",
+            "--resolution",
+            "2.5",
             "--boundary-width",
             "10",
         )

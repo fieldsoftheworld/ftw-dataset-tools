@@ -830,6 +830,11 @@ class DatasetConfig:
             raise ConfigError("stages.masks.boundary_width_m must be a positive number of metres")
         if width is not None and not self.stages.masks.utm:
             raise ConfigError("stages.masks.boundary_width_m needs stages.masks.utm: true")
+        if width is not None and width < 2 * self.stages.masks.resolution:
+            raise ConfigError(
+                "stages.masks.boundary_width_m must be at least two mask pixels "
+                "(2 x stages.masks.resolution); leave it unset for one-pixel lines"
+            )
 
         self._validate_label_extent()
 
