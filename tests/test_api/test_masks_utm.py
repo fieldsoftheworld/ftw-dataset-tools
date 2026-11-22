@@ -353,16 +353,27 @@ class TestFinerGridsShareThe10mFootprint:
         [
             (500_000, 5_540_000, 2000),  # full chip
             (500_003.3, 5_540_001.7, 1234.5),  # clipped, off the lattice
-            (166_000, 5_540_000, 640),  # clipped at the zone's western edge
         ],
     )
     def test_n_times_the_10m_grid(self, factor: int, x0: float, y0: float, size: float) -> None:
         chip = _utm_chip("EPSG:32632", x0, y0, size=size)
+        self._assert_n_times(chip, factor)
+
+    @pytest.mark.parametrize("factor", [2, 4])
+    def test_chip_cut_by_the_zone_meridian(self, factor: int) -> None:
+        # 6°E bounds zone 32 on the west; it runs curved through the chip in UTM.
+        x6, _ = Transformer.from_crs("EPSG:4326", "EPSG:32632", always_xy=True).transform(6, 50)
+        chip = _utm_chip("EPSG:32632", x6 - 703.3, 5_540_001.7) & box(6, 40, 12, 60)
+        self._assert_n_times(chip, factor)
+
+    @staticmethod
+    def _assert_n_times(chip, factor: int) -> None:
         crs10, t10, w10, h10 = utm_grid_for_cell(GRID_ID, chip.bounds, "EPSG:4326", 10.0, chip)
 
         crs, t, w, h = utm_grid_for_cell(GRID_ID, chip.bounds, "EPSG:4326", 10 / factor, chip)
 
         assert crs == crs10
+        assert t.a == pytest.approx(10 / factor) and t.e == pytest.approx(-10 / factor)
         assert (t.c, t.f) == (t10.c, t10.f)
         assert (w, h) == (w10 * factor, h10 * factor)
 
@@ -370,7 +381,7 @@ class TestFinerGridsShareThe10mFootprint:
     def test_other_resolutions_keep_their_own_lattice(self, resolution: float) -> None:
         chip = _utm_chip("EPSG:32632", 500_006, 5_540_006, size=1000)
 
-        _, t, w, h = utm_grid_for_cell(GRID_ID, chip.bounds, "EPSG:4326", resolution, chip)
+        _, t, w, _h = utm_grid_for_cell(GRID_ID, chip.bounds, "EPSG:4326", resolution, chip)
 
         assert t.c % resolution == 0 and t.f % resolution == 0
         assert t.c <= 500_006 and t.c + resolution * w >= 501_006
@@ -413,3 +424,70 @@ class TestNonDividingResolution:
             mask = src.read(1)
         assert mask[:, 0].sum() > 300
         assert mask[:, 1:].sum() == 0
+
+
+class TestBoundaryWidth:
+    """``boundary_width`` burns lines a fixed width in metres, whatever the resolution."""
+
+    # Two fields sharing an edge at x = 501 000, in a 2 km chip.
+    FIELDS = (
+        box(500_100, 5_540_100, 501_000, 5_541_900),
+        box(501_000, 5_540_100, 501_900, 5_541_900),
+    )
+
+    def _burn(self, tmp_path: Path, **kwargs) -> np.ndarray:
+        chip = _utm_chip("EPSG:32632", 500_000, 5_540_000)
+        inputs = _one_chip_inputs(tmp_path, GRID_ID, chip, self.FIELDS, "EPSG:32632")
+        inputs["mask_types"] = [masks.MaskType.SEMANTIC_3_CLASS]
+        result = masks.create_masks(**{**inputs, **kwargs})[masks.MaskType.SEMANTIC_3_CLASS]
+        self.path = result.masks_created[0].output_path if result.masks_created else self.path
+        with rasterio.open(self.path) as src:
+            return src.read(1)
+
+    @staticmethod
+    def _shared_edge_width(mask: np.ndarray, resolution: float) -> float:
+        row = mask[mask.shape[0] // 2]
+        centre = int(1000 / resolution)
+        window = row[centre - 20 : centre + 20]
+        return float((window == 2).sum()) * resolution
+
+    @pytest.mark.parametrize("resolution", [2.5, 5.0, 10.0])
+    def test_lines_are_the_given_width(self, tmp_path: Path, resolution: float) -> None:
+        mask = self._burn(tmp_path, resolution=resolution, boundary_width=10.0)
+
+        assert self._shared_edge_width(mask, resolution) == pytest.approx(10.0)
+
+    def test_default_lines_are_a_pixel_or_two(self, tmp_path: Path) -> None:
+        mask = self._burn(tmp_path, resolution=2.5)
+
+        assert self._shared_edge_width(mask, 2.5) in (2.5, 5.0)
+
+    def test_tag_and_rerun_with_another_width(self, tmp_path: Path) -> None:
+        self._burn(tmp_path, resolution=2.5, boundary_width=10.0)
+        with rasterio.open(self.path) as src:
+            assert src.tags()[masks.BOUNDARY_WIDTH_TAG] == "10"
+
+        kept = masks.create_masks(
+            **{
+                **_one_chip_inputs(
+                    tmp_path,
+                    GRID_ID,
+                    _utm_chip("EPSG:32632", 500_000, 5_540_000),
+                    self.FIELDS,
+                    "EPSG:32632",
+                ),
+                "mask_types": [masks.MaskType.SEMANTIC_3_CLASS],
+                "resolution": 2.5,
+                "boundary_width": 10.0,
+                "skip_existing": True,
+            }
+        )[masks.MaskType.SEMANTIC_3_CLASS]
+        assert kept.masks_existing == 1
+
+        mask = self._burn(tmp_path, resolution=2.5, boundary_width=5.0, skip_existing=True)
+        assert self._shared_edge_width(mask, 2.5) == pytest.approx(5.0)
+
+    @pytest.mark.parametrize(("width", "utm"), [(0.0, True), (-1.0, True), (10.0, False)])
+    def test_bad_width(self, tmp_path: Path, width: float, utm: bool) -> None:
+        with pytest.raises(ValueError, match="boundary_width"):
+            self._burn(tmp_path, boundary_width=width, utm=utm)

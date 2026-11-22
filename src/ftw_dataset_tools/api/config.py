@@ -343,6 +343,9 @@ class MasksConfig:
     # Rasterize each chip on its own UTM zone's grid (square pixels, one shape per
     # chip size). False rasterizes in the chips file's CRS (lon/lat), as before.
     utm: bool = True
+    # Width in metres to burn boundary lines at (UTM only). Unset, they are one pixel
+    # wide, so their width scales with `resolution`.
+    boundary_width_m: float | None = None
     # Path to EPSG:4326 polygons (GeoParquet, resolved relative to the config file)
     # inside which the labels are complete. Inside, unlabelled pixels are background
     # (0); outside, unknown (3). Chips wholly outside are dropped. Optional; an
@@ -820,6 +823,13 @@ class DatasetConfig:
             raise ConfigError("stages.masks.skip_existing must be true or false")
         if not isinstance(self.stages.masks.utm, bool):
             raise ConfigError("stages.masks.utm must be true or false")
+        width = self.stages.masks.boundary_width_m
+        if width is not None and (
+            isinstance(width, bool) or not isinstance(width, int | float) or width <= 0
+        ):
+            raise ConfigError("stages.masks.boundary_width_m must be a positive number of metres")
+        if width is not None and not self.stages.masks.utm:
+            raise ConfigError("stages.masks.boundary_width_m needs stages.masks.utm: true")
 
         self._validate_label_extent()
 

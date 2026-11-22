@@ -311,6 +311,24 @@ class TestFromDict:
                 {"fields_file": "f.parquet", "stages": {"masks": {"utm": "yes"}}}
             )
 
+    def test_boundary_width_defaults_to_one_pixel(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+
+        assert config.stages.masks.boundary_width_m is None
+
+    @pytest.mark.parametrize(
+        ("masks_cfg", "message"),
+        [
+            ({"boundary_width_m": 0}, "positive number"),
+            ({"boundary_width_m": "10"}, "positive number"),
+            ({"boundary_width_m": True}, "positive number"),
+            ({"boundary_width_m": 10, "utm": False}, "needs stages.masks.utm"),
+        ],
+    )
+    def test_bad_boundary_width(self, masks_cfg: dict, message: str) -> None:
+        with pytest.raises(ConfigError, match=message):
+            DatasetConfig.from_dict({"fields_file": "f.parquet", "stages": {"masks": masks_cfg}})
+
     def test_download_resume_defaults_true(self) -> None:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
 

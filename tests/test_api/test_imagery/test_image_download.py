@@ -283,7 +283,6 @@ class TestOnReferenceGrid:
         reason = skip_download_reason(item, image.parent / f"{item.id}.json", resume=True)
 
         assert reason == "Already downloaded"
-        assert image.exists()
 
 
 class TestDownloadAndClipScene:

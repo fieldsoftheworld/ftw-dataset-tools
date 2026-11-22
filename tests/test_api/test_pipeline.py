@@ -261,6 +261,42 @@ class TestStageInputErrors:
 class TestMasksSkippedReporting:
     """Per-cell mask failures must be logged and accumulated on the context."""
 
+    def test_boundary_width_reaches_create_masks(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        from ftw_dataset_tools.api import masks
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        seen: dict = {}
+
+        def fake_create_masks(**kwargs):
+            seen.update(kwargs)
+            return {}
+
+        monkeypatch.setattr(masks, "create_masks", fake_create_masks)
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": str(sample_geoparquet_4326),
+                "output_dir": str(tmp_path / "out"),
+                "name": "ds",
+                "year": 2024,
+                "stages": {"masks": {"resolution": 2.5, "boundary_width_m": 10}},
+            }
+        )
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir()
+        gpd.GeoDataFrame(
+            {"id": ["g1"], "field_coverage_pct": [50.0]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(ctx.chips_path)
+        ctx.output_fields_path.write_bytes(b"")
+        ctx.boundary_lines_path.write_bytes(b"")
+
+        pipeline.stage_masks(ctx)
+
+        assert (seen["resolution"], seen["boundary_width"]) == (2.5, 10)
+
     def test_skipped_masks_are_logged_and_accumulated(
         self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch, caplog
     ) -> None:
