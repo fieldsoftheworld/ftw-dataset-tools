@@ -213,11 +213,10 @@ def _rgb_bidx(bands: list[dict]) -> list[int] | None:
 
     The clipped season COG records each band's name as its GDAL description, which
     ``assets.add_raster_bands`` copies into ``raster:bands``, so the RGB bands are
-    looked up by name. The positional fallback is only for a file written without
-    descriptions at all: ``ftwd download-images --bands`` takes any band list, and a
-    named stack that has no red/green/blue (nir,red,green, say) must not be guessed
-    at and published under a "true colour" title. The season falls back to its
-    ``visual`` asset instead.
+    looked up by name. ``ftwd download-images --bands`` takes any band list, and a
+    stack that has no red/green/blue (nir,red,green, say) must not be guessed at and
+    published under a "true colour" title. The season falls back to its ``visual``
+    asset instead.
     """
     by_name = {
         str(band.get("description") or "").lower(): index
@@ -226,9 +225,7 @@ def _rgb_bidx(bands: list[dict]) -> list[int] | None:
     named = [by_name.get(name) for name in _RGB_BANDS]
     if all(index is not None for index in named):
         return [index for index in named if index is not None]
-    if any(band.get("description") for band in bands):
-        return None
-    return list(_DEFAULT_RGB_BIDX) if len(bands) >= len(_RGB_BANDS) else None
+    return None
 
 
 def _band_stretch(statistics: dict) -> list[float] | None:

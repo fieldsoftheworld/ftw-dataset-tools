@@ -301,17 +301,6 @@ class TestSeasonImageryRenders:
         assert renders["harvest_rgb"]["bidx"] == [4, 3, 2]
         assert renders["harvest_rgb"]["rescale"] == [[7, 8], [5, 6], [3, 4]]
 
-    def test_unnamed_bands_fall_back_to_the_first_three(self) -> None:
-        from ftw_dataset_tools.api.renders import build_item_renders
-
-        bands = [{"statistics": {"minimum": 1, "maximum": 2}} for _ in range(4)]
-
-        assert build_item_renders(_item({"planting_image": bands}))["planting_rgb"]["bidx"] == [
-            1,
-            2,
-            3,
-        ]
-
     def test_a_named_stack_without_rgb_is_never_guessed_at(self) -> None:
         """``--bands nir,red,green`` is a supported download; drawing band 1 as red there
         would publish infrared under a "true colour" title."""
