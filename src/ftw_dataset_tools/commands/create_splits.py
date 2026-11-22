@@ -68,6 +68,8 @@ def create_splits(
     - random-uniform: Randomly assigns each chip to train/val/test splits
     - block3x3: Groups chips into 3x3 spatial blocks and assigns blocks to splits
                 (ensures spatial coherence within each split)
+    - block3x3-hash: Assigns 3x3 blocks by a stable hash, so a block keeps its
+                     split across chip scales
     - predefined: Uses 'split' column from the fields file and assigns each chip
                   by majority vote of intersecting fields
 

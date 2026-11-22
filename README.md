@@ -63,8 +63,9 @@ ftwd run config.yaml --from select_images
 ftwd run config.yaml --through stac
 ```
 
-Stages run in this order: `reproject`, `chips`, `splits`, `boundaries`, `masks`,
-`stac`, `select_images`, `download_images`, `docs`. Intermediate outputs follow a fixed
+Stages run in this order: `reproject`, `filter` (the class filter, a no-op without one),
+`chips`, `scale` (keeps `stages.scale.percent` of the chip blocks), `splits`, `boundaries`,
+`masks`, `stac`, `select_images`, `download_images`, `docs`. Intermediate outputs follow a fixed
 naming convention in the output directory, so individual stages can be re-run on
 their own as long as their inputs already exist.
 

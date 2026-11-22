@@ -58,7 +58,8 @@ def preview_slot(item: pystac.Item, chip_dir: Path) -> str | None:
 
     Read from the item's thumbnail asset, else from the item JSON on disk (a rebuilt
     item starts without assets). A preview with no recorded slot predates the record;
-    older ftwd drew those from a scene, so it counts as the planting scene's. With no
+    older ftwd drew those from a scene, so it counts as the planting scene's (the JPEG
+    catalogs ``convert-previews`` converts all predate it). With no
     preview recorded at all, it is the best slot preview on disk.
     """
     thumbnail = item.assets.get("thumbnail")
