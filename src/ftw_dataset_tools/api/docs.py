@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 import duckdb
 
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded, sql_path
-from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
+from ftw_dataset_tools.api.imagery.catalog_ops import chip_item_files, iter_chip_dirs
 from ftw_dataset_tools.api.logging_config import get_logger
 from ftw_dataset_tools.api.styles import split_counts, top_codes
 
@@ -247,9 +247,8 @@ def _top_crops(chips: Path, fields: Path) -> list[tuple[int, str | None, float]]
 def _observed_asset_keys(output_dir: Path) -> set[str]:
     """Asset keys carried by the chip items actually written under ``chips/``."""
     keys: set[str] = set()
-    for chip_dir in iter_chip_dirs(output_dir):
-        for item_path in sorted(chip_dir.glob("*.json")):
-            keys.update(_read_json(item_path).get("assets") or {})
+    for item_path in chip_item_files(output_dir):
+        keys.update(_read_json(item_path).get("assets") or {})
         if keys:
             break
     return keys
@@ -269,10 +268,9 @@ def _item_properties(con: duckdb.DuckDBPyConnection, output_dir: Path) -> list[s
     items = output_dir / "items.parquet"
     if items.exists():
         return sorted(c for c in _columns(con, items) if c.startswith("ftw:"))
-    for chip_dir in iter_chip_dirs(output_dir):
-        for item_path in sorted(chip_dir.glob("*.json")):
-            props = _read_json(item_path).get("properties") or {}
-            return sorted(key for key in props if key.startswith("ftw:"))
+    for item_path in chip_item_files(output_dir):
+        props = _read_json(item_path).get("properties") or {}
+        return sorted(key for key in props if key.startswith("ftw:"))
     return []
 
 
