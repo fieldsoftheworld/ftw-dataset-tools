@@ -207,6 +207,25 @@ class TestPreviewImageryForCatalog:
             == "planting"
         )
 
+    def test_resume_redraws_an_overlay_older_than_its_mask(self, tmp_path: Path) -> None:
+        """A rebuilt mask gets a fresh overlay from the scene preview, with no new read."""
+        import os
+
+        out = _collection(tmp_path)
+        chip_dir = _chip(out, "chip_a", scene=_scene(tmp_path / "scene.tif"))
+        preview_imagery_for_catalog(out, workers=1)
+        overlay = chip_dir / "chip_a_overlay.webp"
+        mask_mtime = (chip_dir / "chip_a_semantic_3_class.tif").stat().st_mtime
+        os.utime(overlay, (mask_mtime - 100, mask_mtime - 100))
+
+        again = preview_imagery_for_catalog(out, workers=1)
+
+        assert (again.successful, again.skipped, again.previews_redrawn) == (0, 1, 1)
+        assert overlay.stat().st_mtime >= mask_mtime
+        item = pystac.Item.from_file(str(chip_dir / "chip_a.json"))
+        assert item.assets["thumbnail"].href == "./chip_a_overlay.webp"
+        assert item.assets["thumbnail"].extra_fields["file:size"] == overlay.stat().st_size
+
     def test_resume_is_the_default(self, tmp_path: Path) -> None:
         """No caller should inherit a re-render of everything by omitting the flag."""
         out = _collection(tmp_path)

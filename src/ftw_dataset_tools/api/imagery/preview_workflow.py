@@ -20,7 +20,11 @@ from typing import TYPE_CHECKING
 import pystac
 from tqdm import tqdm
 
-from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, refresh_chip_preview
+from ftw_dataset_tools.api.imagery.chip_preview import (
+    preview_slot,
+    refresh_chip_preview,
+    refresh_stale_overlay,
+)
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, run_in_parallel
 from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
 from ftw_dataset_tools.api.imagery.slots import SCENE_SLOTS
@@ -48,6 +52,8 @@ class PreviewWorkflowResult:
     failed: int = 0
     skipped_details: list[dict] = field(default_factory=list)
     failed_details: list[dict] = field(default_factory=list)
+    #: Skipped chips whose overlay was redrawn because their mask is newer.
+    previews_redrawn: int = 0
 
 
 @dataclass(frozen=True)
@@ -120,6 +126,16 @@ def render_preview(task: PreviewTask) -> None:
         base_path.unlink(missing_ok=True)
 
 
+def _redraw_if_stale(item_path: Path, result: PreviewWorkflowResult) -> bool:
+    """Redraw a skipped chip's stale overlay, reporting a failure instead of raising."""
+    try:
+        return refresh_stale_overlay(item_path)
+    except (OSError, pystac.STACError, ValueError) as err:
+        result.failed += 1
+        result.failed_details.append({"chip": item_path.stem, "error": str(err)})
+        return False
+
+
 def preview_imagery_for_catalog(
     catalog_dir: Path,
     *,
@@ -135,7 +151,8 @@ def preview_imagery_for_catalog(
         catalog_dir: The collection directory holding ``collection.json``.
         resume: Skip chips that already have a preview on disk. Defaults to True,
             so a second run picks up where the first stopped; pass False to
-            re-render everything.
+            re-render everything. A skipped chip's overlay is still redrawn from
+            its scene preview on disk when it is older than the chip's mask.
         workers: Number of scenes to read concurrently.
 
     Returns:
@@ -166,6 +183,9 @@ def preview_imagery_for_catalog(
                 continue
             # Done once a scene draws the preview; one drawn from Q3 is replaced.
             if resume and preview_slot(item, item_path.parent) in SCENE_SLOTS:
+                # The scene is not read again, but a mask rebuilt since still
+                # gets a fresh overlay from the scene preview on disk.
+                result.previews_redrawn += _redraw_if_stale(item_path, result)
                 result.skipped += 1
                 result.skipped_details.append({"chip": item.id, "reason": "Already rendered"})
                 advance()

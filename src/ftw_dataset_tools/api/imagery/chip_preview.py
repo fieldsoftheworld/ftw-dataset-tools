@@ -22,15 +22,18 @@ from ftw_dataset_tools.api.imagery.thumbnails import (
     ThumbnailError,
     generate_overlay_thumbnail,
 )
+from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = [
     "PREVIEW_SLOT_FIELD",
+    "overlay_is_stale",
     "preview_slot",
     "redraw_chip_preview",
     "refresh_chip_preview",
+    "refresh_stale_overlay",
     "takes_preview",
 ]
 
@@ -152,3 +155,47 @@ def _redraw_overlay(chip_dir: Path, chip_id: str, base: Path) -> None:
         generate_overlay_thumbnail(base, mask, overlay)
     except ThumbnailError:
         overlay.unlink(missing_ok=True)
+
+
+def overlay_is_stale(chip_dir: Path, chip_id: str) -> bool:
+    """Whether the chip's overlay predates its reference mask, or is missing.
+
+    Only file stats, so it is cheap to ask of every chip in a large catalog. A chip
+    with no mask has nothing to overlay; a missing overlay counts only when a slot
+    preview is on disk to draw it from.
+    """
+    try:
+        mask_mtime = (chip_dir / f"{chip_id}{REFERENCE_MASK_SUFFIX}").stat().st_mtime
+    except FileNotFoundError:
+        return False
+    try:
+        overlay_mtime = (chip_dir / f"{chip_id}_overlay{PREVIEW_SUFFIX}").stat().st_mtime
+    except FileNotFoundError:
+        return _best_slot_preview(chip_dir, chip_id) is not None
+    return overlay_mtime < mask_mtime
+
+
+def refresh_stale_overlay(item_path: Path) -> bool:
+    """Redraw the chip's overlay from its preview slot's image when it is stale.
+
+    A resumed imagery run skips chips it has already downloaded, so a mask rebuilt
+    since (at a new resolution, say) would otherwise keep its old overlay. Draws from
+    the preview slot's image already on disk and downloads nothing; the parent item's
+    ``thumbnail`` asset is refreshed and written back.
+
+    Returns:
+        True when the overlay was redrawn.
+    """
+    chip_dir = item_path.parent
+    chip_id = item_path.stem
+    if not overlay_is_stale(chip_dir, chip_id):
+        return False
+    item = pystac.Item.from_file(str(item_path))
+    slot = preview_slot(item, chip_dir)
+    if slot is None or _existing(chip_dir, f"{chip_id}_{slot}_image_s2") is None:
+        return False
+    old = item.assets.get("thumbnail")
+    checksums = old is not None and "file:checksum" in old.extra_fields
+    refresh_chip_preview(item, chip_dir, slot, redraw=True, checksums=checksums)
+    write_item(item, item_path)
+    return True
