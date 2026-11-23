@@ -427,6 +427,8 @@ def run_pipeline(
     if ctx.provenance is not None:
         config_module.write_provenance_file(ctx.provenance, ctx.output_dir)
 
+    if "reproject" not in stages_to_run:
+        _require_unique_field_ids(ctx)
     for stage in STAGE_ORDER:
         hook = hooks.get(stage)
         if hook is not None:
@@ -436,6 +438,22 @@ def run_pipeline(
 
     success(logger, "Pipeline complete!")
     return ctx
+
+
+def _require_unique_field_ids(ctx: PipelineContext) -> None:
+    """Refuse fields an earlier run left with repeated ids, before any stage reads them.
+
+    The reproject stage makes the ids unique; a run that starts after it reads the
+    fields files already in the output directory, which an older ftwd may have written.
+    """
+    paths = dict.fromkeys((ctx.output_fields_path, ctx.field_polygons_path))
+    for path in (p for p in paths if p.exists()):
+        try:
+            field_ids.require_unique_ids(path)
+        except field_ids.DuplicateIdsError as err:
+            raise StageInputError(
+                f"{err}. Rerun from the reproject stage, which makes the ids unique."
+            ) from err
 
 
 def _validate_stage_selection(ctx: PipelineContext, stages_to_run: list[str]) -> None:

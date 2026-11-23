@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -2406,6 +2407,34 @@ class TestUniqueFieldIds:
 
     def _ids(self, path: Path) -> list[str]:
         return [r[0] for r in duckdb.execute(f"SELECT id FROM '{path}'").fetchall()]
+
+    @pytest.mark.parametrize("filtered", [False, True])
+    def test_a_later_stage_refuses_fields_with_repeated_ids(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filtered: bool
+    ) -> None:
+        """A run starting after reproject checks the fields an older run left."""
+        config = _config(self._fields(tmp_path), tmp_path / "out", name="ds", year=2023)
+        config.class_filter = ClassFilter("crop", ["wheat", "maize"], ["water"])
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        shutil.copyfile(self._fields(tmp_path), ctx.output_fields_path)
+        if filtered:
+            pipeline.stage_reproject(ctx)  # unique full fields, then a stale filtered file
+            shutil.copyfile(self._fields(tmp_path), ctx.field_polygons_path)
+        monkeypatch.setitem(pipeline._STAGE_FUNCS, "chips", pytest.fail)
+        with pytest.raises(StageInputError, match="Rerun from the reproject stage"):
+            pipeline.run_pipeline(ctx, ["chips"])
+
+    def test_a_later_stage_runs_on_unique_ids(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = _config(self._fields(tmp_path), tmp_path / "out", name="ds", year=2023)
+        ctx = pipeline.build_context(config)
+        pipeline.run_pipeline(ctx, ["reproject"])
+        ran = []
+        monkeypatch.setitem(pipeline._STAGE_FUNCS, "chips", ran.append)
+        pipeline.run_pipeline(ctx, ["chips"])
+        assert ran == [ctx]
 
     def test_filtered_fields_outlines_and_embeddings_get_unique_ids(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
