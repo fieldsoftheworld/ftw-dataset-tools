@@ -248,6 +248,33 @@ class TestSlivers:
         assert out.geometry.iloc[0].geom_type == "Polygon"
         assert out.geometry.iloc[0].equals(gdf.geometry.iloc[0])
 
+    def test_a_sliver_piece_of_a_part_is_left_out(self, tmp_path: Path) -> None:
+        tiny = box(10.0030, 50.0, 10.0030001, 50.0000001)  # about 0.1 m², apart
+        area = m2(LEFT, RIGHT)
+        rows = [row(1, shapely.MultiPolygon([LEFT, tiny]), area=area), row(1, RIGHT, area=area)]
+        out, result = dedupe(tmp_path, rows)
+        assert result.groups["parts"] == 1
+        assert out.geometry.iloc[0].geom_type == "Polygon"
+        assert out.geometry.iloc[0].equals(shapely.union_all([LEFT, RIGHT]))
+
+    def test_invalid_parts_merge_into_a_valid_field(self, tmp_path: Path) -> None:
+        bowtie = shapely.Polygon([(10.0, 50.0), (10.001, 50.001), (10.001, 50.0), (10.0, 50.001)])
+        area = m2(shapely.make_valid(bowtie), RIGHT)
+        out, result = dedupe(tmp_path, [row(1, bowtie, area=area), row(1, RIGHT, area=area)])
+        assert result.groups["parts"] == 1
+        merged = out.geometry.iloc[0]
+        assert merged.is_valid
+        assert merged.geom_type in ("Polygon", "MultiPolygon")
+
+    def test_only_the_polygons_of_a_collection_are_kept(self) -> None:
+        mixed = shapely.GeometryCollection(
+            [LEFT, shapely.LineString([(0, 0), (1, 1)]), shapely.Point(5, 5)]
+        )
+        assert field_ids._polygonal(mixed).equals(LEFT)
+        assert field_ids._polygonal(LEFT) is LEFT
+        lines = shapely.GeometryCollection([shapely.LineString([(0, 0), (1, 1)])])
+        assert field_ids._polygonal(lines) is lines
+
     def test_the_overlap_floor_is_one_square_metre(self) -> None:
         def r(area: float) -> field_ids._Row:
             return field_ids._Row(0, {}, "1", (), None, area, None)

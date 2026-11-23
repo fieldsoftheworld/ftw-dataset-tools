@@ -291,11 +291,12 @@ def _content_key(record: dict[str, Any], layout: _Layout) -> tuple:
 
 
 def _close(a: Any, b: Any) -> bool:
-    if isinstance(a, int | float) and isinstance(b, int | float):
-        if math.isnan(a) or math.isnan(b):
-            return math.isnan(a) and math.isnan(b)
-        return abs(a - b) <= METRICS_TOLERANCE * max(abs(a), abs(b))
-    return a == b
+    """Equal, or for numbers within ``METRICS_TOLERANCE`` (NaN equals NaN)."""
+    if not isinstance(a, int | float) or not isinstance(b, int | float):
+        return a == b
+    if math.isnan(a) or math.isnan(b):
+        return math.isnan(a) == math.isnan(b)
+    return abs(a - b) <= METRICS_TOLERANCE * max(abs(a), abs(b))
 
 
 def _same_metrics(a: _Row, b: _Row, layout: _Layout) -> bool:
@@ -324,13 +325,19 @@ def _area_metric_fits(rows: list[_Row], union_area: float, layout: _Layout) -> b
     Without the metric nothing bounds how far apart the parts lie, so a placeholder
     id reused across a region could become one field: such rows are never parts.
     """
-    if AREA_METRIC not in layout.metrics:
-        return False
-    values = [r.record[AREA_METRIC] for r in rows]
-    if any(v is None for v in values) or not all(_close(values[0], v) for v in values):
+    area = _shared_area_metric(rows) if AREA_METRIC in layout.metrics else None
+    if not area or area <= 0:
         return False
     low, high = AREA_RATIO_RANGE
-    return values[0] > 0 and low <= union_area / values[0] <= high
+    return low <= union_area / area <= high
+
+
+def _shared_area_metric(rows: list[_Row]) -> float | None:
+    """The ``metrics:area`` every row carries, or None when one lacks it or differs."""
+    values = [r.record[AREA_METRIC] for r in rows]
+    if None in values or not all(_close(values[0], v) for v in values):
+        return None
+    return values[0]
 
 
 def _interiors_apart(rows: list[_Row], union_area: float) -> bool:
@@ -466,14 +473,21 @@ def _bbox_column(columns: list[str], path: Path) -> str | None:
     return get_bbox_column_name(path) or ("bbox" if "bbox" in columns else None)
 
 
+def _attributes(
+    columns: list[str], geom_col: str, bbox_col: str | None
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Every column but the geometry and bbox, and those of them that are metrics."""
+    attrs = tuple(c for c in columns if c not in (geom_col, bbox_col))
+    return attrs, tuple(c for c in attrs if c.startswith(METRICS_PREFIX))
+
+
 def _layout(
     columns: list[str], path: Path, id_col: str, class_filter: ClassFilter | None
 ) -> _Layout:
     _check_reserved(columns, path)
     geom_col = detect_geometry_column(path) or "geometry"
     bbox_col = _bbox_column(columns, path)
-    attrs = tuple(c for c in columns if c not in (geom_col, bbox_col))
-    metrics = tuple(c for c in attrs if c.startswith(METRICS_PREFIX))
+    attrs, metrics = _attributes(columns, geom_col, bbox_col)
     keep_col, keep_values = _preference(columns, class_filter)
     to_area_crs = reprojector(geoparquet_crs(path, geom_col), AREA_CRS)
     return _Layout(
@@ -579,21 +593,25 @@ def _resolved_table(
 ) -> pa.Table:
     """The resolved rows as Arrow, typed like the source plus the added columns."""
     renumbered = SOURCE_ID_COLUMN in added
-    fields = [pa.field("_pos", pa.int64()), pa.field("_sub", pa.int64())]
-    fields += [
-        f.with_type(pa.string()) if renumbered and f.name == layout.id_col else f for f in schema
-    ]
-    fields += [pa.field(name, _ADDED_TYPES[name]) for name in added]
     if renumbered:
-        for record in records:
-            record[SOURCE_ID_COLUMN] = record["_id_text"]
-            if not isinstance(record[layout.id_col], str):
-                record[layout.id_col] = record["_id_text"]
+        schema = schema.set(
+            schema.get_field_index(layout.id_col), pa.field(layout.id_col, pa.string())
+        )
+        _add_source_ids(records, layout)
+    fields = [pa.field("_pos", pa.int64()), pa.field("_sub", pa.int64()), *schema]
+    fields += [pa.field(name, _ADDED_TYPES[name]) for name in added]
     return pa.Table.from_pylist(records, schema=pa.schema(fields))
 
 
-def _geo_metadata(src: Path, layout: _Layout, resolved: pa.Table) -> str:
-    """The source's ``geo`` metadata, listing any geometry type the merges added."""
+def _add_source_ids(records: list[dict[str, Any]], layout: _Layout) -> None:
+    """Give every resolved row its source id, and its id as text."""
+    for record in records:
+        record[SOURCE_ID_COLUMN] = record["_id_text"]
+        if not record.get("_renumbered"):
+            record[layout.id_col] = record["_id_text"]
+
+
+def _read_geo(src: Path) -> dict:
     con = duckdb.connect(":memory:")
     try:
         row = con.execute(
@@ -603,7 +621,12 @@ def _geo_metadata(src: Path, layout: _Layout, resolved: pa.Table) -> str:
         con.close()
     if row is None:
         raise FieldIdsError(f"{src.name} is not GeoParquet: it has no 'geo' metadata")
-    geo = json.loads(row[0])
+    return json.loads(row[0])
+
+
+def _geo_metadata(src: Path, layout: _Layout, resolved: pa.Table) -> str:
+    """The source's ``geo`` metadata, listing any geometry type the merges added."""
+    geo = _read_geo(src)
     column = geo.get("columns", {}).get(layout.geom_col, {})
     if column.get("encoding", "WKB") != "WKB":
         raise FieldIdsError(f"{src.name}: only WKB geometries are supported")
@@ -719,8 +742,16 @@ def _check_new_ids(
 ) -> None:
     """Refuse renumbered ids that another row of the file already has."""
     new = [r[layout.id_col] for r in records if r.get("_renumbered")]
-    if not new:
-        return
+    taken = _taken(con, src, layout, new) if new else []
+    if taken:
+        raise FieldIdsError(
+            f"{src.name}: renumbering rows that share an id would give ids other rows "
+            f"already have (e.g. {', '.join(taken)})"
+        )
+
+
+def _taken(con: duckdb.DuckDBPyConnection, src: Path, layout: _Layout, new: list[str]) -> list:
+    """Up to five of the ``new`` ids that rows of ``src`` already have."""
     con.register("new_ids", pa.table({"new_id": pa.array(new, pa.string())}))
     quoted = _quote(layout.id_col)
     taken = con.execute(f"""
@@ -728,12 +759,7 @@ def _check_new_ids(
         FROM read_parquet('{sql_path(src)}')
         WHERE CAST({quoted} AS VARCHAR) IN (SELECT new_id FROM new_ids)
         ORDER BY taken LIMIT 5""").fetchall()
-    if taken:
-        examples = ", ".join(row[0] for row in taken)
-        raise FieldIdsError(
-            f"{src.name}: renumbering rows that share an id would give ids other rows "
-            f"already have (e.g. {examples})"
-        )
+    return [row[0] for row in taken]
 
 
 def _dedupe(
