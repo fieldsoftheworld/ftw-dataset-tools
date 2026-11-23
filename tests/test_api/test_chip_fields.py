@@ -340,3 +340,33 @@ def test_fields_are_loaded_in_small_batches(
 def test_a_missing_fields_file(tmp_path: Path, dataset: Path) -> None:
     with pytest.raises(ChipFieldsError, match="no such file"):
         write_chip_fields(tmp_path / "missing.parquet", dataset)
+
+
+def test_written_kept_no_mask_and_failed_chips_in_one_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ftw_dataset_tools.api import chip_fields
+
+    root = tmp_path / "ds"
+    kept, bad, bare, fresh = (root / "chips" / "32UMA" / f"ftw-{n}_2024" for n in "abcd")
+    for chip in (kept, bad, fresh):
+        _mask(chip)
+    bare.mkdir(parents=True)
+    fields = _fields(tmp_path)
+    write_chip_fields(fields, root)
+    for chip in (bad, fresh):
+        chip_fields_path(chip).unlink()
+    clipped = chip_fields._clipped
+
+    def fail_b(source, mask_path):
+        if "ftw-b" in mask_path.name:
+            raise RuntimeError("bad shape")
+        return clipped(source, mask_path)
+
+    monkeypatch.setattr(chip_fields, "_clipped", fail_b)
+
+    result = write_chip_fields(fields, root, skip_existing=True, workers=3)
+
+    assert (result.written, result.skipped) == (1, 1)
+    assert result.no_mask == ["ftw-c_2024"]
+    assert result.failed == [("ftw-b_2024", "RuntimeError: bad shape")]

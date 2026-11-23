@@ -72,6 +72,8 @@ class _Source:
 
     One scan of the file serves every chip: a query per chip read whole row groups
     and took about 0.4 s, which made this step longer than the masks on big datasets.
+    It costs memory instead: the file's columns plus ~500 B a field for the index,
+    about 25 GB at peak for 30M fields (jp_2021).
     """
 
     path: Path
@@ -132,9 +134,9 @@ def _source(fields_file: Path) -> _Source:
         dropped = _covering_columns(fields_file, geom_col)
         columns = [c for c in names if c != geom_col and c not in dropped]
         table, bounds = _load(Path(fields_file), geom_col, columns)
+        tree = shapely.STRtree(shapely.box(bounds[:, 0], bounds[:, 1], bounds[:, 2], bounds[:, 3]))
     except (duckdb.Error, OSError, ValueError) as err:
         raise ChipFieldsError(f"Cannot read {fields_file}: {err}") from err
-    tree = shapely.STRtree(shapely.box(bounds[:, 0], bounds[:, 1], bounds[:, 2], bounds[:, 3]))
     batches = tuple(table.to_batches())
     starts = np.cumsum([0] + [len(b) for b in batches[:-1]], dtype=np.int64)
     return _Source(Path(fields_file), geom_col, crs, batches, starts, table.schema, tree)
@@ -269,16 +271,27 @@ def write_chip_fields(
     chip_dirs = iter_chip_dirs(Path(collection_dir))
     plans = [_plan(d, fields_file, skip_existing) for d in chip_dirs]
     todo = [(d, mask) for d, (step, mask) in zip(chip_dirs, plans, strict=True) if step == "write"]
-    # Loaded only when a chip needs it: a rerun that keeps every file skips the scan.
-    written = {}
-    if todo:
-        source = _source(fields_file)
-        with ThreadPoolExecutor(max(1, workers)) as pool:
-            outcomes = pool.map(lambda job: _write_chip(source, *job), todo)
-            written = {d: outcome for (d, _), outcome in zip(todo, outcomes, strict=True)}
+    written = _write_chips(fields_file, todo, workers)
+    outcomes = [written.get(d, (step, "")) for d, (step, _) in zip(chip_dirs, plans, strict=True)]
+    return _tally(chip_dirs, outcomes)
+
+
+def _write_chips(
+    fields_file: Path, todo: list[tuple[Path, Path]], workers: int
+) -> dict[Path, tuple[str, str]]:
+    """Each chip's outcome; the fields load only when a chip needs them, so a rerun
+    that keeps every file skips the scan."""
+    if not todo:
+        return {}
+    source = _source(fields_file)
+    with ThreadPoolExecutor(max(1, workers)) as pool:
+        outcomes = pool.map(lambda job: _write_chip(source, *job), todo)
+        return {d: outcome for (d, _), outcome in zip(todo, outcomes, strict=True)}
+
+
+def _tally(chip_dirs: list[Path], outcomes: list[tuple[str, str]]) -> ChipFieldsResult:
     result = ChipFieldsResult()
-    for chip_dir, (step, _) in zip(chip_dirs, plans, strict=True):
-        outcome, reason = written.get(chip_dir, (step, ""))
+    for chip_dir, (outcome, reason) in zip(chip_dirs, outcomes, strict=True):
         if outcome == "written":
             result.written += 1
         elif outcome == "skipped":
