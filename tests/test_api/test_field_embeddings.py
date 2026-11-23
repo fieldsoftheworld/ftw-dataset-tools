@@ -642,30 +642,62 @@ class TestSecondReviewFindings:
         assert utm == again
         assert utm != other_crs
 
-    def test_the_fingerprint_scan_is_bounded_and_unordered(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_the_fingerprint_scan_is_bounded(self, tmp_path: Path, monkeypatch) -> None:
         fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
-        before = fe.fields_fingerprint(fields)
-        statements: list[str] = []
+        seen: list[tuple] = []
         connect = duckdb.connect
 
-        class Recording:
+        class Probe:
             def __init__(self, con) -> None:
                 self._con = con
 
             def execute(self, sql, *args):
-                statements.append(" ".join(str(sql).split()))
+                if "file_row_number" in str(sql):
+                    seen.append(
+                        self._con.execute(
+                            "SELECT current_setting('threads'), "
+                            "current_setting('preserve_insertion_order')"
+                        ).fetchone()
+                    )
                 return self._con.execute(sql, *args)
 
             def __getattr__(self, name):
                 return getattr(self._con, name)
 
-        monkeypatch.setattr(fe.duckdb, "connect", lambda *a, **k: Recording(connect(*a, **k)))
+        monkeypatch.setattr(fe.duckdb, "connect", lambda *a, **k: Probe(connect(*a, **k)))
 
-        assert fe.fields_fingerprint(fields) == before
-        assert "SET threads = 8" in statements
-        assert "SET preserve_insertion_order = false" in statements
+        fe.fields_fingerprint(fields)
+
+        assert seen == [(fe._FINGERPRINT_THREADS, False)]
+
+    def test_the_fingerprint_hashes_every_row_once_across_row_groups(self, tmp_path: Path) -> None:
+        import hashlib
+
+        import shapely
+
+        n = 2_000
+        geoms = shapely.box(np.arange(n) * 10.0 + X, Y, np.arange(n) * 10.0 + X + 5, Y + 5)
+        geoms[7] = geoms[3]  # a repeated geometry must not cancel out
+        ids = [f"f{i}" for i in range(n)]
+        ids[7] = ids[3]
+        path = tmp_path / "many.parquet"
+        gpd.GeoDataFrame({"id": ids}, geometry=list(geoms), crs=UTM).to_parquet(
+            path, row_group_size=150
+        )
+        assert pq.ParquetFile(path).metadata.num_row_groups > 10
+
+        table = pq.read_table(path, columns=["id", "geometry"])
+        combined = 0
+        for row, (fid, wkb) in enumerate(
+            zip(table["id"].to_pylist(), table["geometry"].to_pylist(), strict=True)
+        ):
+            h = hashlib.blake2b(f"{row}\0{fid}\0".encode(), digest_size=16)
+            h.update(shapely.to_wkb(shapely.from_wkb(wkb)))
+            combined ^= int.from_bytes(h.digest(), "big")
+
+        rows, _crs, digest = fe.fields_fingerprint(path).split(":")
+
+        assert (int(rows), digest) == (n, f"{combined:032x}")
 
     def test_an_older_algorithm_version_is_not_current(self, tmp_path: Path, monkeypatch) -> None:
         fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})

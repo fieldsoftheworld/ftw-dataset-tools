@@ -1013,7 +1013,9 @@ def _check_fields(fields_path: Path, id_col: str) -> tuple[str, CRS]:
     return geom_col, crs
 
 
-_FINGERPRINT_THREADS = 8
+# Two: each thread holds about two row groups' geometry, and the Python hash loop,
+# not the scan, sets the pace (1.1 s per 600k rows at 2 threads or 8).
+_FINGERPRINT_THREADS = 2
 
 
 def fields_fingerprint(fields_file: Path | str, id_col: str = "id") -> str:
