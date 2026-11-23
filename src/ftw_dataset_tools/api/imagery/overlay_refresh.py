@@ -15,6 +15,13 @@ catalogs and only stale chips have their item read. The rule:
   (a download always draws it), so it is not retried.
 - A failed draw bumps the slot preview's mtime, so the same mask is not retried (or
   counted) on every run; rebuilding the mask makes it stale again.
+- An equal mtime is not stale. Coarse timestamps tie often, and in a normal run the
+  overlay or image is always written after the mask (the masks stage runs first), so
+  a tie means "drawn right after", not "mask rebuilt since". Counting ties as stale
+  would redraw fresh chips on every run on such filesystems.
+- When a chip's item cannot be written, its overlay (else its slot preview) is set
+  just older than the mask, so the next run retries it rather than leave the item's
+  thumbnail describing a different file.
 
 Copies that do not preserve mtimes (``cp`` without ``-p``, some syncs) can therefore
 cause extra redraws, or missed ones when a copied mask ends up older than its overlay.
@@ -82,6 +89,7 @@ def overlay_is_stale(chip_dir: Path, chip_id: str) -> bool:
     if mask_mtime is None:
         return False
     overlay_mtime = _mtime(chip_dir / f"{chip_id}_overlay{PREVIEW_SUFFIX}")
+    # Strictly older: a tie is not stale (see the module docstring).
     if overlay_mtime is not None:
         return overlay_mtime < mask_mtime
     best = best_slot_preview(chip_dir, chip_id)
@@ -141,6 +149,28 @@ def _fall_back_to_plain(task: _RedrawTask) -> None:
         refresh_chip_preview(task.item, chip_dir, slot, checksums=task.checksums)
 
 
+def _retry_target(chip_dir: Path, chip_id: str) -> Path | None:
+    """The file whose age makes the chip stale: its overlay, else its best slot preview."""
+    overlay = chip_dir / f"{chip_id}_overlay{PREVIEW_SUFFIX}"
+    if overlay.exists():
+        return overlay
+    best = best_slot_preview(chip_dir, chip_id)
+    return existing_preview(chip_dir, f"{chip_id}_{best}_image_s2") if best else None
+
+
+def _mark_for_retry(task: _RedrawTask) -> None:
+    """Make the chip stale again after its item could not be written (best effort)."""
+    chip_dir, chip_id = task.item_path.parent, task.item_path.stem
+    mask_mtime = _mtime(chip_dir / f"{chip_id}{REFERENCE_MASK_SUFFIX}")
+    target = _retry_target(chip_dir, chip_id)
+    if mask_mtime is None or target is None:
+        return
+    try:
+        os.utime(target, (mask_mtime - 1, mask_mtime - 1))
+    except OSError as err:
+        logger.warning(f"{chip_id}: could not mark the chip preview for a retry: {err}")
+
+
 def _settle(outcome: ParallelOutcome[_RedrawTask, bool]) -> bool | None:
     """Write the chip's item after its draw (calling thread).
 
@@ -164,9 +194,10 @@ def _apply(outcome: ParallelOutcome[_RedrawTask, bool], result: OverlayRedrawRes
     task = outcome.task
     try:
         drawn = _settle(outcome)
-    except (OSError, ValueError, pystac.STACError) as err:
+    except Exception as err:  # any one chip's failure is counted, never the run's
         result.failed += 1
-        logger.warning(f"{task.item.id}: could not redraw the chip preview: {err}")
+        logger.warning(f"{task.item_path.stem}: could not redraw the chip preview: {err}")
+        _mark_for_retry(task)
         return
     if drawn:
         result.redrawn += 1
@@ -185,7 +216,7 @@ def _stale_tasks(item_paths: Iterable[Path], result: OverlayRedrawResult) -> lis
             continue
         try:
             tasks.append(_plan(item_path))
-        except (OSError, ValueError, pystac.STACError) as err:
+        except Exception as err:  # a malformed item is counted, not fatal to the run
             result.failed += 1
             logger.warning(f"{item_path.stem}: could not redraw the chip preview: {err}")
     return tasks

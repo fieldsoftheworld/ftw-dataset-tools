@@ -259,7 +259,8 @@ class TestPreviewImageryForCatalog:
         assert (third.previews_redrawn, third.previews_redraw_failed) == (0, 0)
 
     def test_the_preview_workers_reach_the_redraw(self, tmp_path: Path) -> None:
-        """Both stale overlays are drawn at once; one at a time, the barrier breaks."""
+        """Five overlays are drawn at once: more than the default workers, so the
+        barrier breaks unless ``workers`` reaches the redraw."""
         import os
         import threading
         from unittest.mock import patch
@@ -268,13 +269,13 @@ class TestPreviewImageryForCatalog:
 
         out = _collection(tmp_path)
         scene = _scene(tmp_path / "scene.tif")
-        chip_dirs = [_chip(out, chip_id, scene=scene) for chip_id in ("chip_a", "chip_b")]
+        chip_dirs = [_chip(out, f"chip_{i}", scene=scene) for i in range(5)]
         preview_imagery_for_catalog(out, workers=1)
         for chip_dir in chip_dirs:
             overlay = chip_dir / f"{chip_dir.name}_overlay.webp"
             mask_mtime = (chip_dir / f"{chip_dir.name}_semantic_3_class.tif").stat().st_mtime
             os.utime(overlay, (mask_mtime - 100, mask_mtime - 100))
-        barrier = threading.Barrier(2, timeout=10)
+        barrier = threading.Barrier(5, timeout=10)
         draw = overlay_refresh._draw
 
         def wait_then_draw(task):
@@ -282,9 +283,9 @@ class TestPreviewImageryForCatalog:
             return draw(task)
 
         with patch.object(overlay_refresh, "_draw", wait_then_draw):
-            again = preview_imagery_for_catalog(out, workers=2)
+            again = preview_imagery_for_catalog(out, workers=5)
 
-        assert (again.previews_redrawn, again.previews_redraw_failed) == (2, 0)
+        assert (again.previews_redrawn, again.previews_redraw_failed) == (5, 0)
 
     def test_resume_is_the_default(self, tmp_path: Path) -> None:
         """No caller should inherit a re-render of everything by omitting the flag."""
