@@ -117,6 +117,10 @@ class TestExact:
         assert result.groups["exact"] == 1
         assert out["metrics:area"].tolist() == [1000.0]  # the first in content order
 
+    def test_nan_metrics_are_equal(self) -> None:
+        assert field_ids._close(float("nan"), float("nan"))
+        assert not field_ids._close(float("nan"), 1.0)
+
     def test_larger_metric_differences_are_not_exact(self, tmp_path: Path) -> None:
         _, result = dedupe(tmp_path, [row(1, LEFT, area=1000.0), row(1, LEFT, area=1010.0)])
         assert result.groups["exact"] == 0
@@ -204,6 +208,12 @@ class TestParts:
 
 
 class TestSameParcel:
+    def test_the_kept_crop_is_not_listed_again(self, tmp_path: Path) -> None:
+        rows = [row(1, LEFT, "A", year=2020), row(1, LEFT, "A", year=2021)]
+        out, result = dedupe(tmp_path, rows)
+        assert result.groups["same_parcel"] == 1
+        assert list(out["other_crop_names"].iloc[0]) == []
+
     def test_one_declaration_is_kept_and_the_other_crops_saved(self, tmp_path: Path) -> None:
         rows = [row(1, LEFT, "B"), row(1, LEFT, "A"), row(1, LEFT, "C"), row(2, RIGHT, "A")]
         out, result = dedupe(tmp_path, rows)
@@ -374,6 +384,25 @@ class TestErrors:
         src = write(tmp_path / "in.parquet", [row(1, LEFT)])
         with pytest.raises(FieldIdsError, match="no 'fid' column"):
             dedupe_fields(src, tmp_path / "out.parquet", id_col="fid")
+
+    def test_a_renumbered_id_that_is_taken_raises(self, tmp_path: Path) -> None:
+        rows = [row("A", LEFT, "x"), row("A", FAR, "y"), row("A_1", RIGHT)]
+        src = write(tmp_path / "in.parquet", rows)
+        with pytest.raises(FieldIdsError, match=r"already have \(e.g. A_1\)"):
+            dedupe_fields(src, tmp_path / "out.parquet")
+        assert not (tmp_path / "out.parquet").exists()
+
+    @pytest.mark.parametrize("column", ["source_id", "other_crop_names", "_pos"])
+    def test_a_column_the_rewrite_writes_is_refused(self, tmp_path: Path, column: str) -> None:
+        rows = [row(1, LEFT, **{column: "x"}), row(1, LEFT, **{column: "x"})]
+        src = write(tmp_path / "in.parquet", rows)
+        with pytest.raises(FieldIdsError, match=f"already has column\\(s\\) {column}"):
+            dedupe_fields(src, tmp_path / "out.parquet")
+
+    def test_reserved_columns_are_fine_without_duplicates(self, tmp_path: Path) -> None:
+        src = write(tmp_path / "in.parquet", [row(1, LEFT, source_id="x"), row(2, RIGHT)])
+        dedupe_fields(src, tmp_path / "out.parquet")
+        assert (tmp_path / "out.parquet").read_bytes() == src.read_bytes()
 
     def test_plain_parquet_with_duplicates(self, tmp_path: Path) -> None:
         import pyarrow as pa

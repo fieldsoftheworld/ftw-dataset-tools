@@ -18,8 +18,8 @@ right after the fields are written, by the first rule that fits the group:
     The rows have the same polygon (their union is within 1% of the smallest row's
     area) but different attributes, like two declarations of one parcel. One row is
     kept: one whose crop passes the class filter when one is given, otherwise the
-    first in content order. The crop names of the rows not kept go in
-    ``other_crop_names``.
+    first in content order. The crop names of the rows not kept, other than the
+    kept row's, go in ``other_crop_names``.
 ``renumbered``
     Anything else. Every row is kept and, in content order, gets ``<id>_1`` ...
     ``<id>_k``; the id column becomes VARCHAR and every row of the file gets
@@ -74,7 +74,17 @@ AREA_METRIC = "metrics:area"
 CROP_NAME_COLUMNS = ("crop:name", "hcat:name")
 
 RULES = ("exact", "parts", "same_parcel", "renumbered")
+# Columns the rewrite adds or uses internally; a source that has one is refused.
+RESERVED_COLUMNS = (
+    SOURCE_ID_COLUMN,
+    OTHER_CROPS_COLUMN,
+    "_pos",
+    "_sub",
+    "_id_text",
+    "_renumbered",
+)
 
+_THREADS = 8
 AREA_CRS = "EPSG:6933"  # WGS 84 / NSIDC EASE-Grid 2.0 Global, equal-area
 METRICS_TOLERANCE = 1e-4  # relative: 0.01%
 OVERLAP_TOLERANCE = 0.01  # of the smallest part's area
@@ -251,11 +261,15 @@ def _text(record: dict[str, Any], columns: tuple[str, ...]) -> tuple:
 
 
 def _content_key(record: dict[str, Any], layout: _Layout) -> tuple:
-    return (bytes(record[layout.geom_col] or b""), _text(record, layout.attrs))
+    """Geometry WKB, then the attributes, then the bbox (only a tie-breaker)."""
+    bbox = str(record[layout.bbox_col]) if layout.bbox_col is not None else ""
+    return (bytes(record[layout.geom_col] or b""), _text(record, layout.attrs), bbox)
 
 
 def _close(a: Any, b: Any) -> bool:
     if isinstance(a, int | float) and isinstance(b, int | float):
+        if math.isnan(a) or math.isnan(b):
+            return math.isnan(a) and math.isnan(b)
         return abs(a - b) <= METRICS_TOLERANCE * max(abs(a), abs(b))
     return a == b
 
@@ -344,8 +358,9 @@ def _one_parcel(rows: list[_Row], layout: _Layout) -> dict[str, Any]:
     kept = min(rows, key=lambda r: (not _passes_filter(r, layout), r.key))
     record = dict(kept.record)
     if layout.crop_col is not None:
-        others = [r.record[layout.crop_col] for r in rows if r is not kept]
-        record[OTHER_CROPS_COLUMN] = sorted({str(v) for v in others if v is not None})
+        others = {str(r.record[layout.crop_col]) for r in rows if r is not kept}
+        others.discard(str(kept.record[layout.crop_col]))
+        record[OTHER_CROPS_COLUMN] = sorted(others - {"None"})
     return record
 
 
@@ -354,6 +369,7 @@ def _renumbered(rows: list[_Row], layout: _Layout) -> list[dict[str, Any]]:
     for n, row in enumerate(rows, start=1):
         record = dict(row.record)
         record[layout.id_col] = f"{row.id_text}_{n}"
+        record["_renumbered"] = True
         records.append(record)
     return records
 
@@ -376,25 +392,52 @@ def _resolve(rows: list[_Row], layout: _Layout) -> _Outcome:
 # --------------------------------------------------------------------------- #
 
 
+def _preference(
+    columns: list[str], class_filter: ClassFilter | None
+) -> tuple[str | None, frozenset[str]]:
+    """The class filter's column in these fields and the values it includes."""
+    if class_filter is None:
+        return None, frozenset()
+    return class_filter.resolve_column(columns), frozenset(class_filter.include)
+
+
+def _crop_column(columns: list[str], keep_col: str | None) -> str | None:
+    candidates = (CROP_NAME_COLUMNS[0], keep_col, *CROP_NAME_COLUMNS[1:])
+    return next((c for c in candidates if c is not None and c in columns), None)
+
+
+def _check_reserved(columns: list[str], path: Path) -> None:
+    clash = sorted(set(columns) & set(RESERVED_COLUMNS))
+    if clash:
+        raise FieldIdsError(
+            f"{path.name} already has column(s) {', '.join(clash)}, which resolving its "
+            "duplicate ids writes; rename them first"
+        )
+
+
+def _bbox_column(columns: list[str], path: Path) -> str | None:
+    return get_bbox_column_name(path) or ("bbox" if "bbox" in columns else None)
+
+
 def _layout(
-    columns: list[str], path: Path | str, id_col: str, class_filter: ClassFilter | None
+    columns: list[str], path: Path, id_col: str, class_filter: ClassFilter | None
 ) -> _Layout:
+    _check_reserved(columns, path)
     geom_col = detect_geometry_column(path) or "geometry"
-    bbox_col = get_bbox_column_name(path) or ("bbox" if "bbox" in columns else None)
+    bbox_col = _bbox_column(columns, path)
     attrs = tuple(c for c in columns if c not in (geom_col, bbox_col))
     metrics = tuple(c for c in attrs if c.startswith(METRICS_PREFIX))
-    keep_col = class_filter.resolve_column(columns) if class_filter is not None else None
-    crop_candidates = (CROP_NAME_COLUMNS[0], keep_col, *CROP_NAME_COLUMNS[1:])
+    keep_col, keep_values = _preference(columns, class_filter)
     return _Layout(
         id_col=id_col,
         geom_col=geom_col,
         bbox_col=bbox_col,
         attrs=attrs,
         metrics=metrics,
-        core=tuple(c for c in attrs if c not in metrics and c != id_col),
-        crop_col=next((c for c in crop_candidates if c is not None and c in columns), None),
+        core=tuple(c for c in attrs if c not in (*metrics, id_col)),
+        crop_col=_crop_column(columns, keep_col),
         keep_col=keep_col,
-        keep_values=frozenset(class_filter.include) if class_filter is not None else frozenset(),
+        keep_values=keep_values,
     )
 
 
@@ -444,7 +487,7 @@ def _resolve_all(
         result.changed_ids[outcome.rule].append(id_text)
         first = min(r.pos for r in rows)
         for sub, record in enumerate(outcome.records):
-            records.append({**record, SOURCE_ID_COLUMN: id_text, "_pos": first, "_sub": sub})
+            records.append({**record, "_id_text": id_text, "_pos": first, "_sub": sub})
     for ids in result.changed_ids.values():
         ids.sort()
     return records
@@ -475,8 +518,9 @@ def _resolved_table(
     fields += [pa.field(name, _ADDED_TYPES[name]) for name in added]
     if renumbered:
         for record in records:
+            record[SOURCE_ID_COLUMN] = record["_id_text"]
             if not isinstance(record[layout.id_col], str):
-                record[layout.id_col] = record[SOURCE_ID_COLUMN]
+                record[layout.id_col] = record["_id_text"]
     return pa.Table.from_pylist(records, schema=pa.schema(fields))
 
 
@@ -588,11 +632,37 @@ def _row_count(path: Path) -> int:
     return pq.ParquetFile(path).metadata.num_rows
 
 
+def _check_new_ids(
+    con: duckdb.DuckDBPyConnection, src: Path, layout: _Layout, records: list[dict[str, Any]]
+) -> None:
+    """Refuse renumbered ids that another row of the file already has."""
+    new = [r[layout.id_col] for r in records if r.get("_renumbered")]
+    if not new:
+        return
+    con.register("new_ids", pa.table({"new_id": pa.array(new, pa.string())}))
+    quoted = _quote(layout.id_col)
+    taken = con.execute(f"""
+        SELECT DISTINCT CAST({quoted} AS VARCHAR) AS taken
+        FROM read_parquet('{sql_path(src)}')
+        WHERE CAST({quoted} AS VARCHAR) IN (SELECT new_id FROM new_ids)
+        ORDER BY taken LIMIT 5""").fetchall()
+    if taken:
+        examples = ", ".join(row[0] for row in taken)
+        raise FieldIdsError(
+            f"{src.name}: renumbering rows that share an id would give ids other rows "
+            f"already have (e.g. {examples})"
+        )
+
+
 def _dedupe(
     con: duckdb.DuckDBPyConnection, src: Path, dst: Path, layout: _Layout, result: DedupResult
 ) -> None:
+    # A scan buffers row groups per thread: bound them, as on a 192-core host the
+    # unbounded default ran out of memory on other full-file scans.
+    con.execute(f"SET threads = {_THREADS}")
     groups, schema = _read_groups(con, src, layout)
     records = _resolve_all(groups, layout, result)
+    _check_new_ids(con, src, layout, records)
     result.added_columns = _added_columns(result, layout)
     resolved = _resolved_table(records, schema, layout, result.added_columns)
     dst.parent.mkdir(parents=True, exist_ok=True)
