@@ -2,14 +2,15 @@
 # Keyed on crop:name (the Dutch RVO gewas label), NOT crop:code: across the 2009-2026 editions
 # the numeric crop:code was REUSED for different crops (e.g. code 1926 = seed potato in
 # 2009-2011, then "agricultural nature mixture" from 2016), so codes are ambiguous while the
-# Dutch crop:name is stable and unambiguous. Covers all editions 2009-2026; 580 distinct names.
+# Dutch crop:name is stable and unambiguous. Covers the editions 2009-2026; 583 distinct names.
 #
 # Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
 # semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
 # exclusion described elsewhere in this header. See docs/grassland-review.md.
 #
 # Excluded (background): permanent, temporary & natural grassland, pasture, forage grasses and
-# turf (sod); fallow, green fallow, cover / green-manure crops (incl. phacelia, catch crops),
+# turf (sod); fallow, green fallow, uncultivated land (onbeteelde grond), cover /
+# green-manure crops (incl. phacelia, catch crops),
 # field & fauna margins (randen); ornamental flowers & bulbs (tulip, lily, iris, dahlia, crocus,
 # etc.), herbaceous perennials, forest; and energy crops (Miscanthus, Igniscum). Grass/clover
 # grown for SEED is field; grass grown as forage/cover is background.
@@ -509,6 +510,10 @@ exclude:
   - "Timothee, groenbemesting, vanggewas"
   # Fallow, cover / green-manure crops & field margins
   - "Groene braak, spontane opkomst"
+  # Uncultivated land: temporarily idle, idle in connection with public works, or under a cultivation ban
+  - "Tijdelijk onbeteelde grond, anders dan voor publieke werken"
+  - "Tijdelijk onbeteelde grond, i.v.m. publieke werken"
+  - "Onbeteelde grond vanwege een teeltverbod/ontheffing"
   - "Overige groenbemesters, niet-vlinderbloemige-"
   - "Overige groenbemesters, niet-vlinderbloemige-, niet zijnde gras"
   - "Perceel bedekt met gewasresten (mulching)"
