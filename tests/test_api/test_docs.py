@@ -1018,6 +1018,8 @@ class TestFieldEmbeddingsSection:
         assert "USING (field_id)" in readme
 
 
+_DECODE_MASKS = ["semantic_3class_mask", "decode_boundary_mask", "decode_distance_mask"]
+
 _V2_COLLECTION = {
     "ftw:mask_resolution_m": 2.5,
     "ftw:mask_boundary_width_m": 10.0,
@@ -1084,31 +1086,56 @@ class TestV2MaskFacts:
         assert mask_facts(collection, {"stages": {"masks": masks_cfg}})[key] == expected
 
     @pytest.mark.parametrize(
-        ("masks", "resolution", "shown"),
+        ("masks", "resolution", "width", "expected"),
         [
-            (["semantic_3class_mask", "decode_boundary_mask", "decode_distance_mask"], 2.5, True),
-            (["semantic_3class_mask", "decode_boundary_mask", "decode_distance_mask"], 10.0, False),
-            (["semantic_3class_mask"], 2.5, False),
+            (
+                _DECODE_MASKS,
+                2.5,
+                10.0,
+                "The DECODE boundary is the one-pixel inner ring of each field, so it is "
+                "2.5 m wide rather than the 10 m of the boundary lines. "
+                "`decode_distance_max_px` counts 2.5 m mask pixels.",
+            ),
+            (
+                _DECODE_MASKS,
+                2.5,
+                None,
+                "The DECODE boundary is the one-pixel inner ring of each field, so it is "
+                "2.5 m wide. `decode_distance_max_px` counts 2.5 m mask pixels.",
+            ),
+            (
+                _DECODE_MASKS,
+                10.0,
+                20.0,
+                "The DECODE boundary is the one-pixel inner ring of each field, so it is "
+                "10 m wide rather than the 20 m of the boundary lines.",
+            ),
+            (
+                _DECODE_MASKS,
+                20.0,
+                None,
+                "The DECODE boundary is the one-pixel inner ring of each field, so it is "
+                "20 m wide. `decode_distance_max_px` counts 20 m mask pixels.",
+            ),
+            (_DECODE_MASKS, 10.0, None, None),
+            (["semantic_3class_mask"], 2.5, 10.0, None),
         ],
     )
-    def test_decode_note_only_for_decode_masks_finer_than_10_m(
-        self, masks: list[str], resolution: float, shown: bool
+    def test_decode_note(
+        self, masks: list[str], resolution: float, width: float | None, expected: str | None
     ) -> None:
         from ftw_dataset_tools.api.docs import render_agents
 
         stats = _stats(
             mask_types=masks,
-            mask_facts={"resolution_m": resolution, "boundary_width_m": None, "unknown": None},
+            mask_facts={"resolution_m": resolution, "boundary_width_m": width, "unknown": None},
         )
         text = render_agents({"title": "T", "links": []}, stats, [])
 
-        note = (
-            "The DECODE boundary is the one-pixel inner ring of each field, so it is 2.5 m "
-            "wide rather than the boundary line width, and `decode_distance_max_px` counts "
-            "2.5 m mask pixels."
-        )
-        assert (note in text) is shown
-        assert ("DECODE boundary is" in text) is shown
+        if expected is None:
+            assert "DECODE" not in text
+        else:
+            assert f"- {expected}\n" in text + "\n"
 
     def test_a_10_m_grid_with_wide_lines_is_stated(self) -> None:
         from ftw_dataset_tools.api.docs import _grid_sentence

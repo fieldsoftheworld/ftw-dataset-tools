@@ -764,21 +764,31 @@ def _chip_file_notes(stats: dict) -> list[str]:
     return [_CHIP_FILE_NOTES[key] for key in stats.get("chip_files") or []]
 
 
-def _is_finer_than_v1(facts: dict) -> bool:
-    resolution = facts.get("resolution_m")
-    return bool(resolution) and float(resolution) < _DEFAULT_MASK_RESOLUTION_M
-
-
 def _decode_note(stats: dict, facts: dict) -> str | None:
-    """How the DECODE masks scale on a grid finer than v1's 10 m (they stay one pixel)."""
+    """How the DECODE masks scale on a v2 grid: they stay one mask pixel wide."""
     has_decode = any(m.startswith("decode_") for m in stats.get("mask_types") or [])
-    if not (has_decode and _is_finer_than_v1(facts)):
+    resolution = facts.get("resolution_m")
+    if not (has_decode and resolution and _grid_is_notable(facts)):
         return None
-    return (
+    return _ring_sentence(resolution, facts.get("boundary_width_m")) + _pixel_sentence(resolution)
+
+
+def _ring_sentence(resolution: float, width: float | None) -> str:
+    """The DECODE ring's width, set against the boundary lines' when those differ."""
+    text = (
         "The DECODE boundary is the one-pixel inner ring of each field, so it is "
-        f"{facts['resolution_m']:g} m wide rather than the boundary line width, and "
-        f"`decode_distance_max_px` counts {facts['resolution_m']:g} m mask pixels."
+        f"{resolution:g} m wide"
     )
+    if width and float(width) != float(resolution):
+        text += f" rather than the {width:g} m of the boundary lines"
+    return text + "."
+
+
+def _pixel_sentence(resolution: float) -> str:
+    """What ``decode_distance_max_px`` counts, when a pixel is not v1's 10 m."""
+    if float(resolution) == _DEFAULT_MASK_RESOLUTION_M:
+        return ""
+    return f" `decode_distance_max_px` counts {resolution:g} m mask pixels."
 
 
 def _unknown_note(stats: dict, facts: dict) -> str | None:
