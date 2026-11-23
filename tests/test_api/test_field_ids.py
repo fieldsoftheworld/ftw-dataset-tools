@@ -249,6 +249,15 @@ class TestSlivers:
         assert out.geometry.iloc[0].geom_type == "Polygon"
         assert out.geometry.iloc[0].equals(gdf.geometry.iloc[0])
 
+    def test_a_sliver_touching_a_part_is_left_out_before_the_union(self, tmp_path: Path) -> None:
+        """A sliver sharing an edge would join the field's outline if unioned."""
+        sliver = shapely.Polygon([(10.0, 50.0), (10.0005, 50.0), (10.00025, 49.99999999)])
+        area = m2(LEFT, RIGHT)
+        rows = [row(1, LEFT, area=area), row(1, sliver, area=area), row(1, RIGHT, area=area)]
+        out, result = dedupe(tmp_path, rows)
+        assert result.groups["parts"] == 1
+        assert out.geometry.iloc[0].equals(shapely.union_all([LEFT, RIGHT]))
+
     def test_a_sliver_piece_of_a_part_is_left_out(self, tmp_path: Path) -> None:
         tiny = box(10.0030, 50.0, 10.0030001, 50.0000001)  # about 0.1 m², apart
         area = m2(LEFT, RIGHT)
@@ -558,6 +567,45 @@ class TestOutput:
         dedupe_fields(src, src)
         assert not find_duplicate_ids(src)
         assert [p.name for p in tmp_path.iterdir()] == ["f.parquet"]
+
+    def test_the_source_metadata_is_kept(self, tmp_path: Path) -> None:
+        """fiboa's collection and pandas' records survive; Arrow's stale schema doesn't."""
+        import pyarrow as pa
+
+        src = write(tmp_path / "geo.parquet", self.ROWS)
+        table = pq.read_table(src)
+        metadata = {**table.schema.metadata, b"collection": b'{"fiboa_version": "0.2.0"}'}
+        pq.write_table(table.replace_schema_metadata(metadata), tmp_path / "in.parquet")
+        assert b"ARROW:schema" in pq.ParquetFile(tmp_path / "in.parquet").metadata.metadata
+
+        dedupe_fields(tmp_path / "in.parquet", tmp_path / "out.parquet")
+        written = pq.ParquetFile(tmp_path / "out.parquet").metadata.metadata
+        assert written[b"collection"] == b'{"fiboa_version": "0.2.0"}'
+        assert written[b"pandas"] == metadata[b"pandas"]
+        assert b"geo" in written
+        assert b"ARROW:schema" not in written
+        assert isinstance(pq.read_table(tmp_path / "out.parquet"), pa.Table)
+        assert len(gpd.read_parquet(tmp_path / "out.parquet")) == 6
+
+    def test_a_large_renumbered_group_is_written_in_order(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The write sorts on (_pos, _sub), not on the order the resolved rows arrive in."""
+        resolved_table = field_ids._resolved_table
+
+        def reversed_rows(*args, **kwargs):
+            table = resolved_table(*args, **kwargs)
+            return table.take(list(range(table.num_rows - 1, -1, -1)))
+
+        monkeypatch.setattr(field_ids, "_resolved_table", reversed_rows)
+        shapes = [box(10 + k * 0.002, 50.0, 10.001 + k * 0.002, 50.001) for k in range(3000)]
+        rows = [row(0, LEFT, "first")]
+        rows += [row(5, s, f"c{k:04d}") for k, s in enumerate(shapes)]
+        rows += [row(9, RIGHT, "last")]
+        out, _ = dedupe(tmp_path, rows)
+        assert out["id"].tolist() == ["0", *[f"5_{n}" for n in range(1, 3001)], "9"]
+        expected = sorted(shapes, key=lambda g: g.wkb)
+        assert [g.wkb for g in out.geometry.iloc[1:-1]] == [g.wkb for g in expected]
 
     def test_logs_a_summary(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         dedupe(tmp_path, self.ROWS)

@@ -613,22 +613,38 @@ def _add_source_ids(records: list[dict[str, Any]], layout: _Layout) -> None:
             record[layout.id_col] = record["_id_text"]
 
 
-def _read_geo(src: Path) -> dict:
-    con = duckdb.connect(":memory:")
-    try:
-        row = con.execute(
-            "SELECT value FROM parquet_kv_metadata(?) WHERE key = 'geo'", [str(src)]
-        ).fetchone()
-    finally:
-        con.close()
-    if row is None:
+# Arrow's own schema record would describe the source's columns, not the rewrite's.
+_STALE_METADATA = {"ARROW:schema"}
+
+
+def _source_metadata(src: Path) -> dict[str, str]:
+    """The source's key-value metadata (fiboa's ``collection``, ``pandas``, ``geo``...)."""
+    import pyarrow.parquet as pq
+
+    raw = _decoded(pq.ParquetFile(src).metadata.metadata or {})
+    if "geo" not in raw:
         raise FieldIdsError(f"{src.name} is not GeoParquet: it has no 'geo' metadata")
-    return json.loads(row[0])
+    return {k: v for k, v in raw.items() if k not in _STALE_METADATA}
 
 
-def _geo_metadata(src: Path, layout: _Layout, resolved: pa.Table) -> str:
+def _decoded(raw: dict[bytes, bytes]) -> dict[str, str]:
+    return {k.decode(): v.decode("utf-8", "replace") for k, v in raw.items()}
+
+
+def _kv_metadata_sql(src: Path, layout: _Layout, resolved: pa.Table) -> str:
+    """The source's metadata as a DuckDB ``KV_METADATA`` struct, with ``geo`` updated."""
+    metadata = _source_metadata(src)
+    metadata["geo"] = _geo_metadata(src, json.loads(metadata["geo"]), layout, resolved)
+    entries = ", ".join(f"{_literal(k)}: {_literal(v)}" for k, v in metadata.items())
+    return f"{{{entries}}}"
+
+
+def _literal(text: str) -> str:
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _geo_metadata(src: Path, geo: dict, layout: _Layout, resolved: pa.Table) -> str:
     """The source's ``geo`` metadata, listing any geometry type the merges added."""
-    geo = _read_geo(src)
     column = geo.get("columns", {}).get(layout.geom_col, {})
     if column.get("encoding", "WKB") != "WKB":
         raise FieldIdsError(f"{src.name}: only WKB geometries are supported")
@@ -649,16 +665,17 @@ def _write(
 ) -> None:
     """Write the rows without a shared id and the resolved ones, in source order.
 
-    DuckDB streams the file through, spilling the sort to disk if it must, and the
-    source's ``geo`` metadata is written as it was (CRS included) but for any
-    geometry type a merge added.
+    DuckDB streams the file through, spilling the sort to disk if it must. The source's
+    key-value metadata is written as it was (``geo`` with its CRS, fiboa's
+    ``collection``, ``pandas``), but for any geometry type a merge added to ``geo`` and
+    without ``ARROW:schema``, which would describe the source's columns.
     """
     quoted = _quote(layout.id_col)
     renumbered = SOURCE_ID_COLUMN in added
     replace = f" REPLACE (CAST({quoted} AS VARCHAR) AS {quoted})" if renumbered else ""
     extra = "".join(f", {_ADDED_SQL[c].format(id=quoted)} AS {_quote(c)}" for c in added)
     columns = ", ".join(_quote(f.name) for f in resolved.schema if f.name not in ("_pos", "_sub"))
-    geo = _geo_metadata(src, layout, resolved).replace("'", "''")
+    metadata = _kv_metadata_sql(src, layout, resolved)
     con.register("resolved", resolved)
     con.execute(f"""
         COPY (
@@ -670,7 +687,7 @@ def _write(
                 UNION ALL BY NAME
                 SELECT * FROM resolved
             ) ORDER BY _pos, _sub
-        ) TO '{sql_path(dst)}' (FORMAT PARQUET, COMPRESSION zstd, KV_METADATA {{geo: '{geo}'}})""")
+        ) TO '{sql_path(dst)}' (FORMAT PARQUET, COMPRESSION zstd, KV_METADATA {metadata})""")
 
 
 def _copy_unchanged(src: Path, dst: Path) -> None:
