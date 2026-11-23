@@ -90,7 +90,9 @@ RESERVED_COLUMNS = (
 
 # DuckDB's bounds for the id scans and the rewrite. A scan buffers row groups per
 # thread, and the rewrite sorts every column of the file: unbounded, a 10M-row file
-# peaked at 25 GB, while 4 GB and 8 threads spill to disk with the same output.
+# peaked at 25 GB of RSS. With DuckDB held to 4 GB on 8 threads it spills to disk and
+# writes the same output, and the process peaks at 8.4 GB (5.8 GB for at-2023): the
+# limit bounds DuckDB's buffers, not everything the process holds.
 _THREADS = 8
 _MEMORY_LIMIT = "4GB"
 AREA_CRS = "EPSG:6933"  # WGS 84 / NSIDC EASE-Grid 2.0 Global, equal-area

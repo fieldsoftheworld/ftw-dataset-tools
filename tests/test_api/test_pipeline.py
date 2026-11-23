@@ -13,7 +13,7 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import box
 
-from ftw_dataset_tools.api import crop_stats, field_stats, pipeline
+from ftw_dataset_tools.api import crop_stats, field_ids, field_stats, pipeline
 from ftw_dataset_tools.api import tiles as tiles_module
 from ftw_dataset_tools.api.config import ClassFilter, ClassFilterError, DatasetConfig
 from ftw_dataset_tools.api.geo import detect_crs
@@ -2408,22 +2408,55 @@ class TestUniqueFieldIds:
     def _ids(self, path: Path) -> list[str]:
         return [r[0] for r in duckdb.execute(f"SELECT id FROM '{path}'").fetchall()]
 
-    @pytest.mark.parametrize("filtered", [False, True])
-    def test_a_later_stage_refuses_fields_with_repeated_ids(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filtered: bool
-    ) -> None:
-        """A run starting after reproject checks the fields an older run left."""
+    def _old_staging_dir(self, tmp_path: Path, *, full_unique: bool = False):
+        """An output dir an older ftwd left: fields and filtered fields with repeated ids."""
         config = _config(self._fields(tmp_path), tmp_path / "out", name="ds", year=2023)
         config.class_filter = ClassFilter("crop", ["wheat", "maize"], ["water"])
         ctx = pipeline.build_context(config)
         ctx.output_dir.mkdir(parents=True)
         shutil.copyfile(self._fields(tmp_path), ctx.output_fields_path)
-        if filtered:
-            pipeline.stage_reproject(ctx)  # unique full fields, then a stale filtered file
-            shutil.copyfile(self._fields(tmp_path), ctx.field_polygons_path)
+        shutil.copyfile(self._fields(tmp_path), ctx.field_polygons_path)
+        if full_unique:  # e.g. ftwd dedupe-fields in place on the full fields only
+            field_ids.dedupe_fields(ctx.output_fields_path, ctx.output_fields_path)
+        return ctx
+
+    @pytest.mark.parametrize("stage", ["filter", "chips", "boundaries", "masks"])
+    def test_stages_that_join_on_ids_refuse_repeated_ids(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+    ) -> None:
+        ctx = self._old_staging_dir(tmp_path)
+        monkeypatch.setitem(pipeline._STAGE_FUNCS, stage, pytest.fail)
+        with pytest.raises(StageInputError, match="rebuilds every stage after it"):
+            pipeline.run_pipeline(ctx, [stage])
+
+    @pytest.mark.parametrize("stages", [["select_images", "download_images"], ["stac", "docs"]])
+    def test_stages_that_do_not_join_on_ids_still_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stages: list[str]
+    ) -> None:
+        ctx = self._old_staging_dir(tmp_path)
+        ran: list[str] = []
+        for stage in stages:
+            monkeypatch.setitem(pipeline._STAGE_FUNCS, stage, lambda _ctx, s=stage: ran.append(s))
+        pipeline.run_pipeline(ctx, stages)
+        assert ran == stages
+
+    def test_deduping_only_the_full_fields_in_place_is_not_a_rebuild(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ctx = self._old_staging_dir(tmp_path, full_unique=True)
         monkeypatch.setitem(pipeline._STAGE_FUNCS, "chips", pytest.fail)
-        with pytest.raises(StageInputError, match="Rerun from the reproject stage"):
-            pipeline.run_pipeline(ctx, ["chips"])
+        with pytest.raises(StageInputError, match=r"ds_fields_filtered\.parquet"):
+            pipeline.run_pipeline(ctx, ["chips", "masks"])
+
+    def test_a_run_that_refilters_needs_only_the_full_fields_unique(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ctx = self._old_staging_dir(tmp_path, full_unique=True)
+        ran: list[str] = []
+        for stage in ("filter", "chips"):
+            monkeypatch.setitem(pipeline._STAGE_FUNCS, stage, lambda _ctx, s=stage: ran.append(s))
+        pipeline.run_pipeline(ctx, ["filter", "chips"])
+        assert ran == ["filter", "chips"]
 
     def test_a_later_stage_runs_on_unique_ids(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -427,8 +427,7 @@ def run_pipeline(
     if ctx.provenance is not None:
         config_module.write_provenance_file(ctx.provenance, ctx.output_dir)
 
-    if "reproject" not in stages_to_run:
-        _require_unique_field_ids(ctx)
+    _require_unique_field_ids(ctx, stages_to_run)
     for stage in STAGE_ORDER:
         hook = hooks.get(stage)
         if hook is not None:
@@ -440,20 +439,38 @@ def run_pipeline(
     return ctx
 
 
-def _require_unique_field_ids(ctx: PipelineContext) -> None:
-    """Refuse fields an earlier run left with repeated ids, before any stage reads them.
+def _require_unique_field_ids(ctx: PipelineContext, stages_to_run: list[str]) -> None:
+    """Refuse fields an earlier run left with repeated ids, before a stage joins on them.
 
-    The reproject stage makes the ids unique; a run that starts after it reads the
-    fields files already in the output directory, which an older ftwd may have written.
+    The reproject stage makes the ids unique. A run that starts after it reads the
+    fields files already in the output directory, which an older ftwd may have
+    written; only the stages that join on field ids need them unique, so a run of
+    the imagery, stac or docs stages alone goes ahead. The filtered fields are checked
+    too unless the filter stage rewrites them, so making the full file unique in place
+    (``ftwd dedupe-fields``) is not mistaken for a rebuild.
     """
-    paths = dict.fromkeys((ctx.output_fields_path, ctx.field_polygons_path))
-    for path in (p for p in paths if p.exists()):
-        try:
-            field_ids.require_unique_ids(path)
-        except field_ids.DuplicateIdsError as err:
-            raise StageInputError(
-                f"{err}. Rerun from the reproject stage, which makes the ids unique."
-            ) from err
+    if "reproject" in stages_to_run or not _ID_STAGES.intersection(stages_to_run):
+        return
+    paths = [ctx.output_fields_path]
+    if "filter" not in stages_to_run:
+        paths.append(ctx.field_polygons_path)
+    for path in (p for p in dict.fromkeys(paths) if p.exists()):
+        _require_unique_ids_in(path)
+
+
+# Stages that join on field ids: the filtered fields, chips (and the field
+# embeddings), boundaries, and masks with their outlines and lookups.
+_ID_STAGES = frozenset({"filter", "chips", "boundaries", "masks"})
+
+
+def _require_unique_ids_in(path: Path) -> None:
+    try:
+        field_ids.require_unique_ids(path)
+    except field_ids.DuplicateIdsError as err:
+        raise StageInputError(
+            f"{err}. Rerun from the reproject stage: it makes the ids unique and rebuilds "
+            "every stage after it, so no chips, masks or outlines keep the old ids."
+        ) from err
 
 
 def _validate_stage_selection(ctx: PipelineContext, stages_to_run: list[str]) -> None:

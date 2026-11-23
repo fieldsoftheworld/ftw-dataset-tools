@@ -324,7 +324,11 @@ be unique. `ftwd run` and `create-dataset` make it so right after writing
 `{name}_fields.parquet`, before the class filter; `create-chips`, `create-boundaries`,
 `create-masks` and `add-field-embeddings` refuse fields that repeat an id and point to
 this command, which does the same to any fields file. A `ftwd run` that starts after
-the reproject stage refuses fields an older run left with repeated ids.
+the reproject stage and runs the filter, chips, boundaries or masks stage refuses fields
+(full or filtered) an older run left with repeated ids; the imagery, stac and docs
+stages still run on them. Rerun such an output from the reproject stage, which rebuilds
+every stage after it: running `dedupe-fields` on `{name}_fields.parquet` in place leaves
+the chips, masks and outlines built from the old ids.
 
 ```bash
 ftwd dedupe-fields cz_2019.parquet cz_2019_unique.parquet
@@ -349,8 +353,9 @@ group's first row and other rows keep their order, so the output does not depend
 how the source orders a group's rows. A file without duplicate ids is copied unchanged.
 Missing ids are left alone. A file with duplicates is refused if it already has a
 `source_id`, `other_crop_names` or `file_row_number` column, or if a `<id>_<n>` it
-would write is already another row's id. DuckDB works within 4 GB and 8 threads here,
-spilling to a folder beside the output.
+would write is already another row's id. DuckDB's own memory is capped at 4 GB on 8
+threads, spilling to a folder beside the output; the process as a whole uses more (about
+6 GB at peak for Austria's 2.9M fields).
 
 ### create-dataset
 
