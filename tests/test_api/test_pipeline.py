@@ -2440,6 +2440,20 @@ class TestUniqueFieldIds:
         pipeline.run_pipeline(ctx, stages)
         assert ran == stages
 
+    def test_a_rerun_from_reproject_rebuilds_an_old_output_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reproject rewrites both fields files, so the old ones must not block it."""
+        ctx = self._old_staging_dir(tmp_path)
+        ran: list[str] = []
+        for stage in ("chips", "boundaries", "masks"):
+            monkeypatch.setitem(pipeline._STAGE_FUNCS, stage, lambda _ctx, s=stage: ran.append(s))
+        pipeline.run_pipeline(ctx, ["reproject", "filter", "chips", "boundaries", "masks"])
+        assert ran == ["chips", "boundaries", "masks"]
+        assert ctx.dedup_result is not None and ctx.dedup_result.changed
+        for path in (ctx.output_fields_path, ctx.field_polygons_path):
+            assert not field_ids.find_duplicate_ids(path)
+
     def test_deduping_only_the_full_fields_in_place_is_not_a_rebuild(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
