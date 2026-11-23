@@ -1130,6 +1130,18 @@ class TestV2MaskFacts:
 
         assert collect_stats(tmp_path, chips, fields)["chip_files"] == ["instance_labels"]
 
+    def test_collect_stats_finds_field_boundaries_on_a_chip_item(self, tmp_path: Path) -> None:
+        """Not declared and not mirrored: the written chip item is what shows it."""
+        from ftw_dataset_tools.api.docs import collect_stats
+
+        _, chips, fields = _collection_dir(tmp_path)
+        chip_dir = tmp_path / "chips" / "33UXP" / "ftw-33UXP0001_2024"
+        chip_dir.mkdir(parents=True)
+        assets = {"field_boundaries": {"href": "./ftw-33UXP0001_2024_fields.parquet"}}
+        (chip_dir / "ftw-33UXP0001_2024.json").write_text(json.dumps({"assets": assets}))
+
+        assert collect_stats(tmp_path, chips, fields)["chip_files"] == ["field_boundaries"]
+
     def test_instance_labels_found_in_the_items_mirror(self, tmp_path: Path) -> None:
         import duckdb
 
@@ -1162,6 +1174,7 @@ class TestV2MaskFacts:
         assert "value 3 (`unknown`) marks pixels outside the label extent" in text
         assert "`field_boundaries` (`<chip>_fields.parquet`)" in text
         assert "in the mask CRS" in text
+        assert "columns except its bbox columns" in text
         assert "`instance_labels` (`<chip>_instance_labels.json`)" in text
 
     def test_readme_gives_the_grid_under_provenance(self) -> None:

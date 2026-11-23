@@ -653,8 +653,8 @@ _UNKNOWN_NOTES = {
 _CHIP_FILE_NOTES = {
     "field_boundaries": (
         "`field_boundaries` (`<chip>_fields.parquet`): the chip's field outlines as "
-        "GeoParquet, clipped to the chip and in the mask CRS, with the columns of the "
-        "fields file."
+        "GeoParquet, clipped to the chip and in the mask CRS, with the fields file's "
+        "columns except its bbox columns."
     ),
     "instance_labels": (
         "`instance_labels` (`<chip>_instance_labels.json`): maps each instance mask value "
