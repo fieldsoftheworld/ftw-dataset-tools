@@ -21,12 +21,15 @@ catalogs and only stale chips have their item read. The rule:
   would redraw fresh chips on every run on such filesystems.
 - A mask dated in the future (clock skew) would otherwise stay newer than anything
   drawn now, so what this module writes or marks is dated no earlier than the mask.
+  The cost: a rebuild within that skew of the stamp does not read as newer, so it is
+  missed for as long as the clocks disagree.
 
 The on-disk state only changes once the item is written: the overlay is drawn to a
 hidden temporary file, the item is written, and only then is the file moved into
-place (or the old overlay removed). An interrupt or error at any point leaves the
-chip stale, so the next run repairs it. A temporary file left by an interrupt is
-removed on the next run.
+place (or the old overlay removed). An error, or an interrupt between those steps,
+leaves the chip stale, so the next run repairs it. The item write itself is not
+atomic: a process killed during it can leave the item JSON truncated. A temporary
+file left by an interrupt is removed on the next run.
 
 Copies that do not preserve mtimes (``cp`` without ``-p``, some syncs) can therefore
 cause extra redraws, or missed ones when a copied mask ends up older than its overlay.
@@ -37,6 +40,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
+from itertools import islice
 from typing import TYPE_CHECKING
 
 import pystac
@@ -58,7 +62,7 @@ from ftw_dataset_tools.api.logging_config import get_logger
 from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable, Iterator
     from pathlib import Path
 
     from ftw_dataset_tools.api.imagery.parallel import ParallelOutcome
@@ -68,6 +72,9 @@ __all__ = ["OverlayRedrawResult", "overlay_is_stale", "redraw_stale_overlays"]
 logger = get_logger(__name__)
 
 _REDRAWN, _FAILED, _REMOVED = "redrawn", "failed", "removed"
+
+#: Chips checked, planned and redrawn together; bounds the items held in memory.
+PLAN_BATCH_SIZE = 2000
 
 
 @dataclass
@@ -242,7 +249,10 @@ def _stale_task(item_path: Path) -> _RedrawTask | None:
     return None
 
 
-def _stale_tasks(item_paths: Iterable[Path], result: OverlayRedrawResult) -> list[_RedrawTask]:
+def _stale_tasks(
+    item_paths: Iterable[Path], result: OverlayRedrawResult, advance: Callable[[], None]
+) -> list[_RedrawTask]:
+    """Plan the stale chips among ``item_paths``; ``advance`` for each one not planned."""
     tasks = []
     for item_path in item_paths:
         try:
@@ -250,10 +260,18 @@ def _stale_tasks(item_paths: Iterable[Path], result: OverlayRedrawResult) -> lis
         except Exception as err:  # an unreadable chip is counted, not fatal to the run
             result.failed += 1
             logger.warning(f"{item_path.stem}: could not redraw the chip preview: {err}")
-            continue
-        if task is not None:
+            task = None
+        if task is None:
+            advance()
+        else:
             tasks.append(task)
     return tasks
+
+
+def _batches(item_paths: Iterable[Path], size: int) -> Iterator[list[Path]]:
+    iterator = iter(item_paths)
+    while batch := list(islice(iterator, size)):
+        yield batch
 
 
 def _log(result: OverlayRedrawResult) -> None:
@@ -279,16 +297,23 @@ def redraw_stale_overlays(
         item_paths: Chip item JSON files, ``<chip_dir>/<chip_id>.json``.
         workers: Number of overlays to draw concurrently.
     """
+    item_paths = list(item_paths)
     result = OverlayRedrawResult()
-    tasks = _stale_tasks(item_paths, result)
-    progress_bar = tqdm(total=len(tasks), desc="Redrawing previews", unit="chip", leave=False)
+    # Over every chip, so it moves while the fresh ones are checked too.
+    progress_bar = tqdm(total=len(item_paths), desc="Checking previews", unit="chip", leave=False)
+
+    def advance() -> None:
+        progress_bar.update(1)
 
     def apply(outcome: ParallelOutcome[_RedrawTask, Path | None]) -> None:
         _apply(outcome, result)
-        progress_bar.update(1)
+        advance()
 
     try:
-        run_in_parallel(tasks, _draw, apply, workers=workers)
+        # In batches, so only one batch's items are held in memory at a time.
+        for batch in _batches(item_paths, PLAN_BATCH_SIZE):
+            tasks = _stale_tasks(batch, result, advance)
+            run_in_parallel(tasks, _draw, apply, workers=workers)
     finally:
         progress_bar.close()
     _log(result)

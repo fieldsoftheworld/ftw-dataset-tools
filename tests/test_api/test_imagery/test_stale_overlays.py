@@ -482,19 +482,59 @@ class TestPerChipErrors:
 
         assert (result.redrawn, result.failed) == (0, 1)
 
-    def test_the_progress_bar_counts_the_stale_chips(self, tmp_path: Path) -> None:
+    def test_the_progress_bar_starts_before_planning_and_counts_every_chip(
+        self, tmp_path: Path
+    ) -> None:
         chips = [_chip(tmp_path, f"chip_{i}") for i in range(3)]
         for chip_dir in chips[:2]:
             _old_overlay(chip_dir, chip_dir.name)
         # The third chip's preview postdates its mask: its overlay was already tried.
         _age(chips[2] / "chip_2_planting_image_s2.webp", chips[2], "chip_2", seconds=-100)
+        events: list[str] = []
+        plan = overlay_refresh._plan
 
-        with patch.object(overlay_refresh, "tqdm") as bar:
+        def record_plan(item_path):
+            events.append("plan")
+            return plan(item_path)
+
+        with (
+            patch.object(overlay_refresh, "tqdm") as bar,
+            patch.object(overlay_refresh, "_plan", record_plan),
+        ):
+            bar.side_effect = lambda **_kwargs: events.append("bar") or bar.return_value
             redraw_stale_overlays([c / f"{c.name}.json" for c in chips], workers=2)
 
-        assert bar.call_args.kwargs["total"] == 2
-        assert bar.return_value.update.call_count == 2
+        assert events[0] == "bar"
+        assert bar.call_args.kwargs["total"] == 3
+        assert bar.return_value.update.call_count == 3
         bar.return_value.close.assert_called_once()
+
+    def test_items_are_planned_and_settled_in_batches(self, tmp_path: Path) -> None:
+        """No more than one batch of items is read before they are settled."""
+        chips = [_chip(tmp_path, f"chip_{i}") for i in range(5)]
+        for chip_dir in chips:
+            _old_overlay(chip_dir, chip_dir.name)
+        live, peak = [0], [0]
+        plan, settle = overlay_refresh._plan, overlay_refresh._settle
+
+        def counted_plan(item_path):
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+            return plan(item_path)
+
+        def counted_settle(outcome):
+            live[0] -= 1
+            return settle(outcome)
+
+        with (
+            patch.object(overlay_refresh, "PLAN_BATCH_SIZE", 2),
+            patch.object(overlay_refresh, "_plan", counted_plan),
+            patch.object(overlay_refresh, "_settle", counted_settle),
+        ):
+            result = redraw_stale_overlays([c / f"{c.name}.json" for c in chips], workers=2)
+
+        assert result.redrawn == 5
+        assert peak[0] == 2
 
     def test_a_missing_overlay_is_logged_as_stale_not_older(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -549,6 +589,7 @@ class TestUnexpectedErrors:
 
         assert (result.redrawn, result.failed) == (0, 1)
         assert not overlay.exists()
+        assert not (chip_dir / f".{CHIP}_overlay.tmp.webp").exists()
         assert _thumbnail(chip_dir).href == f"./{CHIP}_planting_image_s2.webp"
 
     def test_a_failed_item_write_is_retried(self, tmp_path: Path) -> None:
@@ -560,6 +601,8 @@ class TestUnexpectedErrors:
 
         assert (first.redrawn, first.failed) == (0, 1)
         assert overlay_is_stale(chip_dir, CHIP)
+        # The drawn overlay was never moved in, and is not left behind either.
+        assert not (chip_dir / f".{CHIP}_overlay.tmp.webp").exists()
         second = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
         assert (second.redrawn, second.failed) == (1, 0)
         assert _thumbnail(chip_dir).extra_fields["file:size"] == overlay.stat().st_size
