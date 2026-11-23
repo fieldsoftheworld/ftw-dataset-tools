@@ -631,12 +631,64 @@ def _decoded(raw: dict[bytes, bytes]) -> dict[str, str]:
     return {k.decode(): v.decode("utf-8", "replace") for k, v in raw.items()}
 
 
-def _kv_metadata_sql(src: Path, layout: _Layout, resolved: pa.Table) -> str:
-    """The source's metadata as a DuckDB ``KV_METADATA`` struct, with ``geo`` updated."""
+def _kv_metadata_sql(
+    src: Path, layout: _Layout, resolved: pa.Table, added: tuple[str, ...], rows: int
+) -> str:
+    """The source's metadata as a DuckDB ``KV_METADATA`` struct, ``geo`` and ``pandas``
+    updated to the rewritten columns."""
     metadata = _source_metadata(src)
     metadata["geo"] = _geo_metadata(src, json.loads(metadata["geo"]), layout, resolved)
+    if "pandas" in metadata:
+        metadata["pandas"] = _pandas_metadata(json.loads(metadata["pandas"]), layout, added, rows)
     entries = ", ".join(f"{_literal(k)}: {_literal(v)}" for k, v in metadata.items())
     return f"{{{entries}}}"
+
+
+# How pandas records the columns the rewrite adds or turns into text.
+_PANDAS_TYPES = {
+    SOURCE_ID_COLUMN: ("unicode", "object"),
+    OTHER_CROPS_COLUMN: ("list[unicode]", "object"),
+}
+
+
+def _pandas_column(name: str) -> dict[str, Any]:
+    pandas_type, numpy_type = _PANDAS_TYPES.get(name, _PANDAS_TYPES[SOURCE_ID_COLUMN])
+    return {
+        "name": name,
+        "field_name": name,
+        "pandas_type": pandas_type,
+        "numpy_type": numpy_type,
+        "metadata": None,
+    }
+
+
+def _pandas_metadata(
+    pandas: dict[str, Any], layout: _Layout, added: tuple[str, ...], rows: int
+) -> str:
+    """pandas' record of the columns, matching the rewrite.
+
+    A renumbered id becomes text, which a recorded ``Int64`` or ``UInt32`` dtype would
+    make pandas refuse to read; added columns are recorded; a range index spans the
+    rows written.
+    """
+    retyped = {layout.id_col} if SOURCE_ID_COLUMN in added else set()
+    columns = [_retyped(c, retyped) for c in pandas.get("columns", [])]
+    columns += [_pandas_column(name) for name in added]
+    index = [_range_index(i, rows) for i in pandas.get("index_columns", [])]
+    return json.dumps({**pandas, "columns": columns, "index_columns": index})
+
+
+def _retyped(column: dict[str, Any], retyped: set[str]) -> dict[str, Any]:
+    """``column``'s entry, recorded as text if the rewrite made it text."""
+    if column.get("name") not in retyped or column.get("pandas_type") == "unicode":
+        return column
+    return _pandas_column(column["name"])
+
+
+def _range_index(index: Any, rows: int) -> Any:
+    if not isinstance(index, dict) or index.get("kind") != "range":
+        return index
+    return {**index, "stop": index.get("start", 0) + rows * index.get("step", 1)}
 
 
 def _literal(text: str) -> str:
@@ -662,6 +714,7 @@ def _write(
     layout: _Layout,
     resolved: pa.Table,
     added: tuple[str, ...],
+    rows: int,
 ) -> None:
     """Write the rows without a shared id and the resolved ones, in source order.
 
@@ -675,7 +728,7 @@ def _write(
     replace = f" REPLACE (CAST({quoted} AS VARCHAR) AS {quoted})" if renumbered else ""
     extra = "".join(f", {_ADDED_SQL[c].format(id=quoted)} AS {_quote(c)}" for c in added)
     columns = ", ".join(_quote(f.name) for f in resolved.schema if f.name not in ("_pos", "_sub"))
-    metadata = _kv_metadata_sql(src, layout, resolved)
+    metadata = _kv_metadata_sql(src, layout, resolved, added, rows)
     con.register("resolved", resolved)
     con.execute(f"""
         COPY (
@@ -795,5 +848,6 @@ def _dedupe(
     result.added_columns = _added_columns(result, layout)
     resolved = _resolved_table(records, schema, layout, result.added_columns)
     tmp = work / "fields.parquet"
-    _write(con, src, tmp, layout, resolved, result.added_columns)
+    rows = result.rows_in - sum(result.rows_removed.values())
+    _write(con, src, tmp, layout, resolved, result.added_columns, rows)
     tmp.replace(dst)

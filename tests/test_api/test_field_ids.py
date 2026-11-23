@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 from typing import TYPE_CHECKING, ClassVar
 
@@ -581,11 +582,49 @@ class TestOutput:
         dedupe_fields(tmp_path / "in.parquet", tmp_path / "out.parquet")
         written = pq.ParquetFile(tmp_path / "out.parquet").metadata.metadata
         assert written[b"collection"] == b'{"fiboa_version": "0.2.0"}'
-        assert written[b"pandas"] == metadata[b"pandas"]
+        source_pandas = json.loads(metadata[b"pandas"])
+        written_pandas = json.loads(written[b"pandas"])
+        assert written_pandas["pandas_version"] == source_pandas["pandas_version"]
         assert b"geo" in written
         assert b"ARROW:schema" not in written
         assert isinstance(pq.read_table(tmp_path / "out.parquet"), pa.Table)
         assert len(gpd.read_parquet(tmp_path / "out.parquet")) == 6
+
+    @pytest.mark.parametrize("dtype", ["Int64", "UInt32"])
+    def test_a_renumbered_nullable_integer_id_still_reads(self, tmp_path: Path, dtype: str) -> None:
+        """pandas' record must not keep calling a renumbered (now text) id an integer."""
+        import pandas as pd
+
+        gdf = gpd.GeoDataFrame(
+            {"id": pd.array([1, 1, 2], dtype=dtype), "crop:name": ["a", "b", "c"]},
+            geometry=[LEFT, FAR, RIGHT],
+            crs="EPSG:4326",
+        )
+        gdf.to_parquet(tmp_path / "in.parquet")
+        result = dedupe_fields(tmp_path / "in.parquet", tmp_path / "out.parquet")
+        assert result.groups["renumbered"] == 1
+        out = gpd.read_parquet(tmp_path / "out.parquet")
+        assert sorted(out["id"]) == ["1_1", "1_2", "2"]
+        assert out["source_id"].tolist() == ["1", "1", "2"]
+
+    def test_pandas_reads_the_added_columns_and_index(self, tmp_path: Path) -> None:
+        import pandas as pd
+
+        gdf = gpd.GeoDataFrame(
+            {"id": [1, 1, 2, 2, 3], "crop:name": ["a", "b", "x", "y", "z"]},
+            geometry=[LEFT, LEFT, LEFT, FAR, RIGHT],
+            crs="EPSG:4326",
+            index=pd.RangeIndex(10, 15, name=None),
+        )
+        gdf.to_parquet(tmp_path / "in.parquet")
+        dedupe_fields(tmp_path / "in.parquet", tmp_path / "out.parquet")
+        out = gpd.read_parquet(tmp_path / "out.parquet")
+        assert out.index.tolist() == [10, 11, 12, 13]
+        assert list(out["other_crop_names"].iloc[0]) == ["b"]
+        assert out["source_id"].tolist() == ["1", "2", "2", "3"]
+        recorded = json.loads(pq.ParquetFile(tmp_path / "out.parquet").metadata.metadata[b"pandas"])
+        names = [c["name"] for c in recorded["columns"]]
+        assert names[-2:] == ["source_id", "other_crop_names"]
 
     def test_a_large_renumbered_group_is_written_in_order(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
