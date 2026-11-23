@@ -78,6 +78,25 @@ class TestDedupeFieldsCommand:
         assert result.exit_code == 1
         assert "Error:" in result.output
 
+    @pytest.mark.parametrize("spelling", ["same", "relative", "symlink"])
+    def test_the_output_must_not_be_the_input(
+        self, duplicated: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spelling: str
+    ) -> None:
+        before = duplicated.read_bytes()
+        if spelling == "relative":
+            monkeypatch.chdir(tmp_path)
+            output = "./sub/../dup.parquet"
+            (tmp_path / "sub").mkdir()
+        elif spelling == "symlink":
+            output = str(tmp_path / "link.parquet")
+            (tmp_path / "link.parquet").symlink_to(duplicated)
+        else:
+            output = str(duplicated)
+        result = CliRunner().invoke(cli, ["dedupe-fields", str(duplicated), output])
+        assert result.exit_code == 2, result.output
+        assert "must not be FIELDS_FILE" in result.output
+        assert duplicated.read_bytes() == before
+
     def test_a_missing_id_column_is_an_error(self, duplicated: Path, tmp_path: Path) -> None:
         result = CliRunner().invoke(
             cli,

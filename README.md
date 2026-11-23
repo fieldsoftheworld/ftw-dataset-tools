@@ -327,8 +327,8 @@ this command, which does the same to any fields file. A `ftwd run` that starts a
 the reproject stage and runs the filter, chips, boundaries or masks stage refuses fields
 (full or filtered) an older run left with repeated ids; the imagery, stac and docs
 stages still run on them. Rerun such an output from the reproject stage, which rebuilds
-every stage after it: running `dedupe-fields` on `{name}_fields.parquet` in place leaves
-the chips, masks and outlines built from the old ids.
+every stage after it. `dedupe-fields` refuses to write over its input, since rewriting
+`{name}_fields.parquet` in place would leave the chips, masks and outlines on the old ids.
 
 ```bash
 ftwd dedupe-fields cz_2019.parquet cz_2019_unique.parquet

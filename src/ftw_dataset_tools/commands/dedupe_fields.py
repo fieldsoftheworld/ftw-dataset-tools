@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import click
 
 from ftw_dataset_tools.api import field_ids
 from ftw_dataset_tools.api.config import ClassFilter, ConfigError
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def require_unique_ids(path: str | Path, id_col: str = field_ids.ID_COLUMN) -> None:
@@ -24,6 +21,13 @@ def require_unique_ids(path: str | Path, id_col: str = field_ids.ID_COLUMN) -> N
         ) from err
     except field_ids.FieldIdsError as err:
         raise click.ClickException(str(err)) from err
+
+
+def _same_file(a: str, b: str) -> bool:
+    first, second = Path(a), Path(b)
+    if second.exists():
+        return first.samefile(second)
+    return first.resolve() == second.resolve()
 
 
 @click.command("dedupe-fields")
@@ -55,13 +59,22 @@ def dedupe_fields_cmd(
     renumbered   anything else: every row is kept as <id>_1..<id>_k, and the
                  source id goes in source_id
 
-    A file without duplicate ids is copied unchanged.
+    A file without duplicate ids is copied unchanged. OUTPUT_FILE must be a new
+    path: rewriting the fields of a built dataset in place would leave its chips,
+    masks and outlines on the old ids (rerun ftwd run from reproject instead).
 
     \b
     Examples:
         ftwd dedupe-fields cz_2019.parquet cz_2019_unique.parquet
         ftwd dedupe-fields at_2024.parquet at_2024_unique.parquet --class-filter crops.yaml
     """
+    if _same_file(fields_file, output_file):
+        raise click.BadParameter(
+            "must not be FIELDS_FILE: write the unique fields to a new file. For a dataset "
+            "built by ftwd run, rerun it from the reproject stage instead, which dedupes "
+            "the fields and rebuilds everything made from them.",
+            param_hint="OUTPUT_FILE",
+        )
     try:
         class_filter = ClassFilter.from_file(class_filter_file) if class_filter_file else None
         result = field_ids.dedupe_fields(
