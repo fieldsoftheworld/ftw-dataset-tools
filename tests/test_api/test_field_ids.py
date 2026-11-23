@@ -6,6 +6,7 @@ import random
 from typing import TYPE_CHECKING, ClassVar
 
 import geopandas as gpd
+import numpy as np
 import pyarrow.parquet as pq
 import pytest
 import shapely
@@ -262,7 +263,7 @@ class TestSameParcel:
         rows = [row(1, LEFT, "A", year=2020), row(1, LEFT, "A", year=2021)]
         out, result = dedupe(tmp_path, rows)
         assert result.groups["same_parcel"] == 1
-        assert list(out["other_crop_names"].iloc[0]) == []
+        assert out["other_crop_names"].iloc[0] is None
 
     def test_one_declaration_is_kept_and_the_other_crops_saved(self, tmp_path: Path) -> None:
         rows = [row(1, LEFT, "B"), row(1, LEFT, "A"), row(1, LEFT, "C"), row(2, RIGHT, "A")]
@@ -282,6 +283,61 @@ class TestSameParcel:
         out, _ = dedupe(tmp_path, rows, class_filter=ClassFilter("crop:name", ["B"], ["A"]))
         assert out["crop:name"].tolist() == ["B"]
         assert list(out["other_crop_names"].iloc[0]) == ["A"]
+
+    @pytest.mark.parametrize(
+        ("values", "include", "kept"),
+        [
+            # DuckDB casts float32 0.1 to '0.1'; Python's str() gives 0.10000000149011612.
+            (np.array([0.2, 0.1], dtype="float32"), "0.1", 1),
+            # DuckDB casts booleans to 'true'/'false', Python's str() to 'True'/'False'.
+            ([False, True], "true", 1),
+        ],
+        ids=["float32", "boolean"],
+    )
+    def test_the_filter_matches_values_as_its_stage_does(
+        self, tmp_path: Path, values, include: str, kept: int
+    ) -> None:
+        # Content order alone would keep the first row: the filter must pick the second.
+        rows = [row(1, LEFT, "A"), row(1, LEFT, "B")]
+        gdf = gpd.GeoDataFrame(rows, geometry="geometry", crs=4326)
+        gdf["cls"] = values
+        src = tmp_path / "in.parquet"
+        write_geoparquet(src, gdf=gdf)
+        cf = ClassFilter("cls", [include], [])
+        dedupe_fields(src, tmp_path / "out.parquet", class_filter=cf)
+        out = gpd.read_parquet(tmp_path / "out.parquet")
+        assert out["crop:name"].tolist() == [rows[kept]["crop:name"]]
+
+    def test_a_missing_crop_name_is_not_listed(self, tmp_path: Path) -> None:
+        rows = [row(1, LEFT, "A"), row(1, LEFT, None, year=1), row(1, LEFT, "B", year=2)]
+        out, _ = dedupe(tmp_path, rows)
+        assert out["crop:name"].tolist() == ["A"]
+        assert list(out["other_crop_names"].iloc[0]) == ["B"]
+
+    @pytest.mark.parametrize(
+        ("columns", "listed"),
+        [
+            (("crop:name", "cls", "hcat:name"), ["crop-b"]),
+            (("cls", "hcat:name"), ["cls-b"]),
+            (("hcat:name",), ["hcat-b"]),
+        ],
+    )
+    def test_the_crop_name_column_is_chosen_in_order(
+        self, tmp_path: Path, columns: tuple[str, ...], listed: list[str]
+    ) -> None:
+        rows = [
+            {"id": 1, **{c: f"{c.split(':')[0]}-{x}" for c in columns}, "geometry": LEFT}
+            for x in ("a", "b")
+        ]
+        cf = ClassFilter("cls", [], []) if "cls" in columns else None
+        out, _ = dedupe(tmp_path, rows, class_filter=cf)
+        assert list(out["other_crop_names"].iloc[0]) == listed
+
+    def test_rows_without_area_are_not_one_polygon(self, tmp_path: Path) -> None:
+        """Zero-area rows at one place are not a parcel: nothing to keep one of."""
+        line = shapely.Polygon([(10.0, 50.0), (10.001, 50.0), (10.002, 50.0)])
+        _, result = dedupe(tmp_path, [row(1, line, "A"), row(1, line, "B")])
+        assert result.groups["renumbered"] == 1
 
     def test_the_filter_column_alias_is_used(self, tmp_path: Path) -> None:
         rows = [row(1, LEFT, "A", code=1), row(1, LEFT, "B", code=2)]
@@ -458,7 +514,7 @@ class TestErrors:
             dedupe_fields(src, tmp_path / "out.parquet")
         assert not (tmp_path / "out.parquet").exists()
 
-    @pytest.mark.parametrize("column", ["source_id", "other_crop_names", "_pos"])
+    @pytest.mark.parametrize("column", ["source_id", "other_crop_names", "_pos", "file_row_number"])
     def test_a_column_the_rewrite_writes_is_refused(self, tmp_path: Path, column: str) -> None:
         rows = [row(1, LEFT, **{column: "x"}), row(1, LEFT, **{column: "x"})]
         src = write(tmp_path / "in.parquet", rows)

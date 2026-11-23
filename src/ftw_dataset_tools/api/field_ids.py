@@ -83,6 +83,9 @@ RESERVED_COLUMNS = (
     "_sub",
     "_id_text",
     "_renumbered",
+    "_keep",
+    "_crop_text",
+    "file_row_number",
 )
 
 # DuckDB's bounds for the id scans and the rewrite. A scan buffers row groups per
@@ -265,6 +268,8 @@ class _Row:
     shape: Any  # source CRS
     area: float  # m², of the valid geometry in AREA_CRS
     projected: Any
+    keep: bool = False  # the class filter includes the row's class
+    crop: str | None = None  # the crop name, as DuckDB casts it to text
 
 
 @dataclass
@@ -392,20 +397,17 @@ def _merged(rows: list[_Row], layout: _Layout) -> dict[str, Any]:
     return record
 
 
-def _passes_filter(row: _Row, layout: _Layout) -> bool:
-    if layout.keep_col is None:
-        return False
-    value = row.record[layout.keep_col]
-    return value is not None and str(value) in layout.keep_values
+def _other_crops(rows: list[_Row], kept: _Row) -> list[str] | None:
+    """The crop names of ``rows`` but ``kept``'s own, or None when there are none."""
+    others = {r.crop for r in rows} - {kept.crop, None}
+    return sorted(others) or None
 
 
 def _one_parcel(rows: list[_Row], layout: _Layout) -> dict[str, Any]:
-    kept = min(rows, key=lambda r: (not _passes_filter(r, layout), r.key))
+    kept = min(rows, key=lambda r: (not r.keep, r.key))
     record = dict(kept.record)
     if layout.crop_col is not None:
-        others = {str(r.record[layout.crop_col]) for r in rows if r is not kept}
-        others.discard(str(kept.record[layout.crop_col]))
-        record[OTHER_CROPS_COLUMN] = sorted(others - {"None"})
+        record[OTHER_CROPS_COLUMN] = _other_crops(rows, kept)
     return record
 
 
@@ -488,6 +490,23 @@ def _layout(
     )
 
 
+def _keep_sql(layout: _Layout) -> str:
+    """Whether the class filter includes a row, matched as its filter stage does."""
+    if layout.keep_col is None or not layout.keep_values:
+        return "FALSE"
+    literals = ", ".join("'" + v.replace("'", "''") + "'" for v in sorted(layout.keep_values))
+    return f"coalesce(CAST({_quote(layout.keep_col)} AS VARCHAR) IN ({literals}), FALSE)"
+
+
+def _crop_sql(layout: _Layout) -> str:
+    if layout.crop_col is None:
+        return "NULL::VARCHAR"
+    return f"CAST({_quote(layout.crop_col)} AS VARCHAR)"
+
+
+_DERIVED = ["_pos", "_id_text", "_keep", "_crop_text"]
+
+
 def _read_groups(
     con: duckdb.DuckDBPyConnection, src: Path, layout: _Layout
 ) -> tuple[dict[str, list[_Row]], pa.Schema]:
@@ -495,12 +514,13 @@ def _read_groups(
     quoted = _quote(layout.id_col)
     table = con.execute(f"""
         SELECT file_row_number AS _pos, CAST({quoted} AS VARCHAR) AS _id_text,
+               {_keep_sql(layout)} AS _keep, {_crop_sql(layout)} AS _crop_text,
                * EXCLUDE (file_row_number)
         FROM read_parquet('{sql_path(src)}', file_row_number = true)
         WHERE {quoted} IN (SELECT {quoted} FROM dup_ids)""").fetch_arrow_table()
-    positions = table.column("_pos").to_pylist()
-    id_texts = table.column("_id_text").to_pylist()
-    table = table.drop_columns(["_pos", "_id_text"])
+    derived = {name: table.column(name).to_pylist() for name in _DERIVED}
+    positions, id_texts = derived["_pos"], derived["_id_text"]
+    table = table.drop_columns(_DERIVED)
     records = table.to_pylist()
     shapes = shapely.from_wkb([r[layout.geom_col] for r in records])
     projected = shapely.make_valid(shapely.transform(shapes, layout.to_area_crs))
@@ -516,6 +536,8 @@ def _read_groups(
                 shape=shapes[i],
                 area=float(areas[i]) if math.isfinite(areas[i]) else 0.0,
                 projected=projected[i],
+                keep=derived["_keep"][i],
+                crop=derived["_crop_text"][i],
             )
         )
     return groups, table.schema
