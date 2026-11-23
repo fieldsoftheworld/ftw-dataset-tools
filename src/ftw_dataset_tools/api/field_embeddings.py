@@ -840,9 +840,39 @@ def utm_zone(lon: np.ndarray) -> np.ndarray:
     return np.clip(np.floor((np.asarray(lon) + 180.0) / 6.0).astype(np.int64) + 1, 1, 60)
 
 
+# Eight: like the fingerprint scan, each thread buffers about two row groups' geometry,
+# and at the default (one per core) a 192-core host passed the memory limit on fr_2018.
+_PLAN_THREADS = 8
+
+
+@contextmanager
+def _bounded_scan(con: duckdb.DuckDBPyConnection, threads: int) -> Iterator[None]:
+    """Cap the connection's threads and drop insertion order for one scan, then restore."""
+    before = con.execute(
+        "SELECT current_setting('threads'), current_setting('preserve_insertion_order')"
+    ).fetchone()
+    con.execute(f"SET threads = {threads}")
+    con.execute("SET preserve_insertion_order = false")
+    try:
+        yield
+    finally:
+        con.execute(f"SET threads = {before[0]}")
+        con.execute(f"SET preserve_insertion_order = {str(before[1]).lower()}")
+
+
 def _plan(con: duckdb.DuckDBPyConnection, fields_sql: str, geom_col: str, crs: CRS) -> int:
-    """Table ``_keys`` (rid, zone, bx, by): each field's zone and block; returns its size."""
-    rows = con.execute(f"""
+    """Table ``_keys`` (rid, zone, bx, by): each field's zone and block; returns its size.
+
+    Rows carry their own ``rid``, so the scan's order does not matter.
+    """
+    with _bounded_scan(con, _PLAN_THREADS):
+        rows = _plan_rows(con, fields_sql, geom_col)
+    return _store_keys(con, rows, crs)
+
+
+def _plan_rows(con: duckdb.DuckDBPyConnection, fields_sql: str, geom_col: str) -> dict:
+    """Each field's row number and centroid (or bbox centre), as numpy columns."""
+    return con.execute(f"""
         SELECT file_row_number AS rid, ST_X(c) AS x, ST_Y(c) AS y FROM (
             SELECT file_row_number,
                    -- A zero-area polygon's centroid is empty (or NULL); use its bbox centre.
@@ -853,6 +883,10 @@ def _plan(con: duckdb.DuckDBPyConnection, fields_sql: str, geom_col: str, crs: C
                         ELSE ST_Centroid("{geom_col}") END AS c
             FROM {fields_sql}
             WHERE "{geom_col}" IS NOT NULL AND NOT ST_IsEmpty("{geom_col}"))""").fetchnumpy()
+
+
+def _store_keys(con: duckdb.DuckDBPyConnection, rows: dict, crs: CRS) -> int:
+    """Write table ``_keys`` from :func:`_plan_rows`'s output; returns its size."""
     rid = np.asarray(rows["rid"])
     x = np.ma.filled(np.ma.asarray(rows["x"], float), np.nan)
     y = np.ma.filled(np.ma.asarray(rows["y"], float), np.nan)

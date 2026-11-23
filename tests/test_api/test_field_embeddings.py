@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 import rasterio
 from affine import Affine
-from pyproj import Transformer
+from pyproj import CRS, Transformer
 from rasterio.features import geometry_mask
 from rasterio.transform import from_origin
 from shapely.geometry import Polygon, box
@@ -669,6 +669,39 @@ class TestSecondReviewFindings:
         fe.fields_fingerprint(fields)
 
         assert seen == [(fe._FINGERPRINT_THREADS, False)]
+
+    def test_the_plan_scan_is_bounded_and_restored(self, tmp_path: Path) -> None:
+        fields = write_fields(
+            tmp_path / "f.parquet",
+            {"a": box(X, Y, X + 50, Y + 50), "b": box(X + 100, Y, X + 150, Y + 50)},
+        )
+        con = duckdb.connect(":memory:")
+        fe.ensure_spatial_loaded(con)
+        con.execute("SET threads = 3")
+        seen: list[tuple] = []
+
+        class Probe:
+            def execute(self, sql, *args):
+                if "ST_Centroid" in str(sql):
+                    seen.append(
+                        con.execute(
+                            "SELECT current_setting('threads'), "
+                            "current_setting('preserve_insertion_order')"
+                        ).fetchone()
+                    )
+                return con.execute(sql, *args)
+
+            def __getattr__(self, name):
+                return getattr(con, name)
+
+        sql = f"read_parquet('{fields}', file_row_number = true)"
+        assert fe._plan(Probe(), sql, "geometry", CRS.from_user_input(UTM)) == 2
+
+        assert seen == [(fe._PLAN_THREADS, False)]
+        assert con.execute(
+            "SELECT current_setting('threads'), current_setting('preserve_insertion_order')"
+        ).fetchone() == (3, True)
+        assert sorted(r[0] for r in con.execute("SELECT rid FROM _keys").fetchall()) == [0, 1]
 
     def test_the_fingerprint_hashes_every_row_once_across_row_groups(self, tmp_path: Path) -> None:
         import hashlib
