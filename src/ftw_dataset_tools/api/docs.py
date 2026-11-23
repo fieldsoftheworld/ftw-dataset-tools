@@ -751,12 +751,34 @@ def _mask_notes(stats: dict, *, grid: bool = True) -> list[str]:
     """
     facts = stats.get("mask_facts") or {}
     grid_note = _grid_sentence(facts) if grid else None
-    notes = [grid_note, _unknown_note(stats, facts), *_chip_file_notes(stats)]
+    notes = [
+        grid_note,
+        _unknown_note(stats, facts),
+        _decode_note(stats, facts),
+        *_chip_file_notes(stats),
+    ]
     return [note for note in notes if note]
 
 
 def _chip_file_notes(stats: dict) -> list[str]:
     return [_CHIP_FILE_NOTES[key] for key in stats.get("chip_files") or []]
+
+
+def _is_finer_than_v1(facts: dict) -> bool:
+    resolution = facts.get("resolution_m")
+    return bool(resolution) and float(resolution) < _DEFAULT_MASK_RESOLUTION_M
+
+
+def _decode_note(stats: dict, facts: dict) -> str | None:
+    """How the DECODE masks scale on a grid finer than v1's 10 m (they stay one pixel)."""
+    has_decode = any(m.startswith("decode_") for m in stats.get("mask_types") or [])
+    if not (has_decode and _is_finer_than_v1(facts)):
+        return None
+    return (
+        "The DECODE boundary is the one-pixel inner ring of each field, so it is "
+        f"{facts['resolution_m']:g} m wide rather than the boundary line width, and "
+        f"`decode_distance_max_px` counts {facts['resolution_m']:g} m mask pixels."
+    )
 
 
 def _unknown_note(stats: dict, facts: dict) -> str | None:

@@ -1083,6 +1083,33 @@ class TestV2MaskFacts:
 
         assert mask_facts(collection, {"stages": {"masks": masks_cfg}})[key] == expected
 
+    @pytest.mark.parametrize(
+        ("masks", "resolution", "shown"),
+        [
+            (["semantic_3class_mask", "decode_boundary_mask", "decode_distance_mask"], 2.5, True),
+            (["semantic_3class_mask", "decode_boundary_mask", "decode_distance_mask"], 10.0, False),
+            (["semantic_3class_mask"], 2.5, False),
+        ],
+    )
+    def test_decode_note_only_for_decode_masks_finer_than_10_m(
+        self, masks: list[str], resolution: float, shown: bool
+    ) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        stats = _stats(
+            mask_types=masks,
+            mask_facts={"resolution_m": resolution, "boundary_width_m": None, "unknown": None},
+        )
+        text = render_agents({"title": "T", "links": []}, stats, [])
+
+        note = (
+            "The DECODE boundary is the one-pixel inner ring of each field, so it is 2.5 m "
+            "wide rather than the boundary line width, and `decode_distance_max_px` counts "
+            "2.5 m mask pixels."
+        )
+        assert (note in text) is shown
+        assert ("DECODE boundary is" in text) is shown
+
     def test_a_10_m_grid_with_wide_lines_is_stated(self) -> None:
         from ftw_dataset_tools.api.docs import _grid_sentence
 
