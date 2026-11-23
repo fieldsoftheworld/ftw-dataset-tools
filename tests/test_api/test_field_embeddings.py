@@ -692,7 +692,7 @@ class TestSecondReviewFindings:
             zip(table["id"].to_pylist(), table["geometry"].to_pylist(), strict=True)
         ):
             h = hashlib.blake2b(f"{row}\0{fid}\0".encode(), digest_size=16)
-            h.update(shapely.to_wkb(shapely.from_wkb(wkb)))
+            h.update(wkb)
             combined ^= int.from_bytes(h.digest(), "big")
 
         rows, _crs, digest = fe.fields_fingerprint(path).split(":")
