@@ -308,3 +308,35 @@ def test_a_footprint_across_the_antimeridian_finds_fields_on_both_sides() -> Non
     )
 
     assert _query(source, (179.8, 0, -179.8, 1))["id"].to_pylist() == ["east", "west"]
+
+
+def test_a_rerun_that_keeps_every_file_does_not_load_the_fields(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ftw_dataset_tools.api import chip_fields
+
+    fields = _fields(tmp_path)
+    write_chip_fields(fields, dataset)
+
+    def boom(*_a, **_k):
+        raise AssertionError("loaded")
+
+    monkeypatch.setattr(chip_fields, "_source", boom)
+
+    assert write_chip_fields(fields, dataset, skip_existing=True).skipped == 1
+
+
+def test_fields_are_loaded_in_small_batches(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ftw_dataset_tools.api import chip_fields
+
+    monkeypatch.setattr(chip_fields, "_ROWS_PER_BATCH", 1)
+    source = chip_fields._source(_fields(tmp_path))
+
+    assert [len(b) for b in source.batches] == [1, 1, 1, 1]
+
+
+def test_a_missing_fields_file(tmp_path: Path, dataset: Path) -> None:
+    with pytest.raises(ChipFieldsError, match="no such file"):
+        write_chip_fields(tmp_path / "missing.parquet", dataset)

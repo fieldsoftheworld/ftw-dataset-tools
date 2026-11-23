@@ -35,6 +35,9 @@ logger = get_logger(__name__)
 
 CHIP_FIELDS_SUFFIX = "_fields.parquet"
 _WKB = "__ftw_wkb"
+# Rows per Arrow batch on load: a batch's binary and string columns share 32-bit
+# offsets (2 GiB), which DuckDB's default of 1M rows passes at ~2 kB of WKB a field.
+_ROWS_PER_BATCH = 100_000
 
 
 class ChipFieldsError(Exception):
@@ -107,7 +110,7 @@ def _load(fields_file: Path, geom_col: str, columns: list[str]) -> tuple[pa.Tabl
                     ST_XMax({geom}) AS __x1, ST_YMax({geom}) AS __y1
                 FROM '{sql_path(fields_file)}'
                 WHERE {geom} IS NOT NULL AND NOT ST_IsEmpty({geom})"""
-        ).fetch_arrow_table()
+        ).fetch_arrow_table(rows_per_batch=_ROWS_PER_BATCH)
     finally:
         con.close()
     bounds = np.column_stack([table.column(c).to_numpy() for c in ("__x0", "__y0", "__x1", "__y1")])
@@ -223,13 +226,18 @@ def _fresh(out: Path, *inputs: Path) -> bool:
     return all(stamp >= p.stat().st_mtime for p in inputs)
 
 
-def _write_chip(source: _Source, chip_dir: Path, skip_existing: bool) -> tuple[str, str]:
+def _plan(chip_dir: Path, fields_file: Path, skip_existing: bool) -> tuple[str, Path | None]:
+    """What a chip needs before the fields are loaded: no mask, kept, or its mask to cut to."""
     mask_path = _footprint_mask(chip_dir)
     if mask_path is None:
-        return "no_mask", ""
+        return "no_mask", None
+    if skip_existing and _fresh(chip_fields_path(chip_dir), mask_path, fields_file):
+        return "skipped", None
+    return "write", mask_path
+
+
+def _write_chip(source: _Source, chip_dir: Path, mask_path: Path) -> tuple[str, str]:
     out = chip_fields_path(chip_dir)
-    if skip_existing and _fresh(out, mask_path, source.path):
-        return "skipped", ""
     try:
         table, crs = _clipped(source, mask_path)
         _write(table, source.geom_col, crs, out)
@@ -255,20 +263,30 @@ def write_chip_fields(
     # Imported here: api.imagery's package init imports stac, which imports this module.
     from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
 
-    source = _source(Path(fields_file))
+    fields_file = Path(fields_file)
+    if not fields_file.is_file():
+        raise ChipFieldsError(f"Cannot read {fields_file}: no such file")
     chip_dirs = iter_chip_dirs(Path(collection_dir))
+    plans = [_plan(d, fields_file, skip_existing) for d in chip_dirs]
+    todo = [(d, mask) for d, (step, mask) in zip(chip_dirs, plans, strict=True) if step == "write"]
+    # Loaded only when a chip needs it: a rerun that keeps every file skips the scan.
+    written = {}
+    if todo:
+        source = _source(fields_file)
+        with ThreadPoolExecutor(max(1, workers)) as pool:
+            outcomes = pool.map(lambda job: _write_chip(source, *job), todo)
+            written = {d: outcome for (d, _), outcome in zip(todo, outcomes, strict=True)}
     result = ChipFieldsResult()
-    with ThreadPoolExecutor(max(1, workers)) as pool:
-        outcomes = pool.map(lambda d: _write_chip(source, d, skip_existing), chip_dirs)
-        for chip_dir, (outcome, reason) in zip(chip_dirs, outcomes, strict=True):
-            if outcome == "written":
-                result.written += 1
-            elif outcome == "skipped":
-                result.skipped += 1
-            elif outcome == "failed":
-                result.failed.append((chip_dir.name, reason))
-            else:
-                result.no_mask.append(chip_dir.name)
+    for chip_dir, (step, _) in zip(chip_dirs, plans, strict=True):
+        outcome, reason = written.get(chip_dir, (step, ""))
+        if outcome == "written":
+            result.written += 1
+        elif outcome == "skipped":
+            result.skipped += 1
+        elif outcome == "failed":
+            result.failed.append((chip_dir.name, reason))
+        else:
+            result.no_mask.append(chip_dir.name)
     return result
 
 
