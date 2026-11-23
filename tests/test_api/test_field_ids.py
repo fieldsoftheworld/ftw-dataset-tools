@@ -692,6 +692,14 @@ class TestNoDuplicates:
         assert not result.changed
         assert (result.rows_in, result.rows_out) == (3, 3)
 
+    def test_a_hardlinked_output_is_the_input(self, tmp_path: Path) -> None:
+        src = write(tmp_path / "in.parquet", self.ROWS)
+        (tmp_path / "link.parquet").hardlink_to(src)
+        before = src.read_bytes()
+        dedupe_fields(src, tmp_path / "link.parquet")
+        assert src.read_bytes() == before
+        assert (tmp_path / "link.parquet").samefile(src)
+
     def test_in_place_leaves_the_file_alone(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

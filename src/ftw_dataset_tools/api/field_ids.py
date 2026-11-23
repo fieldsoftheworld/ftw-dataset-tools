@@ -772,9 +772,11 @@ def _write(
 
 
 def _copy_unchanged(src: Path, dst: Path) -> None:
-    if src.resolve() != dst.resolve():
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, dst)
+    """Copy ``src`` to ``dst``, unless they are one file (by path, symlink or hardlink)."""
+    if dst.exists() and src.samefile(dst):
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst)
 
 
 def dedupe_fields(
