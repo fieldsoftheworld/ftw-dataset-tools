@@ -348,7 +348,8 @@ equal-area CRS (EPSG:6933):
 
 `other_crop_names` and `source_id` are only added to files where their rule applied;
 `source_id` is then on every row (equal to `id` unless the row was renumbered), so it is
-the column to join back to the source with. Each resolved row takes the place of its
+the column to join back to the source with. Both are declared in the fiboa `collection`
+metadata's `schemas:custom`, and the `pandas` metadata is updated to match. Each resolved row takes the place of its
 group's first row and other rows keep their order, so the output does not depend on
 how the source orders a group's rows. A file without duplicate ids is copied unchanged.
 Missing ids are left alone. A file with duplicates is refused if it already has a

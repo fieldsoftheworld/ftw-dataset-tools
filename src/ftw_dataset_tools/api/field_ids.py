@@ -640,6 +640,8 @@ def _kv_metadata_sql(
     metadata["geo"] = _geo_metadata(src, json.loads(metadata["geo"]), layout, resolved)
     if "pandas" in metadata:
         metadata["pandas"] = _pandas_metadata(json.loads(metadata["pandas"]), layout, added, rows)
+    if "collection" in metadata and added:
+        metadata["collection"] = _collection_metadata(metadata["collection"], added)
     entries = ", ".join(f"{_literal(k)}: {_literal(v)}" for k, v in metadata.items())
     return f"{{{entries}}}"
 
@@ -683,6 +685,32 @@ def _retyped(column: dict[str, Any], retyped: set[str]) -> dict[str, Any]:
     if column.get("name") not in retyped or column.get("pandas_type") == "unicode":
         return column
     return _pandas_column(column["name"])
+
+
+# The added columns in Vecorel's schema language, as fiboa's ``schemas:custom`` holds them.
+_SCHEMA_PROPERTIES = {
+    SOURCE_ID_COLUMN: {"type": "string"},
+    OTHER_CROPS_COLUMN: {"type": "array", "items": {"type": "string"}},
+}
+_CUSTOM_SCHEMA = {"$schema": "https://vecorel.org/sdl/v0.2.0/schema.json", "required": []}
+
+
+def _collection_metadata(text: str, added: tuple[str, ...]) -> str:
+    """fiboa's ``collection`` metadata, declaring the added columns in ``schemas:custom``.
+
+    Left as it is when it isn't a fiboa/Vecorel collection object.
+    """
+    try:
+        collection = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    if not isinstance(collection, dict):
+        return text
+    custom = {**_CUSTOM_SCHEMA, **(collection.get("schemas:custom") or {})}
+    properties = {**custom.get("properties", {})}
+    properties.update({name: _SCHEMA_PROPERTIES[name] for name in added})
+    collection["schemas:custom"] = {**custom, "properties": properties}
+    return json.dumps(collection)
 
 
 def _range_index(index: Any, rows: int) -> Any:

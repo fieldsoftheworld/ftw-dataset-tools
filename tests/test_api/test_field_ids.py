@@ -581,7 +581,12 @@ class TestOutput:
 
         dedupe_fields(tmp_path / "in.parquet", tmp_path / "out.parquet")
         written = pq.ParquetFile(tmp_path / "out.parquet").metadata.metadata
-        assert written[b"collection"] == b'{"fiboa_version": "0.2.0"}'
+        collection = json.loads(written[b"collection"])
+        assert collection["fiboa_version"] == "0.2.0"
+        assert set(collection["schemas:custom"]["properties"]) == {
+            "source_id",
+            "other_crop_names",
+        }
         source_pandas = json.loads(metadata[b"pandas"])
         written_pandas = json.loads(written[b"pandas"])
         assert written_pandas["pandas_version"] == source_pandas["pandas_version"]
@@ -589,6 +594,29 @@ class TestOutput:
         assert b"ARROW:schema" not in written
         assert isinstance(pq.read_table(tmp_path / "out.parquet"), pa.Table)
         assert len(gpd.read_parquet(tmp_path / "out.parquet")) == 6
+
+    def test_the_collection_declares_the_added_columns(self) -> None:
+        source = {
+            "collection": "cz",
+            "schemas:custom": {
+                "properties": {"block_id": {"type": "string"}},
+                "$schema": "https://vecorel.org/sdl/v0.2.0/schema.json",
+                "required": [],
+                "collection": {},
+            },
+        }
+        text = field_ids._collection_metadata(json.dumps(source), ("source_id",))
+        custom = json.loads(text)["schemas:custom"]
+        assert custom["properties"] == {
+            "block_id": {"type": "string"},
+            "source_id": {"type": "string"},
+        }
+        assert custom["collection"] == {}
+        assert json.loads(field_ids._collection_metadata("{}", ("other_crop_names",)))[
+            "schemas:custom"
+        ]["properties"] == {"other_crop_names": {"type": "array", "items": {"type": "string"}}}
+        assert field_ids._collection_metadata("not json", ("source_id",)) == "not json"
+        assert field_ids._collection_metadata("[1]", ("source_id",)) == "[1]"
 
     @pytest.mark.parametrize("dtype", ["Int64", "UInt32"])
     def test_a_renumbered_nullable_integer_id_still_reads(self, tmp_path: Path, dtype: str) -> None:
