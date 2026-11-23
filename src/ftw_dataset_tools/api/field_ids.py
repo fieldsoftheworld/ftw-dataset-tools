@@ -10,8 +10,8 @@ right after the fields are written, by the first rule that fits the group:
 ``parts``
     One field exploded into several rows: the attributes other than ``metrics:*`` are
     equal, the parts' interiors don't overlap (their summed area exceeds the area of
-    their union by less than 1% of the smallest part) and, where the file has
-    ``metrics:area``, every row carries the same value and the union is between half
+    their union by less than 1% of the smallest part) and every row carries the
+    same ``metrics:area`` (rows without it are never parts) and the union is between half
     and twice it. The rows become one, whose geometry is the valid union of the parts;
     ``metrics:area`` keeps the source value and the bbox column is recomputed.
 ``same_parcel``
@@ -295,11 +295,14 @@ def _union_area(rows: list[_Row]) -> float:
 
 
 def _area_metric_fits(rows: list[_Row], union_area: float, layout: _Layout) -> bool:
+    """Whether every row carries the same ``metrics:area`` and the union is near it.
+
+    Without the metric nothing bounds how far apart the parts lie, so a placeholder
+    id reused across a region could become one field: such rows are never parts.
+    """
     if AREA_METRIC not in layout.metrics:
-        return True
+        return False
     values = [r.record[AREA_METRIC] for r in rows]
-    if all(v is None for v in values):
-        return True
     if any(v is None for v in values) or not all(_close(values[0], v) for v in values):
         return False
     low, high = AREA_RATIO_RANGE

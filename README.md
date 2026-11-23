@@ -337,7 +337,7 @@ equal-area CRS (EPSG:6933):
 | Rule | When | Result |
 |------|------|--------|
 | exact | Same geometry and attributes; `metrics:*` within 0.01% | One row is kept |
-| parts | Same attributes apart from `metrics:*`; interiors don't overlap (summed area minus the union's under 1% of the smallest part); where there is `metrics:area`, every row has the same value and the union is 0.5–2× it | One row: the valid union of the parts, the source `metrics:area` and a recomputed bbox |
+| parts | Same attributes apart from `metrics:*`; interiors don't overlap (summed area minus the union's under 1% of the smallest part); every row has the same `metrics:area` and the union is 0.5–2× it (rows without `metrics:area` are never parts) | One row: the valid union of the parts, the source `metrics:area` and a recomputed bbox |
 | same_parcel | The same polygon (union within 1% of the smallest row) with different attributes, like two declarations of one parcel | One row: one whose class passes the class filter if there is one, then the first by geometry WKB and attributes. The other rows' crop names (`crop:name`, else the filter column, else `hcat:name`), apart from the kept one's, go in the new list column `other_crop_names` |
 | renumbered | Anything else | Every row is kept as `<id>_1` … `<id>_k`, numbered by geometry WKB and attributes. `id` becomes text and every row gets `source_id`, the source's id |
 

@@ -2426,7 +2426,8 @@ class TestUniqueFieldIds:
         assert ctx.dedup_result is not None
         assert ctx.dedup_result.groups["same_parcel"] == 1
         full = self._ids(ctx.output_fields_path)
-        assert full == ["1", "2", "3_1", "3_2", "4"]
+        # Field 2's rows have no metrics:area, so they are renumbered, not merged.
+        assert full == ["1", "2_1", "2_2", "3_1", "3_2", "4"]
         # The declaration the filter includes was kept, so parcel 1 survives the filter.
         filtered = self._ids(ctx.field_polygons_path)
         assert filtered == full

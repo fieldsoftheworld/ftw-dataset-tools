@@ -150,11 +150,20 @@ class TestParts:
         geo = pq.read_schema(tmp_path / "out.parquet").metadata[b"geo"].decode()
         assert "MultiPolygon" in geo
 
-    def test_without_an_area_metric_the_area_is_not_checked(self, tmp_path: Path) -> None:
+    def test_without_an_area_metric_rows_are_renumbered(self, tmp_path: Path) -> None:
         rows = [{"id": 1, "geometry": LEFT}, {"id": 1, "geometry": RIGHT}]
         out, result = dedupe(tmp_path, rows)
-        assert result.groups["parts"] == 1
-        assert len(out) == 1
+        assert result.groups["parts"] == 0
+        assert result.groups["renumbered"] == 1
+        assert sorted(out["id"]) == ["1_1", "1_2"]
+
+    def test_a_null_area_metric_never_merges_far_apart_rows(self, tmp_path: Path) -> None:
+        """A placeholder id reused across a region must not become one MultiPolygon."""
+        rows = [row(0, LEFT), row(0, FAR), row(0, box(10.5, 50.5, 10.501, 50.501))]
+        out, result = dedupe(tmp_path, rows)
+        assert result.groups["renumbered"] == 1
+        assert sorted(out["id"]) == ["0_1", "0_2", "0_3"]
+        assert set(out.geometry.geom_type) == {"Polygon"}
 
     def test_overlapping_rows_are_not_parts(self, tmp_path: Path) -> None:
         area = m2(LEFT, OVERLAPPING)
