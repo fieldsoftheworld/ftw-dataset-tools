@@ -233,3 +233,140 @@ def test_remove_chip_fields(tmp_path: Path, dataset: Path) -> None:
 
     assert remove_chip_fields(dataset) == 1
     assert not chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024").exists()
+
+
+def test_empty_and_missing_geometries_are_skipped(tmp_path: Path, dataset: Path) -> None:
+    from shapely.geometry import Polygon
+
+    gdf = gpd.GeoDataFrame(
+        {"id": ["a", "empty", "none"]},
+        geometry=[box(X0 + 10, Y0 + 10, X0 + 40, Y0 + 40), Polygon(), None],
+        crs=UTM,
+    )
+    fields = _fields_from(tmp_path, gdf)
+
+    result = write_chip_fields(fields, dataset)
+
+    assert (result.written, result.failed) == (1, [])
+    out = gpd.read_parquet(chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024"))
+    assert out["id"].tolist() == ["a"]
+
+
+def test_fields_keep_file_order(tmp_path: Path, dataset: Path) -> None:
+    shapes = [box(X0 + 10 * i, Y0 + 10 * i, X0 + 10 * i + 5, Y0 + 10 * i + 5) for i in (5, 1, 3)]
+    gdf = gpd.GeoDataFrame({"id": ["p", "q", "r"]}, geometry=shapes, crs=UTM)
+
+    write_chip_fields(_fields_from(tmp_path, gdf), dataset)
+
+    out = gpd.read_parquet(chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024"))
+    assert out["id"].tolist() == ["p", "q", "r"]
+
+
+def test_rows_are_taken_across_many_batches(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pyarrow as pa
+
+    from ftw_dataset_tools.api import chip_fields
+
+    load = chip_fields._load
+
+    def one_row_batches(*args):
+        table, bounds = load(*args)
+        return pa.Table.from_batches(table.to_batches(max_chunksize=1), table.schema), bounds
+
+    monkeypatch.setattr(chip_fields, "_load", one_row_batches)
+    shapes = [
+        box(X0 + 10 * i, Y0 + 10 * i, X0 + 10 * i + 5, Y0 + 10 * i + 5) for i in (5, 1, 30, 3)
+    ]
+    gdf = gpd.GeoDataFrame({"id": ["p", "q", "far", "r"]}, geometry=shapes, crs=UTM)
+
+    write_chip_fields(_fields_from(tmp_path, gdf), dataset)
+
+    out = gpd.read_parquet(chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024"))
+    assert out["id"].tolist() == ["p", "q", "r"]
+
+
+def test_a_footprint_across_the_antimeridian_finds_fields_on_both_sides() -> None:
+    import pyarrow as pa
+    import shapely
+
+    from ftw_dataset_tools.api.chip_fields import _query, _Source
+
+    shapes = [box(179.9, 0, 179.95, 1), box(-179.95, 0, -179.9, 1), box(0, 0, 1, 1)]
+    table = pa.table(
+        {"id": ["east", "west", "middle"], "__ftw_wkb": shapely.to_wkb(shapes).tolist()}
+    )
+    source = _Source(
+        None,
+        "geometry",
+        "EPSG:4326",
+        tuple(table.to_batches()),
+        np.array([0]),
+        table.schema,
+        shapely.STRtree(shapes),
+    )
+
+    assert _query(source, (179.8, 0, -179.8, 1))["id"].to_pylist() == ["east", "west"]
+
+
+def test_a_rerun_that_keeps_every_file_does_not_load_the_fields(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ftw_dataset_tools.api import chip_fields
+
+    fields = _fields(tmp_path)
+    write_chip_fields(fields, dataset)
+
+    def boom(*_a, **_k):
+        raise AssertionError("loaded")
+
+    monkeypatch.setattr(chip_fields, "_source", boom)
+
+    assert write_chip_fields(fields, dataset, skip_existing=True).skipped == 1
+
+
+def test_fields_are_loaded_in_small_batches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ftw_dataset_tools.api import chip_fields
+
+    monkeypatch.setattr(chip_fields, "_ROWS_PER_BATCH", 1)
+    source = chip_fields._source(_fields(tmp_path))
+
+    assert [len(b) for b in source.batches] == [1, 1, 1, 1]
+
+
+def test_a_missing_fields_file(tmp_path: Path, dataset: Path) -> None:
+    with pytest.raises(ChipFieldsError, match="no such file"):
+        write_chip_fields(tmp_path / "missing.parquet", dataset)
+
+
+def test_written_kept_no_mask_and_failed_chips_in_one_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ftw_dataset_tools.api import chip_fields
+
+    root = tmp_path / "ds"
+    kept, bad, bare, fresh = (root / "chips" / "32UMA" / f"ftw-{n}_2024" for n in "abcd")
+    for chip in (kept, bad, fresh):
+        _mask(chip)
+    bare.mkdir(parents=True)
+    fields = _fields(tmp_path)
+    write_chip_fields(fields, root)
+    for chip in (bad, fresh):
+        chip_fields_path(chip).unlink()
+    clipped = chip_fields._clipped
+
+    def fail_b(source, mask_path):
+        if "ftw-b" in mask_path.name:
+            raise RuntimeError("bad shape")
+        return clipped(source, mask_path)
+
+    monkeypatch.setattr(chip_fields, "_clipped", fail_b)
+
+    result = write_chip_fields(fields, root, skip_existing=True, workers=3)
+
+    assert (result.written, result.skipped) == (1, 1)
+    assert result.no_mask == ["ftw-c_2024"]
+    assert result.failed == [("ftw-b_2024", "RuntimeError: bad shape")]

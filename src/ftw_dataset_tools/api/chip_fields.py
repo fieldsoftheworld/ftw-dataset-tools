@@ -9,7 +9,6 @@ pieces were renumbered) and to the dataset's fields file.
 from __future__ import annotations
 
 import json
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,12 +29,15 @@ from ftw_dataset_tools.api.geo import (
     sql_path,
 )
 from ftw_dataset_tools.api.logging_config import get_logger
-from ftw_dataset_tools.api.masks import MaskType, _bbox_prefilter
+from ftw_dataset_tools.api.masks import MaskType
 
 logger = get_logger(__name__)
 
 CHIP_FIELDS_SUFFIX = "_fields.parquet"
 _WKB = "__ftw_wkb"
+# Rows per Arrow batch on load: a batch's binary and string columns share 32-bit
+# offsets (2 GiB), which DuckDB's default of 1M rows passes at ~2 kB of WKB a field.
+_ROWS_PER_BATCH = 100_000
 
 
 class ChipFieldsError(Exception):
@@ -66,10 +68,24 @@ def _footprint_mask(chip_dir: Path) -> Path | None:
 
 @dataclass(frozen=True)
 class _Source:
+    """The fields file held in memory, with an index over each field's bounds.
+
+    One scan of the file serves every chip: a query per chip read whole row groups
+    and took about 0.4 s, which made this step longer than the masks on big datasets.
+    It costs memory instead: the file's columns plus ~500 B a field for the index,
+    about 25 GB at peak for 30M fields (jp_2021).
+    """
+
     path: Path
     geom_col: str
     crs: object
-    columns: tuple[str, ...]
+    # Every kept column, then the geometry as WKB in _WKB. Kept as batches: one
+    # chunk could overflow binary's 32-bit offsets, and take() on a chunked table
+    # concatenates every chunk first.
+    batches: tuple[pa.RecordBatch, ...]
+    starts: np.ndarray  # the first row of each batch
+    schema: pa.Schema
+    tree: shapely.STRtree  # over the fields' bounding boxes, in row order
 
 
 def _covering_columns(fields_file: Path, geom_col: str) -> set[str]:
@@ -77,6 +93,30 @@ def _covering_columns(fields_file: Path, geom_col: str) -> set[str]:
     meta = geoparquet_column_metadata(fields_file, geom_col) or {}
     bbox = (meta.get("covering") or {}).get("bbox") or {}
     return {path[0] for path in bbox.values() if path} | {"bbox"}
+
+
+def _quote(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _load(fields_file: Path, geom_col: str, columns: list[str]) -> tuple[pa.Table, np.ndarray]:
+    """The kept columns plus WKB, and each field's bounds; empty geometries never intersect."""
+    cols = "".join(f"{_quote(c)}, " for c in columns)
+    geom = _quote(geom_col)
+    con = duckdb.connect()
+    try:
+        ensure_spatial_loaded(con)
+        table = con.execute(
+            f"""SELECT {cols}ST_AsWKB({geom}) AS {_WKB},
+                    ST_XMin({geom}) AS __x0, ST_YMin({geom}) AS __y0,
+                    ST_XMax({geom}) AS __x1, ST_YMax({geom}) AS __y1
+                FROM '{sql_path(fields_file)}'
+                WHERE {geom} IS NOT NULL AND NOT ST_IsEmpty({geom})"""
+        ).fetch_arrow_table(rows_per_batch=_ROWS_PER_BATCH)
+    finally:
+        con.close()
+    bounds = np.column_stack([table.column(c).to_numpy() for c in ("__x0", "__y0", "__x1", "__y1")])
+    return table.drop_columns(["__x0", "__y0", "__x1", "__y1"]), bounds
 
 
 def _source(fields_file: Path) -> _Source:
@@ -92,44 +132,43 @@ def _source(fields_file: Path) -> _Source:
             con.close()
         crs = geoparquet_crs(fields_file, geom_col)
         dropped = _covering_columns(fields_file, geom_col)
+        columns = [c for c in names if c != geom_col and c not in dropped]
+        table, bounds = _load(Path(fields_file), geom_col, columns)
+        tree = shapely.STRtree(shapely.box(bounds[:, 0], bounds[:, 1], bounds[:, 2], bounds[:, 3]))
     except (duckdb.Error, OSError, ValueError) as err:
         raise ChipFieldsError(f"Cannot read {fields_file}: {err}") from err
-    columns = tuple(c for c in names if c != geom_col and c not in dropped)
-    return _Source(Path(fields_file), geom_col, crs, columns)
+    batches = tuple(table.to_batches())
+    starts = np.cumsum([0] + [len(b) for b in batches[:-1]], dtype=np.int64)
+    return _Source(Path(fields_file), geom_col, crs, batches, starts, table.schema, tree)
 
 
-_local = threading.local()
+def _take(source: _Source, rows: np.ndarray) -> pa.Table:
+    """Rows by position, ``rows`` sorted, taken batch by batch."""
+    which = np.searchsorted(source.starts, rows, side="right") - 1
+    parts = [
+        source.batches[b].take(pa.array(rows[which == b] - source.starts[b], type=pa.int64()))
+        for b in np.unique(which)
+    ]
+    return pa.Table.from_batches(parts, schema=source.schema)
 
 
-def _connection() -> duckdb.DuckDBPyConnection:
-    con = getattr(_local, "con", None)
-    if con is None:
-        con = duckdb.connect(":memory:")
-        con.execute("SET threads = 1")  # one per pool thread
-        ensure_spatial_loaded(con)
-        _local.con = con
-    return con
-
-
-def _quote(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
+def _envelopes(bounds: tuple[float, float, float, float]) -> shapely.Geometry:
+    """The chip's footprint in the fields' CRS; split in two where it crosses 180 degrees."""
+    minx, miny, maxx, maxy = bounds
+    if minx <= maxx:
+        return shapely.box(minx, miny, maxx, maxy)
+    return shapely.MultiPolygon(
+        [shapely.box(minx, miny, 180, maxy), shapely.box(-180, miny, maxx, maxy)]
+    )
 
 
 def _query(source: _Source, bounds: tuple[float, float, float, float]) -> pa.Table:
-    minx, miny, maxx, maxy = bounds
-    cols = "".join(f"{_quote(c)}, " for c in source.columns)
-    geom = _quote(source.geom_col)
-    prefilter = _bbox_prefilter(source.path, source.geom_col, bounds)
-    return (
-        _connection()
-        .execute(
-            f"""SELECT {cols}ST_AsWKB({geom}) AS {_WKB}
-                FROM '{sql_path(source.path)}'
-                WHERE {prefilter}ST_Intersects(
-                    {geom}, ST_MakeEnvelope({minx!r}, {miny!r}, {maxx!r}, {maxy!r}))"""
-        )
-        .fetch_arrow_table()
-    )
+    """The fields that intersect ``bounds``, in file order."""
+    envelope = _envelopes(bounds)
+    rows = np.unique(np.concatenate([source.tree.query(e) for e in shapely.get_parts(envelope)]))
+    table = _take(source, rows)
+    shapes = shapely.from_wkb(table.column(_WKB).to_numpy(zero_copy_only=False))
+    return table.filter(pa.array(shapely.intersects(shapes, envelope), type=pa.bool_()))
 
 
 def _polygonal(shape: shapely.Geometry) -> shapely.Geometry | None:
@@ -189,13 +228,18 @@ def _fresh(out: Path, *inputs: Path) -> bool:
     return all(stamp >= p.stat().st_mtime for p in inputs)
 
 
-def _write_chip(source: _Source, chip_dir: Path, skip_existing: bool) -> tuple[str, str]:
+def _plan(chip_dir: Path, fields_file: Path, skip_existing: bool) -> tuple[str, Path | None]:
+    """What a chip needs before the fields are loaded: no mask, kept, or its mask to cut to."""
     mask_path = _footprint_mask(chip_dir)
     if mask_path is None:
-        return "no_mask", ""
+        return "no_mask", None
+    if skip_existing and _fresh(chip_fields_path(chip_dir), mask_path, fields_file):
+        return "skipped", None
+    return "write", mask_path
+
+
+def _write_chip(source: _Source, chip_dir: Path, mask_path: Path) -> tuple[str, str]:
     out = chip_fields_path(chip_dir)
-    if skip_existing and _fresh(out, mask_path, source.path):
-        return "skipped", ""
     try:
         table, crs = _clipped(source, mask_path)
         _write(table, source.geom_col, crs, out)
@@ -221,20 +265,41 @@ def write_chip_fields(
     # Imported here: api.imagery's package init imports stac, which imports this module.
     from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
 
-    source = _source(Path(fields_file))
+    fields_file = Path(fields_file)
+    if not fields_file.is_file():
+        raise ChipFieldsError(f"Cannot read {fields_file}: no such file")
     chip_dirs = iter_chip_dirs(Path(collection_dir))
-    result = ChipFieldsResult()
+    plans = [_plan(d, fields_file, skip_existing) for d in chip_dirs]
+    todo = [(d, mask) for d, (step, mask) in zip(chip_dirs, plans, strict=True) if step == "write"]
+    written = _write_chips(fields_file, todo, workers)
+    outcomes = [written.get(d, (step, "")) for d, (step, _) in zip(chip_dirs, plans, strict=True)]
+    return _tally(chip_dirs, outcomes)
+
+
+def _write_chips(
+    fields_file: Path, todo: list[tuple[Path, Path]], workers: int
+) -> dict[Path, tuple[str, str]]:
+    """Each chip's outcome; the fields load only when a chip needs them, so a rerun
+    that keeps every file skips the scan."""
+    if not todo:
+        return {}
+    source = _source(fields_file)
     with ThreadPoolExecutor(max(1, workers)) as pool:
-        outcomes = pool.map(lambda d: _write_chip(source, d, skip_existing), chip_dirs)
-        for chip_dir, (outcome, reason) in zip(chip_dirs, outcomes, strict=True):
-            if outcome == "written":
-                result.written += 1
-            elif outcome == "skipped":
-                result.skipped += 1
-            elif outcome == "failed":
-                result.failed.append((chip_dir.name, reason))
-            else:
-                result.no_mask.append(chip_dir.name)
+        outcomes = pool.map(lambda job: _write_chip(source, *job), todo)
+        return {d: outcome for (d, _), outcome in zip(todo, outcomes, strict=True)}
+
+
+def _tally(chip_dirs: list[Path], outcomes: list[tuple[str, str]]) -> ChipFieldsResult:
+    result = ChipFieldsResult()
+    for chip_dir, (outcome, reason) in zip(chip_dirs, outcomes, strict=True):
+        if outcome == "written":
+            result.written += 1
+        elif outcome == "skipped":
+            result.skipped += 1
+        elif outcome == "failed":
+            result.failed.append((chip_dir.name, reason))
+        else:
+            result.no_mask.append(chip_dir.name)
     return result
 
 
