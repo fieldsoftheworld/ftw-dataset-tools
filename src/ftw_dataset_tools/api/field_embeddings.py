@@ -1013,6 +1013,11 @@ def _check_fields(fields_path: Path, id_col: str) -> tuple[str, CRS]:
     return geom_col, crs
 
 
+# Two: each thread holds about two row groups' geometry, and the Python hash loop,
+# not the scan, sets the pace (1.1 s per 600k rows at 2 threads or 8).
+_FINGERPRINT_THREADS = 2
+
+
 def fields_fingerprint(fields_file: Path | str, id_col: str = "id") -> str:
     """A digest of the fields' CRS and every field's row number, id and geometry.
 
@@ -1028,6 +1033,11 @@ def fields_fingerprint(fields_file: Path | str, id_col: str = "id") -> str:
     con = duckdb.connect(":memory:")
     con.execute("SET enable_progress_bar = false")
     con.execute(f"SET memory_limit = '{DUCKDB_MEMORY_LIMIT}'")
+    # A streamed scan buffers row groups per thread and, in order, across threads: on a
+    # 192-core host that passed the limit before the first batch (es_2025, 6M fields).
+    # The XOR makes scan order irrelevant.
+    con.execute(f"SET threads = {_FINGERPRINT_THREADS}")
+    con.execute("SET preserve_insertion_order = false")
     ensure_spatial_loaded(con)
     try:
         reader = con.execute(f"""
