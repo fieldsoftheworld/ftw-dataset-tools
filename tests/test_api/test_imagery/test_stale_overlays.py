@@ -392,6 +392,29 @@ class TestInterrupts:
             assert thumbnail.extra_fields["file:size"] == overlay.stat().st_size
             assert not list(chip_dir.glob(".*"))
 
+    def test_a_leftover_is_removed_when_the_item_cannot_be_read(self, tmp_path: Path) -> None:
+        chip_dir = _chip(tmp_path)
+        _old_overlay(chip_dir)
+        leftover = chip_dir / f".{CHIP}_overlay.tmp.webp"
+        leftover.write_bytes(b"half drawn")
+        (chip_dir / f"{CHIP}.json").write_text("[]")
+
+        result = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+
+        assert result.failed == 1
+        assert not leftover.exists()
+
+    def test_a_leftover_is_removed_with_an_overlay_that_has_no_image(self, tmp_path: Path) -> None:
+        chip_dir = _chip(tmp_path, base=False)
+        _old_overlay(chip_dir)
+        leftover = chip_dir / f".{CHIP}_overlay.tmp.webp"
+        leftover.write_bytes(b"half drawn")
+
+        result = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+
+        assert result.removed == 1
+        assert not leftover.exists()
+
     def test_a_leftover_temporary_file_is_removed(self, tmp_path: Path) -> None:
         chip_dir = _chip(tmp_path)
         overlay = _old_overlay(chip_dir)
@@ -508,6 +531,41 @@ class TestPerChipErrors:
         assert bar.call_args.kwargs["total"] == 3
         assert bar.return_value.update.call_count == 3
         bar.return_value.close.assert_called_once()
+
+    def test_a_batch_is_released_before_the_next_is_planned(self, tmp_path: Path) -> None:
+        """At most one batch of items is alive while a chip is planned."""
+        import gc
+        import weakref
+
+        class Probe:
+            pass
+
+        alive: weakref.WeakSet = weakref.WeakSet()
+        peak = [0]
+
+        def plan(item_path):
+            gc.collect()
+            peak[0] = max(peak[0], len(alive))
+            probe = Probe()
+            alive.add(probe)
+            return overlay_refresh._RedrawTask(
+                item=probe, item_path=item_path, slot=None, checksums=False
+            )
+
+        with (
+            patch.object(overlay_refresh, "PLAN_BATCH_SIZE", 3),
+            patch.object(overlay_refresh, "overlay_is_stale", lambda *_: True),
+            patch.object(overlay_refresh, "_plan", plan),
+            patch.object(overlay_refresh, "_draw", lambda _task: None),
+            patch.object(overlay_refresh, "_settle", lambda _outcome: "redrawn"),
+        ):
+            result = redraw_stale_overlays(
+                [tmp_path / f"c{i}" / f"c{i}.json" for i in range(9)], workers=2
+            )
+
+        assert result.redrawn == 9
+        # Planning the third chip of a batch sees its two batch-mates, nothing older.
+        assert peak[0] == 2
 
     def test_items_are_planned_and_settled_in_batches(self, tmp_path: Path) -> None:
         """No more than one batch of items is read before they are settled."""

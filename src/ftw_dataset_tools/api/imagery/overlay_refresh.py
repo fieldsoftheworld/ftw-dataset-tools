@@ -29,7 +29,9 @@ hidden temporary file, the item is written, and only then is the file moved into
 place (or the old overlay removed). An error, or an interrupt between those steps,
 leaves the chip stale, so the next run repairs it. The item write itself is not
 atomic: a process killed during it can leave the item JSON truncated. A temporary
-file left by an interrupt is removed on the next run.
+file left by an interrupt is removed the next time its chip goes through this pass
+(every chip in the download workflow; the chips skipped as already rendered in the
+preview workflow).
 
 Copies that do not preserve mtimes (``cp`` without ``-p``, some syncs) can therefore
 cause extra redraws, or missed ones when a copied mask ends up older than its overlay.
@@ -210,6 +212,7 @@ def _remove(task: _RedrawTask) -> None:
     task.item.assets.pop("thumbnail", None)
     write_item(task.item, task.item_path)
     _overlay(task.chip_dir, task.chip_id).unlink(missing_ok=True)
+    _scratch(task.chip_dir, task.chip_id).unlink(missing_ok=True)
     logger.warning(f"{task.chip_id}: removed the stale chip overlay; no preview image is left")
 
 
@@ -244,7 +247,11 @@ def _stale_task(item_path: Path) -> _RedrawTask | None:
     """The chip's redraw task when stale; else None, its leftover temporary file gone."""
     chip_dir, chip_id = item_path.parent, item_path.stem
     if overlay_is_stale(chip_dir, chip_id):
-        return _plan(item_path)
+        try:
+            return _plan(item_path)
+        except Exception:
+            _scratch(chip_dir, chip_id).unlink(missing_ok=True)
+            raise
     _scratch(chip_dir, chip_id).unlink(missing_ok=True)
     return None
 
@@ -266,6 +273,17 @@ def _stale_tasks(
         else:
             tasks.append(task)
     return tasks
+
+
+def _redraw_batch(
+    batch: list[Path],
+    result: OverlayRedrawResult,
+    advance: Callable[[], None],
+    apply: Callable[[ParallelOutcome[_RedrawTask, Path | None]], None],
+    workers: int,
+) -> None:
+    """Plan and redraw one batch; its tasks (and items) go when this returns."""
+    run_in_parallel(_stale_tasks(batch, result, advance), _draw, apply, workers=workers)
 
 
 def _batches(item_paths: Iterable[Path], size: int) -> Iterator[list[Path]]:
@@ -310,10 +328,10 @@ def redraw_stale_overlays(
         advance()
 
     try:
-        # In batches, so only one batch's items are held in memory at a time.
+        # In batches, so only one batch's items are held in memory at a time: each
+        # batch's tasks are released before the next batch is planned.
         for batch in _batches(item_paths, PLAN_BATCH_SIZE):
-            tasks = _stale_tasks(batch, result, advance)
-            run_in_parallel(tasks, _draw, apply, workers=workers)
+            _redraw_batch(batch, result, advance, apply, workers)
     finally:
         progress_bar.close()
     _log(result)
