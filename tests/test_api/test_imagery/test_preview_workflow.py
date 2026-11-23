@@ -226,6 +226,38 @@ class TestPreviewImageryForCatalog:
         assert item.assets["thumbnail"].href == "./chip_a_overlay.webp"
         assert item.assets["thumbnail"].extra_fields["file:size"] == overlay.stat().st_size
 
+    def test_a_failed_redraw_is_logged_not_failed_or_retried(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Counted once, apart from the skip; the run does not fail and the next one skips it."""
+        import os
+        from unittest.mock import patch
+
+        from ftw_dataset_tools.api.imagery import chip_preview
+        from ftw_dataset_tools.api.imagery.thumbnails import ThumbnailError
+
+        out = _collection(tmp_path)
+        chip_dir = _chip(out, "chip_a", scene=_scene(tmp_path / "scene.tif"))
+        preview_imagery_for_catalog(out, workers=1)
+        overlay = chip_dir / "chip_a_overlay.webp"
+        mask_mtime = (chip_dir / "chip_a_semantic_3_class.tif").stat().st_mtime
+        os.utime(overlay, (mask_mtime - 100, mask_mtime - 100))
+
+        def fail(*_args, **_kwargs):
+            raise ThumbnailError("cannot draw")
+
+        with patch.object(chip_preview, "generate_overlay_thumbnail", fail):
+            again = preview_imagery_for_catalog(out, workers=1)
+
+        assert (again.skipped, again.failed) == (1, 0)
+        assert (again.previews_redrawn, again.previews_redraw_failed) == (0, 1)
+        assert "could not draw the chip overlay" in caplog.text
+        item = pystac.Item.from_file(str(chip_dir / "chip_a.json"))
+        assert item.assets["thumbnail"].href == "./chip_a_planting_image_s2.webp"
+
+        third = preview_imagery_for_catalog(out, workers=1)
+        assert (third.previews_redrawn, third.previews_redraw_failed) == (0, 0)
+
     def test_resume_is_the_default(self, tmp_path: Path) -> None:
         """No caller should inherit a re-render of everything by omitting the flag."""
         out = _collection(tmp_path)

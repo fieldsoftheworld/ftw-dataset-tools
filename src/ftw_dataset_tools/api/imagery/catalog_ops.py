@@ -13,14 +13,9 @@ from typing import TYPE_CHECKING
 
 import pystac
 
-from ftw_dataset_tools.api.imagery.chip_preview import (
-    preview_slot,
-    redraw_chip_preview,
-    refresh_stale_overlay,
-)
+from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, redraw_chip_preview
 from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES, IMAGERY_SLOTS, SLOTS_BY_MODE
 from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_SUFFIX
-from ftw_dataset_tools.api.logging_config import get_logger
 from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
@@ -49,14 +44,11 @@ __all__ = [
     "mosaic_requested_year",
     "normalize_imagery_properties",
     "preserve_imagery_selection",
-    "refresh_stale_overlays",
     "refresh_temporal_extent",
     "selected_modes",
     "selection_conflict",
     "set_temporal_extent",
 ]
-
-logger = get_logger(__name__)
 
 
 class SelectionConflictError(Exception):
@@ -125,27 +117,6 @@ def iter_chip_dirs(collection_dir: Path) -> list[Path]:
         if chip.is_dir() and not chip.name.startswith(".")
     ]
     return sorted(dirs)
-
-
-def refresh_stale_overlays(collection_dir: Path) -> int:
-    """Redraw every chip overlay older than its reference mask, or missing.
-
-    For a resumed imagery run, which skips chips it has already downloaded: their
-    masks may have been rebuilt since. Compares file times first and reads only the
-    stale chips' items (see :func:`refresh_stale_overlay`).
-
-    Returns:
-        The number of overlays redrawn.
-    """
-    redrawn = 0
-    for item_path in chip_item_files(collection_dir):
-        try:
-            redrawn += refresh_stale_overlay(item_path)
-        except (OSError, pystac.STACError, ValueError) as err:
-            logger.warning(f"{item_path.stem}: could not redraw the chip preview: {err}")
-    if redrawn:
-        logger.info(f"Redrew {redrawn} chip preview(s) older than their masks")
-    return redrawn
 
 
 def chip_item_files(collection_dir: Path) -> list[Path]:

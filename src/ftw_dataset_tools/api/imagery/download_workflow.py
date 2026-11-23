@@ -14,12 +14,13 @@ import pystac
 from shapely.geometry import shape
 from tqdm import tqdm
 
-from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs, refresh_stale_overlays
+from ftw_dataset_tools.api.imagery.catalog_ops import chip_item_files, iter_chip_dirs
 from ftw_dataset_tools.api.imagery.image_download import (
     download_and_clip_scene,
     on_reference_grid,
     process_downloaded_scene,
 )
+from ftw_dataset_tools.api.imagery.overlay_refresh import redraw_stale_overlays
 from ftw_dataset_tools.api.imagery.parallel import (
     DEFAULT_WORKERS,
     ParallelOutcome,
@@ -62,8 +63,10 @@ class DownloadWorkflowResult:
     failed: int = 0
     skipped_details: list[dict] = field(default_factory=list)
     failed_details: list[dict] = field(default_factory=list)
-    #: Chip overlays redrawn because their mask is newer (see refresh_stale_overlays).
+    #: Chip overlays redrawn because their mask is newer (see overlay_refresh).
     previews_redrawn: int = 0
+    #: Stale chip overlays that could not be drawn; logged, not counted as failures.
+    previews_redraw_failed: int = 0
 
 
 def find_s2_child_items(
@@ -203,7 +206,9 @@ def download_imagery_for_catalog(
     if generate_thumbnails:
         # A skipped (already downloaded) chip keeps its overlay, though its mask
         # may have been rebuilt since.
-        result.previews_redrawn = refresh_stale_overlays(catalog_dir)
+        redraw = redraw_stale_overlays(chip_item_files(catalog_dir), workers=workers)
+        result.previews_redrawn = redraw.redrawn
+        result.previews_redraw_failed = redraw.failed
     return result
 
 
