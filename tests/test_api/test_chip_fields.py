@@ -233,3 +233,78 @@ def test_remove_chip_fields(tmp_path: Path, dataset: Path) -> None:
 
     assert remove_chip_fields(dataset) == 1
     assert not chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024").exists()
+
+
+def test_empty_and_missing_geometries_are_skipped(tmp_path: Path, dataset: Path) -> None:
+    from shapely.geometry import Polygon
+
+    gdf = gpd.GeoDataFrame(
+        {"id": ["a", "empty", "none"]},
+        geometry=[box(X0 + 10, Y0 + 10, X0 + 40, Y0 + 40), Polygon(), None],
+        crs=UTM,
+    )
+    fields = _fields_from(tmp_path, gdf)
+
+    result = write_chip_fields(fields, dataset)
+
+    assert (result.written, result.failed) == (1, [])
+    out = gpd.read_parquet(chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024"))
+    assert out["id"].tolist() == ["a"]
+
+
+def test_fields_keep_file_order(tmp_path: Path, dataset: Path) -> None:
+    shapes = [box(X0 + 10 * i, Y0 + 10 * i, X0 + 10 * i + 5, Y0 + 10 * i + 5) for i in (5, 1, 3)]
+    gdf = gpd.GeoDataFrame({"id": ["p", "q", "r"]}, geometry=shapes, crs=UTM)
+
+    write_chip_fields(_fields_from(tmp_path, gdf), dataset)
+
+    out = gpd.read_parquet(chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024"))
+    assert out["id"].tolist() == ["p", "q", "r"]
+
+
+def test_rows_are_taken_across_many_batches(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pyarrow as pa
+
+    from ftw_dataset_tools.api import chip_fields
+
+    load = chip_fields._load
+
+    def one_row_batches(*args):
+        table, bounds = load(*args)
+        return pa.Table.from_batches(table.to_batches(max_chunksize=1), table.schema), bounds
+
+    monkeypatch.setattr(chip_fields, "_load", one_row_batches)
+    shapes = [
+        box(X0 + 10 * i, Y0 + 10 * i, X0 + 10 * i + 5, Y0 + 10 * i + 5) for i in (5, 1, 30, 3)
+    ]
+    gdf = gpd.GeoDataFrame({"id": ["p", "q", "far", "r"]}, geometry=shapes, crs=UTM)
+
+    write_chip_fields(_fields_from(tmp_path, gdf), dataset)
+
+    out = gpd.read_parquet(chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024"))
+    assert out["id"].tolist() == ["p", "q", "r"]
+
+
+def test_a_footprint_across_the_antimeridian_finds_fields_on_both_sides() -> None:
+    import pyarrow as pa
+    import shapely
+
+    from ftw_dataset_tools.api.chip_fields import _query, _Source
+
+    shapes = [box(179.9, 0, 179.95, 1), box(-179.95, 0, -179.9, 1), box(0, 0, 1, 1)]
+    table = pa.table(
+        {"id": ["east", "west", "middle"], "__ftw_wkb": shapely.to_wkb(shapes).tolist()}
+    )
+    source = _Source(
+        None,
+        "geometry",
+        "EPSG:4326",
+        tuple(table.to_batches()),
+        np.array([0]),
+        table.schema,
+        shapely.STRtree(shapes),
+    )
+
+    assert _query(source, (179.8, 0, -179.8, 1))["id"].to_pylist() == ["east", "west"]
