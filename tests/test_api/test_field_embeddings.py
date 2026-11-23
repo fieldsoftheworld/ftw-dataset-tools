@@ -642,6 +642,31 @@ class TestSecondReviewFindings:
         assert utm == again
         assert utm != other_crs
 
+    def test_the_fingerprint_scan_is_bounded_and_unordered(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
+        before = fe.fields_fingerprint(fields)
+        statements: list[str] = []
+        connect = duckdb.connect
+
+        class Recording:
+            def __init__(self, con) -> None:
+                self._con = con
+
+            def execute(self, sql, *args):
+                statements.append(" ".join(str(sql).split()))
+                return self._con.execute(sql, *args)
+
+            def __getattr__(self, name):
+                return getattr(self._con, name)
+
+        monkeypatch.setattr(fe.duckdb, "connect", lambda *a, **k: Recording(connect(*a, **k)))
+
+        assert fe.fields_fingerprint(fields) == before
+        assert "SET threads = 8" in statements
+        assert "SET preserve_insertion_order = false" in statements
+
     def test_an_older_algorithm_version_is_not_current(self, tmp_path: Path, monkeypatch) -> None:
         fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})
         out = tmp_path / "o.parquet"
