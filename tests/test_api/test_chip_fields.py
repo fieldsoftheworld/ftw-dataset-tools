@@ -327,7 +327,7 @@ def test_a_rerun_that_keeps_every_file_does_not_load_the_fields(
 
 
 def test_fields_are_loaded_in_small_batches(
-    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from ftw_dataset_tools.api import chip_fields
 
