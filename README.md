@@ -323,7 +323,8 @@ Chips, masks, field outlines and field embeddings join on the fields' `id`, so i
 be unique. `ftwd run` and `create-dataset` make it so right after writing
 `{name}_fields.parquet`, before the class filter; `create-chips`, `create-boundaries`,
 `create-masks` and `add-field-embeddings` refuse fields that repeat an id and point to
-this command, which does the same to any fields file:
+this command, which does the same to any fields file. A `ftwd run` that starts after
+the reproject stage refuses fields an older run left with repeated ids.
 
 ```bash
 ftwd dedupe-fields cz_2019.parquet cz_2019_unique.parquet
@@ -337,8 +338,8 @@ equal-area CRS (EPSG:6933):
 | Rule | When | Result |
 |------|------|--------|
 | exact | Same geometry and attributes; `metrics:*` within 0.01% | One row is kept |
-| parts | Same attributes apart from `metrics:*`; interiors don't overlap (summed area minus the union's under 1% of the smallest part); every row has the same `metrics:area` and the union is 0.5–2× it (rows without `metrics:area` are never parts) | One row: the valid union of the parts, the source `metrics:area` and a recomputed bbox |
-| same_parcel | The same polygon (union within 1% of the smallest row) with different attributes, like two declarations of one parcel | One row: one whose class passes the class filter if there is one, then the first by geometry WKB and attributes. The other rows' crop names (`crop:name`, else the filter column, else `hcat:name`), apart from the kept one's, go in the new list column `other_crop_names` |
+| parts | Same attributes apart from `metrics:*`; interiors don't overlap (summed area minus the union's under 1% of the smallest part of at least 1 m², and never less than 1 m²); every row has the same `metrics:area` and the union is 0.5–2× it (rows without `metrics:area` are never parts) | One row: the valid union of the parts without slivers under 1 m², the source `metrics:area` and a recomputed bbox |
+| same_parcel | The same polygon (union within 1% of the smallest row) with different attributes, like two declarations of one parcel | One row: one whose class passes the class filter if there is one, then the first by geometry WKB and attributes. The other rows' crop names (`crop:name`, else the filter column, else `hcat:name`), apart from the kept one's, go in the new list column `other_crop_names` (NULL when there are none) |
 | renumbered | Anything else | Every row is kept as `<id>_1` … `<id>_k`, numbered by geometry WKB and attributes. `id` becomes text and every row gets `source_id`, the source's id |
 
 `other_crop_names` and `source_id` are only added to files where their rule applied;
@@ -347,8 +348,9 @@ the column to join back to the source with. Each resolved row takes the place of
 group's first row and other rows keep their order, so the output does not depend on
 how the source orders a group's rows. A file without duplicate ids is copied unchanged.
 Missing ids are left alone. A file with duplicates is refused if it already has a
-`source_id` or `other_crop_names` column, or if a `<id>_<n>` it would write is already
-another row's id.
+`source_id`, `other_crop_names` or `file_row_number` column, or if a `<id>_<n>` it
+would write is already another row's id. DuckDB works within 4 GB and 8 threads here,
+spilling to a folder beside the output.
 
 ### create-dataset
 
