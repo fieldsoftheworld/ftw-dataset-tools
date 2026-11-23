@@ -632,18 +632,21 @@ def _mask_block(stats: dict) -> str:
     return f"Every chip carries these label rasters as STAC assets: {names}."
 
 
+_LINES_AND_LOSS = (
+    "Boundary lines are 2 in the 3-class mask and 0 in the 2-class mask, wherever they "
+    "fall. Leave 3 out of losses and metrics rather than reading it as background."
+)
+
 _UNKNOWN_NOTES = {
     "label_extent": (
         "In the semantic masks, value 3 (`unknown`) marks pixels outside the label extent "
-        "that no labelled field covers: they may or may not be fields. Inside the extent, "
-        "unlabelled pixels are background (0). Leave 3 out of losses and metrics rather "
-        "than reading it as background."
+        "that are not a labelled field or boundary line: they may or may not be fields. "
+        "Inside the extent, such pixels are background (0). " + _LINES_AND_LOSS
     ),
     "presence_only": (
         "The labels are presence-only: they mark fields that exist, not where fields are "
-        "absent. In the semantic masks, value 3 (`unknown`) marks every pixel no labelled "
-        "field covers, which may or may not be a field. Leave 3 out of losses and metrics "
-        "rather than reading it as background."
+        "absent. In the semantic masks, value 3 (`unknown`) marks every pixel that is not a "
+        "labelled field or boundary line: it may or may not be a field. " + _LINES_AND_LOSS
     ),
 }
 
@@ -655,14 +658,31 @@ _CHIP_FILE_NOTES = {
     ),
     "instance_labels": (
         "`instance_labels` (`<chip>_instance_labels.json`): maps each instance mask value "
-        "(`instance_value`) to its field (`field_id`), on chips whose mask values are not "
-        "the field ids."
+        "(`instance_value`) to its field's id (`field_id`), and to its crop (`crop_value`) "
+        "when the masks were built with a crop column. With a crop column every chip has "
+        "one. Without, only chips whose field ids could not be the mask values (repeated or "
+        "unusable ids, or a field in separate pieces) have one, and their values are "
+        "numbered from 1."
     ),
 }
 
+#: The mask resolution every v1 collection has; a grid at it, with one-pixel lines,
+#: needs no mention.
+_DEFAULT_MASK_RESOLUTION_M = 10.0
+
+
+def _grid_is_notable(facts: dict) -> bool:
+    """Whether the mask grid differs from the v1 default (10 m, one-pixel lines)."""
+    resolution = facts.get("resolution_m")
+    return bool(facts.get("boundary_width_m")) or bool(
+        resolution and float(resolution) != _DEFAULT_MASK_RESOLUTION_M
+    )
+
 
 def _grid_sentence(facts: dict) -> str | None:
-    """The mask pixel size and boundary line width, as far as they are recorded."""
+    """The mask pixel size and boundary line width, when they differ from the default."""
+    if not _grid_is_notable(facts):
+        return None
     resolution = facts.get("resolution_m")
     width = facts.get("boundary_width_m")
     if resolution and width:
@@ -792,12 +812,17 @@ def _config_lines(collection: dict, config_dict: dict) -> list[str]:
         suffix = f", random seed {seed}" if seed is not None else ""
         lines.append(f"- Splits assigned with the `{split_type}` strategy{suffix}")
     facts = mask_facts(collection, config_dict)
-    if facts["resolution_m"]:
+    # The config states the resolution as before; the collection's only when it is not
+    # the v1 default, which every collection records.
+    resolution = masks.get("resolution") or (
+        facts["resolution_m"] if _grid_is_notable(facts) else None
+    )
+    if resolution:
         # Configs resolved before the UTM default carry no `utm` key; those were lon/lat.
         grid = " on each chip's own UTM zone grid" if masks.get("utm") else ""
-        lines.append(f"- Masks rasterized at {facts['resolution_m']:g} m per pixel{grid}")
+        lines.append(f"- Masks rasterized at {resolution:g} m per pixel{grid}")
     if facts["boundary_width_m"]:
-        lines.append(f"- Field boundary lines burned {facts['boundary_width_m']:g} m wide")
+        lines.append(f"- Field boundary lines are {facts['boundary_width_m']:g} m wide")
     return lines
 
 

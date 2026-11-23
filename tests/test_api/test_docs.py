@@ -1071,6 +1071,9 @@ class TestV2MaskFacts:
 
         coll_path, chips, fields = _collection_dir(tmp_path)
         collection = json.loads(coll_path.read_text())
+        # Every v1 collection records its (default) mask resolution.
+        collection["ftw:mask_resolution_m"] = 10.0
+        coll_path.write_text(json.dumps(collection))
         stats = collect_stats(tmp_path, chips, fields)
 
         assert stats["chip_files"] == []
@@ -1080,10 +1083,52 @@ class TestV2MaskFacts:
             render_agents(collection, stats, []),
         ):
             assert "About the masks" not in text
+            assert "m per pixel" not in text
             assert "unknown" not in text
             assert "field_boundaries" not in text
             assert "instance_labels" not in text
             assert "wide" not in text
+
+    def test_the_v1_config_line_is_kept(self) -> None:
+        from ftw_dataset_tools.api.docs import _readme_provenance
+
+        collection = {"links": [], "ftw:mask_resolution_m": 10.0}
+        text = _readme_provenance(collection, {"stages": {"masks": {"resolution": 10.0}}})
+
+        assert "- Masks rasterized at 10 m per pixel" in text
+        assert "wide" not in text
+
+    def test_collect_stats_finds_instance_labels_past_the_first_chip(self, tmp_path: Path) -> None:
+        """Only a later chip has the lookup, so the sample item misses it; the mirror has it."""
+        import duckdb
+
+        from ftw_dataset_tools.api.docs import collect_stats
+
+        _, chips, fields = _collection_dir(tmp_path)
+        for chip_id, assets in (
+            ("ftw-33UXP0001_2024", {"instance_mask": {"href": "./a.tif"}}),
+            (
+                "ftw-33UXP0002_2024",
+                {
+                    "instance_mask": {"href": "./b.tif"},
+                    "instance_labels": {"href": "./b_labels.json"},
+                },
+            ),
+        ):
+            chip_dir = tmp_path / "chips" / "33UXP" / chip_id
+            chip_dir.mkdir(parents=True)
+            (chip_dir / f"{chip_id}.json").write_text(json.dumps({"assets": assets}))
+        items = tmp_path / "items.parquet"
+        duckdb.connect().execute(
+            "COPY (SELECT * FROM (VALUES "
+            "('ftw-33UXP0001_2024', 'train', {'instance_mask': {'href': './a.tif'}, "
+            "'instance_labels': NULL}), "
+            "('ftw-33UXP0002_2024', 'test', {'instance_mask': {'href': './b.tif'}, "
+            "'instance_labels': {'href': './b_labels.json'}})) "
+            f"t(id, \"ftw:split\", assets)) TO '{items}' (FORMAT parquet)"
+        )
+
+        assert collect_stats(tmp_path, chips, fields)["chip_files"] == ["instance_labels"]
 
     def test_instance_labels_found_in_the_items_mirror(self, tmp_path: Path) -> None:
         import duckdb
@@ -1126,7 +1171,8 @@ class TestV2MaskFacts:
         text = render_readme(collection, self._v2_stats(), [], {})
 
         assert "- Masks rasterized at 2.5 m per pixel" in text
-        assert "- Field boundary lines burned 10 m wide" in text
+        assert "- Field boundary lines are 10 m wide" in text
+        assert "burned" not in text
         assert "About the masks and the files beside them:" in text
         assert "`field_boundaries` (`<chip>_fields.parquet`)" in text
         # The grid is stated once, under Provenance.
@@ -1138,7 +1184,17 @@ class TestV2MaskFacts:
         text = render_agents({"title": "T", "links": []}, self._v2_stats("presence_only"), [])
 
         assert "The labels are presence-only" in text
+        assert "not a labelled field or boundary line" in text
+        assert "Boundary lines are 2 in the 3-class mask and 0 in the 2-class mask" in text
         assert "outside the label extent" not in text
+
+    def test_instance_labels_note_covers_the_crop_column_case(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        text = render_agents({"title": "T", "links": []}, self._v2_stats(), [])
+
+        assert "(`crop_value`)" in text
+        assert "With a crop column every chip has one." in text
 
     def test_no_unknown_note_without_a_semantic_mask(self) -> None:
         from ftw_dataset_tools.api.docs import render_agents
