@@ -54,6 +54,7 @@ import shapely
 from ftw_dataset_tools.api.chip_grid import reprojector
 from ftw_dataset_tools.api.geo import (
     detect_geometry_column,
+    geoparquet_column_metadata,
     geoparquet_crs,
     get_bbox_column_name,
     sql_path,
@@ -90,13 +91,13 @@ RESERVED_COLUMNS = (
 
 # DuckDB's bounds for the id scans and the rewrite. A scan buffers row groups per
 # thread, and the rewrite sorts every column of the file: unbounded, a 10M-row file
-# peaked at 25 GB of RSS. With DuckDB held to 4 GB on 8 threads it spills to disk and
-# writes the same output; the limit bounds DuckDB's buffers, not everything the process
-# holds. at-2023 peaks at about 6 GB through DuckDB and 8 GB after the schema pass.
-_THREADS = 8
-# Rows the schema pass holds at once: a DuckDB row group (122,880 rows) of Austrian
-# fields is about 265 MB decoded.
-_SCHEMA_PASS_ROWS = 32_768
+# peaked at 25 GB of RSS. With DuckDB held to 4 GB it spills to disk and writes the
+# same output; the limit bounds DuckDB's buffers, not everything the process holds. On 8
+# threads the 10M-row rewrite still ran out of DuckDB memory in 3 of 10 runs, on 4 it
+# passed 10 of 10 in the same 80 s, peaking at about 10 GB of RSS (at-2023: about 8 GB).
+_THREADS = 4
+# The final pass writes zstd at DuckDB's level (pyarrow's default is 1).
+_ZSTD_LEVEL = 3
 _MEMORY_LIMIT = "4GB"
 AREA_CRS = "EPSG:6933"  # WGS 84 / NSIDC EASE-Grid 2.0 Global, equal-area
 METRICS_TOLERANCE = 1e-4  # relative: 0.01%
@@ -203,6 +204,9 @@ def _connect(work: Path) -> duckdb.DuckDBPyConnection:
     con.execute(f"SET memory_limit = '{_MEMORY_LIMIT}'")
     con.execute(f"SET threads = {_THREADS}")
     con.execute(f"SET temp_directory = '{sql_path(work / 'duckdb')}'")
+    # Without this the rewrite's COPY ran out of memory on 10M rows in half the runs;
+    # its ORDER BY still fixes the row order.
+    con.execute("SET preserve_insertion_order = false")
     return con
 
 
@@ -486,11 +490,18 @@ def _attributes(
     return attrs, tuple(c for c in attrs if c.startswith(METRICS_PREFIX))
 
 
+def _require_wkb(path: Path, geom_col: str) -> None:
+    encoding = (geoparquet_column_metadata(path, geom_col) or {}).get("encoding", "WKB")
+    if str(encoding).upper() != "WKB":
+        raise FieldIdsError(f"{path.name}: only WKB geometries are supported, not {encoding}")
+
+
 def _layout(
     columns: list[str], path: Path, id_col: str, class_filter: ClassFilter | None
 ) -> _Layout:
     _check_reserved(columns, path)
     geom_col = detect_geometry_column(path) or "geometry"
+    _require_wkb(path, geom_col)
     bbox_col = _bbox_column(columns, path)
     attrs, metrics = _attributes(columns, geom_col, bbox_col)
     keep_col, keep_values = _preference(columns, class_filter)
@@ -641,7 +652,7 @@ def _kv_metadata(
     """The source's key-value metadata, ``geo``, ``pandas`` and ``collection`` updated
     to the rewritten columns."""
     metadata = _source_metadata(src)
-    metadata["geo"] = _geo_metadata(src, json.loads(metadata["geo"]), layout, resolved)
+    metadata["geo"] = _geo_metadata(json.loads(metadata["geo"]), layout, resolved)
     if "pandas" in metadata:
         metadata["pandas"] = _pandas_metadata(json.loads(metadata["pandas"]), layout, added, rows)
     if "collection" in metadata and added:
@@ -729,11 +740,9 @@ def _range_index(index: Any, rows: int) -> Any:
     return {**index, "stop": index.get("start", 0) + rows * index.get("step", 1)}
 
 
-def _geo_metadata(src: Path, geo: dict, layout: _Layout, resolved: pa.Table) -> str:
+def _geo_metadata(geo: dict, layout: _Layout, resolved: pa.Table) -> str:
     """The source's ``geo`` metadata, listing any geometry type the merges added."""
     column = geo.get("columns", {}).get(layout.geom_col, {})
-    if column.get("encoding", "WKB") != "WKB":
-        raise FieldIdsError(f"{src.name}: only WKB geometries are supported")
     if column.get("geometry_types"):
         shapes = shapely.from_wkb(resolved.column(layout.geom_col).to_pylist())
         types = {g.geom_type for g in shapes if g is not None}
@@ -781,6 +790,10 @@ def _source_field(field: pa.Field, source: pa.Schema, text_id: str | None) -> pa
     declared = source.field(field.name)
     if field.name == text_id:
         return field.with_nullable(declared.nullable)
+    if isinstance(declared.type, pa.BaseExtensionType):
+        # e.g. geoarrow.wkb, from the source's Arrow schema: pyarrow would write it as a
+        # Parquet-native GEOMETRY column, which the source's plain binary column wasn't.
+        return declared.with_type(declared.type.storage_type)
     return declared
 
 
@@ -798,18 +811,38 @@ def _with_source_schema(written: _Written, dst: Path, src: Path) -> None:
 
     DuckDB writes every column as nullable, which fiboa's validator rejects where the
     source declared a column required, and it widens types such as millisecond
-    timestamps to microseconds. The copy goes one row group at a time.
+    timestamps to microseconds. The copy goes one of DuckDB's row groups (122,880 rows)
+    at a time, keeping that size, and DuckDB's file is deleted once read.
+
+    Raises:
+        FieldIdsError: If a column can't take the source's type again.
     """
     import pyarrow.parquet as pq
 
     source = pq.read_schema(src)
     reader = pq.ParquetFile(written.path)
     fields = [_source_field(f, source, written.text_id) for f in reader.schema_arrow]
-    metadata = written.metadata
-    schema = pa.schema(fields, metadata=metadata)
-    with pq.ParquetWriter(dst, schema, compression="zstd") as writer:
-        for batch in reader.iter_batches(batch_size=_SCHEMA_PASS_ROWS):
-            writer.write_table(pa.Table.from_batches([batch]).cast(schema))
+    schema = pa.schema(fields, metadata=written.metadata)
+    try:
+        with pq.ParquetWriter(
+            dst, schema, compression="zstd", compression_level=_ZSTD_LEVEL
+        ) as writer:
+            for i in range(reader.num_row_groups):
+                writer.write_table(_conform(reader.read_row_group(i), schema))
+    finally:
+        reader.close()
+        written.path.unlink(missing_ok=True)
+
+
+def _conform(table: pa.Table, schema: pa.Schema) -> pa.Table:
+    """``table`` cast to ``schema``; columns of Arrow's null type are rebuilt as nulls."""
+    for i, f in enumerate(schema):
+        if pa.types.is_null(f.type):
+            table = table.set_column(i, f.name, pa.nulls(table.num_rows))
+    try:
+        return table.cast(schema)
+    except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError) as err:
+        raise FieldIdsError(f"Cannot give the deduped fields the source's types: {err}") from err
 
 
 def _copy_unchanged(src: Path, dst: Path, work: Path) -> None:

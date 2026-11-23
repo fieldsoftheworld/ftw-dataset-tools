@@ -354,10 +354,12 @@ group's first row and other rows keep their order, so the output does not depend
 how the source orders a group's rows. A file without duplicate ids is copied unchanged.
 Missing ids are left alone. A file with duplicates is refused if it already has a
 `source_id`, `other_crop_names` or `file_row_number` column, or if a `<id>_<n>` it
-would write is already another row's id. DuckDB's own memory is capped at 4 GB on 8
+would write is already another row's id. DuckDB's own memory is capped at 4 GB on 4
 threads, spilling to a folder beside the output; the process as a whole uses more (about
-8 GB at peak for Austria's 2.9M fields, including a last pass that restores the source's
-column types and nullability).
+8 GB at peak for Austria's 2.9M fields and 10 GB for 10M, including a last pass that
+restores the source's column types and nullability). Arrow extension types such as
+`geoarrow.wkb` are written as their storage type, so the geometry stays a plain WKB
+column rather than becoming a Parquet-native `GEOMETRY` one.
 
 ### create-dataset
 

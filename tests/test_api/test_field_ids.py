@@ -649,10 +649,19 @@ class TestOutput:
         ).set_index("id", drop=False)
         gdf.to_parquet(tmp_path / "in.parquet")
         dedupe_fields(tmp_path / "in.parquet", tmp_path / "out.parquet")
-        recorded = json.loads(pq.ParquetFile(tmp_path / "out.parquet").metadata.metadata[b"pandas"])
-        entries = {c["field_name"]: c for c in recorded["columns"]}
-        assert entries["__index_level_0__"]["name"] == "id"
-        assert entries["id"]["pandas_type"] == "unicode"
+
+        def entries(name: str) -> dict:
+            meta = pq.ParquetFile(tmp_path / name).metadata.metadata[b"pandas"]
+            return {c["field_name"]: c for c in json.loads(meta)["columns"]}
+
+        source, written = entries("in.parquet"), entries("out.parquet")
+        index = written["__index_level_0__"]
+        assert index["name"] == "id"
+        assert (index["pandas_type"], index["numpy_type"]) == (
+            source["__index_level_0__"]["pandas_type"],
+            source["__index_level_0__"]["numpy_type"],
+        )
+        assert written["id"]["pandas_type"] == "unicode"
         for read in (pd.read_parquet, gpd.read_parquet):
             out = read(tmp_path / "out.parquet")
             assert out.index.tolist() == [1, 1, 2]
@@ -714,6 +723,64 @@ class TestOutput:
             assert written.field(name).nullable == source.field(name).nullable, name
         assert written.field("source_id").nullable
         assert written.field("other_crop_names").nullable
+
+    def _with_column(self, tmp_path: Path, name: str, values) -> Path:
+        src = write(tmp_path / "geo.parquet", self.ROWS)
+        table = pq.read_table(src)
+        table = table.append_column(name, values)
+        pq.write_table(table, tmp_path / "in.parquet")
+        return tmp_path / "in.parquet"
+
+    def test_an_all_null_column_stays_null(self, tmp_path: Path) -> None:
+        import pyarrow as pa
+
+        src = self._with_column(tmp_path, "note", pa.nulls(len(self.ROWS)))
+        assert pq.read_schema(src).field("note").type == pa.null()
+        dedupe_fields(src, tmp_path / "out.parquet")
+        written = pq.read_table(tmp_path / "out.parquet")
+        assert written.schema.field("note").type == pa.null()
+        assert written.column("note").null_count == written.num_rows
+
+    def test_a_type_that_cannot_return_is_a_field_ids_error(self) -> None:
+        import pyarrow as pa
+
+        schema = pa.schema([pa.field("x", pa.decimal128(5, 2))])
+        with pytest.raises(FieldIdsError, match="source's types"):
+            field_ids._conform(pa.table({"x": pa.array([1e9])}), schema)
+
+    def test_an_extension_type_is_written_as_its_storage(self) -> None:
+        """A geoarrow.wkb type, which an Arrow schema in the source can declare on a plain
+        binary column, would make pyarrow write a native Parquet GEOMETRY column."""
+        ga = pytest.importorskip("geoarrow.pyarrow")
+        import pyarrow as pa
+
+        source = pa.schema([pa.field("geometry", ga.wkb(), nullable=False)])
+        written = pa.field("geometry", pa.binary())
+        field = field_ids._source_field(written, source, None)
+        assert field.type == pa.binary()
+        assert not field.nullable
+
+    def test_a_plain_geometry_column_stays_plain(self, tmp_path: Path) -> None:
+        dedupe(tmp_path, self.ROWS)
+        source = pq.ParquetFile(tmp_path / "in.parquet")
+        written = pq.ParquetFile(tmp_path / "out.parquet")
+        i, j = (f.schema_arrow.get_field_index("geometry") for f in (source, written))
+        assert str(written.schema.column(j).logical_type) == "None"
+        assert str(source.schema.column(i).logical_type) == "None"
+
+    def test_native_geoarrow_geometries_are_refused(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.parquet"
+        gpd.GeoDataFrame({"id": ["1", "1"]}, geometry=[LEFT, FAR], crs="EPSG:4326").to_parquet(
+            src, geometry_encoding="geoarrow"
+        )
+        with pytest.raises(FieldIdsError, match="only WKB geometries"):
+            dedupe_fields(src, tmp_path / "out.parquet")
+
+    def test_the_output_keeps_duckdbs_row_groups(self, tmp_path: Path) -> None:
+        dedupe(tmp_path, self.ROWS)
+        out = pq.ParquetFile(tmp_path / "out.parquet")
+        assert out.num_row_groups == 1
+        assert out.metadata.row_group(0).column(0).compression == "ZSTD"
 
     def test_column_types_follow_the_source(self, tmp_path: Path) -> None:
         """DuckDB widens millisecond timestamps to microseconds; fiboa wants them in ms."""
@@ -824,13 +891,15 @@ def test_duckdb_is_bounded(tmp_path: Path) -> None:
         settings = dict(
             con.execute(
                 "SELECT name, value FROM duckdb_settings() "
-                "WHERE name IN ('memory_limit', 'threads', 'temp_directory')"
+                "WHERE name IN ('memory_limit', 'threads', 'temp_directory', "
+                "'preserve_insertion_order')"
             ).fetchall()
         )
     finally:
         con.close()
     assert settings["memory_limit"] == "3.7 GiB"
-    assert settings["threads"] == "8"
+    assert settings["threads"] == "4"
+    assert settings["preserve_insertion_order"] == "false"
     assert settings["temp_directory"] == str(tmp_path / "duckdb")
 
 
