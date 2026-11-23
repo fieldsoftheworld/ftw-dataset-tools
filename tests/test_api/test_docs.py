@@ -1016,3 +1016,134 @@ class TestFieldEmbeddingsSection:
         assert "`aef_*`" in readme
         assert "olmoearth_*" not in readme
         assert "USING (field_id)" in readme
+
+
+_V2_COLLECTION = {
+    "ftw:mask_resolution_m": 2.5,
+    "ftw:mask_boundary_width_m": 10.0,
+    "ftw:label_extent": True,
+    "item_assets": {
+        "semantic_3class_mask": {"type": "image/tiff", "roles": ["labels"]},
+        "field_boundaries": {"type": "application/vnd.apache.parquet"},
+    },
+}
+
+
+class TestV2MaskFacts:
+    """Mask grid, unknown value and per-chip files, described only when present."""
+
+    def _v2_stats(self, unknown: str | None = "label_extent") -> dict:
+        return _stats(
+            mask_types=["semantic_3class_mask"],
+            chip_files=["field_boundaries", "instance_labels"],
+            mask_facts={"resolution_m": 2.5, "boundary_width_m": 10.0, "unknown": unknown},
+        )
+
+    def test_collect_stats_reads_them_from_the_collection(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import collect_stats
+
+        coll_path, chips, fields = _collection_dir(tmp_path)
+        collection = json.loads(coll_path.read_text())
+        collection.update(_V2_COLLECTION)
+        coll_path.write_text(json.dumps(collection))
+
+        stats = collect_stats(tmp_path, chips, fields)
+
+        assert stats["chip_files"] == ["field_boundaries"]
+        assert stats["mask_facts"] == {
+            "resolution_m": 2.5,
+            "boundary_width_m": 10.0,
+            "unknown": "label_extent",
+        }
+
+    def test_collect_stats_falls_back_to_the_config(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import collect_stats
+
+        _, chips, fields = _collection_dir(tmp_path)
+        config = {"stages": {"masks": {"resolution": 5.0, "presence_only": True}}}
+
+        facts = collect_stats(tmp_path, chips, fields, config)["mask_facts"]
+
+        assert facts == {"resolution_m": 5.0, "boundary_width_m": None, "unknown": "presence_only"}
+
+    def test_a_v1_collection_has_none_of_them(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import collect_stats, render_agents, render_readme
+
+        coll_path, chips, fields = _collection_dir(tmp_path)
+        collection = json.loads(coll_path.read_text())
+        stats = collect_stats(tmp_path, chips, fields)
+
+        assert stats["chip_files"] == []
+        assert stats["mask_facts"]["unknown"] is None
+        for text in (
+            render_readme(collection, stats, [], {}),
+            render_agents(collection, stats, []),
+        ):
+            assert "About the masks" not in text
+            assert "unknown" not in text
+            assert "field_boundaries" not in text
+            assert "instance_labels" not in text
+            assert "wide" not in text
+
+    def test_instance_labels_found_in_the_items_mirror(self, tmp_path: Path) -> None:
+        import duckdb
+
+        from ftw_dataset_tools.api.docs import _mirror_has_asset
+
+        with_labels = tmp_path / "with.parquet"
+        without = tmp_path / "without.parquet"
+        con = duckdb.connect()
+        con.execute(
+            "COPY (SELECT * FROM (VALUES ({'semantic_3class_mask': {'href': 'a.tif'}, "
+            "'instance_labels': {'href': 'a_instance_labels.json'}}), "
+            "({'semantic_3class_mask': {'href': 'b.tif'}, 'instance_labels': NULL})) "
+            f"t(assets)) TO '{with_labels}' (FORMAT parquet)"
+        )
+        con.execute(
+            "COPY (SELECT {'semantic_3class_mask': {'href': 'a.tif'}} AS assets) "
+            f"TO '{without}' (FORMAT parquet)"
+        )
+
+        assert _mirror_has_asset(con, with_labels, "instance_labels")
+        assert not _mirror_has_asset(con, without, "instance_labels")
+        assert not _mirror_has_asset(con, tmp_path / "missing.parquet", "instance_labels")
+
+    def test_agents_states_grid_unknown_and_chip_files(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        text = render_agents({"title": "T", "links": []}, self._v2_stats(), [])
+
+        assert "Masks are 2.5 m per pixel, with field boundary lines 10 m wide." in text
+        assert "value 3 (`unknown`) marks pixels outside the label extent" in text
+        assert "`field_boundaries` (`<chip>_fields.parquet`)" in text
+        assert "in the mask CRS" in text
+        assert "`instance_labels` (`<chip>_instance_labels.json`)" in text
+
+    def test_readme_gives_the_grid_under_provenance(self) -> None:
+        from ftw_dataset_tools.api.docs import render_readme
+
+        collection = {"links": [], "ftw:mask_resolution_m": 2.5, "ftw:mask_boundary_width_m": 10}
+        text = render_readme(collection, self._v2_stats(), [], {})
+
+        assert "- Masks rasterized at 2.5 m per pixel" in text
+        assert "- Field boundary lines burned 10 m wide" in text
+        assert "About the masks and the files beside them:" in text
+        assert "`field_boundaries` (`<chip>_fields.parquet`)" in text
+        # The grid is stated once, under Provenance.
+        assert "Masks are 2.5 m per pixel" not in text
+
+    def test_presence_only_note(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        text = render_agents({"title": "T", "links": []}, self._v2_stats("presence_only"), [])
+
+        assert "The labels are presence-only" in text
+        assert "outside the label extent" not in text
+
+    def test_no_unknown_note_without_a_semantic_mask(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        stats = self._v2_stats()
+        stats["mask_types"] = ["instance_mask"]
+
+        assert "unknown" not in render_agents({"title": "T", "links": []}, stats, [])

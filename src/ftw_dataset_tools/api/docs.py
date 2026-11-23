@@ -263,6 +263,59 @@ def _mask_types(collection: dict, output_dir: Path) -> list[str]:
     return [key for key in declared if key in observed]
 
 
+#: Per-chip assets beside the masks that the documents describe when chips carry them.
+CHIP_FILE_ASSETS = ("field_boundaries", "instance_labels")
+
+
+def _mirror_has_asset(con: duckdb.DuckDBPyConnection, items: Path, key: str) -> bool:
+    """Whether any chip in items.parquet carries asset ``key``.
+
+    The mirror's ``assets`` struct has a field for every key any item carries, so an
+    absent key fails to bind rather than scanning the rows.
+    """
+    try:
+        row = con.execute(
+            f"SELECT 1 FROM read_parquet('{sql_path(items)}') "
+            f'WHERE assets."{key}" IS NOT NULL LIMIT 1'
+        ).fetchone()
+    except (duckdb.BinderException, duckdb.IOException):
+        return False
+    return row is not None
+
+
+def _chip_file_assets(
+    con: duckdb.DuckDBPyConnection, collection: dict, output_dir: Path
+) -> list[str]:
+    """The ``CHIP_FILE_ASSETS`` the chips carry: declared, on a sample item, or mirrored."""
+    known = set(collection.get("item_assets") or {}) | _observed_asset_keys(output_dir)
+    items = output_dir / "items.parquet"
+    return [
+        key
+        for key in CHIP_FILE_ASSETS
+        if key in known or (items.exists() and _mirror_has_asset(con, items, key))
+    ]
+
+
+def _unknown_label_kind(collection: dict, masks_cfg: dict) -> str | None:
+    """Why masks hold value 3 (unknown): ``label_extent``, ``presence_only`` or None."""
+    if collection.get("ftw:label_extent") or masks_cfg.get("label_extent"):
+        return "label_extent"
+    if collection.get("ftw:presence_only") or masks_cfg.get("presence_only"):
+        return "presence_only"
+    return None
+
+
+def mask_facts(collection: dict, config_dict: dict) -> dict:
+    """Mask grid and label settings, from the collection or else the resolved config."""
+    masks_cfg = (config_dict.get("stages") or {}).get("masks") or {}
+    return {
+        "resolution_m": collection.get("ftw:mask_resolution_m") or masks_cfg.get("resolution"),
+        "boundary_width_m": collection.get("ftw:mask_boundary_width_m")
+        or masks_cfg.get("boundary_width_m"),
+        "unknown": _unknown_label_kind(collection, masks_cfg),
+    }
+
+
 def _item_properties(con: duckdb.DuckDBPyConnection, output_dir: Path) -> list[str]:
     """The ``ftw:*`` item properties present, from items.parquet or a sample item."""
     items = output_dir / "items.parquet"
@@ -384,6 +437,7 @@ def collect_stats(
         chip_columns = _columns(con, chips) if chips.exists() else []
         imagery = imagery_stats(output_dir, con)
         item_properties = _item_properties(con, output_dir)
+        chip_files = _chip_file_assets(con, collection, output_dir)
     finally:
         con.close()
 
@@ -398,6 +452,8 @@ def collect_stats(
         "chip_columns": chip_columns,
         "item_properties": item_properties,
         "split_type": _split_type(collection, config_dict or {}),
+        "chip_files": chip_files,
+        "mask_facts": mask_facts(collection, config_dict or {}),
     }
 
 
@@ -576,6 +632,67 @@ def _mask_block(stats: dict) -> str:
     return f"Every chip carries these label rasters as STAC assets: {names}."
 
 
+_UNKNOWN_NOTES = {
+    "label_extent": (
+        "In the semantic masks, value 3 (`unknown`) marks pixels outside the label extent "
+        "that no labelled field covers: they may or may not be fields. Inside the extent, "
+        "unlabelled pixels are background (0). Leave 3 out of losses and metrics rather "
+        "than reading it as background."
+    ),
+    "presence_only": (
+        "The labels are presence-only: they mark fields that exist, not where fields are "
+        "absent. In the semantic masks, value 3 (`unknown`) marks every pixel no labelled "
+        "field covers, which may or may not be a field. Leave 3 out of losses and metrics "
+        "rather than reading it as background."
+    ),
+}
+
+_CHIP_FILE_NOTES = {
+    "field_boundaries": (
+        "`field_boundaries` (`<chip>_fields.parquet`): the chip's field outlines as "
+        "GeoParquet, clipped to the chip and in the mask CRS, with the columns of the "
+        "fields file."
+    ),
+    "instance_labels": (
+        "`instance_labels` (`<chip>_instance_labels.json`): maps each instance mask value "
+        "(`instance_value`) to its field (`field_id`), on chips whose mask values are not "
+        "the field ids."
+    ),
+}
+
+
+def _grid_sentence(facts: dict) -> str | None:
+    """The mask pixel size and boundary line width, as far as they are recorded."""
+    resolution = facts.get("resolution_m")
+    width = facts.get("boundary_width_m")
+    if resolution and width:
+        return f"Masks are {resolution:g} m per pixel, with field boundary lines {width:g} m wide."
+    if resolution:
+        return f"Masks are {resolution:g} m per pixel."
+    if width:
+        return f"Field boundary lines in the masks are {width:g} m wide."
+    return None
+
+
+def _has_semantic_mask(stats: dict) -> bool:
+    return any(m.startswith("semantic") for m in stats.get("mask_types") or [])
+
+
+def _mask_notes(stats: dict, *, grid: bool = True) -> list[str]:
+    """Facts about the masks and per-chip files that this collection actually has.
+
+    ``grid=False`` leaves out the pixel size and line width, which the README gives
+    under Provenance.
+    """
+    facts = stats.get("mask_facts") or {}
+    notes = [_grid_sentence(facts) if grid else None]
+    unknown = facts.get("unknown")
+    if unknown and _has_semantic_mask(stats):
+        notes.append(_UNKNOWN_NOTES[unknown])
+    notes += [_CHIP_FILE_NOTES[key] for key in stats.get("chip_files") or []]
+    return [note for note in notes if note]
+
+
 def _season_sentence(season: str, summary: dict) -> str:
     text = f"{season.capitalize()} imagery"
     if summary.get("min") and summary.get("max"):
@@ -607,6 +724,13 @@ def _imagery_block(stats: dict) -> str:
     return " ".join(lines)
 
 
+def _mask_notes_block(stats: dict) -> str:
+    notes = _mask_notes(stats, grid=False)
+    if not notes:
+        return ""
+    return "About the masks and the files beside them:\n\n" + "\n".join(f"- {n}" for n in notes)
+
+
 def _readme_contents(stats: dict) -> str:
     blocks = [
         "## What is in this collection",
@@ -614,6 +738,7 @@ def _readme_contents(stats: dict) -> str:
         _split_block(stats),
         _coverage_block(stats),
         _mask_block(stats),
+        _mask_notes_block(stats),
         _imagery_block(stats),
     ]
     return "\n\n".join(b for b in blocks if b)
@@ -666,10 +791,13 @@ def _config_lines(collection: dict, config_dict: dict) -> list[str]:
         seed = splits.get("random_seed")
         suffix = f", random seed {seed}" if seed is not None else ""
         lines.append(f"- Splits assigned with the `{split_type}` strategy{suffix}")
-    if masks.get("resolution"):
+    facts = mask_facts(collection, config_dict)
+    if facts["resolution_m"]:
         # Configs resolved before the UTM default carry no `utm` key; those were lon/lat.
         grid = " on each chip's own UTM zone grid" if masks.get("utm") else ""
-        lines.append(f"- Masks rasterized at {masks['resolution']:g} m per pixel{grid}")
+        lines.append(f"- Masks rasterized at {facts['resolution_m']:g} m per pixel{grid}")
+    if facts["boundary_width_m"]:
+        lines.append(f"- Field boundary lines burned {facts['boundary_width_m']:g} m wide")
     return lines
 
 
@@ -902,7 +1030,11 @@ def _agents_schema(stats: dict) -> str:
     masks = stats.get("mask_types") or []
     if masks:
         names = ", ".join(f"`{m}`" for m in masks)
-        lines.append(f"Label rasters available as item assets: {names}.")
+        lines += [f"Label rasters available as item assets: {names}.", ""]
+    notes = _mask_notes(stats)
+    if notes:
+        lines += ["About the masks and the files beside them:", ""]
+        lines += [f"- {note}" for note in notes]
     if len(lines) == 2:
         return ""
     return "\n".join(lines).strip()
