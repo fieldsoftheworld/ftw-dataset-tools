@@ -836,9 +836,13 @@ def _with_source_schema(written: _Written, dst: Path, src: Path) -> None:
     """
     import pyarrow.parquet as pq
 
+    native = _native_geometry_columns(src)
+    if native:
+        # pyarrow reads a GEOMETRY column as geoarrow.wkb, which keeps it native when
+        # written, only once that extension type is registered; this import registers it.
+        import geoarrow.pyarrow  # noqa: F401
     source = pq.read_schema(src)
     reader = pq.ParquetFile(written.path)
-    native = _native_geometry_columns(src)
     fields = [_source_field(f, source, written.text_id, native) for f in reader.schema_arrow]
     schema = pa.schema(fields, metadata=written.metadata)
     try:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import random
+import subprocess
+import sys
 from typing import TYPE_CHECKING, ClassVar
 
 import geopandas as gpd
@@ -783,7 +785,16 @@ class TestOutput:
 
         source_type, source_version = geometry(src)
         assert source_type.startswith("Geometry")
-        dedupe_fields(src, tmp_path / "out.parquet")
+        # A fresh interpreter: writing GeoParquet 2.0 above imported geoarrow.pyarrow,
+        # which would otherwise hide a dedupe that relies on someone else importing it.
+        code = (
+            "import sys; from ftw_dataset_tools.api.field_ids import dedupe_fields; "
+            "assert not any(m.startswith('geoarrow.pyarrow') for m in sys.modules); "
+            "dedupe_fields(sys.argv[1], sys.argv[2])"
+        )
+        subprocess.run(
+            [sys.executable, "-c", code, str(src), str(tmp_path / "out.parquet")], check=True
+        )
         assert geometry(tmp_path / "out.parquet") == (source_type, source_version)
         out = gpd.read_parquet(tmp_path / "out.parquet")
         assert out.crs.to_epsg() == 4326
