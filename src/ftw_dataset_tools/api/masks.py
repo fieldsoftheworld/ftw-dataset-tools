@@ -525,24 +525,28 @@ INSTANCE_WITH_LOOKUP = "piece-lookup"
 _UINT32_MAX = 0xFFFFFFFF
 
 
+_PLAIN_INTEGER = re.compile(r"([0-9]+)(?:\.0+)?")
+
+
 def _instance_value(raw: object) -> int | None:
     """Coerce a raw field id into a usable instance mask value.
 
     Harmonized field datasets sometimes store ids as VARCHAR that look like
     floats (e.g. Austria's ``'111205887.0'``), so a plain ``int(raw)`` raises.
-    Returns None when the value can't be interpreted as a number at all.
+    A string must be plain digits, optionally with a ``.0`` fraction: ``float()``
+    would read ``'5_1'`` (a renumbered duplicate id) as 51, which another field's id
+    could be. Returns None when the value isn't a whole number written plainly.
     """
     if isinstance(raw, bool):
         return None
     if isinstance(raw, int):
         return raw
-    if isinstance(raw, str | float):
-        try:
-            value = float(raw)
-        except (TypeError, ValueError):
-            return None
+    if isinstance(raw, str):
+        match = _PLAIN_INTEGER.fullmatch(raw)
+        return int(match.group(1)) if match else None
+    if isinstance(raw, float):
         # A fractional or infinite id can't be a pixel value without changing it.
-        return int(value) if value.is_integer() else None
+        return int(raw) if raw.is_integer() else None
     return None
 
 

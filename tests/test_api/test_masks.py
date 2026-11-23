@@ -7,6 +7,7 @@ from typing import ClassVar
 import numpy as np
 import pytest
 import rasterio
+from shapely.geometry import box
 
 
 def expected_mask_path(output_dir, grid_id: str, mask_type, year: int | None = None) -> Path:
@@ -1452,6 +1453,50 @@ class TestInstanceValue:
         from ftw_dataset_tools.api.masks import _instance_value
 
         assert _instance_value("abc") is None
+
+    @pytest.mark.parametrize("raw", ["5_1", "105443_1", "1e3", " 12", "+7", "0x10", "١٢"])
+    def test_only_plain_digits_are_numbers(self, raw: str) -> None:
+        """float() reads '5_1' as 51: a renumbered id must not become another's value."""
+        from ftw_dataset_tools.api.masks import _instance_value
+
+        assert _instance_value(raw) is None
+
+    def test_whole_number_strings_parse(self) -> None:
+        from ftw_dataset_tools.api.masks import _instance_value
+
+        assert _instance_value("123") == 123
+        assert _instance_value("123.00") == 123
+
+
+class TestInstanceShapesRenumberedIds:
+    """Ids the dedupe step renumbers burn 1..n with a lookup, never a misread number."""
+
+    EXTENT = box(0, 0, 10, 10)
+
+    def _shapes(self, ids: list[str]):
+        from ftw_dataset_tools.api.masks import _instance_shapes
+
+        rows = [(i,) for i in ids]
+        geometries = [box(k * 2, 0, k * 2 + 1, 1) for k in range(len(ids))]
+        return _instance_shapes(rows, geometries, None, self.EXTENT)
+
+    def test_renumbered_ids_get_a_lookup(self) -> None:
+        shapes, lookup, renumbered = self._shapes(["5_1", "5_2"])
+        assert renumbered
+        assert [value for _, value in shapes] == [1, 2]
+        assert [(r["instance_value"], r["field_id"]) for r in lookup] == [(1, "5_1"), (2, "5_2")]
+
+    def test_a_renumbered_id_cannot_take_a_plain_ids_value(self) -> None:
+        """'12_3' must not burn 123, which is field 123's value in its own chips."""
+        shapes, lookup, renumbered = self._shapes(["12_3", "7"])
+        assert renumbered
+        assert sorted(value for _, value in shapes) == [1, 2]
+        assert [r["field_id"] for r in lookup] == ["12_3", "7"]
+
+    def test_a_renumbered_id_and_a_plain_id_stay_apart(self) -> None:
+        shapes, lookup, _ = self._shapes(["12_3", "123"])
+        assert sorted(value for _, value in shapes) == [1, 2]
+        assert [r["field_id"] for r in lookup] == ["12_3", "123"]
 
     def test_none_is_none(self) -> None:
         from ftw_dataset_tools.api.masks import _instance_value
