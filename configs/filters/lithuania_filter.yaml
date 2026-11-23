@@ -1,65 +1,70 @@
 # Class filter used for Lithuania (LT) field boundaries.
 # Lithuania publishes a coarse crop-group scheme as text (not a numeric code). The categories
-# live in crop:name (in the native `lt` dataset, crop:code carries the same text). This is a
-# land-use / crop-group filter, not a fine crop-type filter. Covers the editions that share
-# the scheme: lt (2024 & 2025) and ec_lt (2021, EuroCrops); 27 distinct category strings.
-# NOTE: the source strings carry a character-encoding quirk (e.g. þ=ž, ð=š, ë=ė, û=ū); values
-# below are reproduced byte-for-byte so they match the data. Some year editions differ only by
-# a space (e.g. "iki 5m." vs "iki 5 m."); both spellings are listed. The ec_lt 2021 edition uses
-# correct Lithuanian characters (e.g. "Žieminiai javai"); those spellings are listed too. ec_lt
-# 2021 holds only 9 crop categories (no grassland/fallow), so all its parcels are field.
+# live in crop:name, and crop:code carries the same text. This is a land-use / crop-group
+# filter, not a fine crop-type filter. It covers lt (2024 & 2025, 25 categories each) and
+# ec_lt (2021, EuroCrops, 9 crop categories with no grassland or fallow, so all field).
 #
-# Managed grassland (meadows, pastures, leys) is field since the 2026-11 visual review; rough,
-# semi-natural, wooded, alpine and common grazing stays background. This supersedes any grassland
-# exclusion described elsewhere in this header. See docs/grassland-review.md.
+# Spellings: lt was republished on 2026-11-20 with correct Lithuanian characters, which ec_lt
+# already used. Earlier lt editions carried an encoding quirk (þ/Þ=ž/Ž, ð/Ð=š/Š, ë=ė, û=ū); those
+# spellings stay listed next to the correct ones. Some years differ only by a space
+# ("virš 5m." vs "virš 5 m."); both are listed.
 #
-# Excluded (background): pastures & meadows, perennial grasses, fallow, landscape elements,
-# ditches, non-supported areas, woods, and wetlands (the 'Ðlapynës' category, mislabelled
-# "Spinach"/spinach in the source HCAT mapping).
+# Included (field): winter and summer cereals, grain legumes, oats, buckwheat, maize, rapeseed,
+# flax, fibre hemp, sugar beet, vegetables, aromatic plants, other arable land, orchards,
+# berry plantations, other plantations, and managed grassland (pastures-meadows and perennial
+# grasses; field since the 2026-11 visual review, see ftw-dataset-tools docs/grassland-review.md).
 #
-# Included (field): winter/summer/early cereals, oats, buckwheat, maize, rapeseed, flax,
-# fibre hemp, grain legumes (Ankðtiniai javai), sugar beet, vegetables, aromatic/medicinal
-# plants, other arable land, and permanent & tree crops: orchards (Sodai), berry plantations
-# (Uogynai) and other plantations (Kiti sodiniai).
+# Excluded (background): fallow, landscape elements, ditches, non-supported areas, woods, and
+# wetlands (Šlapynės).
 
 column: ["crop:name", "crop:code", "crop_name"]
 
 include:
   - "Þieminiai javai"  # Winter cereals
   - "Vasariniai javai"  # Summer cereals
-  - "Ankðtiniai javai"  # Early cereals
+  - "Ankðtiniai javai"  # Grain legumes
   - "Aviþos"  # Oats
-  - "Rapsai"  # Rape
+  - "Rapsai"  # Rapeseed
   - "Darþovës"  # Vegetables
   - "Kita ariama þemë"  # Other arable land
   - "Grikiai"  # Buckwheat
-  - "Kukurûzai"  # Corn
+  - "Kukurûzai"  # Maize
   - "Cukriniai runkeliai"  # Sugar beet
   - "Aromatiniai augalai"  # Aromatic plants
   - "Pluoðtinës kanapës"  # Fiber hemp
-  - "Linai"  # Linen
-  # ec_lt 2021 spells the same categories with correct Lithuanian characters
+  - "Linai"  # Flax
+  # Correct-character spellings (lt 2024+, ec_lt 2021)
   - "Žieminiai javai"  # Winter cereals
   - "Ankštiniai javai"  # Grain legumes
   - "Avižos"  # Oats
   - "Daržovės"  # Vegetables
-  - "Kukurūzai"  # Corn
+  - "Kukurūzai"  # Maize
+  - "Kita ariama žemė"  # Other arable land (lt only)
+  - "Pluoštinės kanapės"  # Fiber hemp (lt only)
   # Permanent and tree crops
   - "Sodai"  # Orchards
   - "Uogynai"  # Berries
   - "Kiti sodiniai"  # Other plantations
 
-  # Managed grassland: meadows, pastures and leys (see docs/grassland-review.md)
-  - "Ganyklos-pievos virð 5m."  # Pastures-meadows over 5m.
-  - "Ganyklos-pievos virð 5 m."  # Pastures-meadows over 5m.
-  - "Ganyklos-pievos iki 5m."  # Pastures-meadows up to 5m.
-  - "Ganyklos-pievos iki 5 m."  # Pastures-meadows up to 5m.
+  # Managed grassland: pastures-meadows and perennial grasses
+  - "Ganyklos-pievos virð 5m."  # Pastures-meadows over 5 years
+  - "Ganyklos-pievos virð 5 m."  # Pastures-meadows over 5 years
+  - "Ganyklos-pievos iki 5m."  # Pastures-meadows up to 5 years
+  - "Ganyklos-pievos iki 5 m."  # Pastures-meadows up to 5 years
   - "Daugiametës þolës"  # Perennial grasses
+  - "Ganyklos-pievos virš 5m."  # Pastures-meadows over 5 years
+  - "Ganyklos-pievos virš 5 m."  # Pastures-meadows over 5 years
+  - "Daugiametės žolės"  # Perennial grasses
 
 exclude:
   - "Kraðtovaizdþio elementai"  # Landscape elements
   - "Neremiami plotai"  # Non-supported areas
   - "Pûdymas"  # Fallow
   - "Miðkai"  # Woods
-  - "Ðlapynës"  # wetlands (labelled 'Spinach' in source)
+  - "Ðlapynës"  # Wetlands
   - "Grioviai"  # Ditches
+  # Correct-character spellings (lt 2024+)
+  - "Kraštovaizdžio elementai"  # Landscape elements
+  - "Pūdymas"  # Fallow
+  - "Miškai"  # Woods
+  - "Šlapynės"  # Wetlands
