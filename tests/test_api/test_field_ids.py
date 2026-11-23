@@ -756,9 +756,38 @@ class TestOutput:
 
         source = pa.schema([pa.field("geometry", ga.wkb(), nullable=False)])
         written = pa.field("geometry", pa.binary())
-        field = field_ids._source_field(written, source, None)
+        field = field_ids._source_field(written, source, None, frozenset())
         assert field.type == pa.binary()
         assert not field.nullable
+        native = field_ids._source_field(written, source, None, frozenset({"geometry"}))
+        assert native.type == ga.wkb()
+
+    def test_a_geoparquet_2_source_keeps_its_native_geometry(self, tmp_path: Path) -> None:
+        """GeoParquet 2.0 stores the geometry as a Parquet GEOMETRY column; so must we."""
+        gpio = pytest.importorskip("geoparquet_io")
+        plain, src = tmp_path / "plain.parquet", tmp_path / "in.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["1", "1", "2"], "crop:name": ["a", "b", "c"]},
+            geometry=[LEFT, FAR, RIGHT],
+            crs="EPSG:4326",
+        ).to_parquet(plain)
+        try:
+            gpio.read(str(plain)).write(str(src), geoparquet_version="2.0")
+        except Exception as err:  # an older geoparquet-io without 2.0
+            pytest.skip(f"geoparquet-io can't write GeoParquet 2.0: {err}")
+
+        def geometry(path: Path) -> tuple[str, str]:
+            f = pq.ParquetFile(path)
+            column = f.schema.column(f.schema_arrow.get_field_index("geometry"))
+            return str(column.logical_type), json.loads(f.metadata.metadata[b"geo"])["version"]
+
+        source_type, source_version = geometry(src)
+        assert source_type.startswith("Geometry")
+        dedupe_fields(src, tmp_path / "out.parquet")
+        assert geometry(tmp_path / "out.parquet") == (source_type, source_version)
+        out = gpd.read_parquet(tmp_path / "out.parquet")
+        assert out.crs.to_epsg() == 4326
+        assert sorted(out["id"]) == ["1_1", "1_2", "2"]
 
     def test_a_plain_geometry_column_stays_plain(self, tmp_path: Path) -> None:
         dedupe(tmp_path, self.ROWS)
@@ -777,10 +806,44 @@ class TestOutput:
             dedupe_fields(src, tmp_path / "out.parquet")
 
     def test_the_output_keeps_duckdbs_row_groups(self, tmp_path: Path) -> None:
+        """40,000 rows are one DuckDB row group; the final pass must not split them."""
+        rows = [row(k, box(k * 1e-4, 0, k * 1e-4 + 5e-5, 5e-5)) for k in range(40_000)]
+        rows += [row(0, FAR, "other")]
+        out, _ = dedupe(tmp_path, rows)
+        written = pq.ParquetFile(tmp_path / "out.parquet")
+        assert written.num_row_groups == 1
+        assert written.metadata.row_group(0).num_rows == len(out) == 40_001
+        assert written.metadata.row_group(0).column(0).compression == "ZSTD"
+
+    def test_the_output_is_zstd_at_level_6(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Parquet doesn't record the level, so the writer's arguments are checked."""
+        seen = {}
+        writer = pq.ParquetWriter
+
+        def recording(*args, **kwargs):
+            seen.update(kwargs)
+            return writer(*args, **kwargs)
+
+        monkeypatch.setattr(pq, "ParquetWriter", recording)
         dedupe(tmp_path, self.ROWS)
-        out = pq.ParquetFile(tmp_path / "out.parquet")
-        assert out.num_row_groups == 1
-        assert out.metadata.row_group(0).column(0).compression == "ZSTD"
+        assert (seen["compression"], seen["compression_level"]) == ("zstd", 6)
+
+    def test_duckdbs_file_is_deleted_once_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        final_pass = field_ids._with_source_schema
+        left: list[bool] = []
+
+        def spy(written, dst, src):
+            assert written.path.exists()
+            final_pass(written, dst, src)
+            left.append(written.path.exists())
+
+        monkeypatch.setattr(field_ids, "_with_source_schema", spy)
+        dedupe(tmp_path, self.ROWS)
+        assert left == [False]
 
     def test_column_types_follow_the_source(self, tmp_path: Path) -> None:
         """DuckDB widens millisecond timestamps to microseconds; fiboa wants them in ms."""

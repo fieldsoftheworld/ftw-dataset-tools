@@ -357,9 +357,12 @@ Missing ids are left alone. A file with duplicates is refused if it already has 
 would write is already another row's id. DuckDB's own memory is capped at 4 GB on 4
 threads, spilling to a folder beside the output; the process as a whole uses more (about
 8 GB at peak for Austria's 2.9M fields and 10 GB for 10M, including a last pass that
-restores the source's column types and nullability). Arrow extension types such as
-`geoarrow.wkb` are written as their storage type, so the geometry stays a plain WKB
-column rather than becoming a Parquet-native `GEOMETRY` one.
+restores the source's column types and nullability and writes zstd at level 6: Austria
+2023 takes about 35 s and comes out at 841 MB from an 848 MB source). The geometry column
+keeps the source's Parquet type: a GeoParquet 2.0 file's native `GEOMETRY` column stays
+one, and a plain WKB column stays plain even when the source's Arrow schema calls it
+`geoarrow.wkb`. A pandas categorical column comes back with only the categories in use,
+in the order they first appear in the output, which may differ from the source's.
 
 ### create-dataset
 

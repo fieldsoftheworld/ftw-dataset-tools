@@ -96,8 +96,9 @@ RESERVED_COLUMNS = (
 # threads the 10M-row rewrite still ran out of DuckDB memory in 3 of 10 runs, on 4 it
 # passed 10 of 10 in the same 80 s, peaking at about 10 GB of RSS (at-2023: about 8 GB).
 _THREADS = 4
-# The final pass writes zstd at DuckDB's level (pyarrow's default is 1).
-_ZSTD_LEVEL = 3
+# The final pass's zstd level (pyarrow's default is 1): at 6, at-2023 comes out smaller
+# than its source, for about 15 s more than at 3.
+_ZSTD_LEVEL = 6
 _MEMORY_LIMIT = "4GB"
 AREA_CRS = "EPSG:6933"  # WGS 84 / NSIDC EASE-Grid 2.0 Global, equal-area
 METRICS_TOLERANCE = 1e-4  # relative: 0.01%
@@ -782,19 +783,35 @@ def _write(
         ) TO '{sql_path(dst)}' (FORMAT PARQUET, COMPRESSION zstd)""")
 
 
-def _source_field(field: pa.Field, source: pa.Schema, text_id: str | None) -> pa.Field:
+def _source_field(
+    field: pa.Field, source: pa.Schema, text_id: str | None, native: frozenset[str]
+) -> pa.Field:
     """``field`` as the source declared it, type and nullability; a renumbered id keeps
-    its new text type with the source's nullability, and new columns stay nullable."""
+    its new text type with the source's nullability, and new columns stay nullable.
+
+    An extension type such as geoarrow.wkb makes pyarrow write a Parquet-native
+    GEOMETRY column: it is kept for the source columns that were one (``native``, as
+    GeoParquet 2.0 writes them), and otherwise written as its plain storage type.
+    """
     if field.name not in source.names:
         return field
     declared = source.field(field.name)
     if field.name == text_id:
         return field.with_nullable(declared.nullable)
-    if isinstance(declared.type, pa.BaseExtensionType):
-        # e.g. geoarrow.wkb, from the source's Arrow schema: pyarrow would write it as a
-        # Parquet-native GEOMETRY column, which the source's plain binary column wasn't.
+    if isinstance(declared.type, pa.BaseExtensionType) and field.name not in native:
         return declared.with_type(declared.type.storage_type)
     return declared
+
+
+def _native_geometry_columns(src: Path) -> frozenset[str]:
+    """The source's columns with a Parquet GEOMETRY or GEOGRAPHY logical type."""
+    import pyarrow.parquet as pq
+
+    schema = pq.ParquetFile(src).schema
+    columns = (schema.column(i) for i in range(len(schema)))
+    return frozenset(
+        c.path for c in columns if str(c.logical_type).startswith(("Geometry", "Geography"))
+    )
 
 
 @dataclass(frozen=True)
@@ -821,7 +838,8 @@ def _with_source_schema(written: _Written, dst: Path, src: Path) -> None:
 
     source = pq.read_schema(src)
     reader = pq.ParquetFile(written.path)
-    fields = [_source_field(f, source, written.text_id) for f in reader.schema_arrow]
+    native = _native_geometry_columns(src)
+    fields = [_source_field(f, source, written.text_id, native) for f in reader.schema_arrow]
     schema = pa.schema(fields, metadata=written.metadata)
     try:
         with pq.ParquetWriter(
