@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 
+from ftw_dataset_tools.api import field_ids
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.imagery.catalog_ops import chip_item_files, iter_chip_dirs
 from ftw_dataset_tools.api.logging_config import get_logger
@@ -176,7 +177,7 @@ ITEM_PROPERTY_NOTES = {
 }
 
 ASSET_NOTES = {
-    "fields": "field boundary polygons, one row per field, with a unique `id` (GeoParquet)",
+    "fields": "field boundary polygons, one row per field (GeoParquet)",
     "chips": "one row per chip, with its field coverage, dominant crop and any split (GeoParquet)",
     "items": "stac-geoparquet mirror of every chip item, for querying the whole collection",
     "chips_tiles": "vector tiles of the chips, for maps (PMTiles)",
@@ -492,6 +493,7 @@ def collect_stats(
         quantiles = _coverage_quantiles(con, chips) if chips.exists() else {}
         chip_columns = _columns(con, chips) if chips.exists() else []
         field_columns = _columns(con, fields) if fields.exists() else []
+        ids_unique = _field_ids_unique(fields, field_columns)
         imagery = imagery_stats(output_dir, con)
         item_properties = _item_properties(con, output_dir)
         chip_files = _chip_file_assets(con, collection, output_dir)
@@ -508,6 +510,7 @@ def collect_stats(
         "mask_types": _mask_types(collection, output_dir),
         "chip_columns": chip_columns,
         "field_columns": field_columns,
+        "field_ids_unique": ids_unique,
         "item_properties": item_properties,
         "split_type": _split_type(collection, config_dict or {}),
         "chip_files": chip_files,
@@ -1149,6 +1152,27 @@ def _note_lines(names: list[str], notes: dict[str, str], fallback: str) -> list[
     return [f"- `{name}`: {notes.get(name, fallback)}" for name in names]
 
 
+# Notes that describe ids made unique by the build: only true of a fields file that is.
+_ID_NOTES = ("id", "source_id")
+
+
+def _field_ids_unique(fields: Path, columns: list[str]) -> bool:
+    """Whether the fields file's ids are unique, as the build makes them.
+
+    An output directory an older ftwd built can still repeat ids; the docs stage may
+    run on it without a rebuild, so this is measured rather than assumed.
+    """
+    return "id" in columns and not field_ids.find_duplicate_ids(fields)
+
+
+def _field_notes(stats: dict) -> list[str]:
+    """The fields columns to describe, leaving out the id notes when ids repeat."""
+    present = set(stats.get("field_columns") or [])
+    if not stats.get("field_ids_unique"):
+        present -= set(_ID_NOTES)
+    return [c for c in FIELD_COLUMN_NOTES if c in present]
+
+
 def _agents_schema(stats: dict) -> str:
     lines = ["## Schema & field notes", ""]
     columns = stats.get("chip_columns") or []
@@ -1156,7 +1180,7 @@ def _agents_schema(stats: dict) -> str:
         lines += ["Columns in the chips table:", ""]
         lines += _note_lines(columns, CHIP_COLUMN_NOTES, "carried through from the source dataset")
         lines.append("")
-    field_notes = [c for c in FIELD_COLUMN_NOTES if c in (stats.get("field_columns") or [])]
+    field_notes = _field_notes(stats)
     if field_notes:
         lines += ["Columns in the fields table set by FTW (the rest come from the source):", ""]
         lines += _note_lines(field_notes, FIELD_COLUMN_NOTES, "")
