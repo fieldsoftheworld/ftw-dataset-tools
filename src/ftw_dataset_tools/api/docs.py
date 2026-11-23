@@ -287,13 +287,21 @@ def _chip_file_assets(
     con: duckdb.DuckDBPyConnection, collection: dict, output_dir: Path
 ) -> list[str]:
     """The ``CHIP_FILE_ASSETS`` the chips carry: declared, on a sample item, or mirrored."""
-    known = set(collection.get("item_assets") or {}) | _observed_asset_keys(output_dir)
-    items = output_dir / "items.parquet"
-    return [
-        key
-        for key in CHIP_FILE_ASSETS
-        if key in known or (items.exists() and _mirror_has_asset(con, items, key))
-    ]
+    known = _declared_asset_keys(collection) | _observed_asset_keys(output_dir)
+    unknown = [key for key in CHIP_FILE_ASSETS if key not in known]
+    found = known | _mirrored_asset_keys(con, output_dir / "items.parquet", unknown)
+    return [key for key in CHIP_FILE_ASSETS if key in found]
+
+
+def _declared_asset_keys(collection: dict) -> set[str]:
+    return set(collection.get("item_assets") or {})
+
+
+def _mirrored_asset_keys(con: duckdb.DuckDBPyConnection, items: Path, keys: list[str]) -> set[str]:
+    """Those of ``keys`` that some chip in items.parquet carries (none without the file)."""
+    if not items.exists():
+        return set()
+    return {key for key in keys if _mirror_has_asset(con, items, key)}
 
 
 def _unknown_label_kind(collection: dict, masks_cfg: dict) -> str | None:
@@ -679,19 +687,21 @@ def _grid_is_notable(facts: dict) -> bool:
     )
 
 
+#: The grid sentence by which of (resolution, line width) is recorded.
+_GRID_SENTENCES = {
+    (True, True): "Masks are {r:g} m per pixel, with field boundary lines {w:g} m wide.",
+    (True, False): "Masks are {r:g} m per pixel.",
+    (False, True): "Field boundary lines in the masks are {w:g} m wide.",
+}
+
+
 def _grid_sentence(facts: dict) -> str | None:
     """The mask pixel size and boundary line width, when they differ from the default."""
-    if not _grid_is_notable(facts):
+    resolution, width = facts.get("resolution_m"), facts.get("boundary_width_m")
+    template = _GRID_SENTENCES.get((bool(resolution), bool(width)))
+    if template is None or not _grid_is_notable(facts):
         return None
-    resolution = facts.get("resolution_m")
-    width = facts.get("boundary_width_m")
-    if resolution and width:
-        return f"Masks are {resolution:g} m per pixel, with field boundary lines {width:g} m wide."
-    if resolution:
-        return f"Masks are {resolution:g} m per pixel."
-    if width:
-        return f"Field boundary lines in the masks are {width:g} m wide."
-    return None
+    return template.format(r=resolution or 0, w=width or 0)
 
 
 def _has_semantic_mask(stats: dict) -> bool:
@@ -705,12 +715,19 @@ def _mask_notes(stats: dict, *, grid: bool = True) -> list[str]:
     under Provenance.
     """
     facts = stats.get("mask_facts") or {}
-    notes = [_grid_sentence(facts) if grid else None]
-    unknown = facts.get("unknown")
-    if unknown and _has_semantic_mask(stats):
-        notes.append(_UNKNOWN_NOTES[unknown])
-    notes += [_CHIP_FILE_NOTES[key] for key in stats.get("chip_files") or []]
+    grid_note = _grid_sentence(facts) if grid else None
+    notes = [grid_note, _unknown_note(stats, facts), *_chip_file_notes(stats)]
     return [note for note in notes if note]
+
+
+def _chip_file_notes(stats: dict) -> list[str]:
+    return [_CHIP_FILE_NOTES[key] for key in stats.get("chip_files") or []]
+
+
+def _unknown_note(stats: dict, facts: dict) -> str | None:
+    """What mask value 3 means, when the semantic masks hold it."""
+    unknown = facts.get("unknown")
+    return _UNKNOWN_NOTES[unknown] if unknown and _has_semantic_mask(stats) else None
 
 
 def _season_sentence(season: str, summary: dict) -> str:
@@ -811,12 +828,24 @@ def _config_lines(collection: dict, config_dict: dict) -> list[str]:
         seed = splits.get("random_seed")
         suffix = f", random seed {seed}" if seed is not None else ""
         lines.append(f"- Splits assigned with the `{split_type}` strategy{suffix}")
+    return lines + _mask_config_lines(collection, config_dict, masks)
+
+
+def _provenance_resolution(masks: dict, facts: dict) -> float | None:
+    """The config's mask resolution, else the collection's when not the v1 default.
+
+    Every collection records its resolution, so the default one is not repeated.
+    """
+    if masks.get("resolution"):
+        return masks["resolution"]
+    return facts["resolution_m"] if _grid_is_notable(facts) else None
+
+
+def _mask_config_lines(collection: dict, config_dict: dict, masks: dict) -> list[str]:
+    """The mask resolution and boundary line width lines of the Provenance section."""
     facts = mask_facts(collection, config_dict)
-    # The config states the resolution as before; the collection's only when it is not
-    # the v1 default, which every collection records.
-    resolution = masks.get("resolution") or (
-        facts["resolution_m"] if _grid_is_notable(facts) else None
-    )
+    resolution = _provenance_resolution(masks, facts)
+    lines = []
     if resolution:
         # Configs resolved before the UTM default carry no `utm` key; those were lon/lat.
         grid = " on each chip's own UTM zone grid" if masks.get("utm") else ""
@@ -1052,17 +1081,29 @@ def _agents_schema(stats: dict) -> str:
             properties, ITEM_PROPERTY_NOTES, "set by the FTW pipeline; see the item JSON"
         )
         lines.append("")
-    masks = stats.get("mask_types") or []
-    if masks:
-        names = ", ".join(f"`{m}`" for m in masks)
-        lines += [f"Label rasters available as item assets: {names}.", ""]
-    notes = _mask_notes(stats)
-    if notes:
-        lines += ["About the masks and the files beside them:", ""]
-        lines += [f"- {note}" for note in notes]
+    lines += _agents_mask_lines(stats)
     if len(lines) == 2:
         return ""
     return "\n".join(lines).strip()
+
+
+def _agents_mask_lines(stats: dict) -> list[str]:
+    """The label rasters and the notes about them, for the schema section."""
+    return _label_raster_lines(stats.get("mask_types") or []) + _bulleted(
+        "About the masks and the files beside them:", _mask_notes(stats)
+    )
+
+
+def _label_raster_lines(masks: list[str]) -> list[str]:
+    if not masks:
+        return []
+    names = ", ".join(f"`{m}`" for m in masks)
+    return [f"Label rasters available as item assets: {names}.", ""]
+
+
+def _bulleted(title: str, notes: list[str]) -> list[str]:
+    """``title`` and a bullet per note, or nothing without notes."""
+    return [title, "", *(f"- {note}" for note in notes)] if notes else []
 
 
 def _split_quality_note(split_type: str | None) -> str | None:
