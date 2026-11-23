@@ -24,7 +24,7 @@ from ftw_dataset_tools.api.imagery import download_imagery_for_catalog
 from ftw_dataset_tools.api.imagery.catalog_ops import SelectionConflictError
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
 from ftw_dataset_tools.api.imagery.selection_workflow import select_imagery_modes_for_catalog
-from ftw_dataset_tools.api.imagery.summary import selection_summary_lines
+from ftw_dataset_tools.api.imagery.summary import preview_redraw_lines, selection_summary_lines
 from ftw_dataset_tools.api.pipeline import docs_summary_line
 from ftw_dataset_tools.api.stac import resolve_year
 from ftw_dataset_tools.commands.imagery_mode import (
@@ -491,12 +491,8 @@ def create_dataset_cmd(
                 click.echo(f"  Skipped: {download_stats.skipped}")
             if download_stats.failed:
                 click.echo(click.style(f"  Failed: {download_stats.failed}", fg="red"))
-            if download_stats.previews_redrawn:
-                click.echo(f"  Previews redrawn: {download_stats.previews_redrawn}")
-            if download_stats.previews_redraw_failed:
-                click.echo(
-                    f"  Previews not redrawn: {download_stats.previews_redraw_failed} (see log)"
-                )
+            for line in preview_redraw_lines(download_stats):
+                click.echo(f"  {line}")
 
         result = dataset.create_dataset(
             fields_file=fields_file,

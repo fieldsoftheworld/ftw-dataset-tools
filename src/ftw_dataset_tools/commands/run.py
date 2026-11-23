@@ -223,6 +223,8 @@ def _print_summary(ctx: pipeline.PipelineContext) -> None:
     if ctx.selection_result is not None:
         for line in selection_summary_lines(ctx.selection_result):
             click.echo(line)
+    if ctx.preview_result is not None:
+        click.echo(imagery_summary_line("Chip previews", ctx.preview_result))
     if ctx.download_result is not None:
         click.echo(imagery_summary_line("Imagery download", ctx.download_result))
     if ctx.docs_result is not None:

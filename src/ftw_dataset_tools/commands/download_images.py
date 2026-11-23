@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
 from ftw_dataset_tools.api.imagery import download_imagery_for_catalog, find_collection_dir
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, MAX_WORKERS
+from ftw_dataset_tools.api.imagery.summary import preview_redraw_lines
+
+if TYPE_CHECKING:
+    from ftw_dataset_tools.api.imagery.download_workflow import DownloadWorkflowResult
 
 # All valid Sentinel-2 bands from EarthSearch
 VALID_BANDS: tuple[str, ...] = (
@@ -161,16 +166,7 @@ def download_images_cmd(
             "No S2 child items found. Run 'select-images' first to create them."
         )
 
-    # Print summary
-    click.echo("\n" + "=" * 50)
-    click.echo("Summary:")
-    click.echo(f"  Downloaded: {result.successful}")
-    click.echo(f"  Skipped: {len(skipped)}")
-    click.echo(f"  Failed: {len(failed)}")
-    if result.previews_redrawn:
-        click.echo(f"  Previews redrawn: {result.previews_redrawn}")
-    if result.previews_redraw_failed:
-        click.echo(f"  Previews not redrawn: {result.previews_redraw_failed} (see log)")
+    _echo_counts(result)
 
     if skipped:
         # Count skipped by reason
@@ -210,6 +206,17 @@ def download_images_cmd(
         click.echo(click.style("\nAll items were already downloaded.", fg="cyan"))
     else:
         click.echo(click.style("\nNo items successfully downloaded.", fg="yellow"))
+
+
+def _echo_counts(result: DownloadWorkflowResult) -> None:
+    """The summary's count lines, the redrawn previews among them."""
+    click.echo("\n" + "=" * 50)
+    click.echo("Summary:")
+    click.echo(f"  Downloaded: {result.successful}")
+    click.echo(f"  Skipped: {len(result.skipped_details)}")
+    click.echo(f"  Failed: {len(result.failed_details)}")
+    for line in preview_redraw_lines(result):
+        click.echo(f"  {line}")
 
 
 # Alias for registration

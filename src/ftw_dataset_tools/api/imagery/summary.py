@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from ftw_dataset_tools.api.imagery.selection_workflow import MultiModeSelectionResult
 
 
-__all__ = ["imagery_summary_line", "selection_summary_lines"]
+__all__ = ["imagery_summary_line", "preview_redraw_lines", "selection_summary_lines"]
 
 
 def imagery_summary_line(label: str, result: Any) -> str:
@@ -18,23 +18,26 @@ def imagery_summary_line(label: str, result: Any) -> str:
     run in which every chip failed still printed only "Imagery selected: 0".
     """
     line = f"  {label}: {result.successful} ok, {result.skipped} skipped, {result.failed} failed"
-    line += previews_redrawn_text(result)
     if result.failed_details:
         first = result.failed_details[0].get("error", "unknown error")
         line += f" (first error: {first})"
+    redraw = preview_redraw_lines(result)
+    if redraw:
+        line += "; " + "; ".join(text[0].lower() + text[1:] for text in redraw)
     return line
 
 
-def previews_redrawn_text(result: Any) -> str:
-    """``", N previews redrawn, M not redrawn"``, for the counts above zero (else "")."""
-    parts = []
+def preview_redraw_lines(result: Any) -> list[str]:
+    """``Previews redrawn: N`` and ``Previews not redrawn: M (see log)``, when above zero.
+
+    Shared by every command that downloads or previews imagery, so they word it alike.
+    """
     redrawn = getattr(result, "previews_redrawn", 0)
     not_redrawn = getattr(result, "previews_redraw_failed", 0)
-    if redrawn:
-        parts.append(f"{redrawn} previews redrawn")
+    lines = [f"Previews redrawn: {redrawn}"] if redrawn else []
     if not_redrawn:
-        parts.append(f"{not_redrawn} previews could not be redrawn")
-    return "".join(f", {part}" for part in parts)
+        lines.append(f"Previews not redrawn: {not_redrawn} (see log)")
+    return lines
 
 
 def selection_summary_lines(result: MultiModeSelectionResult) -> list[str]:
