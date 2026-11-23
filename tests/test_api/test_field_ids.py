@@ -13,6 +13,7 @@ import shapely
 from shapely.geometry import box
 
 from ftw_dataset_tools.api import field_ids
+from ftw_dataset_tools.api.chip_grid import reprojector
 from ftw_dataset_tools.api.config import ClassFilter, ClassFilterError
 from ftw_dataset_tools.api.field_ids import (
     DuplicateIdsError,
@@ -283,6 +284,25 @@ class TestSlivers:
         assert field_ids._interiors_apart([r(1000.0), r(1e-9)], 1000.0 - 0.5)
         assert not field_ids._interiors_apart([r(1000.0), r(500.0)], 1000.0 - 0.5 + 500 - 20)
         assert not field_ids._interiors_apart([r(0.5), r(0.2)], 0.0)
+        # 0.8 m² against a 50 m² part: above its 1% (0.5 m²) but under the 1 m² floor.
+        assert field_ids._interiors_apart([r(1000.0), r(50.0)], 1050.0 - 0.8)
+        assert not field_ids._interiors_apart([r(1000.0), r(50.0)], 1050.0 - 1.2)
+
+    def test_a_field_of_slivers_only_is_kept_whole(self) -> None:
+        tiny = shapely.MultiPolygon(
+            [box(10.0, 50.0, 10.0000001, 50.0000001), box(10.1, 50.0, 10.1000001, 50.0000001)]
+        )
+        layout = field_ids._Layout(
+            id_col="id",
+            geom_col="geometry",
+            bbox_col=None,
+            attrs=(),
+            metrics=(),
+            core=(),
+            crop_col=None,
+            to_area_crs=reprojector("EPSG:4326", field_ids.AREA_CRS),
+        )
+        assert field_ids._without_slivers(tiny, layout) is tiny
 
 
 class TestSameParcel:
@@ -360,6 +380,25 @@ class TestSameParcel:
         out, _ = dedupe(tmp_path, rows, class_filter=cf)
         assert list(out["other_crop_names"].iloc[0]) == listed
 
+    def test_a_polygon_within_one_percent_is_the_same_parcel(self, tmp_path: Path) -> None:
+        wider = box(10.000, 50.000, 10.001005, 50.001)  # 0.5% larger than LEFT
+        out, result = dedupe(tmp_path, [row(1, LEFT, "A"), row(1, wider, "B")])
+        assert result.groups["same_parcel"] == 1
+        assert len(out) == 1
+
+    def test_a_polygon_beyond_one_percent_is_not(self, tmp_path: Path) -> None:
+        wider = box(10.000, 50.000, 10.00102, 50.001)  # 2% larger than LEFT
+        _, result = dedupe(tmp_path, [row(1, LEFT, "A"), row(1, wider, "B")])
+        assert result.groups["renumbered"] == 1
+
+    def test_the_filter_compares_the_text_not_the_value(self, tmp_path: Path) -> None:
+        """'1.0' doesn't name the class 1 in the filter stage, so it can't here either."""
+        rows = [row(1, LEFT, "A", cls=2), row(1, LEFT, "B", cls=1)]
+        out, _ = dedupe(tmp_path, rows, class_filter=ClassFilter("cls", ["1.0"], ["2"]))
+        assert out["crop:name"].tolist() == ["A"]  # content order: nothing passes the filter
+        out, _ = dedupe(tmp_path, rows, class_filter=ClassFilter("cls", ["1"], ["2"]))
+        assert out["crop:name"].tolist() == ["B"]
+
     def test_rows_without_area_are_not_one_polygon(self, tmp_path: Path) -> None:
         """Zero-area rows at one place are not a parcel: nothing to keep one of."""
         line = shapely.Polygon([(10.0, 50.0), (10.001, 50.0), (10.002, 50.0)])
@@ -388,6 +427,46 @@ class TestSameParcel:
 
 
 class TestRenumbered:
+    def test_renumbered_rows_keep_their_order(self, tmp_path: Path) -> None:
+        shapes = [box(10 + k * 0.01, 50.0, 10.001 + k * 0.01, 50.001) for k in range(12)]
+        rows = [row(0, LEFT, "first")] + [row(5, s, f"c{k:02d}") for k, s in enumerate(shapes)]
+        out, _ = dedupe(tmp_path, rows)
+        expected = sorted(shapes, key=lambda g: (g.wkb,))
+        assert out["id"].tolist() == ["0", *[f"5_{n}" for n in range(1, 13)]]
+        assert [g.wkb for g in out.geometry.iloc[1:]] == [g.wkb for g in expected]
+
+    def test_resolved_rows_are_numbered_within_their_group(self) -> None:
+        layout = field_ids._Layout(
+            id_col="id",
+            geom_col="geometry",
+            bbox_col=None,
+            attrs=("id", "c"),
+            metrics=(),
+            core=("c",),
+            crop_col=None,
+        )
+        rows = []
+        for pos, (shape, c) in enumerate([(LEFT, "a"), (FAR, "b"), (RIGHT, "c")]):
+            record = {"id": 5, "c": c, "geometry": shape.wkb}
+            projected = shapely.transform(shape, reprojector("EPSG:4326", field_ids.AREA_CRS))
+            rows.append(
+                field_ids._Row(
+                    pos=pos + 3,
+                    record=record,
+                    id_text="5",
+                    key=field_ids._content_key(record, layout),
+                    shape=shape,
+                    area=float(projected.area),
+                    projected=projected,
+                )
+            )
+        records = field_ids._resolve_all({"5": rows}, layout, field_ids.DedupResult())
+        assert [(r["_pos"], r["_sub"], r["id"]) for r in records] == [
+            (3, 0, "5_1"),
+            (3, 1, "5_2"),
+            (3, 2, "5_3"),
+        ]
+
     def test_every_row_is_kept_under_a_new_id(self, tmp_path: Path) -> None:
         rows = [row(5, FAR, "maize"), row(1, RIGHT), row(5, LEFT, "wheat"), row(9, RIGHT)]
         out, result = dedupe(tmp_path, rows)
