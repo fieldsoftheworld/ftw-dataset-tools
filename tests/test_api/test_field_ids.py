@@ -216,6 +216,47 @@ class TestParts:
         assert sorted(out["id"]) == ["1_1", "1_2", "1_3", "1_4", "1_5"]
 
 
+# A field of about 10 ha in Austria Lambert (EPSG:31287) with a sliver of about 4e-10 m²
+# at one vertex, the shape of at-2023's id 108361087.
+_FIELD_31287 = shapely.Point(379200.0, 365500.0).buffer(182.0, quad_segs=64)
+_CORNER = _FIELD_31287.exterior.coords[5]
+_SLIVER_31287 = shapely.Polygon(
+    [
+        _CORNER,
+        (_CORNER[0] + 0.00144526427, _CORNER[1] - 0.0017034812),
+        (_CORNER[0] + 0.0014447445, _CORNER[1] - 0.0017034038),
+    ]
+)
+
+
+class TestSlivers:
+    @pytest.mark.parametrize("crs", [31287, 4326])
+    def test_a_field_with_a_sliver_is_one_polygon_in_either_crs(
+        self, tmp_path: Path, crs: int
+    ) -> None:
+        gdf = gpd.GeoDataFrame(
+            {"id": [7, 7], "crop:name": ["w", "w"], "metrics:area": [_FIELD_31287.area] * 2},
+            geometry=[_FIELD_31287, _SLIVER_31287],
+            crs=31287,
+        ).to_crs(crs)
+        src = tmp_path / "in.parquet"
+        write_geoparquet(src, gdf=gdf)
+        result = dedupe_fields(src, tmp_path / "out.parquet")
+        assert result.groups["parts"] == 1
+        out = gpd.read_parquet(tmp_path / "out.parquet")
+        assert out.geometry.iloc[0].geom_type == "Polygon"
+        assert out.geometry.iloc[0].equals(gdf.geometry.iloc[0])
+
+    def test_the_overlap_floor_is_one_square_metre(self) -> None:
+        def r(area: float) -> field_ids._Row:
+            return field_ids._Row(0, {}, "1", (), None, area, None)
+
+        # 0.5 m² of overlap against a 1e-9 m² part: noise, not an overlap.
+        assert field_ids._interiors_apart([r(1000.0), r(1e-9)], 1000.0 - 0.5)
+        assert not field_ids._interiors_apart([r(1000.0), r(500.0)], 1000.0 - 0.5 + 500 - 20)
+        assert not field_ids._interiors_apart([r(0.5), r(0.2)], 0.0)
+
+
 class TestSameParcel:
     def test_the_kept_crop_is_not_listed_again(self, tmp_path: Path) -> None:
         rows = [row(1, LEFT, "A", year=2020), row(1, LEFT, "A", year=2021)]

@@ -10,9 +10,10 @@ right after the fields are written, by the first rule that fits the group:
 ``parts``
     One field exploded into several rows: the attributes other than ``metrics:*`` are
     equal, the parts' interiors don't overlap (their summed area exceeds the area of
-    their union by less than 1% of the smallest part) and every row carries the
-    same ``metrics:area`` (rows without it are never parts) and the union is between half
-    and twice it. The rows become one, whose geometry is the valid union of the parts;
+    their union by less than 1% of the smallest part of at least 1 m², or by less
+    than 1 m²) and every row carries the same ``metrics:area`` (rows without it are
+    never parts) and the union is between half and twice it. The rows become one,
+    whose geometry is the valid union of the parts without slivers under 1 m²;
     ``metrics:area`` keeps the source value and the bbox column is recomputed.
 ``same_parcel``
     The rows have the same polygon (their union is within 1% of the smallest row's
@@ -88,6 +89,9 @@ _THREADS = 8
 AREA_CRS = "EPSG:6933"  # WGS 84 / NSIDC EASE-Grid 2.0 Global, equal-area
 METRICS_TOLERANCE = 1e-4  # relative: 0.01%
 OVERLAP_TOLERANCE = 0.01  # of the smallest part's area
+# Parts and pieces smaller than this are slivers: they set no overlap tolerance (theirs
+# would be below the rounding noise of the areas) and are left out of a merged field.
+SLIVER_M2 = 1.0
 SAME_POLYGON_TOLERANCE = 0.01  # of the smallest row's area
 AREA_RATIO_RANGE = (0.5, 2.0)  # union area / metrics:area
 
@@ -235,6 +239,7 @@ class _Layout:
     crop_col: str | None
     keep_col: str | None = None
     keep_values: frozenset[str] = frozenset()
+    to_area_crs: Any = None  # shapely.transform function from the file's CRS to AREA_CRS
 
 
 @dataclass
@@ -309,15 +314,24 @@ def _area_metric_fits(rows: list[_Row], union_area: float, layout: _Layout) -> b
     return values[0] > 0 and low <= union_area / values[0] <= high
 
 
-def _are_parts(rows: list[_Row], union_area: float, layout: _Layout) -> bool:
-    if len({_text(r.record, layout.core) for r in rows}) != 1:
-        return False
-    positive = [r.area for r in rows if r.area > 0]
-    if not positive:
+def _interiors_apart(rows: list[_Row], union_area: float) -> bool:
+    """Whether the rows' summed area exceeds their union's by no more than noise."""
+    sizable = [r.area for r in rows if r.area >= SLIVER_M2]
+    if not sizable:
         return False
     overlap = sum(r.area for r in rows) - union_area
-    return overlap < OVERLAP_TOLERANCE * min(positive) and _area_metric_fits(
-        rows, union_area, layout
+    return overlap < max(OVERLAP_TOLERANCE * min(sizable), SLIVER_M2)
+
+
+def _same_core(rows: list[_Row], layout: _Layout) -> bool:
+    return len({_text(r.record, layout.core) for r in rows}) == 1
+
+
+def _are_parts(rows: list[_Row], union_area: float, layout: _Layout) -> bool:
+    return (
+        _same_core(rows, layout)
+        and _interiors_apart(rows, union_area)
+        and _area_metric_fits(rows, union_area, layout)
     )
 
 
@@ -328,10 +342,24 @@ def _is_same_polygon(rows: list[_Row], union_area: float) -> bool:
 
 def _polygonal(shape: Any) -> Any:
     """``shape`` without the points and lines a union of polygons can pick up."""
-    if shape is None or shape.geom_type != "GeometryCollection":
+    if shape.geom_type != "GeometryCollection":
         return shape
     parts = [g for g in shapely.get_parts(shape) if g.geom_type in ("Polygon", "MultiPolygon")]
-    return shapely.union_all(parts) if parts else shape
+    return _union_or(parts, shape)
+
+
+def _union_or(parts: list, fallback: Any) -> Any:
+    return shapely.union_all(parts) if parts else fallback
+
+
+def _without_slivers(shape: Any, layout: _Layout) -> Any:
+    """``shape`` without the pieces under ``SLIVER_M2``, unless that is all of it."""
+    pieces = shapely.get_parts(shape)
+    areas = shapely.area(shapely.make_valid(shapely.transform(pieces, layout.to_area_crs)))
+    kept = [p for p, a in zip(pieces, areas, strict=True) if a >= SLIVER_M2]
+    if len(kept) == len(pieces):
+        return shape
+    return _union_or(kept, shape)
 
 
 def _bbox(shape: Any) -> dict[str, float]:
@@ -340,9 +368,9 @@ def _bbox(shape: Any) -> dict[str, float]:
 
 
 def _merged(rows: list[_Row], layout: _Layout) -> dict[str, Any]:
-    shape = _polygonal(
-        shapely.make_valid(shapely.union_all(shapely.make_valid([r.shape for r in rows])))
-    )
+    """One row for the parts: their valid union, slivers left out."""
+    parts = shapely.make_valid([r.shape for r in rows if r.area >= SLIVER_M2])
+    shape = _without_slivers(_polygonal(shapely.make_valid(shapely.union_all(parts))), layout)
     record = dict(rows[0].record)
     record[layout.geom_col] = shapely.to_wkb(shape)
     if layout.bbox_col is not None:
@@ -431,6 +459,7 @@ def _layout(
     attrs = tuple(c for c in columns if c not in (geom_col, bbox_col))
     metrics = tuple(c for c in attrs if c.startswith(METRICS_PREFIX))
     keep_col, keep_values = _preference(columns, class_filter)
+    to_area_crs = reprojector(geoparquet_crs(path, geom_col), AREA_CRS)
     return _Layout(
         id_col=id_col,
         geom_col=geom_col,
@@ -441,6 +470,7 @@ def _layout(
         crop_col=_crop_column(columns, keep_col),
         keep_col=keep_col,
         keep_values=keep_values,
+        to_area_crs=to_area_crs,
     )
 
 
@@ -459,8 +489,7 @@ def _read_groups(
     table = table.drop_columns(["_pos", "_id_text"])
     records = table.to_pylist()
     shapes = shapely.from_wkb([r[layout.geom_col] for r in records])
-    to_area_crs = reprojector(geoparquet_crs(src, layout.geom_col), AREA_CRS)
-    projected = shapely.make_valid(shapely.transform(shapes, to_area_crs))
+    projected = shapely.make_valid(shapely.transform(shapes, layout.to_area_crs))
     areas = shapely.area(projected)
     groups: dict[str, list[_Row]] = defaultdict(list)
     for i, record in enumerate(records):
