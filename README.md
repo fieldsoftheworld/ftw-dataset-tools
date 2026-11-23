@@ -356,7 +356,8 @@ Missing ids are left alone. A file with duplicates is refused if it already has 
 `source_id`, `other_crop_names` or `file_row_number` column, or if a `<id>_<n>` it
 would write is already another row's id. DuckDB's own memory is capped at 4 GB on 8
 threads, spilling to a folder beside the output; the process as a whole uses more (about
-6 GB at peak for Austria's 2.9M fields).
+8 GB at peak for Austria's 2.9M fields, including a last pass that restores the source's
+column types and nullability).
 
 ### create-dataset
 

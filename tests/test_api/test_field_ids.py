@@ -715,6 +715,20 @@ class TestOutput:
         assert written.field("source_id").nullable
         assert written.field("other_crop_names").nullable
 
+    def test_column_types_follow_the_source(self, tmp_path: Path) -> None:
+        """DuckDB widens millisecond timestamps to microseconds; fiboa wants them in ms."""
+        import pyarrow as pa
+
+        src = write(tmp_path / "geo.parquet", self.ROWS)
+        table = pq.read_table(src)
+        stamps = pa.array([1_700_000_000_000] * table.num_rows, pa.timestamp("ms", tz="UTC"))
+        table = table.append_column(pa.field("determination:datetime", stamps.type), stamps)
+        pq.write_table(table, tmp_path / "in.parquet")
+        dedupe_fields(tmp_path / "in.parquet", tmp_path / "out.parquet")
+        written = pq.read_schema(tmp_path / "out.parquet")
+        assert written.field("determination:datetime").type == pa.timestamp("ms", tz="UTC")
+        assert written.field("id").type == pa.string()
+
     def test_pandas_reads_the_added_columns_and_index(self, tmp_path: Path) -> None:
         import pandas as pd
 

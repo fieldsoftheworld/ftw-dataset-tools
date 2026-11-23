@@ -91,9 +91,12 @@ RESERVED_COLUMNS = (
 # DuckDB's bounds for the id scans and the rewrite. A scan buffers row groups per
 # thread, and the rewrite sorts every column of the file: unbounded, a 10M-row file
 # peaked at 25 GB of RSS. With DuckDB held to 4 GB on 8 threads it spills to disk and
-# writes the same output, and the process peaks at 8.4 GB (5.8 GB for at-2023): the
-# limit bounds DuckDB's buffers, not everything the process holds.
+# writes the same output; the limit bounds DuckDB's buffers, not everything the process
+# holds. at-2023 peaks at about 6 GB through DuckDB and 8 GB after the schema pass.
 _THREADS = 8
+# Rows the schema pass holds at once: a DuckDB row group (122,880 rows) of Austrian
+# fields is about 265 MB decoded.
+_SCHEMA_PASS_ROWS = 32_768
 _MEMORY_LIMIT = "4GB"
 AREA_CRS = "EPSG:6933"  # WGS 84 / NSIDC EASE-Grid 2.0 Global, equal-area
 METRICS_TOLERANCE = 1e-4  # relative: 0.01%
@@ -770,33 +773,43 @@ def _write(
         ) TO '{sql_path(dst)}' (FORMAT PARQUET, COMPRESSION zstd)""")
 
 
-def _source_field(field: pa.Field, source: pa.Schema) -> pa.Field:
-    """``field`` as the source declared it: its own type and nullability where the
-    rewrite kept the type, else just the source's nullability. New columns stay as
-    they are (nullable)."""
+def _source_field(field: pa.Field, source: pa.Schema, text_id: str | None) -> pa.Field:
+    """``field`` as the source declared it, type and nullability; a renumbered id keeps
+    its new text type with the source's nullability, and new columns stay nullable."""
     if field.name not in source.names:
         return field
     declared = source.field(field.name)
-    if declared.type == field.type:
-        return declared.with_metadata(field.metadata)
-    return field.with_nullable(declared.nullable)
+    if field.name == text_id:
+        return field.with_nullable(declared.nullable)
+    return declared
 
 
-def _with_source_schema(written: Path, dst: Path, src: Path, metadata: dict[str, str]) -> None:
-    """Copy ``written`` to ``dst`` with the source's nullability and ``metadata``.
+@dataclass(frozen=True)
+class _Written:
+    """DuckDB's sorted output, still to get the source's schema and metadata."""
+
+    path: Path
+    metadata: dict[str, str]
+    text_id: str | None
+
+
+def _with_source_schema(written: _Written, dst: Path, src: Path) -> None:
+    """Copy DuckDB's output to ``dst`` with the source's column types and nullability.
 
     DuckDB writes every column as nullable, which fiboa's validator rejects where the
-    source declared a column required. The copy goes one row group at a time.
+    source declared a column required, and it widens types such as millisecond
+    timestamps to microseconds. The copy goes one row group at a time.
     """
     import pyarrow.parquet as pq
 
     source = pq.read_schema(src)
-    reader = pq.ParquetFile(written)
-    fields = [_source_field(f, source) for f in reader.schema_arrow]
+    reader = pq.ParquetFile(written.path)
+    fields = [_source_field(f, source, written.text_id) for f in reader.schema_arrow]
+    metadata = written.metadata
     schema = pa.schema(fields, metadata=metadata)
     with pq.ParquetWriter(dst, schema, compression="zstd") as writer:
-        for i in range(reader.num_row_groups):
-            writer.write_table(reader.read_row_group(i).cast(schema))
+        for batch in reader.iter_batches(batch_size=_SCHEMA_PASS_ROWS):
+            writer.write_table(pa.Table.from_batches([batch]).cast(schema))
 
 
 def _copy_unchanged(src: Path, dst: Path, work: Path) -> None:
@@ -838,9 +851,11 @@ def dedupe_fields(
     with tempfile.TemporaryDirectory(dir=dst.parent, prefix=".ftwd-dedupe-") as work:
         con = _connect(Path(work))
         try:
-            _dedupe_with(con, src, dst, Path(work), id_col, class_filter, result)
+            written = _dedupe_with(con, src, dst, Path(work), id_col, class_filter, result)
         finally:
-            con.close()
+            con.close()  # frees DuckDB's buffers before the schema pass
+        if written is not None:
+            _finish(written, src, dst, Path(work))
     result.rows_out = result.rows_in - sum(result.rows_removed.values())
     logger.info(result.summary())
     return result
@@ -854,15 +869,22 @@ def _dedupe_with(
     id_col: str,
     class_filter: ClassFilter | None,
     result: DedupResult,
-) -> None:
+) -> _Written | None:
+    """DuckDB's output with the ids resolved, or None when there was nothing to do."""
     columns = _columns(con, src)
     if id_col not in columns:
         raise FieldIdsError(f"{src.name} has no '{id_col}' column")
     con.execute(f"CREATE TEMP TABLE dup_ids AS {_duplicates_sql(src, id_col)}")
     if con.execute("SELECT count(*) FROM dup_ids").fetchone()[0] == 0:
         _copy_unchanged(src, dst, work)
-        return
-    _dedupe(con, src, dst, work, _layout(columns, src, id_col, class_filter), result)
+        return None
+    return _dedupe(con, src, work, _layout(columns, src, id_col, class_filter), result)
+
+
+def _finish(written: _Written, src: Path, dst: Path, work: Path) -> None:
+    tmp = work / "fields.parquet"
+    _with_source_schema(written, tmp, src)
+    tmp.replace(dst)
 
 
 def _row_count(path: Path) -> int:
@@ -900,19 +922,18 @@ def _taken(con: duckdb.DuckDBPyConnection, src: Path, layout: _Layout, new: list
 def _dedupe(
     con: duckdb.DuckDBPyConnection,
     src: Path,
-    dst: Path,
     work: Path,
     layout: _Layout,
     result: DedupResult,
-) -> None:
+) -> _Written:
     groups, schema = _read_groups(con, src, layout)
     records = _resolve_all(groups, layout, result)
     _check_new_ids(con, src, layout, records)
     result.added_columns = _added_columns(result, layout)
     resolved = _resolved_table(records, schema, layout, result.added_columns)
-    written, tmp = work / "sorted.parquet", work / "fields.parquet"
+    written = work / "sorted.parquet"
     _write(con, src, written, layout, resolved, result.added_columns)
     rows = result.rows_in - sum(result.rows_removed.values())
     metadata = _kv_metadata(src, layout, resolved, result.added_columns, rows)
-    _with_source_schema(written, tmp, src, metadata)
-    tmp.replace(dst)
+    text_id = layout.id_col if SOURCE_ID_COLUMN in result.added_columns else None
+    return _Written(written, metadata, text_id)
