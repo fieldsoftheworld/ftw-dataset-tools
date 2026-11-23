@@ -85,7 +85,11 @@ RESERVED_COLUMNS = (
     "_renumbered",
 )
 
+# DuckDB's bounds for the id scans and the rewrite. A scan buffers row groups per
+# thread, and the rewrite sorts every column of the file: unbounded, a 10M-row file
+# peaked at 25 GB, while 4 GB and 8 threads spill to disk with the same output.
 _THREADS = 8
+_MEMORY_LIMIT = "4GB"
 AREA_CRS = "EPSG:6933"  # WGS 84 / NSIDC EASE-Grid 2.0 Global, equal-area
 METRICS_TOLERANCE = 1e-4  # relative: 0.01%
 OVERLAP_TOLERANCE = 0.01  # of the smallest part's area
@@ -185,19 +189,29 @@ def _columns(con: duckdb.DuckDBPyConnection, path: Path | str) -> list[str]:
     return [row[0] for row in rows]
 
 
+def _connect(work: Path) -> duckdb.DuckDBPyConnection:
+    """A DuckDB connection with bounded memory and threads, spilling under ``work``."""
+    con = duckdb.connect(":memory:")
+    con.execute(f"SET memory_limit = '{_MEMORY_LIMIT}'")
+    con.execute(f"SET threads = {_THREADS}")
+    con.execute(f"SET temp_directory = '{sql_path(work / 'duckdb')}'")
+    return con
+
+
 def find_duplicate_ids(path: Path | str, id_col: str = ID_COLUMN) -> DuplicateIds:
     """The ids more than one row of ``path`` shares; scans only the id column.
 
     Raises:
         FieldIdsError: If the file has no ``id_col`` column.
     """
-    con = duckdb.connect(":memory:")
-    try:
-        if id_col not in _columns(con, path):
-            raise FieldIdsError(f"{Path(path).name} has no '{id_col}' column")
-        found = con.execute(_duplicates_sql(path, id_col)).fetchall()
-    finally:
-        con.close()
+    with tempfile.TemporaryDirectory(prefix="ftwd-field-ids-") as work:
+        con = _connect(Path(work))
+        try:
+            if id_col not in _columns(con, path):
+                raise FieldIdsError(f"{Path(path).name} has no '{id_col}' column")
+            found = con.execute(f"{_duplicates_sql(path, id_col)} ORDER BY 1").fetchall()
+        finally:
+            con.close()
     return DuplicateIds(ids=tuple(row[0] for row in found), rows=sum(row[1] for row in found))
 
 
@@ -640,21 +654,35 @@ def dedupe_fields(
     """
     src, dst = Path(src), Path(dst)
     result = DedupResult(rows_in=_row_count(src))
-    con = duckdb.connect(":memory:")
-    try:
-        columns = _columns(con, src)
-        if id_col not in columns:
-            raise FieldIdsError(f"{src.name} has no '{id_col}' column")
-        con.execute(f"CREATE TEMP TABLE dup_ids AS {_duplicates_sql(src, id_col)}")
-        if con.execute("SELECT count(*) FROM dup_ids").fetchone()[0] == 0:
-            _copy_unchanged(src, dst)
-        else:
-            _dedupe(con, src, dst, _layout(columns, src, id_col, class_filter), result)
-        result.rows_out = result.rows_in - sum(result.rows_removed.values())
-    finally:
-        con.close()
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=dst.parent, prefix=".ftwd-dedupe-") as work:
+        con = _connect(Path(work))
+        try:
+            _dedupe_with(con, src, dst, Path(work), id_col, class_filter, result)
+        finally:
+            con.close()
+    result.rows_out = result.rows_in - sum(result.rows_removed.values())
     logger.info(result.summary())
     return result
+
+
+def _dedupe_with(
+    con: duckdb.DuckDBPyConnection,
+    src: Path,
+    dst: Path,
+    work: Path,
+    id_col: str,
+    class_filter: ClassFilter | None,
+    result: DedupResult,
+) -> None:
+    columns = _columns(con, src)
+    if id_col not in columns:
+        raise FieldIdsError(f"{src.name} has no '{id_col}' column")
+    con.execute(f"CREATE TEMP TABLE dup_ids AS {_duplicates_sql(src, id_col)}")
+    if con.execute("SELECT count(*) FROM dup_ids").fetchone()[0] == 0:
+        _copy_unchanged(src, dst)
+        return
+    _dedupe(con, src, dst, work, _layout(columns, src, id_col, class_filter), result)
 
 
 def _row_count(path: Path) -> int:
@@ -687,19 +715,18 @@ def _check_new_ids(
 
 
 def _dedupe(
-    con: duckdb.DuckDBPyConnection, src: Path, dst: Path, layout: _Layout, result: DedupResult
+    con: duckdb.DuckDBPyConnection,
+    src: Path,
+    dst: Path,
+    work: Path,
+    layout: _Layout,
+    result: DedupResult,
 ) -> None:
-    # A scan buffers row groups per thread: bound them, as on a 192-core host the
-    # unbounded default ran out of memory on other full-file scans.
-    con.execute(f"SET threads = {_THREADS}")
     groups, schema = _read_groups(con, src, layout)
     records = _resolve_all(groups, layout, result)
     _check_new_ids(con, src, layout, records)
     result.added_columns = _added_columns(result, layout)
     resolved = _resolved_table(records, schema, layout, result.added_columns)
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=dst.parent, prefix=".ftwd-dedupe-") as work:
-        con.execute(f"SET temp_directory = '{sql_path(Path(work) / 'duckdb')}'")
-        tmp = Path(work) / "fields.parquet"
-        _write(con, src, tmp, layout, resolved, result.added_columns)
-        tmp.replace(dst)
+    tmp = work / "fields.parquet"
+    _write(con, src, tmp, layout, resolved, result.added_columns)
+    tmp.replace(dst)

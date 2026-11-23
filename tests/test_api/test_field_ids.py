@@ -429,6 +429,22 @@ class TestNoDuplicates:
         assert (src.stat().st_mtime_ns, src.read_bytes()) == before
 
 
+def test_duckdb_is_bounded(tmp_path: Path) -> None:
+    con = field_ids._connect(tmp_path)
+    try:
+        settings = dict(
+            con.execute(
+                "SELECT name, value FROM duckdb_settings() "
+                "WHERE name IN ('memory_limit', 'threads', 'temp_directory')"
+            ).fetchall()
+        )
+    finally:
+        con.close()
+    assert settings["memory_limit"] == "3.7 GiB"
+    assert settings["threads"] == "8"
+    assert settings["temp_directory"] == str(tmp_path / "duckdb")
+
+
 class TestErrors:
     def test_missing_id_column(self, tmp_path: Path) -> None:
         src = write(tmp_path / "in.parquet", [row(1, LEFT)])
