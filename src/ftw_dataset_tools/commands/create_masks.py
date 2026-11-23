@@ -8,6 +8,7 @@ import click
 from ftw_dataset_tools.api import chip_fields, field_stats, masks, stac
 from ftw_dataset_tools.api.config import VALID_MASK_TYPES
 from ftw_dataset_tools.api.masks import MaskType
+from ftw_dataset_tools.commands.dedupe_fields import require_unique_ids
 
 
 @click.command("create-masks")
@@ -149,6 +150,9 @@ def create_masks_cmd(
     column: the year is then derived from it, the same way create-dataset does,
     and the STAC collection's temporal extent is read from it too.
     """
+    # Instance masks, outlines and the lookups join on the field id.
+    require_unique_ids(boundaries_file)
+
     # The STAC collection written at the end needs a temporal extent, and the year
     # is folded into every item id. Resolved before any rasterization so a missing
     # --year fails in a second rather than after a full mask run.

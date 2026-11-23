@@ -8,7 +8,7 @@ context and execute the same stages.
 Intermediate outputs live in the output directory under a fixed naming
 convention, so any stage can be re-run on its own as long as its inputs exist:
 
-    {output_dir}/{name}_fields.parquet          (reproject)
+    {output_dir}/{name}_fields.parquet          (reproject, with unique ids)
     {output_dir}/{name}_chips.parquet           (chips, scale, splits)
     {output_dir}/{name}_boundary_lines.parquet  (boundaries)
     {output_dir}/collection.json                 (stac)
@@ -34,6 +34,7 @@ from ftw_dataset_tools.api import (
     crop_stats,
     docs,
     field_embeddings,
+    field_ids,
     field_stats,
     label_extent,
     land_cover,
@@ -183,6 +184,7 @@ class PipelineContext:
     # Accumulated results / state, populated as stages run.
     was_reprojected: bool = False
     source_crs: str | None = None
+    dedup_result: field_ids.DedupResult | None = None
     chips_result: field_stats.FieldStatsResult | None = None
     crop_stats_result: crop_stats.CropStatsResult | None = None
     label_extent_result: label_extent.LabelExtentChipsResult | None = None
@@ -425,6 +427,7 @@ def run_pipeline(
     if ctx.provenance is not None:
         config_module.write_provenance_file(ctx.provenance, ctx.output_dir)
 
+    _require_unique_field_ids(ctx, stages_to_run)
     for stage in STAGE_ORDER:
         hook = hooks.get(stage)
         if hook is not None:
@@ -434,6 +437,40 @@ def run_pipeline(
 
     success(logger, "Pipeline complete!")
     return ctx
+
+
+def _require_unique_field_ids(ctx: PipelineContext, stages_to_run: list[str]) -> None:
+    """Refuse fields an earlier run left with repeated ids, before a stage joins on them.
+
+    The reproject stage makes the ids unique. A run that starts after it reads the
+    fields files already in the output directory, which an older ftwd may have
+    written; only the stages that join on field ids need them unique, so a run of
+    the imagery, stac or docs stages alone goes ahead. The filtered fields are checked
+    too unless the filter stage rewrites them, so making the full file unique in place
+    (``ftwd dedupe-fields``) is not mistaken for a rebuild.
+    """
+    if "reproject" in stages_to_run or not _ID_STAGES.intersection(stages_to_run):
+        return
+    paths = [ctx.output_fields_path]
+    if "filter" not in stages_to_run:
+        paths.append(ctx.field_polygons_path)
+    for path in (p for p in dict.fromkeys(paths) if p.exists()):
+        _require_unique_ids_in(path)
+
+
+# Stages that join on field ids: the filtered fields, chips (and the field
+# embeddings), boundaries, and masks with their outlines and lookups.
+_ID_STAGES = frozenset({"filter", "chips", "boundaries", "masks"})
+
+
+def _require_unique_ids_in(path: Path) -> None:
+    try:
+        field_ids.require_unique_ids(path)
+    except field_ids.DuplicateIdsError as err:
+        raise StageInputError(
+            f"{err}. Rerun from the reproject stage: it makes the ids unique and rebuilds "
+            "every stage after it, so no chips, masks or outlines keep the old ids."
+        ) from err
 
 
 def _validate_stage_selection(ctx: PipelineContext, stages_to_run: list[str]) -> None:
@@ -534,6 +571,19 @@ def stage_reproject(ctx: PipelineContext) -> None:
     else:
         logger.info("CRS is already EPSG:4326, copying to output directory...")
         shutil.copy2(ctx.fields_input, ctx.output_fields_path)
+    _dedupe_field_ids(ctx)
+
+
+def _dedupe_field_ids(ctx: PipelineContext) -> None:
+    """Make the written fields' ids unique, before any later stage joins on them.
+
+    The class filter only runs in the next stage, but its recipe is known here: rows
+    that describe one parcel keep one whose class it includes, so the filter doesn't
+    drop a parcel for a declaration that was kept over the one it would have used.
+    """
+    ctx.dedup_result = field_ids.dedupe_fields(
+        ctx.output_fields_path, ctx.output_fields_path, class_filter=ctx.config.class_filter
+    )
 
 
 def _declares_crs(crs_info: CRSInfo) -> bool:

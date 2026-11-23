@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import box
 
-from ftw_dataset_tools.api import crop_stats, field_stats, pipeline
+from ftw_dataset_tools.api import crop_stats, field_ids, field_stats, pipeline
 from ftw_dataset_tools.api import tiles as tiles_module
 from ftw_dataset_tools.api.config import ClassFilter, ClassFilterError, DatasetConfig
 from ftw_dataset_tools.api.geo import detect_crs
@@ -2384,3 +2385,144 @@ class TestMosaicYearValidation:
         config = _config(sample_geoparquet_4326, tmp_path / "out", year=2023)
         ctx = pipeline.build_context(config, stages=["select_images"])
         pipeline._validate_stage_selection(ctx, ["select_images"])
+
+
+class TestUniqueFieldIds:
+    """Every stage after reproject sees fields whose ids are unique."""
+
+    def _fields(self, tmp_path: Path) -> Path:
+        left, right = box(10.0, 50.0, 10.01, 50.01), box(10.01, 50.0, 10.02, 50.01)
+        gdf = gpd.GeoDataFrame(
+            {
+                "id": ["1", "1", "2", "2", "3", "3", "4"],
+                # Parcel 1 was declared twice; only the second crop passes the filter.
+                "crop": ["water", "wheat", "maize", "maize", "wheat", "maize", "wheat"],
+            },
+            geometry=[left, left, left, right, box(10.0, 50.02, 10.01, 50.03), right, right],
+            crs="EPSG:4326",
+        )
+        path = tmp_path / "fields.parquet"
+        gdf.to_parquet(path)
+        return path
+
+    def _ids(self, path: Path) -> list[str]:
+        return [r[0] for r in duckdb.execute(f"SELECT id FROM '{path}'").fetchall()]
+
+    def _old_staging_dir(self, tmp_path: Path, *, full_unique: bool = False):
+        """An output dir an older ftwd left: fields and filtered fields with repeated ids."""
+        config = _config(self._fields(tmp_path), tmp_path / "out", name="ds", year=2023)
+        config.class_filter = ClassFilter("crop", ["wheat", "maize"], ["water"])
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        shutil.copyfile(self._fields(tmp_path), ctx.output_fields_path)
+        shutil.copyfile(self._fields(tmp_path), ctx.field_polygons_path)
+        if full_unique:  # e.g. ftwd dedupe-fields in place on the full fields only
+            field_ids.dedupe_fields(ctx.output_fields_path, ctx.output_fields_path)
+        return ctx
+
+    @pytest.mark.parametrize("stage", ["filter", "chips", "boundaries", "masks"])
+    def test_stages_that_join_on_ids_refuse_repeated_ids(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+    ) -> None:
+        ctx = self._old_staging_dir(tmp_path)
+        monkeypatch.setitem(pipeline._STAGE_FUNCS, stage, pytest.fail)
+        with pytest.raises(StageInputError, match="rebuilds every stage after it"):
+            pipeline.run_pipeline(ctx, [stage])
+
+    @pytest.mark.parametrize("stages", [["select_images", "download_images"], ["stac", "docs"]])
+    def test_stages_that_do_not_join_on_ids_still_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stages: list[str]
+    ) -> None:
+        ctx = self._old_staging_dir(tmp_path)
+        ran: list[str] = []
+        for stage in stages:
+            monkeypatch.setitem(pipeline._STAGE_FUNCS, stage, lambda _ctx, s=stage: ran.append(s))
+        pipeline.run_pipeline(ctx, stages)
+        assert ran == stages
+
+    def test_a_rerun_from_reproject_rebuilds_an_old_output_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reproject rewrites both fields files, so the old ones must not block it."""
+        ctx = self._old_staging_dir(tmp_path)
+        ran: list[str] = []
+        for stage in ("chips", "boundaries", "masks"):
+            monkeypatch.setitem(pipeline._STAGE_FUNCS, stage, lambda _ctx, s=stage: ran.append(s))
+        pipeline.run_pipeline(ctx, ["reproject", "filter", "chips", "boundaries", "masks"])
+        assert ran == ["chips", "boundaries", "masks"]
+        assert ctx.dedup_result is not None and ctx.dedup_result.changed
+        for path in (ctx.output_fields_path, ctx.field_polygons_path):
+            assert not field_ids.find_duplicate_ids(path)
+
+    def test_deduping_only_the_full_fields_in_place_is_not_a_rebuild(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ctx = self._old_staging_dir(tmp_path, full_unique=True)
+        monkeypatch.setitem(pipeline._STAGE_FUNCS, "chips", pytest.fail)
+        with pytest.raises(StageInputError, match=r"ds_fields_filtered\.parquet"):
+            pipeline.run_pipeline(ctx, ["chips", "masks"])
+
+    def test_a_run_that_refilters_needs_only_the_full_fields_unique(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ctx = self._old_staging_dir(tmp_path, full_unique=True)
+        ran: list[str] = []
+        for stage in ("filter", "chips"):
+            monkeypatch.setitem(pipeline._STAGE_FUNCS, stage, lambda _ctx, s=stage: ran.append(s))
+        pipeline.run_pipeline(ctx, ["filter", "chips"])
+        assert ran == ["filter", "chips"]
+
+    def test_a_later_stage_runs_on_unique_ids(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = _config(self._fields(tmp_path), tmp_path / "out", name="ds", year=2023)
+        ctx = pipeline.build_context(config)
+        pipeline.run_pipeline(ctx, ["reproject"])
+        ran = []
+        monkeypatch.setitem(pipeline._STAGE_FUNCS, "chips", ran.append)
+        pipeline.run_pipeline(ctx, ["chips"])
+        assert ran == [ctx]
+
+    def test_filtered_fields_outlines_and_embeddings_get_unique_ids(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api import chip_fields, field_embeddings
+
+        config = _config(
+            self._fields(tmp_path),
+            tmp_path / "out",
+            name="ds",
+            year=2023,
+            stages={"chips": {"field_embeddings": True}},
+        )
+        config.class_filter = ClassFilter("crop", ["wheat", "maize"], ["water"])
+        ctx = pipeline.build_context(config)
+        pipeline.run_pipeline(ctx, ["reproject", "filter"])
+
+        assert ctx.dedup_result is not None
+        assert ctx.dedup_result.groups["same_parcel"] == 1
+        full = self._ids(ctx.output_fields_path)
+        # Field 2's rows have no metrics:area, so they are renumbered, not merged.
+        assert full == ["1", "2_1", "2_2", "3_1", "3_2", "4"]
+        # The declaration the filter includes was kept, so parcel 1 survives the filter.
+        filtered = self._ids(ctx.field_polygons_path)
+        assert filtered == full
+
+        seen: dict[str, list[str]] = {}
+
+        def outlines(fields_file, *_args, **_kwargs):
+            seen["outlines"] = self._ids(fields_file)
+            return SimpleNamespace()
+
+        def embeddings(fields_file, *_args, **_kwargs):
+            seen["embeddings"] = self._ids(fields_file)
+
+        monkeypatch.setattr(chip_fields, "write_chip_fields", outlines)
+        monkeypatch.setattr(chip_fields, "summary_lines", lambda _result: [])
+        monkeypatch.setattr(field_embeddings, "is_current", lambda *_a, **_k: False)
+        monkeypatch.setattr(field_embeddings, "add_field_embeddings", embeddings)
+        pipeline._write_chip_fields(ctx, ctx.config.stages.masks)
+        pipeline._add_field_embeddings(ctx)
+        assert seen == {"outlines": filtered, "embeddings": full}
+        for ids in seen.values():
+            assert len(ids) == len(set(ids))

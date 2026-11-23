@@ -96,6 +96,28 @@ class TestCollectStats:
         assert stats["fields_total"] == 2
         assert [c for c, _, _ in stats["top_crops"]] == [3301010101, 3302000000]
         assert stats["imagery"] is None
+        assert "id" in stats["field_columns"]
+        assert stats["field_ids_unique"] is True
+
+    def test_repeated_field_ids_are_measured(self, tmp_path: Path) -> None:
+        """An old output dir can still repeat ids; the docs must not claim otherwise."""
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.docs import collect_stats, render_agents
+
+        _, chips, fields = _collection_dir(tmp_path)
+        gpd.GeoDataFrame(
+            {"id": [1, 1], "source_id": ["1", "1"]},
+            geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(fields)
+        stats = collect_stats(tmp_path, chips, fields)
+        assert stats["field_ids_unique"] is False
+
+        agents = render_agents({"title": "T", "links": []}, stats, [])
+        assert "unique in this table" not in agents
+        assert "`source_id`" not in agents
 
     def test_split_type_from_collection_or_config(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.docs import collect_stats
@@ -718,6 +740,22 @@ class TestSplitQualityNote:
 
 class TestSchemaNotes:
     """gzd/mgrs_10km/hcat_top and the ftw:hcat_* properties get real descriptions."""
+
+    def test_field_id_columns_are_explained(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        collection = {"title": "T", "links": []}
+        stats = _stats(
+            field_columns=["id", "crop:name", "source_id", "other_crop_names"],
+            field_ids_unique=True,
+        )
+
+        agents = render_agents(collection, stats, [])
+
+        assert "- `id`: field identifier, unique in this table" in agents
+        assert "- `source_id`: the field's id in the source dataset" in agents
+        assert "- `other_crop_names`: for a parcel the source declared more than once" in agents
+        assert "`crop:name`" not in agents
 
     def test_grid_columns_have_specific_notes(self) -> None:
         from ftw_dataset_tools.api.docs import render_agents

@@ -317,6 +317,53 @@ detected as identifiers and their values are not dumped.
 Options: `--top N` (max values per categorical column; `0` = all, safety-capped),
 `-c/--column` (show all values for a column, repeatable), `--no-geometry`, `--json`.
 
+### dedupe-fields
+
+Chips, masks, field outlines and field embeddings join on the fields' `id`, so it must
+be unique. `ftwd run` and `create-dataset` make it so right after writing
+`{name}_fields.parquet`, before the class filter; `create-chips`, `create-boundaries`,
+`create-masks` and `add-field-embeddings` refuse fields that repeat an id and point to
+this command, which does the same to any fields file. A `ftwd run` that starts after
+the reproject stage and runs the filter, chips, boundaries or masks stage refuses fields
+(full or filtered) an older run left with repeated ids; the imagery, stac and docs
+stages still run on them. Rerun such an output from the reproject stage, which rebuilds
+every stage after it. `dedupe-fields` refuses to write over its input, since rewriting
+`{name}_fields.parquet` in place would leave the chips, masks and outlines on the old ids.
+
+```bash
+ftwd dedupe-fields cz_2019.parquet cz_2019_unique.parquet
+# Of several declarations for one parcel, keep one the class filter includes
+ftwd dedupe-fields at_2024.parquet at_2024_unique.parquet --class-filter crops.yaml
+```
+
+Rows sharing an id are resolved by the first rule that fits them, comparing areas in an
+equal-area CRS (EPSG:6933):
+
+| Rule | When | Result |
+|------|------|--------|
+| exact | Same geometry and attributes; `metrics:*` within 0.01% | One row is kept |
+| parts | Same attributes apart from `metrics:*`; interiors don't overlap (summed area minus the union's under 1% of the smallest part of at least 1 m², and never less than 1 m²); every row has the same `metrics:area` and the union is 0.5–2× it (rows without `metrics:area` are never parts) | One row: the valid union of the parts without slivers under 1 m², the source `metrics:area` and a recomputed bbox |
+| same_parcel | The same polygon (union within 1% of the smallest row) with different attributes, like two declarations of one parcel | One row: one whose class passes the class filter if there is one, then the first by geometry WKB and attributes. The other rows' crop names (`crop:name`, else the filter column, else `hcat:name`), apart from the kept one's, go in the new list column `other_crop_names` (NULL when there are none) |
+| renumbered | Anything else | Every row is kept as `<id>_1` … `<id>_k`, numbered by geometry WKB and attributes. `id` becomes text and every row gets `source_id`, the source's id |
+
+`other_crop_names` and `source_id` are only added to files where their rule applied;
+`source_id` is then on every row (equal to `id` unless the row was renumbered), so it is
+the column to join back to the source with. Both are declared in the fiboa `collection`
+metadata's `schemas:custom`, and the `pandas` metadata is updated to match. Each resolved row takes the place of its
+group's first row and other rows keep their order, so the output does not depend on
+how the source orders a group's rows. A file without duplicate ids is copied unchanged.
+Missing ids are left alone. A file with duplicates is refused if it already has a
+`source_id`, `other_crop_names` or `file_row_number` column, or if a `<id>_<n>` it
+would write is already another row's id. DuckDB's own memory is capped at 4 GB on 4
+threads, spilling to a folder beside the output; the process as a whole uses more (about
+8 GB at peak for Austria's 2.9M fields and 10 GB for 10M, including a last pass that
+restores the source's column types and nullability and writes zstd at level 6: Austria
+2023 takes about 35 s and comes out at 841 MB from an 848 MB source). The geometry column
+keeps the source's Parquet type: a GeoParquet 2.0 file's native `GEOMETRY` column stays
+one, and a plain WKB column stays plain even when the source's Arrow schema calls it
+`geoarrow.wkb`. A pandas categorical column comes back with only the categories in use,
+in the order they first appear in the output, which may differ from the source's.
+
 ### create-dataset
 
 Create a complete training dataset from a single fields file. This is the main command that orchestrates the entire pipeline.

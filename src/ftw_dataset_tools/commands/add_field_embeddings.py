@@ -4,6 +4,7 @@ import click
 
 from ftw_dataset_tools.api import field_embeddings
 from ftw_dataset_tools.api.source import SourceFetchError
+from ftw_dataset_tools.commands.dedupe_fields import require_unique_ids
 
 
 @click.command("add-field-embeddings")
@@ -45,6 +46,7 @@ def add_field_embeddings_cmd(
     Examples:
         ftwd add-field-embeddings dk_2022_fields.parquet dk_2022_field_embeddings.parquet --year 2022
     """
+    require_unique_ids(fields_file, id_col)
     with click.progressbar(length=1, label="Fields") as bar:
 
         def progress(done: int, total: int) -> None:

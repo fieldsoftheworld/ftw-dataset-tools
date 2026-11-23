@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 
+from ftw_dataset_tools.api import field_ids
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.imagery.catalog_ops import chip_item_files, iter_chip_dirs
 from ftw_dataset_tools.api.logging_config import get_logger
@@ -127,6 +128,19 @@ CHIP_COLUMN_NOTES = {
     "mgrs_10km": "MGRS 100 km square plus 10 km cell identifier the chip belongs to",
     "grid_id": "identifier of the FTW grid cell the chip was cut from",
     "year": "calendar year the field boundaries were declared for",
+}
+
+# The fields table's columns whose meaning FTW sets; the rest come from the source.
+FIELD_COLUMN_NOTES = {
+    "id": "field identifier, unique in this table. Where the source repeated an id, "
+    "identical rows were kept once, the parts of one field were merged into one row, "
+    "and of several declarations for the same polygon one was kept (one the class "
+    "filter includes, if the build has one); any other rows sharing an id became "
+    "`<id>_1`, `<id>_2`, ...",
+    "source_id": "the field's id in the source dataset; differs from `id` only for rows "
+    "renumbered `<id>_<n>` because the source gave several different fields one id",
+    "other_crop_names": "for a parcel the source declared more than once with different "
+    "crops, the crop names of the declarations not kept (NULL for every other field)",
 }
 
 ITEM_PROPERTY_NOTES = {
@@ -478,6 +492,8 @@ def collect_stats(
         fields_total = _count(con, fields) if fields.exists() else 0
         quantiles = _coverage_quantiles(con, chips) if chips.exists() else {}
         chip_columns = _columns(con, chips) if chips.exists() else []
+        field_columns = _columns(con, fields) if fields.exists() else []
+        ids_unique = _field_ids_unique(fields, field_columns)
         imagery = imagery_stats(output_dir, con)
         item_properties = _item_properties(con, output_dir)
         chip_files = _chip_file_assets(con, collection, output_dir)
@@ -493,6 +509,8 @@ def collect_stats(
         "imagery": imagery,
         "mask_types": _mask_types(collection, output_dir),
         "chip_columns": chip_columns,
+        "field_columns": field_columns,
+        "field_ids_unique": ids_unique,
         "item_properties": item_properties,
         "split_type": _split_type(collection, config_dict or {}),
         "chip_files": chip_files,
@@ -1134,12 +1152,38 @@ def _note_lines(names: list[str], notes: dict[str, str], fallback: str) -> list[
     return [f"- `{name}`: {notes.get(name, fallback)}" for name in names]
 
 
+# Notes that describe ids made unique by the build: only true of a fields file that is.
+_ID_NOTES = ("id", "source_id")
+
+
+def _field_ids_unique(fields: Path, columns: list[str]) -> bool:
+    """Whether the fields file's ids are unique, as the build makes them.
+
+    An output directory an older ftwd built can still repeat ids; the docs stage may
+    run on it without a rebuild, so this is measured rather than assumed.
+    """
+    return "id" in columns and not field_ids.find_duplicate_ids(fields)
+
+
+def _field_notes(stats: dict) -> list[str]:
+    """The fields columns to describe, leaving out the id notes when ids repeat."""
+    present = set(stats.get("field_columns") or [])
+    if not stats.get("field_ids_unique"):
+        present -= set(_ID_NOTES)
+    return [c for c in FIELD_COLUMN_NOTES if c in present]
+
+
 def _agents_schema(stats: dict) -> str:
     lines = ["## Schema & field notes", ""]
     columns = stats.get("chip_columns") or []
     if columns:
         lines += ["Columns in the chips table:", ""]
         lines += _note_lines(columns, CHIP_COLUMN_NOTES, "carried through from the source dataset")
+        lines.append("")
+    field_notes = _field_notes(stats)
+    if field_notes:
+        lines += ["Columns in the fields table set by FTW (the rest come from the source):", ""]
+        lines += _note_lines(field_notes, FIELD_COLUMN_NOTES, "")
         lines.append("")
     properties = stats.get("item_properties") or []
     if properties:

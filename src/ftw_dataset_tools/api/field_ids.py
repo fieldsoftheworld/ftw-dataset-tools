@@ -1,0 +1,994 @@
+"""Make the field ids of a fields file unique.
+
+Some source datasets repeat a field ``id``. Chips, masks, field outlines and field
+embeddings all join on it, so the build resolves every group of rows sharing an id
+right after the fields are written, by the first rule that fits the group:
+
+``exact``
+    The rows are the same: same geometry (WKB) and attributes, with ``metrics:*``
+    values within 0.01% of each other. One row is kept.
+``parts``
+    One field exploded into several rows: the attributes other than ``metrics:*`` are
+    equal, the parts' interiors don't overlap (their summed area exceeds the area of
+    their union by less than 1% of the smallest part of at least 1 m², or by less
+    than 1 m²) and every row carries the same ``metrics:area`` (rows without it are
+    never parts) and the union is between half and twice it. The rows become one,
+    whose geometry is the valid union of the parts without slivers under 1 m²;
+    ``metrics:area`` keeps the source value and the bbox column is recomputed.
+``same_parcel``
+    The rows have the same polygon (their union is within 1% of the smallest row's
+    area) but different attributes, like two declarations of one parcel. One row is
+    kept: one whose crop passes the class filter when one is given, otherwise the
+    first in content order. The crop names of the rows not kept, other than the
+    kept row's, go in ``other_crop_names``.
+``renumbered``
+    Anything else. Every row is kept and, in content order, gets ``<id>_1`` ...
+    ``<id>_k``; the id column becomes VARCHAR and every row of the file gets
+    ``source_id``, the id it had in the source.
+
+Rows identical apart from their position resolve the same way in any order: "content
+order" sorts a group's rows by geometry WKB, then by their attribute values. Each
+resolved row takes the position of its group's first row; other rows keep theirs.
+Areas are measured in an equal-area CRS (EPSG:6933), never in degrees. Missing ids
+are not duplicates and stay as they are.
+
+Only the id column is read for a file without duplicates, and only the duplicate
+groups are loaded into memory.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import shutil
+import tempfile
+from collections import defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import duckdb
+import pyarrow as pa
+import shapely
+
+from ftw_dataset_tools.api.chip_grid import reprojector
+from ftw_dataset_tools.api.geo import (
+    detect_geometry_column,
+    geoparquet_column_metadata,
+    geoparquet_crs,
+    get_bbox_column_name,
+    sql_path,
+)
+from ftw_dataset_tools.api.logging_config import get_logger
+
+if TYPE_CHECKING:
+    from ftw_dataset_tools.api.config import ClassFilter
+
+logger = get_logger(__name__)
+
+ID_COLUMN = "id"
+SOURCE_ID_COLUMN = "source_id"
+OTHER_CROPS_COLUMN = "other_crop_names"
+METRICS_PREFIX = "metrics:"
+AREA_METRIC = "metrics:area"
+# The crop name saved for a same_parcel row not kept: the first of these present
+# (the class filter's column is tried between them).
+CROP_NAME_COLUMNS = ("crop:name", "hcat:name")
+
+RULES = ("exact", "parts", "same_parcel", "renumbered")
+# Columns the rewrite adds or uses internally; a source that has one is refused.
+RESERVED_COLUMNS = (
+    SOURCE_ID_COLUMN,
+    OTHER_CROPS_COLUMN,
+    "_pos",
+    "_sub",
+    "_id_text",
+    "_renumbered",
+    "_keep",
+    "_crop_text",
+    "file_row_number",
+)
+
+# DuckDB's bounds for the id scans and the rewrite. A scan buffers row groups per
+# thread, and the rewrite sorts every column of the file: unbounded, a 10M-row file
+# peaked at 25 GB of RSS. With DuckDB held to 4 GB it spills to disk and writes the
+# same output; the limit bounds DuckDB's buffers, not everything the process holds. On 8
+# threads the 10M-row rewrite still ran out of DuckDB memory in 3 of 10 runs, on 4 it
+# passed 10 of 10 in the same 80 s, peaking at about 10 GB of RSS (at-2023: about 8 GB).
+_THREADS = 4
+# The final pass's zstd level (pyarrow's default is 1): at 6, at-2023 comes out smaller
+# than its source, for about 15 s more than at 3.
+_ZSTD_LEVEL = 6
+_MEMORY_LIMIT = "4GB"
+AREA_CRS = "EPSG:6933"  # WGS 84 / NSIDC EASE-Grid 2.0 Global, equal-area
+METRICS_TOLERANCE = 1e-4  # relative: 0.01%
+OVERLAP_TOLERANCE = 0.01  # of the smallest part's area
+# Parts and pieces smaller than this are slivers: they set no overlap tolerance (theirs
+# would be below the rounding noise of the areas) and are left out of a merged field.
+SLIVER_M2 = 1.0
+SAME_POLYGON_TOLERANCE = 0.01  # of the smallest row's area
+AREA_RATIO_RANGE = (0.5, 2.0)  # union area / metrics:area
+
+
+class FieldIdsError(ValueError):
+    """Raised when a fields file's ids cannot be checked or made unique."""
+
+
+@dataclass(frozen=True)
+class DuplicateIds:
+    """The ids of a fields file that more than one row shares."""
+
+    ids: tuple[Any, ...]
+    rows: int
+
+    @property
+    def extra_rows(self) -> int:
+        """Rows beyond one per duplicated id."""
+        return self.rows - len(self.ids)
+
+    def __bool__(self) -> bool:
+        return bool(self.ids)
+
+
+class DuplicateIdsError(FieldIdsError):
+    """Raised when a fields file that must have unique ids repeats some."""
+
+    def __init__(self, path: Path | str, duplicates: DuplicateIds, id_col: str = ID_COLUMN):
+        self.path = Path(path)
+        self.duplicates = duplicates
+        examples = ", ".join(str(i) for i in sorted(duplicates.ids, key=str)[:5])
+        super().__init__(
+            f"{self.path.name}: {len(duplicates.ids):,} '{id_col}' value(s) are shared by "
+            f"{duplicates.rows:,} rows (e.g. {examples})"
+        )
+
+
+@dataclass
+class DedupResult:
+    """What :func:`dedupe_fields` did: groups and rows removed per rule, and the ids."""
+
+    rows_in: int = 0
+    rows_out: int = 0
+    groups: dict[str, int] = field(default_factory=lambda: dict.fromkeys(RULES, 0))
+    rows_removed: dict[str, int] = field(default_factory=lambda: dict.fromkeys(RULES, 0))
+    changed_ids: dict[str, list[str]] = field(default_factory=lambda: {r: [] for r in RULES})
+    added_columns: tuple[str, ...] = ()
+
+    @property
+    def changed(self) -> bool:
+        """Whether the fields had any duplicate id."""
+        return any(self.groups.values())
+
+    def summary(self) -> str:
+        """One line for the log."""
+        if not self.changed:
+            return f"Field ids are unique ({self.rows_in:,} fields)"
+        parts = ", ".join(
+            f"{self.groups[r]:,} {r} (-{self.rows_removed[r]:,} rows)"
+            for r in RULES
+            if self.groups[r]
+        )
+        return (
+            f"Resolved duplicate field ids: {parts}; {self.rows_in:,} -> {self.rows_out:,} fields"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Finding duplicates
+# --------------------------------------------------------------------------- #
+
+
+def _quote(column: str) -> str:
+    if '"' in column:
+        raise FieldIdsError(f"Invalid column name: {column!r}")
+    return f'"{column}"'
+
+
+def _duplicates_sql(path: Path | str, id_col: str) -> str:
+    quoted = _quote(id_col)
+    return f"""
+        SELECT {quoted}, count(*) AS n FROM read_parquet('{sql_path(path)}')
+        WHERE {quoted} IS NOT NULL GROUP BY {quoted} HAVING count(*) > 1"""
+
+
+def _columns(con: duckdb.DuckDBPyConnection, path: Path | str) -> list[str]:
+    try:
+        rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{sql_path(path)}')").fetchall()
+    except duckdb.Error as err:
+        raise FieldIdsError(f"Cannot read {Path(path).name} as Parquet: {err}") from err
+    return [row[0] for row in rows]
+
+
+def _connect(work: Path) -> duckdb.DuckDBPyConnection:
+    """A DuckDB connection with bounded memory and threads, spilling under ``work``."""
+    con = duckdb.connect(":memory:")
+    con.execute(f"SET memory_limit = '{_MEMORY_LIMIT}'")
+    con.execute(f"SET threads = {_THREADS}")
+    con.execute(f"SET temp_directory = '{sql_path(work / 'duckdb')}'")
+    # Without this the rewrite's COPY ran out of memory on 10M rows in half the runs;
+    # its ORDER BY still fixes the row order.
+    con.execute("SET preserve_insertion_order = false")
+    return con
+
+
+def find_duplicate_ids(path: Path | str, id_col: str = ID_COLUMN) -> DuplicateIds:
+    """The ids more than one row of ``path`` shares; scans only the id column.
+
+    Raises:
+        FieldIdsError: If the file has no ``id_col`` column.
+    """
+    with tempfile.TemporaryDirectory(prefix="ftwd-field-ids-") as work:
+        con = _connect(Path(work))
+        try:
+            if id_col not in _columns(con, path):
+                raise FieldIdsError(f"{Path(path).name} has no '{id_col}' column")
+            found = con.execute(f"{_duplicates_sql(path, id_col)} ORDER BY 1").fetchall()
+        finally:
+            con.close()
+    return DuplicateIds(ids=tuple(row[0] for row in found), rows=sum(row[1] for row in found))
+
+
+def require_unique_ids(path: Path | str, id_col: str = ID_COLUMN) -> None:
+    """Raise unless every non-missing ``id_col`` value of ``path`` is unique.
+
+    A file without the column has no ids to clash and passes.
+
+    Raises:
+        DuplicateIdsError: If some id is shared by more than one row.
+    """
+    con = duckdb.connect(":memory:")
+    try:
+        present = id_col in _columns(con, path)
+    finally:
+        con.close()
+    if not present:
+        return
+    duplicates = find_duplicate_ids(path, id_col)
+    if duplicates:
+        raise DuplicateIdsError(path, duplicates, id_col)
+
+
+# --------------------------------------------------------------------------- #
+# Resolving one group
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class _Layout:
+    """Which columns play which part, and the preference for same_parcel rows."""
+
+    id_col: str
+    geom_col: str
+    bbox_col: str | None
+    attrs: tuple[str, ...]  # every column but geometry and bbox, in file order
+    metrics: tuple[str, ...]
+    core: tuple[str, ...]  # attrs that are neither metrics nor the id
+    crop_col: str | None
+    keep_col: str | None = None
+    keep_values: frozenset[str] = frozenset()
+    to_area_crs: Any = None  # shapely.transform function from the file's CRS to AREA_CRS
+
+
+@dataclass
+class _Row:
+    pos: int  # row number in the source file
+    record: dict[str, Any]
+    id_text: str
+    key: tuple
+    shape: Any  # source CRS
+    area: float  # m², of the valid geometry in AREA_CRS
+    projected: Any
+    keep: bool = False  # the class filter includes the row's class
+    crop: str | None = None  # the crop name, as DuckDB casts it to text
+
+
+@dataclass
+class _Outcome:
+    rule: str
+    records: list[dict[str, Any]]
+    removed: int
+
+
+def _text(record: dict[str, Any], columns: tuple[str, ...]) -> tuple:
+    """``record``'s values in ``columns`` as sortable, hashable text."""
+    return tuple((record[c] is None, str(record[c])) for c in columns)
+
+
+def _content_key(record: dict[str, Any], layout: _Layout) -> tuple:
+    """Geometry WKB, then the attributes, then the bbox (only a tie-breaker)."""
+    bbox = str(record[layout.bbox_col]) if layout.bbox_col is not None else ""
+    return (bytes(record[layout.geom_col] or b""), _text(record, layout.attrs), bbox)
+
+
+def _close(a: Any, b: Any) -> bool:
+    """Equal, or for numbers within ``METRICS_TOLERANCE`` (NaN equals NaN)."""
+    if not isinstance(a, int | float) or not isinstance(b, int | float):
+        return a == b
+    if math.isnan(a) or math.isnan(b):
+        return math.isnan(a) == math.isnan(b)
+    return abs(a - b) <= METRICS_TOLERANCE * max(abs(a), abs(b))
+
+
+def _same_metrics(a: _Row, b: _Row, layout: _Layout) -> bool:
+    return all(_close(a.record[c], b.record[c]) for c in layout.metrics)
+
+
+def _collapse_exact(rows: list[_Row], layout: _Layout) -> list[_Row]:
+    """One row per set of exact duplicates, in content order."""
+    buckets: dict[tuple, list[_Row]] = defaultdict(list)
+    distinct: list[_Row] = []
+    for row in sorted(rows, key=lambda r: r.key):
+        bucket = buckets[(row.key[0], _text(row.record, layout.core))]
+        if not any(_same_metrics(kept, row, layout) for kept in bucket):
+            bucket.append(row)
+            distinct.append(row)
+    return distinct
+
+
+def _union_area(rows: list[_Row]) -> float:
+    return float(shapely.area(shapely.union_all([r.projected for r in rows])))
+
+
+def _area_metric_fits(rows: list[_Row], union_area: float, layout: _Layout) -> bool:
+    """Whether every row carries the same ``metrics:area`` and the union is near it.
+
+    Without the metric nothing bounds how far apart the parts lie, so a placeholder
+    id reused across a region could become one field: such rows are never parts.
+    """
+    area = _shared_area_metric(rows) if AREA_METRIC in layout.metrics else None
+    if not area or area <= 0:
+        return False
+    low, high = AREA_RATIO_RANGE
+    return low <= union_area / area <= high
+
+
+def _shared_area_metric(rows: list[_Row]) -> float | None:
+    """The ``metrics:area`` every row carries, or None when one lacks it or differs."""
+    values = [r.record[AREA_METRIC] for r in rows]
+    if None in values or not all(_close(values[0], v) for v in values):
+        return None
+    return values[0]
+
+
+def _interiors_apart(rows: list[_Row], union_area: float) -> bool:
+    """Whether the rows' summed area exceeds their union's by no more than noise."""
+    sizable = [r.area for r in rows if r.area >= SLIVER_M2]
+    if not sizable:
+        return False
+    overlap = sum(r.area for r in rows) - union_area
+    return overlap < max(OVERLAP_TOLERANCE * min(sizable), SLIVER_M2)
+
+
+def _same_core(rows: list[_Row], layout: _Layout) -> bool:
+    return len({_text(r.record, layout.core) for r in rows}) == 1
+
+
+def _are_parts(rows: list[_Row], union_area: float, layout: _Layout) -> bool:
+    return (
+        _same_core(rows, layout)
+        and _interiors_apart(rows, union_area)
+        and _area_metric_fits(rows, union_area, layout)
+    )
+
+
+def _is_same_polygon(rows: list[_Row], union_area: float) -> bool:
+    smallest = min(r.area for r in rows)
+    return smallest > 0 and union_area <= (1 + SAME_POLYGON_TOLERANCE) * smallest
+
+
+def _polygonal(shape: Any) -> Any:
+    """``shape`` without the points and lines a union of polygons can pick up."""
+    if shape.geom_type != "GeometryCollection":
+        return shape
+    parts = [g for g in shapely.get_parts(shape) if g.geom_type in ("Polygon", "MultiPolygon")]
+    return _union_or(parts, shape)
+
+
+def _union_or(parts: list, fallback: Any) -> Any:
+    return shapely.union_all(parts) if parts else fallback
+
+
+def _without_slivers(shape: Any, layout: _Layout) -> Any:
+    """``shape`` without the pieces under ``SLIVER_M2``, unless that is all of it."""
+    pieces = shapely.get_parts(shape)
+    areas = shapely.area(shapely.make_valid(shapely.transform(pieces, layout.to_area_crs)))
+    kept = [p for p, a in zip(pieces, areas, strict=True) if a >= SLIVER_M2]
+    if len(kept) == len(pieces):
+        return shape
+    return _union_or(kept, shape)
+
+
+def _bbox(shape: Any) -> dict[str, float]:
+    xmin, ymin, xmax, ymax = shape.bounds
+    return {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax}
+
+
+def _merged(rows: list[_Row], layout: _Layout) -> dict[str, Any]:
+    """One row for the parts: their valid union, slivers left out."""
+    parts = shapely.make_valid([r.shape for r in rows if r.area >= SLIVER_M2])
+    shape = _without_slivers(_polygonal(shapely.make_valid(shapely.union_all(parts))), layout)
+    record = dict(rows[0].record)
+    record[layout.geom_col] = shapely.to_wkb(shape)
+    if layout.bbox_col is not None:
+        record[layout.bbox_col] = _bbox(shape)
+    return record
+
+
+def _other_crops(rows: list[_Row], kept: _Row) -> list[str] | None:
+    """The crop names of ``rows`` but ``kept``'s own, or None when there are none."""
+    others = {r.crop for r in rows} - {kept.crop, None}
+    return sorted(others) or None
+
+
+def _one_parcel(rows: list[_Row], layout: _Layout) -> dict[str, Any]:
+    kept = min(rows, key=lambda r: (not r.keep, r.key))
+    record = dict(kept.record)
+    if layout.crop_col is not None:
+        record[OTHER_CROPS_COLUMN] = _other_crops(rows, kept)
+    return record
+
+
+def _renumbered(rows: list[_Row], layout: _Layout) -> list[dict[str, Any]]:
+    records = []
+    for n, row in enumerate(rows, start=1):
+        record = dict(row.record)
+        record[layout.id_col] = f"{row.id_text}_{n}"
+        record["_renumbered"] = True
+        records.append(record)
+    return records
+
+
+def _resolve(rows: list[_Row], layout: _Layout) -> _Outcome:
+    """The rule for one group of rows sharing an id, and the rows it leaves."""
+    distinct = _collapse_exact(rows, layout)
+    if len(distinct) == 1:
+        return _Outcome("exact", [distinct[0].record], len(rows) - 1)
+    union_area = _union_area(distinct)
+    if _are_parts(distinct, union_area, layout):
+        return _Outcome("parts", [_merged(distinct, layout)], len(rows) - 1)
+    if _is_same_polygon(distinct, union_area):
+        return _Outcome("same_parcel", [_one_parcel(distinct, layout)], len(rows) - 1)
+    return _Outcome("renumbered", _renumbered(distinct, layout), len(rows) - len(distinct))
+
+
+# --------------------------------------------------------------------------- #
+# Reading the groups and writing the result
+# --------------------------------------------------------------------------- #
+
+
+def _preference(
+    columns: list[str], class_filter: ClassFilter | None
+) -> tuple[str | None, frozenset[str]]:
+    """The class filter's column in these fields and the values it includes."""
+    if class_filter is None:
+        return None, frozenset()
+    return class_filter.resolve_column(columns), frozenset(class_filter.include)
+
+
+def _crop_column(columns: list[str], keep_col: str | None) -> str | None:
+    candidates = (CROP_NAME_COLUMNS[0], keep_col, *CROP_NAME_COLUMNS[1:])
+    return next((c for c in candidates if c is not None and c in columns), None)
+
+
+def _check_reserved(columns: list[str], path: Path) -> None:
+    clash = sorted(set(columns) & set(RESERVED_COLUMNS))
+    if clash:
+        raise FieldIdsError(
+            f"{path.name} already has column(s) {', '.join(clash)}, which resolving its "
+            "duplicate ids writes; rename them first"
+        )
+
+
+def _bbox_column(columns: list[str], path: Path) -> str | None:
+    return get_bbox_column_name(path) or ("bbox" if "bbox" in columns else None)
+
+
+def _attributes(
+    columns: list[str], geom_col: str, bbox_col: str | None
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Every column but the geometry and bbox, and those of them that are metrics."""
+    attrs = tuple(c for c in columns if c not in (geom_col, bbox_col))
+    return attrs, tuple(c for c in attrs if c.startswith(METRICS_PREFIX))
+
+
+def _require_wkb(path: Path, geom_col: str) -> None:
+    encoding = (geoparquet_column_metadata(path, geom_col) or {}).get("encoding", "WKB")
+    if str(encoding).upper() != "WKB":
+        raise FieldIdsError(f"{path.name}: only WKB geometries are supported, not {encoding}")
+
+
+def _layout(
+    columns: list[str], path: Path, id_col: str, class_filter: ClassFilter | None
+) -> _Layout:
+    _check_reserved(columns, path)
+    geom_col = detect_geometry_column(path) or "geometry"
+    _require_wkb(path, geom_col)
+    bbox_col = _bbox_column(columns, path)
+    attrs, metrics = _attributes(columns, geom_col, bbox_col)
+    keep_col, keep_values = _preference(columns, class_filter)
+    to_area_crs = reprojector(geoparquet_crs(path, geom_col), AREA_CRS)
+    return _Layout(
+        id_col=id_col,
+        geom_col=geom_col,
+        bbox_col=bbox_col,
+        attrs=attrs,
+        metrics=metrics,
+        core=tuple(c for c in attrs if c not in (*metrics, id_col)),
+        crop_col=_crop_column(columns, keep_col),
+        keep_col=keep_col,
+        keep_values=keep_values,
+        to_area_crs=to_area_crs,
+    )
+
+
+def _keep_sql(layout: _Layout) -> str:
+    """Whether the class filter includes a row, matched as its filter stage does."""
+    if layout.keep_col is None or not layout.keep_values:
+        return "FALSE"
+    literals = ", ".join("'" + v.replace("'", "''") + "'" for v in sorted(layout.keep_values))
+    return f"coalesce(CAST({_quote(layout.keep_col)} AS VARCHAR) IN ({literals}), FALSE)"
+
+
+def _crop_sql(layout: _Layout) -> str:
+    if layout.crop_col is None:
+        return "NULL::VARCHAR"
+    return f"CAST({_quote(layout.crop_col)} AS VARCHAR)"
+
+
+_DERIVED = ["_pos", "_id_text", "_keep", "_crop_text"]
+
+
+def _read_groups(
+    con: duckdb.DuckDBPyConnection, src: Path, layout: _Layout
+) -> tuple[dict[str, list[_Row]], pa.Schema]:
+    """Every row whose id is shared, grouped by that id (as text), and their schema."""
+    quoted = _quote(layout.id_col)
+    table = con.execute(f"""
+        SELECT file_row_number AS _pos, CAST({quoted} AS VARCHAR) AS _id_text,
+               {_keep_sql(layout)} AS _keep, {_crop_sql(layout)} AS _crop_text,
+               * EXCLUDE (file_row_number)
+        FROM read_parquet('{sql_path(src)}', file_row_number = true)
+        WHERE {quoted} IN (SELECT {quoted} FROM dup_ids)""").fetch_arrow_table()
+    derived = {name: table.column(name).to_pylist() for name in _DERIVED}
+    positions, id_texts = derived["_pos"], derived["_id_text"]
+    table = table.drop_columns(_DERIVED)
+    records = table.to_pylist()
+    shapes = shapely.from_wkb([r[layout.geom_col] for r in records])
+    projected = shapely.make_valid(shapely.transform(shapes, layout.to_area_crs))
+    areas = shapely.area(projected)
+    groups: dict[str, list[_Row]] = defaultdict(list)
+    for i, record in enumerate(records):
+        groups[id_texts[i]].append(
+            _Row(
+                pos=positions[i],
+                record=record,
+                id_text=id_texts[i],
+                key=_content_key(record, layout),
+                shape=shapes[i],
+                area=float(areas[i]) if math.isfinite(areas[i]) else 0.0,
+                projected=projected[i],
+                keep=derived["_keep"][i],
+                crop=derived["_crop_text"][i],
+            )
+        )
+    return groups, table.schema
+
+
+def _resolve_all(
+    groups: dict[str, list[_Row]], layout: _Layout, result: DedupResult
+) -> list[dict[str, Any]]:
+    """Each group's resolved rows, tagged with the position and order they go at."""
+    records = []
+    for id_text, rows in groups.items():
+        outcome = _resolve(rows, layout)
+        result.groups[outcome.rule] += 1
+        result.rows_removed[outcome.rule] += outcome.removed
+        result.changed_ids[outcome.rule].append(id_text)
+        first = min(r.pos for r in rows)
+        for sub, record in enumerate(outcome.records):
+            records.append({**record, "_id_text": id_text, "_pos": first, "_sub": sub})
+    for ids in result.changed_ids.values():
+        ids.sort()
+    return records
+
+
+def _added_columns(result: DedupResult, layout: _Layout) -> tuple[str, ...]:
+    added = []
+    if result.groups["renumbered"]:
+        added.append(SOURCE_ID_COLUMN)
+    if result.groups["same_parcel"] and layout.crop_col is not None:
+        added.append(OTHER_CROPS_COLUMN)
+    return tuple(added)
+
+
+_ADDED_TYPES = {SOURCE_ID_COLUMN: pa.string(), OTHER_CROPS_COLUMN: pa.list_(pa.string())}
+_ADDED_SQL = {SOURCE_ID_COLUMN: "CAST({id} AS VARCHAR)", OTHER_CROPS_COLUMN: "NULL::VARCHAR[]"}
+
+
+def _resolved_table(
+    records: list[dict[str, Any]], schema: pa.Schema, layout: _Layout, added: tuple[str, ...]
+) -> pa.Table:
+    """The resolved rows as Arrow, typed like the source plus the added columns."""
+    renumbered = SOURCE_ID_COLUMN in added
+    if renumbered:
+        schema = schema.set(
+            schema.get_field_index(layout.id_col), pa.field(layout.id_col, pa.string())
+        )
+        _add_source_ids(records, layout)
+    fields = [pa.field("_pos", pa.int64()), pa.field("_sub", pa.int64()), *schema]
+    fields += [pa.field(name, _ADDED_TYPES[name]) for name in added]
+    return pa.Table.from_pylist(records, schema=pa.schema(fields))
+
+
+def _add_source_ids(records: list[dict[str, Any]], layout: _Layout) -> None:
+    """Give every resolved row its source id, and its id as text."""
+    for record in records:
+        record[SOURCE_ID_COLUMN] = record["_id_text"]
+        if not record.get("_renumbered"):
+            record[layout.id_col] = record["_id_text"]
+
+
+# Arrow's own schema record describes the source's columns, not the rewrite's; the
+# writer stores a new one.
+_STALE_METADATA = {"ARROW:schema"}
+
+
+def _source_metadata(src: Path) -> dict[str, str]:
+    """The source's key-value metadata (fiboa's ``collection``, ``pandas``, ``geo``...)."""
+    import pyarrow.parquet as pq
+
+    raw = _decoded(pq.ParquetFile(src).metadata.metadata or {})
+    if "geo" not in raw:
+        raise FieldIdsError(f"{src.name} is not GeoParquet: it has no 'geo' metadata")
+    return {k: v for k, v in raw.items() if k not in _STALE_METADATA}
+
+
+def _decoded(raw: dict[bytes, bytes]) -> dict[str, str]:
+    return {k.decode(): v.decode("utf-8", "replace") for k, v in raw.items()}
+
+
+def _kv_metadata(
+    src: Path, layout: _Layout, resolved: pa.Table, added: tuple[str, ...], rows: int
+) -> dict[str, str]:
+    """The source's key-value metadata, ``geo``, ``pandas`` and ``collection`` updated
+    to the rewritten columns."""
+    metadata = _source_metadata(src)
+    metadata["geo"] = _geo_metadata(json.loads(metadata["geo"]), layout, resolved)
+    if "pandas" in metadata:
+        metadata["pandas"] = _pandas_metadata(json.loads(metadata["pandas"]), layout, added, rows)
+    if "collection" in metadata and added:
+        metadata["collection"] = _collection_metadata(metadata["collection"], added)
+    return metadata
+
+
+# How pandas records the columns the rewrite adds or turns into text.
+_PANDAS_TYPES = {
+    SOURCE_ID_COLUMN: ("unicode", "object"),
+    OTHER_CROPS_COLUMN: ("list[unicode]", "object"),
+}
+
+
+def _pandas_column(name: str) -> dict[str, Any]:
+    pandas_type, numpy_type = _PANDAS_TYPES.get(name, _PANDAS_TYPES[SOURCE_ID_COLUMN])
+    return {
+        "name": name,
+        "field_name": name,
+        "pandas_type": pandas_type,
+        "numpy_type": numpy_type,
+        "metadata": None,
+    }
+
+
+def _pandas_metadata(
+    pandas: dict[str, Any], layout: _Layout, added: tuple[str, ...], rows: int
+) -> str:
+    """pandas' record of the columns, matching the rewrite.
+
+    A renumbered id becomes text, which a recorded ``Int64`` or ``UInt32`` dtype would
+    make pandas refuse to read; added columns are recorded; a range index spans the
+    rows written.
+    """
+    retyped = {layout.id_col} if SOURCE_ID_COLUMN in added else set()
+    columns = [_retyped(c, retyped) for c in pandas.get("columns", [])]
+    columns += [_pandas_column(name) for name in added]
+    index = [_range_index(i, rows) for i in pandas.get("index_columns", [])]
+    return json.dumps({**pandas, "columns": columns, "index_columns": index})
+
+
+def _retyped(column: dict[str, Any], retyped: set[str]) -> dict[str, Any]:
+    """``column``'s entry, recorded as text if the rewrite made its Parquet column text.
+
+    Entries are matched on the Parquet column (``field_name``): an index named like the
+    id is stored under another one, such as ``__index_level_0__``, and keeps its type.
+    Only the types change, so the entry keeps its own ``name`` and ``field_name``.
+    """
+    stored = column.get("field_name") or column.get("name")
+    if stored not in retyped or column.get("pandas_type") == "unicode":
+        return column
+    pandas_type, numpy_type = _PANDAS_TYPES[SOURCE_ID_COLUMN]
+    return {**column, "pandas_type": pandas_type, "numpy_type": numpy_type, "metadata": None}
+
+
+# The added columns in Vecorel's schema language, as fiboa's ``schemas:custom`` holds them.
+_SCHEMA_PROPERTIES = {
+    SOURCE_ID_COLUMN: {"type": "string"},
+    OTHER_CROPS_COLUMN: {"type": "array", "items": {"type": "string"}},
+}
+_CUSTOM_SCHEMA = {"$schema": "https://vecorel.org/sdl/v0.2.0/schema.json", "required": []}
+
+
+def _collection_metadata(text: str, added: tuple[str, ...]) -> str:
+    """fiboa's ``collection`` metadata, declaring the added columns in ``schemas:custom``.
+
+    Left as it is when it isn't a fiboa/Vecorel collection object.
+    """
+    try:
+        collection = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    if not isinstance(collection, dict):
+        return text
+    custom = {**_CUSTOM_SCHEMA, **(collection.get("schemas:custom") or {})}
+    properties = {**custom.get("properties", {})}
+    properties.update({name: _SCHEMA_PROPERTIES[name] for name in added})
+    collection["schemas:custom"] = {**custom, "properties": properties}
+    return json.dumps(collection)
+
+
+def _range_index(index: Any, rows: int) -> Any:
+    if not isinstance(index, dict) or index.get("kind") != "range":
+        return index
+    return {**index, "stop": index.get("start", 0) + rows * index.get("step", 1)}
+
+
+def _geo_metadata(geo: dict, layout: _Layout, resolved: pa.Table) -> str:
+    """The source's ``geo`` metadata, listing any geometry type the merges added."""
+    column = geo.get("columns", {}).get(layout.geom_col, {})
+    if column.get("geometry_types"):
+        shapes = shapely.from_wkb(resolved.column(layout.geom_col).to_pylist())
+        types = {g.geom_type for g in shapes if g is not None}
+        column["geometry_types"] = sorted(set(column["geometry_types"]) | types)
+    return json.dumps(geo)
+
+
+def _write(
+    con: duckdb.DuckDBPyConnection,
+    src: Path,
+    dst: Path,
+    layout: _Layout,
+    resolved: pa.Table,
+    added: tuple[str, ...],
+) -> None:
+    """Write the rows without a shared id and the resolved ones, in source order.
+
+    DuckDB streams the file through, spilling the sort to disk if it must;
+    :func:`_with_source_schema` then gives the result the source's schema and metadata.
+    """
+    quoted = _quote(layout.id_col)
+    renumbered = SOURCE_ID_COLUMN in added
+    replace = f" REPLACE (CAST({quoted} AS VARCHAR) AS {quoted})" if renumbered else ""
+    extra = "".join(f", {_ADDED_SQL[c].format(id=quoted)} AS {_quote(c)}" for c in added)
+    columns = ", ".join(_quote(f.name) for f in resolved.schema if f.name not in ("_pos", "_sub"))
+    con.register("resolved", resolved)
+    con.execute(f"""
+        COPY (
+            SELECT {columns} FROM (
+                SELECT file_row_number AS _pos, 0::BIGINT AS _sub,
+                       * EXCLUDE (file_row_number){replace}{extra}
+                FROM read_parquet('{sql_path(src)}', file_row_number = true)
+                WHERE {quoted} IS NULL OR {quoted} NOT IN (SELECT {quoted} FROM dup_ids)
+                UNION ALL BY NAME
+                SELECT * FROM resolved
+            ) ORDER BY _pos, _sub
+        ) TO '{sql_path(dst)}' (FORMAT PARQUET, COMPRESSION zstd)""")
+
+
+def _source_field(
+    field: pa.Field, source: pa.Schema, text_id: str | None, native: frozenset[str]
+) -> pa.Field:
+    """``field`` as the source declared it, type and nullability; a renumbered id keeps
+    its new text type with the source's nullability, and new columns stay nullable.
+
+    An extension type such as geoarrow.wkb makes pyarrow write a Parquet-native
+    GEOMETRY column: it is kept for the source columns that were one (``native``, as
+    GeoParquet 2.0 writes them), and otherwise written as its plain storage type.
+    """
+    if field.name not in source.names:
+        return field
+    declared = source.field(field.name)
+    if field.name == text_id:
+        return field.with_nullable(declared.nullable)
+    if isinstance(declared.type, pa.BaseExtensionType) and field.name not in native:
+        return declared.with_type(declared.type.storage_type)
+    return declared
+
+
+def _native_geometry_columns(src: Path) -> frozenset[str]:
+    """The source's columns with a Parquet GEOMETRY or GEOGRAPHY logical type."""
+    import pyarrow.parquet as pq
+
+    schema = pq.ParquetFile(src).schema
+    columns = (schema.column(i) for i in range(len(schema)))
+    return frozenset(
+        c.path for c in columns if str(c.logical_type).startswith(("Geometry", "Geography"))
+    )
+
+
+@dataclass(frozen=True)
+class _Written:
+    """DuckDB's sorted output, still to get the source's schema and metadata."""
+
+    path: Path
+    metadata: dict[str, str]
+    text_id: str | None
+
+
+def _with_source_schema(written: _Written, dst: Path, src: Path) -> None:
+    """Copy DuckDB's output to ``dst`` with the source's column types and nullability.
+
+    DuckDB writes every column as nullable, which fiboa's validator rejects where the
+    source declared a column required, and it widens types such as millisecond
+    timestamps to microseconds. The copy goes one of DuckDB's row groups (122,880 rows)
+    at a time, keeping that size, and DuckDB's file is deleted once read.
+
+    Raises:
+        FieldIdsError: If a column can't take the source's type again.
+    """
+    import pyarrow.parquet as pq
+
+    native = _native_geometry_columns(src)
+    if native:
+        # pyarrow reads a GEOMETRY column as geoarrow.wkb, which keeps it native when
+        # written, only once that extension type is registered; this import registers it.
+        import geoarrow.pyarrow  # noqa: F401
+    source = pq.read_schema(src)
+    reader = pq.ParquetFile(written.path)
+    fields = [_source_field(f, source, written.text_id, native) for f in reader.schema_arrow]
+    schema = pa.schema(fields, metadata=written.metadata)
+    try:
+        with pq.ParquetWriter(
+            dst, schema, compression="zstd", compression_level=_ZSTD_LEVEL
+        ) as writer:
+            for i in range(reader.num_row_groups):
+                writer.write_table(_conform(reader.read_row_group(i), schema))
+    finally:
+        reader.close()
+        written.path.unlink(missing_ok=True)
+
+
+def _conform(table: pa.Table, schema: pa.Schema) -> pa.Table:
+    """``table`` cast to ``schema``; columns of Arrow's null type are rebuilt as nulls."""
+    for i, f in enumerate(schema):
+        if pa.types.is_null(f.type):
+            table = table.set_column(i, f.name, pa.nulls(table.num_rows))
+    try:
+        return table.cast(schema)
+    except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError) as err:
+        raise FieldIdsError(f"Cannot give the deduped fields the source's types: {err}") from err
+
+
+def _copy_unchanged(src: Path, dst: Path, work: Path) -> None:
+    """Copy ``src`` to ``dst``, unless they are one file (by path, symlink or hardlink).
+
+    The copy replaces ``dst`` rather than writing into it, so a symlink at ``dst`` to
+    another file is replaced, not written through.
+    """
+    if dst.exists() and src.samefile(dst):
+        return
+    tmp = work / "fields.parquet"
+    shutil.copyfile(src, tmp)
+    tmp.replace(dst)
+
+
+def dedupe_fields(
+    src: Path | str,
+    dst: Path | str,
+    *,
+    id_col: str = ID_COLUMN,
+    class_filter: ClassFilter | None = None,
+) -> DedupResult:
+    """Write ``src`` to ``dst`` with every ``id_col`` value unique; see the module doc.
+
+    A file without duplicate ids is copied unchanged, or left alone when ``dst`` is
+    ``src``. Otherwise ``dst`` (which may be ``src``) is replaced once fully written.
+
+    Args:
+        class_filter: The recipe's class filter. Of rows describing one parcel
+            (``same_parcel``), one whose class the filter includes is kept.
+
+    Raises:
+        FieldIdsError: If the file has no ``id_col``, or isn't WKB GeoParquet.
+        ClassFilterError: If ``class_filter``'s column is not in the file.
+    """
+    src, dst = Path(src), Path(dst)
+    result = DedupResult(rows_in=_row_count(src))
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=dst.parent, prefix=".ftwd-dedupe-") as work:
+        con = _connect(Path(work))
+        try:
+            written = _dedupe_with(con, src, dst, Path(work), id_col, class_filter, result)
+        finally:
+            con.close()  # frees DuckDB's buffers before the schema pass
+        if written is not None:
+            _finish(written, src, dst, Path(work))
+    result.rows_out = result.rows_in - sum(result.rows_removed.values())
+    logger.info(result.summary())
+    return result
+
+
+def _dedupe_with(
+    con: duckdb.DuckDBPyConnection,
+    src: Path,
+    dst: Path,
+    work: Path,
+    id_col: str,
+    class_filter: ClassFilter | None,
+    result: DedupResult,
+) -> _Written | None:
+    """DuckDB's output with the ids resolved, or None when there was nothing to do."""
+    columns = _columns(con, src)
+    if id_col not in columns:
+        raise FieldIdsError(f"{src.name} has no '{id_col}' column")
+    con.execute(f"CREATE TEMP TABLE dup_ids AS {_duplicates_sql(src, id_col)}")
+    if con.execute("SELECT count(*) FROM dup_ids").fetchone()[0] == 0:
+        _copy_unchanged(src, dst, work)
+        return None
+    return _dedupe(con, src, work, _layout(columns, src, id_col, class_filter), result)
+
+
+def _finish(written: _Written, src: Path, dst: Path, work: Path) -> None:
+    tmp = work / "fields.parquet"
+    _with_source_schema(written, tmp, src)
+    tmp.replace(dst)
+
+
+def _row_count(path: Path) -> int:
+    """From the Parquet footer, so it reads no data."""
+    import pyarrow.parquet as pq
+
+    return pq.ParquetFile(path).metadata.num_rows
+
+
+def _check_new_ids(
+    con: duckdb.DuckDBPyConnection, src: Path, layout: _Layout, records: list[dict[str, Any]]
+) -> None:
+    """Refuse renumbered ids that another row of the file already has."""
+    new = [r[layout.id_col] for r in records if r.get("_renumbered")]
+    taken = _taken(con, src, layout, new) if new else []
+    if taken:
+        raise FieldIdsError(
+            f"{src.name}: renumbering rows that share an id would give ids other rows "
+            f"already have (e.g. {', '.join(taken)})"
+        )
+
+
+def _taken(con: duckdb.DuckDBPyConnection, src: Path, layout: _Layout, new: list[str]) -> list:
+    """Up to five of the ``new`` ids that rows of ``src`` already have."""
+    con.register("new_ids", pa.table({"new_id": pa.array(new, pa.string())}))
+    quoted = _quote(layout.id_col)
+    taken = con.execute(f"""
+        SELECT DISTINCT CAST({quoted} AS VARCHAR) AS taken
+        FROM read_parquet('{sql_path(src)}')
+        WHERE CAST({quoted} AS VARCHAR) IN (SELECT new_id FROM new_ids)
+        ORDER BY taken LIMIT 5""").fetchall()
+    return [row[0] for row in taken]
+
+
+def _dedupe(
+    con: duckdb.DuckDBPyConnection,
+    src: Path,
+    work: Path,
+    layout: _Layout,
+    result: DedupResult,
+) -> _Written:
+    groups, schema = _read_groups(con, src, layout)
+    records = _resolve_all(groups, layout, result)
+    _check_new_ids(con, src, layout, records)
+    result.added_columns = _added_columns(result, layout)
+    resolved = _resolved_table(records, schema, layout, result.added_columns)
+    written = work / "sorted.parquet"
+    _write(con, src, written, layout, resolved, result.added_columns)
+    rows = result.rows_in - sum(result.rows_removed.values())
+    metadata = _kv_metadata(src, layout, resolved, result.added_columns, rows)
+    text_id = layout.id_col if SOURCE_ID_COLUMN in result.added_columns else None
+    return _Written(written, metadata, text_id)

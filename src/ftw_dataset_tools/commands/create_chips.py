@@ -5,6 +5,7 @@ from tqdm import tqdm
 
 from ftw_dataset_tools.api import field_stats
 from ftw_dataset_tools.api.geo import CRSMismatchError
+from ftw_dataset_tools.commands.dedupe_fields import require_unique_ids
 from ftw_dataset_tools.commands.options import KM_SIZE, KM_SIZE_HELP
 
 
@@ -149,6 +150,7 @@ def create_chips_cmd(
         ftwd create-chips fields.parquet --reproject
         ftwd create-chips fields.parquet --batch-size 250
     """
+    require_unique_ids(fields_file)
     click.echo(f"Fields file: {fields_file}")
     if grid_file:
         click.echo(f"Grid file: {grid_file}")
