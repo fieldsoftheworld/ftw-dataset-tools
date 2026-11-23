@@ -703,6 +703,26 @@ class TestSecondReviewFindings:
         ).fetchone() == (3, True)
         assert sorted(r[0] for r in con.execute("SELECT rid FROM _keys").fetchall()) == [0, 1]
 
+    def test_the_task_scan_is_bounded_while_streaming(self, tmp_path: Path) -> None:
+        fields = write_fields(
+            tmp_path / "f.parquet",
+            {"a": box(X, Y, X + 50, Y + 50), "b": box(X + 100, Y, X + 150, Y + 50)},
+        )
+        con = duckdb.connect(":memory:")
+        fe.ensure_spatial_loaded(con)
+        con.execute("SET threads = 3")
+        sql = f"read_parquet('{fields}', file_row_number = true)"
+        fe._plan(con, sql, "geometry", CRS.from_user_input(UTM))
+        settings = "SELECT current_setting('threads'), current_setting('preserve_insertion_order')"
+
+        tasks = fe._tasks(con, sql, "geometry")
+        first = next(tasks)
+        assert con.execute(settings).fetchone() == (fe._PLAN_THREADS, False)
+        rest = list(tasks)
+
+        assert sorted(r for t in [first, *rest] for r in t.rids) == [0, 1]
+        assert con.execute(settings).fetchone() == (3, True)
+
     def test_the_fingerprint_hashes_every_row_once_across_row_groups(self, tmp_path: Path) -> None:
         import hashlib
 

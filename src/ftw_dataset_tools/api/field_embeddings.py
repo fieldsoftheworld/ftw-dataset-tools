@@ -840,8 +840,9 @@ def utm_zone(lon: np.ndarray) -> np.ndarray:
     return np.clip(np.floor((np.asarray(lon) + 180.0) / 6.0).astype(np.int64) + 1, 1, 60)
 
 
-# Eight: like the fingerprint scan, each thread buffers about two row groups' geometry,
-# and at the default (one per core) a 192-core host passed the memory limit on fr_2018.
+# Threads for the two scans that read every geometry (_plan and _tasks). Each thread
+# buffers geometry pages, from under 15 MB to about 300 MB depending on how the file was
+# written; at the default (one per core) a 192-core host passed the limit on fr_2018.
 _PLAN_THREADS = 8
 
 
@@ -917,7 +918,7 @@ def _tasks(
 
     The sort keeps its larger memory limit until the last work unit is read.
     """
-    with sort_memory(con):
+    with sort_memory(con), _bounded_scan(con, _PLAN_THREADS):
         reader = con.execute(f"""
             SELECT k.zone, k.bx, k.by, k.rid, ST_AsWKB(f."{geom_col}") AS wkb
             FROM {fields_sql} f JOIN _keys k ON k.rid = f.file_row_number
