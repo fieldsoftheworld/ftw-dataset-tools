@@ -78,7 +78,7 @@ class TestDedupeFieldsCommand:
         assert result.exit_code == 1
         assert "Error:" in result.output
 
-    @pytest.mark.parametrize("spelling", ["same", "relative", "symlink"])
+    @pytest.mark.parametrize("spelling", ["same", "relative", "symlink", "hardlink"])
     def test_the_output_must_not_be_the_input(
         self, duplicated: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spelling: str
     ) -> None:
@@ -90,6 +90,9 @@ class TestDedupeFieldsCommand:
         elif spelling == "symlink":
             output = str(tmp_path / "link.parquet")
             (tmp_path / "link.parquet").symlink_to(duplicated)
+        elif spelling == "hardlink":
+            output = str(tmp_path / "hard.parquet")
+            (tmp_path / "hard.parquet").hardlink_to(duplicated)
         else:
             output = str(duplicated)
         result = CliRunner().invoke(cli, ["dedupe-fields", str(duplicated), output])
