@@ -570,7 +570,7 @@ class TestOutput:
         assert [p.name for p in tmp_path.iterdir()] == ["f.parquet"]
 
     def test_the_source_metadata_is_kept(self, tmp_path: Path) -> None:
-        """fiboa's collection and pandas' records survive; Arrow's stale schema doesn't."""
+        """fiboa's collection and pandas' records survive; Arrow's schema is written anew."""
         import pyarrow as pa
 
         src = write(tmp_path / "geo.parquet", self.ROWS)
@@ -591,7 +591,9 @@ class TestOutput:
         written_pandas = json.loads(written[b"pandas"])
         assert written_pandas["pandas_version"] == source_pandas["pandas_version"]
         assert b"geo" in written
-        assert b"ARROW:schema" not in written
+        source_arrow = pq.ParquetFile(tmp_path / "in.parquet").metadata.metadata[b"ARROW:schema"]
+        assert written[b"ARROW:schema"] != source_arrow
+        assert "source_id" in pq.read_schema(tmp_path / "out.parquet").names
         assert isinstance(pq.read_table(tmp_path / "out.parquet"), pa.Table)
         assert len(gpd.read_parquet(tmp_path / "out.parquet")) == 6
 
@@ -634,6 +636,84 @@ class TestOutput:
         out = gpd.read_parquet(tmp_path / "out.parquet")
         assert sorted(out["id"]) == ["1_1", "1_2", "2"]
         assert out["source_id"].tolist() == ["1", "1", "2"]
+
+    @pytest.mark.parametrize("dtype", ["int64", "Int64"])
+    def test_an_index_named_like_the_id_keeps_its_entry(self, tmp_path: Path, dtype: str) -> None:
+        """set_index("id", drop=False) stores the index as __index_level_0__, named "id"."""
+        import pandas as pd
+
+        gdf = gpd.GeoDataFrame(
+            {"id": pd.array([1, 1, 2], dtype=dtype), "crop:name": ["a", "b", "c"]},
+            geometry=[LEFT, FAR, RIGHT],
+            crs="EPSG:4326",
+        ).set_index("id", drop=False)
+        gdf.to_parquet(tmp_path / "in.parquet")
+        dedupe_fields(tmp_path / "in.parquet", tmp_path / "out.parquet")
+        recorded = json.loads(pq.ParquetFile(tmp_path / "out.parquet").metadata.metadata[b"pandas"])
+        entries = {c["field_name"]: c for c in recorded["columns"]}
+        assert entries["__index_level_0__"]["name"] == "id"
+        assert entries["id"]["pandas_type"] == "unicode"
+        for read in (pd.read_parquet, gpd.read_parquet):
+            out = read(tmp_path / "out.parquet")
+            assert out.index.tolist() == [1, 1, 2]
+            assert sorted(out["id"]) == ["1_1", "1_2", "2"]
+
+    def test_an_unnamed_index_used_as_the_id_is_retyped(self, tmp_path: Path) -> None:
+        import pandas as pd
+
+        gdf = gpd.GeoDataFrame(
+            {"crop:name": ["a", "b", "c"]},
+            geometry=[LEFT, FAR, RIGHT],
+            crs="EPSG:4326",
+            index=pd.Index(pd.array([7, 7, 8], dtype="Int64")),
+        )
+        gdf.to_parquet(tmp_path / "in.parquet")
+        dedupe_fields(tmp_path / "in.parquet", tmp_path / "out.parquet", id_col="__index_level_0__")
+        out = gpd.read_parquet(tmp_path / "out.parquet")
+        assert sorted(out.index) == ["7_1", "7_2", "8"]
+
+    def test_added_columns_are_recorded_for_pandas(self) -> None:
+        layout = field_ids._Layout(
+            id_col="id",
+            geom_col="geometry",
+            bbox_col=None,
+            attrs=(),
+            metrics=(),
+            core=(),
+            crop_col=None,
+        )
+        text = field_ids._pandas_metadata(
+            {"columns": [], "index_columns": []}, layout, ("source_id", "other_crop_names"), 3
+        )
+        recorded = {c["name"]: c for c in json.loads(text)["columns"]}
+        assert recorded["source_id"]["pandas_type"] == "unicode"
+        assert recorded["other_crop_names"]["pandas_type"] == "list[unicode]"
+        assert recorded["other_crop_names"]["numpy_type"] == "object"
+
+    def test_a_range_index_spans_the_rows_written(self) -> None:
+        index = {"kind": "range", "name": None, "start": 10, "stop": 40, "step": 3}
+        assert field_ids._range_index(index, 4) == {**index, "stop": 22}
+        assert field_ids._range_index("fid", 4) == "fid"
+
+    def test_nullability_follows_the_source(self, tmp_path: Path) -> None:
+        """fiboa's validator rejects a column the source required but the output doesn't."""
+        import pyarrow as pa
+
+        src = write(tmp_path / "geo.parquet", self.ROWS)
+        table = pq.read_table(src)
+        required = {"crop:name", "geometry"}
+        schema = pa.schema(
+            [f.with_nullable(f.name not in required) for f in table.schema],
+            metadata=table.schema.metadata,
+        )
+        pq.write_table(table.cast(schema), tmp_path / "in.parquet")
+        dedupe_fields(tmp_path / "in.parquet", tmp_path / "out.parquet")
+        source = pq.read_schema(tmp_path / "in.parquet")
+        written = pq.read_schema(tmp_path / "out.parquet")
+        for name in source.names:
+            assert written.field(name).nullable == source.field(name).nullable, name
+        assert written.field("source_id").nullable
+        assert written.field("other_crop_names").nullable
 
     def test_pandas_reads_the_added_columns_and_index(self, tmp_path: Path) -> None:
         import pandas as pd
@@ -691,6 +771,16 @@ class TestNoDuplicates:
         assert (tmp_path / "out.parquet").read_bytes() == src.read_bytes()
         assert not result.changed
         assert (result.rows_in, result.rows_out) == (3, 3)
+
+    def test_a_symlinked_output_is_replaced_not_written_through(self, tmp_path: Path) -> None:
+        src = write(tmp_path / "in.parquet", self.ROWS)
+        other = tmp_path / "other.parquet"
+        other.write_bytes(b"keep me")
+        (tmp_path / "link.parquet").symlink_to(other)
+        dedupe_fields(src, tmp_path / "link.parquet")
+        assert other.read_bytes() == b"keep me"
+        assert not (tmp_path / "link.parquet").is_symlink()
+        assert (tmp_path / "link.parquet").read_bytes() == src.read_bytes()
 
     def test_a_hardlinked_output_is_the_input(self, tmp_path: Path) -> None:
         src = write(tmp_path / "in.parquet", self.ROWS)

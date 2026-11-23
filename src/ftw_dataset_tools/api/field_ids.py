@@ -613,7 +613,8 @@ def _add_source_ids(records: list[dict[str, Any]], layout: _Layout) -> None:
             record[layout.id_col] = record["_id_text"]
 
 
-# Arrow's own schema record would describe the source's columns, not the rewrite's.
+# Arrow's own schema record describes the source's columns, not the rewrite's; the
+# writer stores a new one.
 _STALE_METADATA = {"ARROW:schema"}
 
 
@@ -631,19 +632,18 @@ def _decoded(raw: dict[bytes, bytes]) -> dict[str, str]:
     return {k.decode(): v.decode("utf-8", "replace") for k, v in raw.items()}
 
 
-def _kv_metadata_sql(
+def _kv_metadata(
     src: Path, layout: _Layout, resolved: pa.Table, added: tuple[str, ...], rows: int
-) -> str:
-    """The source's metadata as a DuckDB ``KV_METADATA`` struct, ``geo`` and ``pandas``
-    updated to the rewritten columns."""
+) -> dict[str, str]:
+    """The source's key-value metadata, ``geo``, ``pandas`` and ``collection`` updated
+    to the rewritten columns."""
     metadata = _source_metadata(src)
     metadata["geo"] = _geo_metadata(src, json.loads(metadata["geo"]), layout, resolved)
     if "pandas" in metadata:
         metadata["pandas"] = _pandas_metadata(json.loads(metadata["pandas"]), layout, added, rows)
     if "collection" in metadata and added:
         metadata["collection"] = _collection_metadata(metadata["collection"], added)
-    entries = ", ".join(f"{_literal(k)}: {_literal(v)}" for k, v in metadata.items())
-    return f"{{{entries}}}"
+    return metadata
 
 
 # How pandas records the columns the rewrite adds or turns into text.
@@ -681,10 +681,17 @@ def _pandas_metadata(
 
 
 def _retyped(column: dict[str, Any], retyped: set[str]) -> dict[str, Any]:
-    """``column``'s entry, recorded as text if the rewrite made it text."""
-    if column.get("name") not in retyped or column.get("pandas_type") == "unicode":
+    """``column``'s entry, recorded as text if the rewrite made its Parquet column text.
+
+    Entries are matched on the Parquet column (``field_name``): an index named like the
+    id is stored under another one, such as ``__index_level_0__``, and keeps its type.
+    Only the types change, so the entry keeps its own ``name`` and ``field_name``.
+    """
+    stored = column.get("field_name") or column.get("name")
+    if stored not in retyped or column.get("pandas_type") == "unicode":
         return column
-    return _pandas_column(column["name"])
+    pandas_type, numpy_type = _PANDAS_TYPES[SOURCE_ID_COLUMN]
+    return {**column, "pandas_type": pandas_type, "numpy_type": numpy_type, "metadata": None}
 
 
 # The added columns in Vecorel's schema language, as fiboa's ``schemas:custom`` holds them.
@@ -719,10 +726,6 @@ def _range_index(index: Any, rows: int) -> Any:
     return {**index, "stop": index.get("start", 0) + rows * index.get("step", 1)}
 
 
-def _literal(text: str) -> str:
-    return "'" + text.replace("'", "''") + "'"
-
-
 def _geo_metadata(src: Path, geo: dict, layout: _Layout, resolved: pa.Table) -> str:
     """The source's ``geo`` metadata, listing any geometry type the merges added."""
     column = geo.get("columns", {}).get(layout.geom_col, {})
@@ -742,21 +745,17 @@ def _write(
     layout: _Layout,
     resolved: pa.Table,
     added: tuple[str, ...],
-    rows: int,
 ) -> None:
     """Write the rows without a shared id and the resolved ones, in source order.
 
-    DuckDB streams the file through, spilling the sort to disk if it must. The source's
-    key-value metadata is written as it was (``geo`` with its CRS, fiboa's
-    ``collection``, ``pandas``), but for any geometry type a merge added to ``geo`` and
-    without ``ARROW:schema``, which would describe the source's columns.
+    DuckDB streams the file through, spilling the sort to disk if it must;
+    :func:`_with_source_schema` then gives the result the source's schema and metadata.
     """
     quoted = _quote(layout.id_col)
     renumbered = SOURCE_ID_COLUMN in added
     replace = f" REPLACE (CAST({quoted} AS VARCHAR) AS {quoted})" if renumbered else ""
     extra = "".join(f", {_ADDED_SQL[c].format(id=quoted)} AS {_quote(c)}" for c in added)
     columns = ", ".join(_quote(f.name) for f in resolved.schema if f.name not in ("_pos", "_sub"))
-    metadata = _kv_metadata_sql(src, layout, resolved, added, rows)
     con.register("resolved", resolved)
     con.execute(f"""
         COPY (
@@ -768,15 +767,49 @@ def _write(
                 UNION ALL BY NAME
                 SELECT * FROM resolved
             ) ORDER BY _pos, _sub
-        ) TO '{sql_path(dst)}' (FORMAT PARQUET, COMPRESSION zstd, KV_METADATA {metadata})""")
+        ) TO '{sql_path(dst)}' (FORMAT PARQUET, COMPRESSION zstd)""")
 
 
-def _copy_unchanged(src: Path, dst: Path) -> None:
-    """Copy ``src`` to ``dst``, unless they are one file (by path, symlink or hardlink)."""
+def _source_field(field: pa.Field, source: pa.Schema) -> pa.Field:
+    """``field`` as the source declared it: its own type and nullability where the
+    rewrite kept the type, else just the source's nullability. New columns stay as
+    they are (nullable)."""
+    if field.name not in source.names:
+        return field
+    declared = source.field(field.name)
+    if declared.type == field.type:
+        return declared.with_metadata(field.metadata)
+    return field.with_nullable(declared.nullable)
+
+
+def _with_source_schema(written: Path, dst: Path, src: Path, metadata: dict[str, str]) -> None:
+    """Copy ``written`` to ``dst`` with the source's nullability and ``metadata``.
+
+    DuckDB writes every column as nullable, which fiboa's validator rejects where the
+    source declared a column required. The copy goes one row group at a time.
+    """
+    import pyarrow.parquet as pq
+
+    source = pq.read_schema(src)
+    reader = pq.ParquetFile(written)
+    fields = [_source_field(f, source) for f in reader.schema_arrow]
+    schema = pa.schema(fields, metadata=metadata)
+    with pq.ParquetWriter(dst, schema, compression="zstd") as writer:
+        for i in range(reader.num_row_groups):
+            writer.write_table(reader.read_row_group(i).cast(schema))
+
+
+def _copy_unchanged(src: Path, dst: Path, work: Path) -> None:
+    """Copy ``src`` to ``dst``, unless they are one file (by path, symlink or hardlink).
+
+    The copy replaces ``dst`` rather than writing into it, so a symlink at ``dst`` to
+    another file is replaced, not written through.
+    """
     if dst.exists() and src.samefile(dst):
         return
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(src, dst)
+    tmp = work / "fields.parquet"
+    shutil.copyfile(src, tmp)
+    tmp.replace(dst)
 
 
 def dedupe_fields(
@@ -827,7 +860,7 @@ def _dedupe_with(
         raise FieldIdsError(f"{src.name} has no '{id_col}' column")
     con.execute(f"CREATE TEMP TABLE dup_ids AS {_duplicates_sql(src, id_col)}")
     if con.execute("SELECT count(*) FROM dup_ids").fetchone()[0] == 0:
-        _copy_unchanged(src, dst)
+        _copy_unchanged(src, dst, work)
         return
     _dedupe(con, src, dst, work, _layout(columns, src, id_col, class_filter), result)
 
@@ -877,7 +910,9 @@ def _dedupe(
     _check_new_ids(con, src, layout, records)
     result.added_columns = _added_columns(result, layout)
     resolved = _resolved_table(records, schema, layout, result.added_columns)
-    tmp = work / "fields.parquet"
+    written, tmp = work / "sorted.parquet", work / "fields.parquet"
+    _write(con, src, written, layout, resolved, result.added_columns)
     rows = result.rows_in - sum(result.rows_removed.values())
-    _write(con, src, tmp, layout, resolved, result.added_columns, rows)
+    metadata = _kv_metadata(src, layout, resolved, result.added_columns, rows)
+    _with_source_schema(written, tmp, src, metadata)
     tmp.replace(dst)
