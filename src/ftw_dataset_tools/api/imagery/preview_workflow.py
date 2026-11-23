@@ -21,6 +21,7 @@ import pystac
 from tqdm import tqdm
 
 from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, refresh_chip_preview
+from ftw_dataset_tools.api.imagery.overlay_refresh import redraw_stale_overlays
 from ftw_dataset_tools.api.imagery.parallel import DEFAULT_WORKERS, run_in_parallel
 from ftw_dataset_tools.api.imagery.selection_workflow import find_chip_items
 from ftw_dataset_tools.api.imagery.slots import SCENE_SLOTS
@@ -48,6 +49,10 @@ class PreviewWorkflowResult:
     failed: int = 0
     skipped_details: list[dict] = field(default_factory=list)
     failed_details: list[dict] = field(default_factory=list)
+    #: Skipped chips whose overlay was redrawn because their mask is newer.
+    previews_redrawn: int = 0
+    #: Stale chip overlays that could not be drawn; logged, not counted as failures.
+    previews_redraw_failed: int = 0
 
 
 @dataclass(frozen=True)
@@ -135,7 +140,8 @@ def preview_imagery_for_catalog(
         catalog_dir: The collection directory holding ``collection.json``.
         resume: Skip chips that already have a preview on disk. Defaults to True,
             so a second run picks up where the first stopped; pass False to
-            re-render everything.
+            re-render everything. A skipped chip's overlay is still redrawn from
+            its scene preview on disk when it is older than the chip's mask.
         workers: Number of scenes to read concurrently.
 
     Returns:
@@ -157,6 +163,7 @@ def preview_imagery_for_catalog(
 
     try:
         tasks: list[PreviewTask] = []
+        done: list[Path] = []
         for item, item_path in chip_items:
             built = build_preview_task(item, item_path)
             if isinstance(built, str):
@@ -166,6 +173,7 @@ def preview_imagery_for_catalog(
                 continue
             # Done once a scene draws the preview; one drawn from Q3 is replaced.
             if resume and preview_slot(item, item_path.parent) in SCENE_SLOTS:
+                done.append(item_path)
                 result.skipped += 1
                 result.skipped_details.append({"chip": item.id, "reason": "Already rendered"})
                 advance()
@@ -196,5 +204,11 @@ def preview_imagery_for_catalog(
         run_in_parallel(tasks, render_preview, apply, workers=workers)
     finally:
         progress_bar.close()
+
+    # The skipped chips' scenes are not read again, but a mask rebuilt since still
+    # gets a fresh overlay from the scene preview on disk.
+    redraw = redraw_stale_overlays(done, workers=workers)
+    result.previews_redrawn = redraw.redrawn
+    result.previews_redraw_failed = redraw.failed
 
     return result

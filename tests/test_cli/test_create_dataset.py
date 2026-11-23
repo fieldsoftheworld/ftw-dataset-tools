@@ -765,6 +765,22 @@ class TestCreateDatasetImageDownload:
         assert kwargs["workers"] == DEFAULT_WORKERS
 
     @pytest.mark.usefixtures("stub_pipeline")
+    def test_prints_the_redrawn_previews(
+        self, monkeypatch: pytest.MonkeyPatch, sample_fields_geoparquet: Path
+    ) -> None:
+        monkeypatch.setattr(
+            create_dataset_module,
+            "download_imagery_for_catalog",
+            lambda **_kwargs: DownloadWorkflowResult(previews_redrawn=3, previews_redraw_failed=1),
+        )
+
+        result = _invoke(sample_fields_geoparquet, "--download-images")
+
+        assert result.exit_code == 0, result.output
+        assert "Previews redrawn: 3" in result.output
+        assert "Previews not redrawn: 1 (see log)" in result.output
+
+    @pytest.mark.usefixtures("stub_pipeline")
     def test_image_workers_passed_through(
         self, download_calls: list[dict[str, Any]], sample_fields_geoparquet: Path
     ) -> None:

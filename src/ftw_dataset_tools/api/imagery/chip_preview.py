@@ -28,9 +28,12 @@ if TYPE_CHECKING:
 
 __all__ = [
     "PREVIEW_SLOT_FIELD",
+    "best_slot_preview",
+    "existing_preview",
     "preview_slot",
     "redraw_chip_preview",
     "refresh_chip_preview",
+    "set_thumbnail",
     "takes_preview",
 ]
 
@@ -40,16 +43,16 @@ PREVIEW_SLOT_FIELD = "ftw:preview_slot"
 OVERLAY_TITLE = "Chip preview with field overlay"
 
 
-def _existing(chip_dir: Path, stem: str) -> Path | None:
+def existing_preview(chip_dir: Path, stem: str) -> Path | None:
     """``{stem}.webp``, if it is on disk."""
     path = chip_dir / f"{stem}{PREVIEW_SUFFIX}"
     return path if path.exists() else None
 
 
-def _best_slot_preview(chip_dir: Path, chip_id: str) -> str | None:
+def best_slot_preview(chip_dir: Path, chip_id: str) -> str | None:
     """The first of ``THUMBNAIL_SLOTS`` with its own preview image on disk."""
     return next(
-        (s for s in THUMBNAIL_SLOTS if _existing(chip_dir, f"{chip_id}_{s}_image_s2")), None
+        (s for s in THUMBNAIL_SLOTS if existing_preview(chip_dir, f"{chip_id}_{s}_image_s2")), None
     )
 
 
@@ -70,9 +73,9 @@ def preview_slot(item: pystac.Item, chip_dir: Path) -> str | None:
         recorded = (json.loads(on_disk.read_text()).get("assets") or {}).get("thumbnail")
         if recorded is not None:
             return recorded.get(PREVIEW_SLOT_FIELD, THUMBNAIL_SLOTS[0])
-    if _existing(chip_dir, f"{item.id}_overlay") is not None:
+    if existing_preview(chip_dir, f"{item.id}_overlay") is not None:
         return THUMBNAIL_SLOTS[0]
-    return _best_slot_preview(chip_dir, item.id)
+    return best_slot_preview(chip_dir, item.id)
 
 
 def takes_preview(item: pystac.Item, chip_dir: Path, slot: str) -> bool:
@@ -106,13 +109,30 @@ def refresh_chip_preview(
     item.assets.pop("thumbnail", None)
     if slot is None:
         return None
-    base = _existing(chip_dir, f"{item.id}_{slot}_image_s2")
+    base = existing_preview(chip_dir, f"{item.id}_{slot}_image_s2")
     if redraw and base is not None:
         _redraw_overlay(chip_dir, item.id, base)
     # The overlay beats the plain preview.
-    target = _existing(chip_dir, f"{item.id}_overlay") or base
+    target = existing_preview(chip_dir, f"{item.id}_overlay") or base
     if target is None:
         return None
+    set_thumbnail(item, slot, target, checksums=checksums)
+    return slot
+
+
+def set_thumbnail(
+    item: pystac.Item,
+    slot: str,
+    target: Path,
+    *,
+    file_info_from: Path | None = None,
+    checksums: bool = False,
+) -> None:
+    """Point the ``thumbnail`` asset at ``target``: the overlay or ``slot``'s plain preview.
+
+    ``file_info_from`` reads the size (and checksum) from another file with the same
+    content, for an overlay drawn to a temporary file that is moved into place after.
+    """
     is_overlay = target.stem == f"{item.id}_overlay"
     asset = pystac.Asset(
         href=f"./{target.name}",
@@ -122,8 +142,7 @@ def refresh_chip_preview(
         extra_fields={PREVIEW_SLOT_FIELD: slot},
     )
     item.add_asset("thumbnail", asset)
-    add_file_info(asset, target, checksum=checksums)
-    return slot
+    add_file_info(asset, file_info_from or target, checksum=checksums)
 
 
 def redraw_chip_preview(
@@ -136,7 +155,7 @@ def redraw_chip_preview(
     """
     (chip_dir / f"{item.id}_overlay{PREVIEW_SUFFIX}").unlink(missing_ok=True)
     item.assets.pop("thumbnail", None)
-    best = _best_slot_preview(chip_dir, item.id)
+    best = best_slot_preview(chip_dir, item.id)
     if best is None:
         return None
     return refresh_chip_preview(item, chip_dir, best, redraw=True, checksums=checksums)

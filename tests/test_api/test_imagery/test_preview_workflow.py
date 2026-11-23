@@ -207,6 +207,86 @@ class TestPreviewImageryForCatalog:
             == "planting"
         )
 
+    def test_resume_redraws_an_overlay_older_than_its_mask(self, tmp_path: Path) -> None:
+        """A rebuilt mask gets a fresh overlay from the scene preview, with no new read."""
+        import os
+
+        out = _collection(tmp_path)
+        chip_dir = _chip(out, "chip_a", scene=_scene(tmp_path / "scene.tif"))
+        preview_imagery_for_catalog(out, workers=1)
+        overlay = chip_dir / "chip_a_overlay.webp"
+        mask_mtime = (chip_dir / "chip_a_semantic_3_class.tif").stat().st_mtime
+        os.utime(overlay, (mask_mtime - 100, mask_mtime - 100))
+
+        again = preview_imagery_for_catalog(out, workers=1)
+
+        assert (again.successful, again.skipped, again.previews_redrawn) == (0, 1, 1)
+        assert overlay.stat().st_mtime >= mask_mtime
+        item = pystac.Item.from_file(str(chip_dir / "chip_a.json"))
+        assert item.assets["thumbnail"].href == "./chip_a_overlay.webp"
+        assert item.assets["thumbnail"].extra_fields["file:size"] == overlay.stat().st_size
+
+    def test_a_failed_redraw_is_logged_not_failed_or_retried(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Counted once, apart from the skip; the run does not fail and the next one skips it."""
+        import os
+        from unittest.mock import patch
+
+        from ftw_dataset_tools.api.imagery import overlay_refresh
+        from ftw_dataset_tools.api.imagery.thumbnails import ThumbnailError
+
+        out = _collection(tmp_path)
+        chip_dir = _chip(out, "chip_a", scene=_scene(tmp_path / "scene.tif"))
+        preview_imagery_for_catalog(out, workers=1)
+        overlay = chip_dir / "chip_a_overlay.webp"
+        mask_mtime = (chip_dir / "chip_a_semantic_3_class.tif").stat().st_mtime
+        os.utime(overlay, (mask_mtime - 100, mask_mtime - 100))
+
+        def fail(*_args, **_kwargs):
+            raise ThumbnailError("cannot draw")
+
+        with patch.object(overlay_refresh, "generate_overlay_thumbnail", fail):
+            again = preview_imagery_for_catalog(out, workers=1)
+
+        assert (again.skipped, again.failed) == (1, 0)
+        assert (again.previews_redrawn, again.previews_redraw_failed) == (0, 1)
+        assert "could not draw the chip overlay" in caplog.text
+        item = pystac.Item.from_file(str(chip_dir / "chip_a.json"))
+        assert item.assets["thumbnail"].href == "./chip_a_planting_image_s2.webp"
+
+        third = preview_imagery_for_catalog(out, workers=1)
+        assert (third.previews_redrawn, third.previews_redraw_failed) == (0, 0)
+
+    def test_the_preview_workers_reach_the_redraw(self, tmp_path: Path) -> None:
+        """Five overlays are drawn at once: more than the default workers, so the
+        barrier breaks unless ``workers`` reaches the redraw."""
+        import os
+        import threading
+        from unittest.mock import patch
+
+        from ftw_dataset_tools.api.imagery import overlay_refresh
+
+        out = _collection(tmp_path)
+        scene = _scene(tmp_path / "scene.tif")
+        chip_dirs = [_chip(out, f"chip_{i}", scene=scene) for i in range(5)]
+        preview_imagery_for_catalog(out, workers=1)
+        for chip_dir in chip_dirs:
+            overlay = chip_dir / f"{chip_dir.name}_overlay.webp"
+            mask_mtime = (chip_dir / f"{chip_dir.name}_semantic_3_class.tif").stat().st_mtime
+            os.utime(overlay, (mask_mtime - 100, mask_mtime - 100))
+        barrier = threading.Barrier(5, timeout=10)
+        draw = overlay_refresh._draw
+
+        def wait_then_draw(task):
+            barrier.wait()
+            return draw(task)
+
+        with patch.object(overlay_refresh, "_draw", wait_then_draw):
+            again = preview_imagery_for_catalog(out, workers=5)
+
+        assert (again.previews_redrawn, again.previews_redraw_failed) == (5, 0)
+
     def test_resume_is_the_default(self, tmp_path: Path) -> None:
         """No caller should inherit a re-render of everything by omitting the flag."""
         out = _collection(tmp_path)

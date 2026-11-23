@@ -180,6 +180,7 @@ class TestPrintSummaryCropComposition:
         ctx.stac_result = None
         ctx.selection_result = None
         ctx.download_result = None
+        ctx.preview_result = None
         ctx.docs_result = None
         ctx.field_embeddings_result = None
         return ctx
@@ -263,6 +264,7 @@ class TestPrintSummaryMasksSkippedAndReused:
         ctx.stac_result = None
         ctx.selection_result = None
         ctx.download_result = None
+        ctx.preview_result = None
         ctx.docs_result = None
         return ctx
 
@@ -395,6 +397,7 @@ class TestPrintSummaryDocs:
         ctx.stac_result = None
         ctx.selection_result = None
         ctx.download_result = None
+        ctx.preview_result = None
         ctx.docs_result = docs_result
         ctx.config = DatasetConfig.from_dict(
             {"fields_file": "f.parquet", "stages": {"docs": {"pmtiles": pmtiles}}}
@@ -460,7 +463,7 @@ class TestPrintSummaryDocs:
 class TestPrintSummaryImagery:
     """The imagery stages report their failures, not just their successes."""
 
-    def _ctx(self, tmp_path: Path, selection=None, download=None) -> Mock:
+    def _ctx(self, tmp_path: Path, selection=None, download=None, preview=None) -> Mock:
         ctx = Mock(spec=PipelineContext)
         ctx.output_dir = tmp_path
         ctx.chips_result = None
@@ -470,6 +473,7 @@ class TestPrintSummaryImagery:
         ctx.stac_result = None
         ctx.selection_result = selection
         ctx.download_result = download
+        ctx.preview_result = preview
         ctx.docs_result = None
         return ctx
 
@@ -518,6 +522,34 @@ class TestPrintSummaryImagery:
 
         out = capsys.readouterr().out
         assert "Imagery download: 2 ok, 0 skipped, 1 failed (first error: 404)" in out
+
+    def test_download_line_counts_redrawn_previews(self, tmp_path: Path, capsys) -> None:
+        """The first error stays by the download counts; the redraws come after."""
+        result = self._download(
+            skipped=5,
+            failed=1,
+            failed_details=[{"item": "chip_planting_s2", "error": "404"}],
+            previews_redrawn=1,
+            previews_redraw_failed=1,
+        )
+
+        _print_summary(self._ctx(tmp_path, download=result))
+
+        out = capsys.readouterr().out
+        assert (
+            "Imagery download: 0 ok, 5 skipped, 1 failed (first error: 404); "
+            "previews redrawn: 1; previews not redrawn: 1 (see log)"
+        ) in out
+
+    def test_preview_mode_line_counts_redrawn_previews(self, tmp_path: Path, capsys) -> None:
+        from ftw_dataset_tools.api.imagery.preview_workflow import PreviewWorkflowResult
+
+        result = PreviewWorkflowResult(skipped=4, previews_redrawn=2)
+
+        _print_summary(self._ctx(tmp_path, preview=result))
+
+        out = capsys.readouterr().out
+        assert "Chip previews: 0 ok, 4 skipped, 0 failed; previews redrawn: 2" in out
 
     def test_no_lines_when_the_stages_did_not_run(self, tmp_path: Path, capsys) -> None:
         _print_summary(self._ctx(tmp_path))

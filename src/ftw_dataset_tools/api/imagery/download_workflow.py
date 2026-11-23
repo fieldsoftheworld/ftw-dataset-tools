@@ -14,12 +14,13 @@ import pystac
 from shapely.geometry import shape
 from tqdm import tqdm
 
-from ftw_dataset_tools.api.imagery.catalog_ops import iter_chip_dirs
+from ftw_dataset_tools.api.imagery.catalog_ops import chip_item_files, iter_chip_dirs
 from ftw_dataset_tools.api.imagery.image_download import (
     download_and_clip_scene,
     on_reference_grid,
     process_downloaded_scene,
 )
+from ftw_dataset_tools.api.imagery.overlay_refresh import redraw_stale_overlays
 from ftw_dataset_tools.api.imagery.parallel import (
     DEFAULT_WORKERS,
     ParallelOutcome,
@@ -62,6 +63,10 @@ class DownloadWorkflowResult:
     failed: int = 0
     skipped_details: list[dict] = field(default_factory=list)
     failed_details: list[dict] = field(default_factory=list)
+    #: Chip overlays redrawn because their mask is newer (see overlay_refresh).
+    previews_redrawn: int = 0
+    #: Stale chip overlays that could not be drawn; logged, not counted as failures.
+    previews_redraw_failed: int = 0
 
 
 def find_s2_child_items(
@@ -131,7 +136,9 @@ def download_imagery_for_catalog(
         catalog_dir: Path to the chips collection directory
         bands: List of bands to download. Default: ["red", "green", "blue", "nir"]
         resolution: Target resolution in meters
-        generate_thumbnails: Whether to generate WebP preview thumbnails
+        generate_thumbnails: Whether to generate WebP preview thumbnails. Also
+            redraws, from the images already on disk, each chip overlay that is
+            older than the chip's mask, which a resumed run would otherwise keep.
         resume: Skip items that already have local imagery. Defaults to True: a
             completed download replaces the child's band assets with the local
             `image`, so re-attempting one leaves no band hrefs to fetch and fails.
@@ -196,6 +203,12 @@ def download_imagery_for_catalog(
     finally:
         progress_bar.close()
 
+    if generate_thumbnails:
+        # A skipped (already downloaded) chip keeps its overlay, though its mask
+        # may have been rebuilt since.
+        redraw = redraw_stale_overlays(chip_item_files(catalog_dir), workers=workers)
+        result.previews_redrawn = redraw.redrawn
+        result.previews_redraw_failed = redraw.failed
     return result
 
 
