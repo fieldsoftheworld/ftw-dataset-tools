@@ -826,6 +826,21 @@ class TestOutput:
         assert written.metadata.row_group(0).num_rows == len(out) == 40_001
         assert written.metadata.row_group(0).column(0).compression == "ZSTD"
 
+    def test_large_outputs_keep_row_groups_of_122880(self, tmp_path: Path) -> None:
+        """More rows than one DuckDB row group, so smaller batches would show."""
+        n = 130_000
+        x = np.arange(n) * 1e-4
+        gdf = gpd.GeoDataFrame(
+            {"id": np.r_[np.arange(n - 1), 0], "crop:name": ["w"] * n},
+            geometry=shapely.box(x, 0, x + 5e-5, 5e-5),
+            crs="EPSG:4326",
+        )
+        gdf.to_parquet(tmp_path / "in.parquet")
+        dedupe_fields(tmp_path / "in.parquet", tmp_path / "out.parquet")
+        written = pq.ParquetFile(tmp_path / "out.parquet").metadata
+        sizes = [written.row_group(i).num_rows for i in range(written.num_row_groups)]
+        assert sizes == [122_880, n - 122_880]
+
     def test_the_output_is_zstd_at_level_6(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
