@@ -233,7 +233,7 @@ class TestPreviewImageryForCatalog:
         import os
         from unittest.mock import patch
 
-        from ftw_dataset_tools.api.imagery import chip_preview
+        from ftw_dataset_tools.api.imagery import overlay_refresh
         from ftw_dataset_tools.api.imagery.thumbnails import ThumbnailError
 
         out = _collection(tmp_path)
@@ -246,7 +246,7 @@ class TestPreviewImageryForCatalog:
         def fail(*_args, **_kwargs):
             raise ThumbnailError("cannot draw")
 
-        with patch.object(chip_preview, "generate_overlay_thumbnail", fail):
+        with patch.object(overlay_refresh, "generate_overlay_thumbnail", fail):
             again = preview_imagery_for_catalog(out, workers=1)
 
         assert (again.skipped, again.failed) == (1, 0)

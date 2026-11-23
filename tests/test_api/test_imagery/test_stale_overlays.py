@@ -16,7 +16,7 @@ import rasterio
 from PIL import Image
 from rasterio.transform import from_bounds
 
-from ftw_dataset_tools.api.imagery import chip_preview, download_workflow, overlay_refresh
+from ftw_dataset_tools.api.imagery import download_workflow, overlay_refresh
 from ftw_dataset_tools.api.imagery.chip_preview import PREVIEW_SLOT_FIELD, refresh_chip_preview
 from ftw_dataset_tools.api.imagery.overlay_refresh import overlay_is_stale, redraw_stale_overlays
 from ftw_dataset_tools.api.imagery.thumbnails import ThumbnailError
@@ -282,13 +282,17 @@ class TestMissingSlotImage:
         assert _thumbnail(chip_dir).extra_fields[PREVIEW_SLOT_FIELD] == "planting"
         assert not overlay_is_stale(chip_dir, CHIP)
 
-    def test_with_no_image_left_the_old_overlay_goes(self, tmp_path: Path) -> None:
+    def test_with_no_image_left_the_old_overlay_goes(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         chip_dir = _chip(tmp_path, base=False)
         overlay = _old_overlay(chip_dir)
 
-        result = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+        with caplog.at_level("INFO"):
+            result = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
 
-        assert (result.redrawn, result.failed) == (0, 0)
+        assert (result.redrawn, result.failed, result.removed) == (0, 0, 1)
+        assert "1 removed (no preview image left)" in caplog.text
         assert not overlay.exists()
         item = pystac.Item.from_file(str(chip_dir / f"{CHIP}.json"))
         assert "thumbnail" not in item.assets
@@ -300,13 +304,13 @@ class TestRedrawFailure:
         chip_dir = _chip(tmp_path)
         _old_overlay(chip_dir)
 
-        with patch.object(chip_preview, "generate_overlay_thumbnail", _failing_draw):
+        with patch.object(overlay_refresh, "generate_overlay_thumbnail", _failing_draw):
             first = _resume(tmp_path)
         assert (first.skipped, first.previews_redrawn, first.previews_redraw_failed) == (1, 0, 1)
         thumbnail = _thumbnail(chip_dir)
         assert thumbnail.href == f"./{CHIP}_planting_image_s2.webp"
 
-        with patch.object(chip_preview, "generate_overlay_thumbnail") as draw:
+        with patch.object(overlay_refresh, "generate_overlay_thumbnail") as draw:
             second = _resume(tmp_path)
         draw.assert_not_called()
         assert (second.previews_redrawn, second.previews_redraw_failed) == (0, 0)
@@ -314,7 +318,7 @@ class TestRedrawFailure:
     def test_a_rebuilt_mask_retries_it(self, tmp_path: Path) -> None:
         chip_dir = _chip(tmp_path)
         _old_overlay(chip_dir)
-        with patch.object(chip_preview, "generate_overlay_thumbnail", _failing_draw):
+        with patch.object(overlay_refresh, "generate_overlay_thumbnail", _failing_draw):
             _resume(tmp_path)
 
         # Rebuild the mask, as often as the clock's granularity needs for it to be
@@ -336,7 +340,7 @@ class TestRedrawFailure:
         def boom(*_args, **_kwargs):
             raise ValueError("boom")
 
-        with patch.object(chip_preview, "generate_overlay_thumbnail", boom):
+        with patch.object(overlay_refresh, "generate_overlay_thumbnail", boom):
             first = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
             second = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
 
@@ -360,6 +364,149 @@ class TestRedrawFailure:
 
         assert (result.redrawn, result.failed) == (0, 1)
         assert "could not redraw the chip preview" in caplog.text
+
+
+class TestInterrupts:
+    """An interrupt between drawing and writing the item leaves every chip repairable."""
+
+    def test_an_interrupt_before_the_item_write_leaves_the_chips_stale(
+        self, tmp_path: Path
+    ) -> None:
+        chips = [_chip(tmp_path, f"chip_{i}") for i in range(4)]
+        for chip_dir in chips:
+            _old_overlay(chip_dir, chip_dir.name)
+        items = [c / f"{c.name}.json" for c in chips]
+
+        with (
+            patch.object(overlay_refresh, "write_item", side_effect=KeyboardInterrupt),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            redraw_stale_overlays(items, workers=4)
+
+        assert all(overlay_is_stale(c, c.name) for c in chips)
+        again = redraw_stale_overlays(items, workers=4)
+        assert (again.redrawn, again.failed) == (4, 0)
+        for chip_dir in chips:
+            overlay = chip_dir / f"{chip_dir.name}_overlay.webp"
+            thumbnail = _thumbnail(chip_dir, chip_dir.name)
+            assert thumbnail.extra_fields["file:size"] == overlay.stat().st_size
+            assert not list(chip_dir.glob(".*"))
+
+    def test_a_leftover_temporary_file_is_removed(self, tmp_path: Path) -> None:
+        chip_dir = _chip(tmp_path)
+        overlay = _old_overlay(chip_dir)
+        mask_mtime = (chip_dir / f"{CHIP}_semantic_3_class.tif").stat().st_mtime
+        os.utime(overlay, (mask_mtime + 100, mask_mtime + 100))
+        leftover = chip_dir / f".{CHIP}_overlay.tmp.webp"
+        leftover.write_bytes(b"half drawn")
+
+        redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+
+        assert not leftover.exists()
+
+
+class TestClockSkew:
+    def test_a_mask_dated_in_the_future_is_redrawn_once(self, tmp_path: Path) -> None:
+        chip_dir = _chip(tmp_path)
+        _old_overlay(chip_dir)
+        mask = chip_dir / f"{CHIP}_semantic_3_class.tif"
+        future = time.time() + 3600
+        os.utime(mask, (future, future))
+
+        first = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+        second = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+
+        assert (first.redrawn, second.redrawn) == (1, 0)
+
+    def test_a_failure_under_a_future_mask_is_not_retried(self, tmp_path: Path) -> None:
+        chip_dir = _chip(tmp_path)
+        _old_overlay(chip_dir)
+        mask = chip_dir / f"{CHIP}_semantic_3_class.tif"
+        future = time.time() + 3600
+        os.utime(mask, (future, future))
+
+        with patch.object(overlay_refresh, "generate_overlay_thumbnail", _failing_draw):
+            first = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+        second = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+
+        assert (first.failed, second.failed, second.redrawn) == (1, 0, 0)
+
+
+class TestRecordedSlotIsNotTheBest:
+    def test_a_failure_is_not_retried(self, tmp_path: Path) -> None:
+        """The overlay came from harvest; staleness reads planting, the best slot."""
+        chip_dir = _chip(tmp_path)
+        Image.new("RGB", (32, 32), (60, 90, 120)).save(
+            chip_dir / f"{CHIP}_harvest_image_s2.webp", "WEBP"
+        )
+        _age(chip_dir / f"{CHIP}_harvest_image_s2.webp", chip_dir)
+        _age(chip_dir / f"{CHIP}_planting_image_s2.webp", chip_dir)
+        _old_overlay(chip_dir, slot="harvest")
+
+        with patch.object(overlay_refresh, "generate_overlay_thumbnail", _failing_draw):
+            first = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+        assert _thumbnail(chip_dir).href == f"./{CHIP}_harvest_image_s2.webp"
+        with patch.object(overlay_refresh, "generate_overlay_thumbnail") as draw:
+            second = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+
+        draw.assert_not_called()
+        assert (first.failed, second.failed) == (1, 0)
+
+
+class TestPerChipErrors:
+    def test_a_stat_error_on_one_chip_does_not_stop_the_others(self, tmp_path: Path) -> None:
+        chips = [_chip(tmp_path, f"chip_{i}") for i in range(2)]
+        for chip_dir in chips:
+            _old_overlay(chip_dir, chip_dir.name)
+        real = overlay_refresh.overlay_is_stale
+
+        def denied(chip_dir, chip_id):
+            if chip_id == "chip_0":
+                raise PermissionError("denied")
+            return real(chip_dir, chip_id)
+
+        with patch.object(overlay_refresh, "overlay_is_stale", denied):
+            result = redraw_stale_overlays([c / f"{c.name}.json" for c in chips], workers=1)
+
+        assert (result.redrawn, result.failed) == (1, 1)
+
+    def test_a_mark_error_after_a_failed_draw_is_counted(self, tmp_path: Path) -> None:
+        chip_dir = _chip(tmp_path)
+        _old_overlay(chip_dir)
+
+        with (
+            patch.object(overlay_refresh, "generate_overlay_thumbnail", _failing_draw),
+            patch.object(overlay_refresh.os, "utime", side_effect=OSError("read-only")),
+        ):
+            result = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+
+        assert (result.redrawn, result.failed) == (0, 1)
+
+    def test_the_progress_bar_counts_the_stale_chips(self, tmp_path: Path) -> None:
+        chips = [_chip(tmp_path, f"chip_{i}") for i in range(3)]
+        for chip_dir in chips[:2]:
+            _old_overlay(chip_dir, chip_dir.name)
+        # The third chip's preview postdates its mask: its overlay was already tried.
+        _age(chips[2] / "chip_2_planting_image_s2.webp", chips[2], "chip_2", seconds=-100)
+
+        with patch.object(overlay_refresh, "tqdm") as bar:
+            redraw_stale_overlays([c / f"{c.name}.json" for c in chips], workers=2)
+
+        assert bar.call_args.kwargs["total"] == 2
+        assert bar.return_value.update.call_count == 2
+        bar.return_value.close.assert_called_once()
+
+    def test_a_missing_overlay_is_logged_as_stale_not_older(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        chip_dir = _chip(tmp_path)
+        _age(chip_dir / f"{CHIP}_planting_image_s2.webp", chip_dir)
+
+        with caplog.at_level("INFO"):
+            redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+
+        assert "Chip previews: redrew 1 stale chip overlay(s)" in caplog.text
+        assert "older than" not in caplog.text
 
 
 class TestOverlayIsStale:
@@ -391,13 +538,13 @@ class TestUnexpectedErrors:
     def test_a_draw_that_writes_then_raises_leaves_no_overlay(self, tmp_path: Path) -> None:
         chip_dir = _chip(tmp_path)
         overlay = _old_overlay(chip_dir)
-        real = chip_preview.generate_overlay_thumbnail
+        real = overlay_refresh.generate_overlay_thumbnail
 
         def draw_then_raise(base, mask, out, *_args, **_kwargs):
             real(base, mask, out)
             raise ValueError("after write")
 
-        with patch.object(chip_preview, "generate_overlay_thumbnail", draw_then_raise):
+        with patch.object(overlay_refresh, "generate_overlay_thumbnail", draw_then_raise):
             result = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
 
         assert (result.redrawn, result.failed) == (0, 1)
@@ -421,16 +568,10 @@ class TestUnexpectedErrors:
         """The plain-preview fallback itself raises; the chip is not left looking done."""
         chip_dir = _chip(tmp_path)
         _old_overlay(chip_dir)
-        real = overlay_refresh.refresh_chip_preview
-
-        def fallback_fails(*args, redraw=False, **kwargs):
-            if not redraw:
-                raise OSError("cannot stat")
-            return real(*args, redraw=redraw, **kwargs)
 
         with (
-            patch.object(chip_preview, "generate_overlay_thumbnail", _failing_value_error),
-            patch.object(overlay_refresh, "refresh_chip_preview", fallback_fails),
+            patch.object(overlay_refresh, "generate_overlay_thumbnail", _failing_value_error),
+            patch.object(overlay_refresh, "set_thumbnail", side_effect=OSError("cannot stat")),
         ):
             first = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
 

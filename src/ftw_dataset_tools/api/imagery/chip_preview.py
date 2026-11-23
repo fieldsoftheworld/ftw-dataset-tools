@@ -33,6 +33,7 @@ __all__ = [
     "preview_slot",
     "redraw_chip_preview",
     "refresh_chip_preview",
+    "set_thumbnail",
     "takes_preview",
 ]
 
@@ -115,6 +116,23 @@ def refresh_chip_preview(
     target = existing_preview(chip_dir, f"{item.id}_overlay") or base
     if target is None:
         return None
+    set_thumbnail(item, slot, target, checksums=checksums)
+    return slot
+
+
+def set_thumbnail(
+    item: pystac.Item,
+    slot: str,
+    target: Path,
+    *,
+    file_info_from: Path | None = None,
+    checksums: bool = False,
+) -> None:
+    """Point the ``thumbnail`` asset at ``target``: the overlay or ``slot``'s plain preview.
+
+    ``file_info_from`` reads the size (and checksum) from another file with the same
+    content, for an overlay drawn to a temporary file that is moved into place after.
+    """
     is_overlay = target.stem == f"{item.id}_overlay"
     asset = pystac.Asset(
         href=f"./{target.name}",
@@ -124,8 +142,7 @@ def refresh_chip_preview(
         extra_fields={PREVIEW_SLOT_FIELD: slot},
     )
     item.add_asset("thumbnail", asset)
-    add_file_info(asset, target, checksum=checksums)
-    return slot
+    add_file_info(asset, file_info_from or target, checksum=checksums)
 
 
 def redraw_chip_preview(
