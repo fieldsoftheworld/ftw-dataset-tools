@@ -263,8 +263,13 @@ def _mask_types(collection: dict, output_dir: Path) -> list[str]:
     return [key for key in declared if key in observed]
 
 
-#: Per-chip assets beside the masks that the documents describe when chips carry them.
-CHIP_FILE_ASSETS = ("field_boundaries", "instance_labels")
+#: Per-chip assets beside the masks that the documents describe when chips carry them,
+#: with the suffix of the file each one points at (``<chip_id><suffix>``).
+CHIP_FILE_SUFFIXES = {
+    "field_boundaries": "_fields.parquet",
+    "instance_labels": "_instance_labels.json",
+}
+CHIP_FILE_ASSETS = tuple(CHIP_FILE_SUFFIXES)
 
 
 def _mirror_has_asset(con: duckdb.DuckDBPyConnection, items: Path, key: str) -> bool:
@@ -286,22 +291,52 @@ def _mirror_has_asset(con: duckdb.DuckDBPyConnection, items: Path, key: str) -> 
 def _chip_file_assets(
     con: duckdb.DuckDBPyConnection, collection: dict, output_dir: Path
 ) -> list[str]:
-    """The ``CHIP_FILE_ASSETS`` the chips carry: declared, on a sample item, or mirrored."""
+    """The ``CHIP_FILE_ASSETS`` the chips carry.
+
+    Declared in ``item_assets``, on a sample item, or else on any chip: from
+    items.parquet when it exists, from the chips' files otherwise. ``instance_labels``
+    is on some chips only, so a sample item can miss it.
+    """
     known = _declared_asset_keys(collection) | _observed_asset_keys(output_dir)
-    unknown = [key for key in CHIP_FILE_ASSETS if key not in known]
-    found = known | _mirrored_asset_keys(con, output_dir / "items.parquet", unknown)
+    found = known | _any_chip_asset_keys(
+        con, output_dir, [key for key in CHIP_FILE_ASSETS if key not in known]
+    )
     return [key for key in CHIP_FILE_ASSETS if key in found]
+
+
+def _any_chip_asset_keys(
+    con: duckdb.DuckDBPyConnection, output_dir: Path, keys: list[str]
+) -> set[str]:
+    """Those of ``keys`` some chip carries: from items.parquet, else from the chip files."""
+    items = output_dir / "items.parquet"
+    if items.exists():
+        return {key for key in keys if _mirror_has_asset(con, items, key)}
+    return _on_disk_asset_keys(output_dir, keys)
+
+
+def _files_present(chip_dir: Path, keys: set[str]) -> set[str]:
+    """Those of ``keys`` whose file this chip has."""
+    return {
+        key for key in keys if (chip_dir / f"{chip_dir.name}{CHIP_FILE_SUFFIXES[key]}").exists()
+    }
+
+
+def _on_disk_asset_keys(output_dir: Path, keys: list[str]) -> set[str]:
+    """Those of ``keys`` whose file some chip has.
+
+    One stat per chip and key still sought, stopping once every key is found.
+    """
+    remaining = set(keys)
+    chip_dirs = iter_chip_dirs(output_dir) if remaining else []
+    for chip_dir in chip_dirs:
+        remaining -= _files_present(chip_dir, remaining)
+        if not remaining:
+            break
+    return set(keys) - remaining
 
 
 def _declared_asset_keys(collection: dict) -> set[str]:
     return set(collection.get("item_assets") or {})
-
-
-def _mirrored_asset_keys(con: duckdb.DuckDBPyConnection, items: Path, keys: list[str]) -> set[str]:
-    """Those of ``keys`` that some chip in items.parquet carries (none without the file)."""
-    if not items.exists():
-        return set()
-    return {key for key in keys if _mirror_has_asset(con, items, key)}
 
 
 def _unknown_label_kind(collection: dict, masks_cfg: dict) -> str | None:

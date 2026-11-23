@@ -1066,6 +1066,47 @@ class TestV2MaskFacts:
 
         assert facts == {"resolution_m": 5.0, "boundary_width_m": None, "unknown": "presence_only"}
 
+    @pytest.mark.parametrize(
+        ("collection", "masks_cfg", "key", "expected"),
+        [
+            ({"ftw:presence_only": True}, {}, "unknown", "presence_only"),
+            ({}, {"label_extent": "extent.parquet"}, "unknown", "label_extent"),
+            ({"ftw:label_extent": True}, {}, "unknown", "label_extent"),
+            ({}, {"boundary_width_m": 5.0}, "boundary_width_m", 5.0),
+            ({"ftw:mask_boundary_width_m": 7.5}, {}, "boundary_width_m", 7.5),
+        ],
+    )
+    def test_each_fact_from_either_source(
+        self, collection: dict, masks_cfg: dict, key: str, expected: object
+    ) -> None:
+        from ftw_dataset_tools.api.docs import mask_facts
+
+        assert mask_facts(collection, {"stages": {"masks": masks_cfg}})[key] == expected
+
+    def test_a_10_m_grid_with_wide_lines_is_stated(self) -> None:
+        from ftw_dataset_tools.api.docs import _grid_sentence
+
+        facts = {"resolution_m": 10.0, "boundary_width_m": 20.0}
+
+        assert _grid_sentence(facts) == (
+            "Masks are 10 m per pixel, with field boundary lines 20 m wide."
+        )
+
+    def test_instance_labels_found_on_disk_without_items_parquet(self, tmp_path: Path) -> None:
+        """Only the second chip has the lookup file; the sample item misses it."""
+        from ftw_dataset_tools.api.docs import collect_stats
+
+        _, chips, fields = _collection_dir(tmp_path)
+        (tmp_path / "items.parquet").unlink()
+        for chip_id in ("ftw-33UXP0001_2024", "ftw-33UXP0002_2024"):
+            chip_dir = tmp_path / "chips" / "33UXP" / chip_id
+            chip_dir.mkdir(parents=True)
+            (chip_dir / f"{chip_id}.json").write_text(json.dumps({"assets": {}}))
+        labels = tmp_path / "chips" / "33UXP" / "ftw-33UXP0002_2024"
+        (labels / "ftw-33UXP0002_2024_instance_labels.json").write_text("{}")
+
+        assert collect_stats(tmp_path, chips, fields)["chip_files"] == ["instance_labels"]
+
     def test_a_v1_collection_has_none_of_them(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.docs import collect_stats, render_agents, render_readme
 
