@@ -129,6 +129,19 @@ CHIP_COLUMN_NOTES = {
     "year": "calendar year the field boundaries were declared for",
 }
 
+# The fields table's columns whose meaning FTW sets; the rest come from the source.
+FIELD_COLUMN_NOTES = {
+    "id": "field identifier, unique in this table. Where the source repeated an id, "
+    "identical rows were kept once, the parts of one field were merged into one row, "
+    "and of several declarations for the same polygon one was kept (one the class "
+    "filter includes, if the build has one); any other rows sharing an id became "
+    "`<id>_1`, `<id>_2`, ...",
+    "source_id": "the field's id in the source dataset; differs from `id` only for rows "
+    "renumbered `<id>_<n>` because the source gave several different fields one id",
+    "other_crop_names": "for a parcel the source declared more than once with different "
+    "crops, the crop names of the declarations not kept (NULL for every other field)",
+}
+
 ITEM_PROPERTY_NOTES = {
     "ftw:split": "which benchmark split the chip belongs to (train / val / test)",
     "ftw:scale_score": "stable hash score of the chip's 3x3 block; a scale keeps scores below it",
@@ -163,7 +176,7 @@ ITEM_PROPERTY_NOTES = {
 }
 
 ASSET_NOTES = {
-    "fields": "field boundary polygons, one row per field (GeoParquet)",
+    "fields": "field boundary polygons, one row per field, with a unique `id` (GeoParquet)",
     "chips": "one row per chip, with its field coverage, dominant crop and any split (GeoParquet)",
     "items": "stac-geoparquet mirror of every chip item, for querying the whole collection",
     "chips_tiles": "vector tiles of the chips, for maps (PMTiles)",
@@ -478,6 +491,7 @@ def collect_stats(
         fields_total = _count(con, fields) if fields.exists() else 0
         quantiles = _coverage_quantiles(con, chips) if chips.exists() else {}
         chip_columns = _columns(con, chips) if chips.exists() else []
+        field_columns = _columns(con, fields) if fields.exists() else []
         imagery = imagery_stats(output_dir, con)
         item_properties = _item_properties(con, output_dir)
         chip_files = _chip_file_assets(con, collection, output_dir)
@@ -493,6 +507,7 @@ def collect_stats(
         "imagery": imagery,
         "mask_types": _mask_types(collection, output_dir),
         "chip_columns": chip_columns,
+        "field_columns": field_columns,
         "item_properties": item_properties,
         "split_type": _split_type(collection, config_dict or {}),
         "chip_files": chip_files,
@@ -1140,6 +1155,11 @@ def _agents_schema(stats: dict) -> str:
     if columns:
         lines += ["Columns in the chips table:", ""]
         lines += _note_lines(columns, CHIP_COLUMN_NOTES, "carried through from the source dataset")
+        lines.append("")
+    field_notes = [c for c in FIELD_COLUMN_NOTES if c in (stats.get("field_columns") or [])]
+    if field_notes:
+        lines += ["Columns in the fields table set by FTW (the rest come from the source):", ""]
+        lines += _note_lines(field_notes, FIELD_COLUMN_NOTES, "")
         lines.append("")
     properties = stats.get("item_properties") or []
     if properties:

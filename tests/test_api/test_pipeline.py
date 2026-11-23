@@ -2384,3 +2384,68 @@ class TestMosaicYearValidation:
         config = _config(sample_geoparquet_4326, tmp_path / "out", year=2023)
         ctx = pipeline.build_context(config, stages=["select_images"])
         pipeline._validate_stage_selection(ctx, ["select_images"])
+
+
+class TestUniqueFieldIds:
+    """Every stage after reproject sees fields whose ids are unique."""
+
+    def _fields(self, tmp_path: Path) -> Path:
+        left, right = box(10.0, 50.0, 10.01, 50.01), box(10.01, 50.0, 10.02, 50.01)
+        gdf = gpd.GeoDataFrame(
+            {
+                "id": ["1", "1", "2", "2", "3", "3", "4"],
+                # Parcel 1 was declared twice; only the second crop passes the filter.
+                "crop": ["water", "wheat", "maize", "maize", "wheat", "maize", "wheat"],
+            },
+            geometry=[left, left, left, right, box(10.0, 50.02, 10.01, 50.03), right, right],
+            crs="EPSG:4326",
+        )
+        path = tmp_path / "fields.parquet"
+        gdf.to_parquet(path)
+        return path
+
+    def _ids(self, path: Path) -> list[str]:
+        return [r[0] for r in duckdb.execute(f"SELECT id FROM '{path}'").fetchall()]
+
+    def test_filtered_fields_outlines_and_embeddings_get_unique_ids(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api import chip_fields, field_embeddings
+
+        config = _config(
+            self._fields(tmp_path),
+            tmp_path / "out",
+            name="ds",
+            year=2023,
+            stages={"chips": {"field_embeddings": True}},
+        )
+        config.class_filter = ClassFilter("crop", ["wheat", "maize"], ["water"])
+        ctx = pipeline.build_context(config)
+        pipeline.run_pipeline(ctx, ["reproject", "filter"])
+
+        assert ctx.dedup_result is not None
+        assert ctx.dedup_result.groups["same_parcel"] == 1
+        full = self._ids(ctx.output_fields_path)
+        assert full == ["1", "2", "3_1", "3_2", "4"]
+        # The declaration the filter includes was kept, so parcel 1 survives the filter.
+        filtered = self._ids(ctx.field_polygons_path)
+        assert filtered == full
+
+        seen: dict[str, list[str]] = {}
+
+        def outlines(fields_file, *_args, **_kwargs):
+            seen["outlines"] = self._ids(fields_file)
+            return SimpleNamespace()
+
+        def embeddings(fields_file, *_args, **_kwargs):
+            seen["embeddings"] = self._ids(fields_file)
+
+        monkeypatch.setattr(chip_fields, "write_chip_fields", outlines)
+        monkeypatch.setattr(chip_fields, "summary_lines", lambda _result: [])
+        monkeypatch.setattr(field_embeddings, "is_current", lambda *_a, **_k: False)
+        monkeypatch.setattr(field_embeddings, "add_field_embeddings", embeddings)
+        pipeline._write_chip_fields(ctx, ctx.config.stages.masks)
+        pipeline._add_field_embeddings(ctx)
+        assert seen == {"outlines": filtered, "embeddings": full}
+        for ids in seen.values():
+            assert len(ids) == len(set(ids))

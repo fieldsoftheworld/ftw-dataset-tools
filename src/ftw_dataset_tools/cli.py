@@ -22,6 +22,7 @@ COMMAND_MODULES = (
     "create_masks",
     "create_splits",
     "create_subset",
+    "dedupe_fields",
     "download_images",
     "export_coco",
     "get_grid",

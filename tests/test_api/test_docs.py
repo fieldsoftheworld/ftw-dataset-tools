@@ -96,6 +96,7 @@ class TestCollectStats:
         assert stats["fields_total"] == 2
         assert [c for c, _, _ in stats["top_crops"]] == [3301010101, 3302000000]
         assert stats["imagery"] is None
+        assert "id" in stats["field_columns"]
 
     def test_split_type_from_collection_or_config(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.docs import collect_stats
@@ -718,6 +719,19 @@ class TestSplitQualityNote:
 
 class TestSchemaNotes:
     """gzd/mgrs_10km/hcat_top and the ftw:hcat_* properties get real descriptions."""
+
+    def test_field_id_columns_are_explained(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        collection = {"title": "T", "links": []}
+        stats = _stats(field_columns=["id", "crop:name", "source_id", "other_crop_names"])
+
+        agents = render_agents(collection, stats, [])
+
+        assert "- `id`: field identifier, unique in this table" in agents
+        assert "- `source_id`: the field's id in the source dataset" in agents
+        assert "- `other_crop_names`: for a parcel the source declared more than once" in agents
+        assert "`crop:name`" not in agents
 
     def test_grid_columns_have_specific_notes(self) -> None:
         from ftw_dataset_tools.api.docs import render_agents

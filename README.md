@@ -317,6 +317,37 @@ detected as identifiers and their values are not dumped.
 Options: `--top N` (max values per categorical column; `0` = all, safety-capped),
 `-c/--column` (show all values for a column, repeatable), `--no-geometry`, `--json`.
 
+### dedupe-fields
+
+Chips, masks, field outlines and field embeddings join on the fields' `id`, so it must
+be unique. `ftwd run` and `create-dataset` make it so right after writing
+`{name}_fields.parquet`, before the class filter; `create-chips`, `create-boundaries`,
+`create-masks` and `add-field-embeddings` refuse fields that repeat an id and point to
+this command, which does the same to any fields file:
+
+```bash
+ftwd dedupe-fields cz_2019.parquet cz_2019_unique.parquet
+# Of several declarations for one parcel, keep one the class filter includes
+ftwd dedupe-fields at_2024.parquet at_2024_unique.parquet --class-filter crops.yaml
+```
+
+Rows sharing an id are resolved by the first rule that fits them, comparing areas in an
+equal-area CRS (EPSG:6933):
+
+| Rule | When | Result |
+|------|------|--------|
+| exact | Same geometry and attributes; `metrics:*` within 0.01% | One row is kept |
+| parts | Same attributes apart from `metrics:*`; interiors don't overlap (summed area minus the union's under 1% of the smallest part); where there is `metrics:area`, every row has the same value and the union is 0.5–2× it | One row: the valid union of the parts, the source `metrics:area` and a recomputed bbox |
+| same_parcel | The same polygon (union within 1% of the smallest row) with different attributes, like two declarations of one parcel | One row: one whose class passes the class filter if there is one, then the first by geometry WKB and attributes. The other rows' crop names (`crop:name`, else the filter column, else `hcat:name`) go in the new list column `other_crop_names` |
+| renumbered | Anything else | Every row is kept as `<id>_1` … `<id>_k`, numbered by geometry WKB and attributes. `id` becomes text and every row gets `source_id`, the source's id |
+
+`other_crop_names` and `source_id` are only added to files where their rule applied;
+`source_id` is then on every row (equal to `id` unless the row was renumbered), so it is
+the column to join back to the source with. Each resolved row takes the place of its
+group's first row and other rows keep their order, so the output does not depend on
+how the source orders a group's rows. A file without duplicate ids is copied unchanged.
+Missing ids are left alone.
+
 ### create-dataset
 
 Create a complete training dataset from a single fields file. This is the main command that orchestrates the entire pipeline.

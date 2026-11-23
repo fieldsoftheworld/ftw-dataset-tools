@@ -1,9 +1,12 @@
 """CLI command for extracting polygon boundaries as lines."""
 
+from pathlib import Path
+
 import click
 from tqdm import tqdm
 
 from ftw_dataset_tools.api import boundaries
+from ftw_dataset_tools.commands.dedupe_fields import require_unique_ids
 
 
 @click.command("create-boundaries")
@@ -44,6 +47,9 @@ def create_boundaries_cmd(
         ftwd create-boundaries fields.parquet -o ./output/
         ftwd create-boundaries fields.parquet --prefix lines_
     """
+    source = Path(input_path)
+    for path in sorted(source.glob("**/*.parquet")) if source.is_dir() else [source]:
+        require_unique_ids(path)
     click.echo(f"Input: {input_path}")
     if output_dir:
         click.echo(f"Output directory: {output_dir}")
