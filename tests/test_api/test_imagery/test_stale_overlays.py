@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path  # noqa: TC003 - used at runtime in helpers
 from typing import TYPE_CHECKING
@@ -101,7 +102,7 @@ def _old_overlay(
     return overlay
 
 
-def _resume(tmp_path: Path, **kwargs) -> download_workflow.DownloadWorkflowResult:
+def _resume(tmp_path: Path, workers: int = 1, **kwargs) -> download_workflow.DownloadWorkflowResult:
     """A resumed download over the catalog, which must not download anything."""
     with (
         patch.object(download_workflow, "on_reference_grid", return_value=True),
@@ -109,7 +110,7 @@ def _resume(tmp_path: Path, **kwargs) -> download_workflow.DownloadWorkflowResul
             download_workflow, "download_and_clip_scene", side_effect=AssertionError("download")
         ),
     ):
-        result = download_workflow.download_imagery_for_catalog(tmp_path, workers=1, **kwargs)
+        result = download_workflow.download_imagery_for_catalog(tmp_path, workers=workers, **kwargs)
     assert result.failed == 0
     return result
 
@@ -120,6 +121,21 @@ def _thumbnail(chip_dir: Path, chip_id: str = CHIP) -> pystac.Asset:
 
 def _failing_draw(*_args, **_kwargs):
     raise ThumbnailError("cannot draw")
+
+
+def _concurrent_draws(parties: int):
+    """``overlay_refresh._draw`` that only finishes once ``parties`` draws run at once.
+
+    Drawn one at a time, the barrier times out and every draw fails.
+    """
+    barrier = threading.Barrier(parties, timeout=10)
+    draw = overlay_refresh._draw
+
+    def wait_then_draw(task):
+        barrier.wait()
+        return draw(task)
+
+    return patch.object(overlay_refresh, "_draw", wait_then_draw)
 
 
 class TestResumedDownloadRedrawsStaleOverlays:
@@ -137,18 +153,23 @@ class TestResumedDownloadRedrawsStaleOverlays:
         assert thumbnail.extra_fields["file:size"] == overlay.stat().st_size
         assert thumbnail.extra_fields[PREVIEW_SLOT_FIELD] == "planting"
 
-    def test_an_overlay_newer_than_its_mask_is_left_alone(self, tmp_path: Path) -> None:
+    def test_an_overlay_newer_than_its_mask_is_left_alone(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         chip_dir = _chip(tmp_path)
         overlay = _old_overlay(chip_dir)
         mask_mtime = (chip_dir / f"{CHIP}_semantic_3_class.tif").stat().st_mtime
         os.utime(overlay, (mask_mtime + 100, mask_mtime + 100))
         item_json = (chip_dir / f"{CHIP}.json").read_text()
 
-        result = _resume(tmp_path)
+        with caplog.at_level("INFO"):
+            result = _resume(tmp_path)
 
         assert result.previews_redrawn == 0
         assert overlay.read_bytes() == b"old overlay"
         assert (chip_dir / f"{CHIP}.json").read_text() == item_json
+        # Nothing redrawn, nothing logged about it.
+        assert "Redrew" not in caplog.text
 
     def test_no_overlay_is_drawn_without_a_mask(self, tmp_path: Path) -> None:
         chip_dir = _chip(tmp_path, mask=False)
@@ -219,15 +240,30 @@ class TestResumedDownloadRedrawsStaleOverlays:
             write_threads.add(threading.get_ident())
             return write(*args, **kwargs)
 
+        barrier = threading.Barrier(4, timeout=10)
+
+        def concurrent_draw(task):
+            barrier.wait()
+            return record_draw(task)
+
         with (
-            patch.object(overlay_refresh, "_draw", record_draw),
+            patch.object(overlay_refresh, "_draw", concurrent_draw),
             patch.object(overlay_refresh, "write_item", record_write),
         ):
             result = redraw_stale_overlays([c / f"{c.name}.json" for c in chips], workers=4)
 
-        assert result.redrawn == 4
+        assert (result.redrawn, result.failed) == (4, 0)
         assert threading.get_ident() not in draw_threads
         assert write_threads == {threading.get_ident()}
+
+    def test_the_download_workers_reach_the_redraw(self, tmp_path: Path) -> None:
+        for chip_id in ("chip_a", "chip_b"):
+            _old_overlay(_chip(tmp_path, chip_id), chip_id)
+
+        with _concurrent_draws(2):
+            result = _resume(tmp_path, workers=2)
+
+        assert (result.previews_redrawn, result.previews_redraw_failed) == (2, 0)
 
 
 class TestMissingSlotImage:
@@ -279,10 +315,37 @@ class TestRedrawFailure:
         with patch.object(chip_preview, "generate_overlay_thumbnail", _failing_draw):
             _resume(tmp_path)
 
-        _write_mask(chip_dir, CHIP)
-        _age(chip_dir / f"{CHIP}_planting_image_s2.webp", chip_dir)
+        # Rebuild the mask, as often as the clock's granularity needs for it to be
+        # newer than the image the failed draw marked; no mtime is set by hand.
+        base = chip_dir / f"{CHIP}_planting_image_s2.webp"
+        mask = _write_mask(chip_dir, CHIP)
+        deadline = time.monotonic() + 5
+        while mask.stat().st_mtime <= base.stat().st_mtime and time.monotonic() < deadline:
+            time.sleep(0.01)
+            _write_mask(chip_dir, CHIP)
 
         assert _resume(tmp_path).previews_redrawn == 1
+
+    def test_any_draw_error_falls_back_to_the_plain_preview_once(self, tmp_path: Path) -> None:
+        """Not only ThumbnailError: the old overlay is already gone when the draw raises."""
+        chip_dir = _chip(tmp_path)
+        overlay = _old_overlay(chip_dir)
+
+        def boom(*_args, **_kwargs):
+            raise ValueError("boom")
+
+        with patch.object(chip_preview, "generate_overlay_thumbnail", boom):
+            first = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+            second = redraw_stale_overlays([chip_dir / f"{CHIP}.json"], workers=1)
+
+        assert (first.redrawn, first.failed) == (0, 1)
+        assert (second.redrawn, second.failed) == (0, 0)
+        assert not overlay.exists()
+        thumbnail = _thumbnail(chip_dir)
+        assert thumbnail.href == f"./{CHIP}_planting_image_s2.webp"
+        assert thumbnail.extra_fields["file:size"] == (
+            (chip_dir / f"{CHIP}_planting_image_s2.webp").stat().st_size
+        )
 
     def test_an_unreadable_item_is_logged_not_raised(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture

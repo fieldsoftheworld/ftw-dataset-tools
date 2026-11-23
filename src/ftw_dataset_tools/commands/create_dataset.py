@@ -491,6 +491,12 @@ def create_dataset_cmd(
                 click.echo(f"  Skipped: {download_stats.skipped}")
             if download_stats.failed:
                 click.echo(click.style(f"  Failed: {download_stats.failed}", fg="red"))
+            if download_stats.previews_redrawn:
+                click.echo(f"  Previews redrawn: {download_stats.previews_redrawn}")
+            if download_stats.previews_redraw_failed:
+                click.echo(
+                    f"  Previews not redrawn: {download_stats.previews_redraw_failed} (see log)"
+                )
 
         result = dataset.create_dataset(
             fields_file=fields_file,

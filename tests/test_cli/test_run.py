@@ -519,6 +519,17 @@ class TestPrintSummaryImagery:
         out = capsys.readouterr().out
         assert "Imagery download: 2 ok, 0 skipped, 1 failed (first error: 404)" in out
 
+    def test_download_line_counts_redrawn_previews(self, tmp_path: Path, capsys) -> None:
+        result = self._download(skipped=5, previews_redrawn=3, previews_redraw_failed=1)
+
+        _print_summary(self._ctx(tmp_path, download=result))
+
+        out = capsys.readouterr().out
+        assert (
+            "Imagery download: 0 ok, 5 skipped, 0 failed, 3 previews redrawn, "
+            "1 previews could not be redrawn"
+        ) in out
+
     def test_no_lines_when_the_stages_did_not_run(self, tmp_path: Path, capsys) -> None:
         _print_summary(self._ctx(tmp_path))
 

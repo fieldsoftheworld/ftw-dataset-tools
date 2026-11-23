@@ -127,26 +127,55 @@ def _mark_attempted(task: _RedrawTask) -> None:
         os.utime(base)
 
 
-def _apply(outcome: ParallelOutcome[_RedrawTask, bool], result: OverlayRedrawResult) -> None:
-    """Write the chip's item and count the outcome (calling thread)."""
+def _fall_back_to_plain(task: _RedrawTask) -> None:
+    """After a draw that raised: the plain slot preview as thumbnail, or none.
+
+    The draw may have removed the old overlay already (or left a partial one), so the
+    item must not keep pointing at it.
+    """
+    chip_dir = task.item_path.parent
+    (chip_dir / f"{task.item.id}_overlay{PREVIEW_SUFFIX}").unlink(missing_ok=True)
+    task.item.assets.pop("thumbnail", None)
+    slot = task.slot or best_slot_preview(chip_dir, task.item.id)
+    if slot is not None:
+        refresh_chip_preview(task.item, chip_dir, slot, checksums=task.checksums)
+
+
+def _settle(outcome: ParallelOutcome[_RedrawTask, bool]) -> bool | None:
+    """Write the chip's item after its draw (calling thread).
+
+    Returns True when the overlay was drawn, False when it could not be, and None when
+    no preview image was left to draw it from.
+    """
     task = outcome.task
     if outcome.error is not None:
-        result.failed += 1
-        logger.warning(f"{task.item.id}: could not redraw the chip preview: {outcome.error}")
-        return
+        logger.warning(f"{task.item.id}: could not draw the chip overlay: {outcome.error}")
+        _fall_back_to_plain(task)
+    drawn = outcome.error is None and bool(outcome.value)
+    write_item(task.item, task.item_path)
+    if drawn:
+        return True
+    _mark_attempted(task)
+    return False if task.item.assets.get("thumbnail") is not None else None
+
+
+def _apply(outcome: ParallelOutcome[_RedrawTask, bool], result: OverlayRedrawResult) -> None:
+    """Settle one chip and count it once (calling thread)."""
+    task = outcome.task
     try:
-        write_item(task.item, task.item_path)
-        if not outcome.value:
-            _mark_attempted(task)
+        drawn = _settle(outcome)
     except (OSError, ValueError, pystac.STACError) as err:
         result.failed += 1
         logger.warning(f"{task.item.id}: could not redraw the chip preview: {err}")
         return
-    if outcome.value:
+    if drawn:
         result.redrawn += 1
-    elif task.item.assets.get("thumbnail") is not None:
+    elif drawn is False:
         result.failed += 1
-        logger.warning(f"{task.item.id}: could not draw the chip overlay; kept the plain preview")
+        if outcome.error is None:
+            logger.warning(
+                f"{task.item.id}: could not draw the chip overlay; kept the plain preview"
+            )
 
 
 def _stale_tasks(item_paths: Iterable[Path], result: OverlayRedrawResult) -> list[_RedrawTask]:
@@ -178,8 +207,9 @@ def redraw_stale_overlays(
     result = OverlayRedrawResult()
     tasks = _stale_tasks(item_paths, result)
     run_in_parallel(tasks, _draw, lambda outcome: _apply(outcome, result), workers=workers)
-    logger.info(
-        f"Redrew {result.redrawn} chip preview(s) older than their masks"
-        + (f"; {result.failed} could not be drawn" if result.failed else "")
-    )
+    if result.redrawn or result.failed:
+        logger.info(
+            f"Redrew {result.redrawn} chip preview(s) older than their masks"
+            + (f"; {result.failed} could not be drawn" if result.failed else "")
+        )
     return result

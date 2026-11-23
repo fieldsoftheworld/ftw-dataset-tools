@@ -167,6 +167,10 @@ def download_images_cmd(
     click.echo(f"  Downloaded: {result.successful}")
     click.echo(f"  Skipped: {len(skipped)}")
     click.echo(f"  Failed: {len(failed)}")
+    if result.previews_redrawn:
+        click.echo(f"  Previews redrawn: {result.previews_redrawn}")
+    if result.previews_redraw_failed:
+        click.echo(f"  Previews not redrawn: {result.previews_redraw_failed} (see log)")
 
     if skipped:
         # Count skipped by reason

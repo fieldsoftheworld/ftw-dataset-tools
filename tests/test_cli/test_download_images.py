@@ -271,6 +271,25 @@ class TestDownloadImagesWorkers:
 class TestDownloadImagesOutput:
     """What the command prints and reports around the shared workflow."""
 
+    def test_prints_the_redrawn_previews(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api.imagery.download_workflow import DownloadWorkflowResult
+
+        dataset_dir = _write_catalog(tmp_path, ["chip_000"])
+        monkeypatch.setattr(
+            "ftw_dataset_tools.commands.download_images.download_imagery_for_catalog",
+            lambda *_args, **_kwargs: DownloadWorkflowResult(
+                skipped=2, previews_redrawn=3, previews_redraw_failed=1
+            ),
+        )
+
+        result = CliRunner().invoke(cli, ["download-images", str(dataset_dir)])
+
+        assert result.exit_code == 0, result.output
+        assert "Previews redrawn: 3" in result.output
+        assert "Previews not redrawn: 1 (see log)" in result.output
+
     @pytest.mark.parametrize("verbose", [False, True])
     def test_grid_lines_need_verbose(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verbose: bool

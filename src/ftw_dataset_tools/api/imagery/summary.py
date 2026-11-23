@@ -18,10 +18,23 @@ def imagery_summary_line(label: str, result: Any) -> str:
     run in which every chip failed still printed only "Imagery selected: 0".
     """
     line = f"  {label}: {result.successful} ok, {result.skipped} skipped, {result.failed} failed"
+    line += previews_redrawn_text(result)
     if result.failed_details:
         first = result.failed_details[0].get("error", "unknown error")
         line += f" (first error: {first})"
     return line
+
+
+def previews_redrawn_text(result: Any) -> str:
+    """``", N previews redrawn, M not redrawn"``, for the counts above zero (else "")."""
+    parts = []
+    redrawn = getattr(result, "previews_redrawn", 0)
+    not_redrawn = getattr(result, "previews_redraw_failed", 0)
+    if redrawn:
+        parts.append(f"{redrawn} previews redrawn")
+    if not_redrawn:
+        parts.append(f"{not_redrawn} previews could not be redrawn")
+    return "".join(f", {part}" for part in parts)
 
 
 def selection_summary_lines(result: MultiModeSelectionResult) -> list[str]:
