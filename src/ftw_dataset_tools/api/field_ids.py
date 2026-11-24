@@ -1032,15 +1032,16 @@ def _rewrite_ids(path: Path, tmp: Path, id_col: str) -> None:
 
     if _native_geometry_columns(path):
         import geoarrow.pyarrow  # noqa: F401  (keeps a GEOMETRY column native; see _with_source_schema)
-    source = pq.ParquetFile(path)
-    schema = source.schema_arrow
-    index = schema.get_field_index(id_col)
-    with pq.ParquetWriter(tmp, schema, compression="zstd", compression_level=_ZSTD_LEVEL) as writer:
-        for i in range(source.num_row_groups):
-            table = source.read_row_group(i)
-            ids = pc.replace_substring_regex(table.column(index), r"\.0+$", "")
-            writer.write_table(table.set_column(index, schema.field(index), ids))
-    source.close()
+    with pq.ParquetFile(path) as source:
+        schema = source.schema_arrow
+        index = schema.get_field_index(id_col)
+        with pq.ParquetWriter(
+            tmp, schema, compression="zstd", compression_level=_ZSTD_LEVEL
+        ) as writer:
+            for i in range(source.num_row_groups):
+                table = source.read_row_group(i)
+                ids = pc.replace_substring_regex(table.column(index), r"\.0+$", "")
+                writer.write_table(table.set_column(index, schema.field(index), ids))
 
 
 def strip_float_suffix(path: Path | str, id_col: str = ID_COLUMN) -> int:
