@@ -210,7 +210,13 @@ def top_codes(
         columns = _columns(con, parquet)
         if code_col not in columns:
             return []
-        name_expr = f'MIN("{name_col}")' if name_col in columns else "CAST(NULL AS VARCHAR)"
+        # A code can carry several names in the source; show the most common one
+        # (ties broken alphabetically), not the alphabetically first.
+        name_expr = (
+            f'MODE("{name_col}" ORDER BY "{name_col}")'
+            if name_col in columns
+            else "CAST(NULL AS VARCHAR)"
+        )
         geom_col = detect_geometry_column(parquet, con) or "geometry"
         weight_expr = "COUNT(*)" if weight == "count" else f'SUM(ST_Area("{geom_col}"))'
         rows = con.execute(
