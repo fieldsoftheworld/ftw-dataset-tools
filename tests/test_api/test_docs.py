@@ -1308,6 +1308,7 @@ class TestV2MaskFacts:
         assert "`field_boundaries` (`<chip>_fields.parquet`)" in text
         assert "in the mask CRS" in text
         assert "columns except its bbox columns" in text
+        assert "Fields narrower than about one mask pixel can have no pixels" in text
         assert "`instance_labels` (`<chip>_instance_labels.json`)" in text
 
     def test_readme_gives_the_grid_under_provenance(self) -> None:

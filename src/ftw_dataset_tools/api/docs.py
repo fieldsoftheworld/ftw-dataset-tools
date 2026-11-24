@@ -715,7 +715,9 @@ _CHIP_FILE_NOTES = {
     "field_boundaries": (
         "`field_boundaries` (`<chip>_fields.parquet`): the chip's field outlines as "
         "GeoParquet, clipped to the chip and in the mask CRS, with the fields file's "
-        "columns except its bbox columns."
+        "columns except its bbox columns. Fields narrower than about one mask pixel "
+        "can have no pixels of their own in the masks, because their boundary lines "
+        "cover them; they are still listed here, with their ids."
     ),
     "instance_labels": (
         "`instance_labels` (`<chip>_instance_labels.json`): maps each instance mask value "
