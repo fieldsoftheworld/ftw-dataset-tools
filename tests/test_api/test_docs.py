@@ -1308,7 +1308,7 @@ class TestV2MaskFacts:
         assert "`field_boundaries` (`<chip>_fields.parquet`)" in text
         assert "in the mask CRS" in text
         assert "columns except its bbox columns" in text
-        assert "Fields narrower than about one mask pixel can have no pixels" in text
+        assert "Fields narrower than about the boundary line width (10 m)" in text
         assert "`instance_labels` (`<chip>_instance_labels.json`)" in text
 
     def test_readme_gives_the_grid_under_provenance(self) -> None:
@@ -1336,6 +1336,8 @@ class TestV2MaskFacts:
             "they touch (one to two pixels wide)." in agents
         )
         assert "rather than the" not in agents
+        assert "Fields narrower than about two mask pixels (5 m) can have no pixels" in agents
+        assert "not in `<chip>_instance_labels.json`" in agents
 
         readme = render_readme({"links": [], "ftw:mask_resolution_m": 2.5}, stats, [], {})
         assert "- Masks rasterized at 2.5 m per pixel" in readme
@@ -1343,6 +1345,16 @@ class TestV2MaskFacts:
             "- Field boundary lines are burned into every pixel they touch (one to two pixels wide)"
             in readme
         )
+
+    def test_no_narrow_field_note_without_chip_outlines(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        stats = self._v2_stats()
+        stats["chip_files"] = [f for f in stats["chip_files"] if f != "field_boundaries"]
+
+        text = render_agents({"title": "T", "links": []}, stats, [])
+
+        assert "Fields narrower than" not in text
 
     def test_presence_only_note(self) -> None:
         from ftw_dataset_tools.api.docs import render_agents

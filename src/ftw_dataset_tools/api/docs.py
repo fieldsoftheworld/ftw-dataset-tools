@@ -715,9 +715,7 @@ _CHIP_FILE_NOTES = {
     "field_boundaries": (
         "`field_boundaries` (`<chip>_fields.parquet`): the chip's field outlines as "
         "GeoParquet, clipped to the chip and in the mask CRS, with the fields file's "
-        "columns except its bbox columns. Fields narrower than about one mask pixel "
-        "can have no pixels of their own in the masks, because their boundary lines "
-        "cover them; they are still listed here, with their ids."
+        "columns except its bbox columns."
     ),
     "instance_labels": (
         "`instance_labels` (`<chip>_instance_labels.json`): maps each instance mask value "
@@ -779,8 +777,33 @@ def _mask_notes(stats: dict, *, grid: bool = True) -> list[str]:
         _unknown_note(stats, facts),
         _decode_note(stats, facts),
         *_chip_file_notes(stats),
+        _narrow_field_note(stats, facts),
     ]
     return [note for note in notes if note]
+
+
+def _narrow_field_note(stats: dict, facts: dict) -> str | None:
+    """Which fields the masks cannot show, by how the collection's lines were drawn.
+
+    A field keeps a pixel only where the pixel's centre is inside it and its own line
+    misses the pixel: lines through every pixel they touch leave nothing inside a field
+    under about two pixels wide, and wide lines nothing inside one under their width.
+    """
+    if "field_boundaries" not in (stats.get("chip_files") or []):
+        return None
+    width = facts.get("boundary_width_m")
+    resolution = facts.get("resolution_m")
+    if width:
+        limit = f"about the boundary line width ({float(width):g} m)"
+    elif resolution:
+        limit = f"about two mask pixels ({2 * float(resolution):g} m)"
+    else:
+        limit = "about two mask pixels"
+    return (
+        f"Fields narrower than {limit} can have no pixels of their own in the masks, "
+        "because their boundary lines cover them. They are still in "
+        "`<chip>_fields.parquet` with their ids, but not in `<chip>_instance_labels.json`."
+    )
 
 
 def _chip_file_notes(stats: dict) -> list[str]:
