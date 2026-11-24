@@ -992,3 +992,50 @@ def _dedupe(
     metadata = _kv_metadata(src, layout, resolved, result.added_columns, rows)
     text_id = layout.id_col if SOURCE_ID_COLUMN in result.added_columns else None
     return _Written(written, metadata, text_id)
+
+
+#: An id that is a whole number written as a float, as some harmonized sources store
+#: integer ids converted to text (Austria's ``'432033.0'``).
+_FLOAT_ID_PATTERN = r"[0-9]+\.0+"
+
+
+def strip_float_suffix(path: Path | str, id_col: str = ID_COLUMN) -> int:
+    """Store whole-number ids written as floats without their fraction, in place.
+
+    ``'432033.0'`` becomes ``'432033'``, the value its instance masks already carry,
+    so the ids join to them as text. Only a text id column whose every non-null value
+    has that form is rewritten; any other file is left alone. Returns the number of
+    ids rewritten, 0 when the file was left alone.
+    """
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    path = Path(path)
+    source = pq.ParquetFile(path)
+    schema = source.schema_arrow
+    index = schema.get_field_index(id_col)
+    id_type = schema.field(index).type if index >= 0 else None
+    if id_type is None or not (pa.types.is_string(id_type) or pa.types.is_large_string(id_type)):
+        return 0
+    con = duckdb.connect(":memory:")
+    try:
+        total, floats = con.execute(f"""
+            SELECT count({_quote(id_col)}),
+                   count(*) FILTER (WHERE regexp_full_match({_quote(id_col)}, '{_FLOAT_ID_PATTERN}'))
+            FROM read_parquet('{sql_path(path)}')
+        """).fetchone()
+    finally:
+        con.close()
+    if total == 0 or floats != total:
+        return 0
+    tmp = path.with_name(f".{path.name}.ids.tmp")
+    try:
+        with pq.ParquetWriter(tmp, schema, compression="zstd") as writer:
+            for batch in source.iter_batches():
+                columns = list(batch.columns)
+                columns[index] = pc.replace_substring_regex(columns[index], r"\.0+$", "")
+                writer.write_batch(pa.RecordBatch.from_arrays(columns, schema=schema))
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return total

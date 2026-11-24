@@ -2472,6 +2472,22 @@ class TestUniqueFieldIds:
         pipeline.run_pipeline(ctx, ["filter", "chips"])
         assert ran == ["filter", "chips"]
 
+    def test_reproject_stores_float_ids_as_whole_numbers(self, tmp_path: Path) -> None:
+        """Ids like '1.0' become '1' before the duplicates are resolved."""
+        left, right = box(10.0, 50.0, 10.01, 50.01), box(10.01, 50.0, 10.02, 50.01)
+        path = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame(
+            {"id": ["1.0", "2.0", "2.00"], "crop": ["wheat", "wheat", "maize"]},
+            geometry=[left, right, box(10.0, 50.02, 10.01, 50.03)],
+            crs="EPSG:4326",
+        ).to_parquet(path)
+        ctx = pipeline.build_context(_config(path, tmp_path / "out", name="ds", year=2023))
+
+        pipeline.run_pipeline(ctx, ["reproject"])
+
+        # '2.0' and '2.00' are one id once stripped, so the dedupe step renumbers them.
+        assert sorted(self._ids(ctx.output_fields_path)) == ["1", "2_1", "2_2"]
+
     def test_a_later_stage_runs_on_unique_ids(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
