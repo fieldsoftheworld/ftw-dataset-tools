@@ -942,7 +942,7 @@ def _mask_config_lines(collection: dict, config_dict: dict, masks: dict) -> list
         lines.append(f"- Field boundary lines are {facts['boundary_width_m']:g} m wide")
     elif _grid_is_notable(facts):
         lines.append(
-            "- Field boundary lines are burned into every pixel they touch (one to two wide)"
+            "- Field boundary lines are burned into every pixel they touch (one to two pixels wide)"
         )
     return lines
 

@@ -756,7 +756,7 @@ def _rasterize_mask(
 ) -> np.ndarray:
     """Burn field polygons and boundary lines into a label array.
 
-    Lines are burned one pixel wide (``all_touched``) unless ``boundary_width`` gives
+    Lines are burned into every pixel they touch (``all_touched``, one to two pixels wide) unless ``boundary_width`` gives
     their width in the raster CRS's units; ``line_bounds`` then widens their query so a
     line just outside the raster still reaches into it.
 

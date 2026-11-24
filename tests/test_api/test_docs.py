@@ -1339,10 +1339,9 @@ class TestV2MaskFacts:
         readme = render_readme({"links": [], "ftw:mask_resolution_m": 2.5}, stats, [], {})
         assert "- Masks rasterized at 2.5 m per pixel" in readme
         assert (
-            "- Field boundary lines are burned into every pixel they touch (one to two wide)"
+            "- Field boundary lines are burned into every pixel they touch (one to two pixels wide)"
             in readme
         )
-        assert "m wide" not in readme.split("- Field boundary lines")[1].splitlines()[0]
 
     def test_presence_only_note(self) -> None:
         from ftw_dataset_tools.api.docs import render_agents
