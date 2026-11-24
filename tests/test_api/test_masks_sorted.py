@@ -237,3 +237,13 @@ class TestCreateMasksOnSortedCopies:
         _instance_mask(tmp_path)
 
         assert not stale.exists()
+
+    def test_a_live_runs_copies_are_kept(self, tmp_path) -> None:
+        import os
+
+        live = tmp_path / "masks" / f".sorted-inputs-{os.getppid()}-x"
+        live.mkdir(parents=True)
+
+        _instance_mask(tmp_path)
+
+        assert live.exists()

@@ -579,6 +579,29 @@ def _with_sorted_inputs(
     return [replace(task, **changes) for task in work_items] if changes else work_items
 
 
+def _remove_stale_sorted_dirs(output_dir: Path) -> None:
+    """Remove sorted copies a killed run left in ``output_dir``; a live process keeps its own.
+
+    Each run's folder is named ``<prefix><pid>-...``, so one that a run still going
+    in the same folder is using is skipped.
+    """
+    for folder in output_dir.glob(f"{_SORTED_DIR_PREFIX}*"):
+        pid = folder.name[len(_SORTED_DIR_PREFIX) :].split("-", 1)[0]
+        if pid.isdigit() and _process_alive(int(pid)):
+            continue
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _get_geometries_in_bounds(
     conn: duckdb.DuckDBPyConnection,
     file_path: Path,
@@ -1987,12 +2010,11 @@ def create_masks(
     if on_start:
         on_start(total_grids, total_cells, total_tasks)
 
-    # A killed run leaves its copies behind; nothing else writes this prefix.
-    for stale in output_path.glob(f"{_SORTED_DIR_PREFIX}*"):
-        shutil.rmtree(stale, ignore_errors=True)
+    _remove_stale_sorted_dirs(output_path)
     # The sort runs before any worker starts, so it can have half the RAM.
     sort_memory_mb = total_ram // (2 * 1024 * 1024) if total_ram else memory_limit_mb
-    with tempfile.TemporaryDirectory(prefix=_SORTED_DIR_PREFIX, dir=output_path) as tmp_dir:
+    prefix = f"{_SORTED_DIR_PREFIX}{os.getpid()}-"
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=output_path) as tmp_dir:
         work_items = _with_sorted_inputs(work_items, Path(tmp_dir), sort_memory_mb)
         results, failures, pool_restarts = _run_work_items(
             work_items, num_workers, total_tasks, on_progress
