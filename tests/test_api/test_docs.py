@@ -1330,12 +1330,18 @@ class TestV2MaskFacts:
         stats = self._v2_stats()
         stats["mask_facts"] = {**stats["mask_facts"], "boundary_width_m": None}
         agents = render_agents({"title": "T", "links": []}, stats, [])
-        assert "Masks are 2.5 m per pixel, with field boundary lines one pixel wide." in agents
+        assert (
+            "Masks are 2.5 m per pixel, with field boundary lines burned into every pixel "
+            "they touch (one to two pixels wide)." in agents
+        )
         assert "rather than the" not in agents
 
         readme = render_readme({"links": [], "ftw:mask_resolution_m": 2.5}, stats, [], {})
         assert "- Masks rasterized at 2.5 m per pixel" in readme
-        assert "- Field boundary lines are one pixel wide" in readme
+        assert (
+            "- Field boundary lines are burned into every pixel they touch (one to two wide)"
+            in readme
+        )
         assert "m wide" not in readme.split("- Field boundary lines")[1].splitlines()[0]
 
     def test_presence_only_note(self) -> None:
