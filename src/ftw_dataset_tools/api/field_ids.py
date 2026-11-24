@@ -999,23 +999,19 @@ def _dedupe(
 _FLOAT_ID_PATTERN = r"[0-9]+\.0+"
 
 
-def strip_float_suffix(path: Path | str, id_col: str = ID_COLUMN) -> int:
-    """Store whole-number ids written as floats without their fraction, in place.
-
-    ``'432033.0'`` becomes ``'432033'``, the value its instance masks already carry,
-    so the ids join to them as text. Only a text id column whose every non-null value
-    has that form is rewritten; any other file is left alone. Returns the number of
-    ids rewritten, 0 when the file was left alone.
-    """
-    import pyarrow.compute as pc
+def _has_text_column(path: Path, column: str) -> bool:
     import pyarrow.parquet as pq
 
-    path = Path(path)
-    source = pq.ParquetFile(path)
-    schema = source.schema_arrow
-    index = schema.get_field_index(id_col)
-    id_type = schema.field(index).type if index >= 0 else None
-    if id_type is None or not (pa.types.is_string(id_type) or pa.types.is_large_string(id_type)):
+    schema = pq.read_schema(path)
+    if column not in schema.names:
+        return False
+    kind = schema.field(column).type
+    return pa.types.is_string(kind) or pa.types.is_large_string(kind)
+
+
+def _all_float_ids(path: Path, id_col: str) -> int:
+    """The number of non-null ids, when every one is a whole number written as a float; else 0."""
+    if not _has_text_column(path, id_col):
         return 0
     con = duckdb.connect(":memory:")
     try:
@@ -1026,15 +1022,46 @@ def strip_float_suffix(path: Path | str, id_col: str = ID_COLUMN) -> int:
         """).fetchone()
     finally:
         con.close()
-    if total == 0 or floats != total:
+    return total if total and floats == total else 0
+
+
+def _rewrite_ids(path: Path, tmp: Path, id_col: str) -> None:
+    """Write ``path`` to ``tmp`` with ``id_col``'s float fraction dropped, row group by row group."""
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    if _native_geometry_columns(path):
+        import geoarrow.pyarrow  # noqa: F401  (keeps a GEOMETRY column native; see _with_source_schema)
+    source = pq.ParquetFile(path)
+    schema = source.schema_arrow
+    index = schema.get_field_index(id_col)
+    with pq.ParquetWriter(tmp, schema, compression="zstd", compression_level=_ZSTD_LEVEL) as writer:
+        for i in range(source.num_row_groups):
+            table = source.read_row_group(i)
+            ids = pc.replace_substring_regex(table.column(index), r"\.0+$", "")
+            writer.write_table(table.set_column(index, schema.field(index), ids))
+    source.close()
+
+
+def strip_float_suffix(path: Path | str, id_col: str = ID_COLUMN) -> int:
+    """Store whole-number ids written as floats without their fraction, in place.
+
+    ``'432033.0'`` becomes ``'432033'``, the value its instance masks already carry,
+    so the ids join to them as text. Only a text id column whose every non-null value
+    has that form is rewritten; any other file (integer, dictionary-encoded or mixed
+    ids) is left alone. Ids that differ only in their fraction (``'2.0'``, ``'2.00'``)
+    become one id, which the dedupe step then resolves, and a renumbered row's
+    ``source_id`` holds the id without its fraction. Rows, row groups, every other
+    column and the file metadata are kept. Returns the number of ids rewritten, 0
+    when the file was left alone.
+    """
+    path = Path(path)
+    total = _all_float_ids(path, id_col)
+    if not total:
         return 0
     tmp = path.with_name(f".{path.name}.ids.tmp")
     try:
-        with pq.ParquetWriter(tmp, schema, compression="zstd") as writer:
-            for batch in source.iter_batches():
-                columns = list(batch.columns)
-                columns[index] = pc.replace_substring_regex(columns[index], r"\.0+$", "")
-                writer.write_batch(pa.RecordBatch.from_arrays(columns, schema=schema))
+        _rewrite_ids(path, tmp, id_col)
         tmp.replace(path)
     finally:
         tmp.unlink(missing_ok=True)
