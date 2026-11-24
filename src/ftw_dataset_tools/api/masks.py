@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import os
 import re
+import shutil
+import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -31,6 +34,7 @@ from ftw_dataset_tools.api.label_extent import (
     extent_pieces,
     load_label_extent,
 )
+from ftw_dataset_tools.api.logging_config import get_logger
 from ftw_dataset_tools.api.raster_stats import compute_band_stats, embed_band_stats
 
 if TYPE_CHECKING:
@@ -48,6 +52,9 @@ class MaskType(str, Enum):
     SEMANTIC_3_CLASS = "semantic_3_class"
     DECODE_BOUNDARY = "decode_boundary"
     DECODE_DISTANCE = "decode_distance"
+
+
+logger = get_logger(__name__)
 
 
 def get_mask_filename(grid_id: str, mask_type: MaskType, year: int | None = None) -> str:
@@ -466,6 +473,135 @@ def _bbox_prefilter(
     )
 
 
+# Rows per row group in the sorted copies: few enough that a chip's bbox test skips all
+# but a group or two (0.06 s instead of 4 s a chip on France's 7.7M lines).
+_SORTED_ROW_GROUP = 30_000
+
+# Column of a sorted copy holding each row's position in the file it was copied from.
+_SOURCE_ROW_COL = "__ftwd_source_row"
+
+# Folder in the masks output dir that holds a run's sorted copies.
+_SORTED_DIR_PREFIX = ".sorted-inputs-"
+
+
+def _spatially_sorted_copy(
+    path: Path, geom_col: str, dest: Path, memory_limit_mb: int
+) -> Path | None:
+    """Write ``path`` to ``dest`` in Hilbert order of its bboxes, or None if it can't be.
+
+    Earlier stages write rows in no spatial order, so every row group can span the
+    whole dataset; the bbox prefilter then skips nothing and each chip's query decodes
+    the file. The copy adds ``_SOURCE_ROW_COL`` so queries can restore the original
+    order, and keeps the source's ``geo`` metadata (CRS, bbox covering). None when the
+    file has no trusted bbox column, no rows or a non-finite extent, the copy fails, or
+    its bbox column isn't trusted either: the caller then keeps the original.
+    """
+    sides = _cached_bbox_covering(path, geom_col)
+    if sides is None:
+        return None
+    try:
+        written = _write_sorted_copy(path, sides, dest, memory_limit_mb)
+    except (duckdb.Error, OSError) as exc:
+        logger.warning(f"Reading {path.name} unsorted: its sorted copy failed ({exc})")
+        written = False
+    if written and _cached_bbox_covering(dest, geom_col) is not None:
+        return dest
+    dest.unlink(missing_ok=True)
+    return None
+
+
+def _write_sorted_copy(path: Path, sides: dict[str, str], dest: Path, memory_limit_mb: int) -> bool:
+    """The copy ``_spatially_sorted_copy`` describes; False when the extent isn't finite."""
+    import pyarrow.parquet as pq
+
+    geo = (pq.read_schema(path).metadata or {}).get(b"geo", b"").decode()
+    kv = ", KV_METADATA {geo: '" + geo.replace("'", "''") + "'}" if geo else ""
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.execute(f"SET memory_limit = '{memory_limit_mb}MB'")
+        conn.execute(f"SET temp_directory = '{sql_path(dest.parent)}'")
+        ensure_spatial_loaded(conn)
+        source = f"read_parquet('{sql_path(path)}', file_row_number = true)"
+        extent = conn.execute(
+            f"SELECT min({sides['xmin']}), min({sides['ymin']}), "
+            f"max({sides['xmax']}), max({sides['ymax']}) FROM {source}"
+        ).fetchone()
+        if extent is None or not all(v is not None and math.isfinite(v) for v in extent):
+            return False
+        box = "{{'min_x': {!r}, 'min_y': {!r}, 'max_x': {!r}, 'max_y': {!r}}}::BOX_2D".format(
+            *extent
+        )
+        conn.execute(f"""
+            COPY (
+                SELECT * EXCLUDE (file_row_number), file_row_number AS "{_SOURCE_ROW_COL}"
+                FROM {source}
+                ORDER BY ST_Hilbert(
+                    ({sides["xmin"]} + {sides["xmax"]}) / 2,
+                    ({sides["ymin"]} + {sides["ymax"]}) / 2,
+                    {box}
+                )
+            ) TO '{sql_path(dest)}' (FORMAT PARQUET, ROW_GROUP_SIZE {_SORTED_ROW_GROUP}{kv})
+        """)
+    finally:
+        conn.close()
+    return True
+
+
+def _with_sorted_inputs(
+    work_items: list[_MaskTask], tmp_dir: Path, memory_limit_mb: int
+) -> list[_MaskTask]:
+    """The tasks, reading Hilbert-sorted copies of their fields and lines in ``tmp_dir``.
+
+    Every task shares the same two files. The order of the lines doesn't matter (they
+    are all burned with one value), so only the fields' copy is read in source order.
+    """
+    if not work_items:
+        return work_items
+    logger.info("Sorting fields and lines by location for the chip queries...")
+    first = work_items[0]
+    changes: dict = {}
+    fields = _spatially_sorted_copy(
+        Path(first.boundaries_path),
+        first.boundaries_geom_col,
+        tmp_dir / "fields.parquet",
+        memory_limit_mb,
+    )
+    if fields is not None:
+        changes.update(boundaries_path=str(fields), boundaries_order_col=_SOURCE_ROW_COL)
+    lines = _spatially_sorted_copy(
+        Path(first.boundary_lines_path),
+        first.boundary_lines_geom_col,
+        tmp_dir / "lines.parquet",
+        memory_limit_mb,
+    )
+    if lines is not None:
+        changes["boundary_lines_path"] = str(lines)
+    return [replace(task, **changes) for task in work_items] if changes else work_items
+
+
+def _remove_stale_sorted_dirs(output_dir: Path) -> None:
+    """Remove sorted copies a killed run left in ``output_dir``; a live process keeps its own.
+
+    Each run's folder is named ``<prefix><pid>-...``, so one that a run still going
+    in the same folder is using is skipped.
+    """
+    for folder in output_dir.glob(f"{_SORTED_DIR_PREFIX}*"):
+        pid = folder.name[len(_SORTED_DIR_PREFIX) :].split("-", 1)[0]
+        if pid.isdigit() and _process_alive(int(pid)):
+            continue
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _get_geometries_in_bounds(
     conn: duckdb.DuckDBPyConnection,
     file_path: Path,
@@ -473,8 +609,13 @@ def _get_geometries_in_bounds(
     bounds: tuple[float, float, float, float],
     id_col: str | None = None,
     crop_column: str | None = None,
+    order_col: str | None = None,
 ) -> list[tuple]:
-    """Get geometries from a parquet file that intersect the given bounds."""
+    """Get geometries from a parquet file that intersect the given bounds.
+
+    ``order_col`` names a column holding each row's position in the file the rows
+    were copied from (see ``_spatially_sorted_copy``); rows come back in that order.
+    """
     minx, miny, maxx, maxy = bounds
 
     # Build query
@@ -498,10 +639,13 @@ def _get_geometries_in_bounds(
         )
     """
 
-    # Without a crop column rows keep the file's order (DuckDB preserves it): where
-    # fields overlap the later row wins, and a chip numbered 1..n follows that order.
+    # Without a crop column rows keep the file's order (DuckDB preserves it), or the
+    # original file's for a sorted copy: where fields overlap the later row wins, and a
+    # chip numbered 1..n follows that order.
     if crop_column is not None:
         query += " ORDER BY id, wkt, crop"
+    elif order_col is not None:
+        query += f' ORDER BY "{order_col}"'
 
     return conn.execute(query).fetchall()
 
@@ -704,6 +848,8 @@ class _MaskTask:
     # Boundary lines buffered to this width in metres (UTM grids); None burns them
     # one pixel wide, whatever the resolution.
     boundary_width: float | None = None
+    # Set when boundaries_path is a sorted copy: its column of source row numbers.
+    boundaries_order_col: str | None = None
 
 
 def _grid_raster_geometry(
@@ -753,6 +899,7 @@ def _rasterize_mask(
     label_extent: LabelExtent | None = None,
     boundary_width: float | None = None,
     line_bounds: tuple[float, float, float, float] | None = None,
+    boundaries_order_col: str | None = None,
 ) -> np.ndarray:
     """Burn field polygons and boundary lines into a label array.
 
@@ -798,6 +945,7 @@ def _rasterize_mask(
             bounds,
             id_col=id_col,
             crop_column=crop_column,
+            order_col=boundaries_order_col,
         )
         # Rasterize with ID values
         if boundaries:
@@ -1071,6 +1219,7 @@ def _create_masks_for_cell(
     cell_wkt: str | None = None,
     label_extent: LabelExtent | None = None,
     boundary_width: float | None = None,
+    boundaries_order_col: str | None = None,
 ) -> list[tuple[MaskType, MaskResult]]:
     """Rasterize ``source_type`` once for a grid cell and write every output from it.
 
@@ -1119,6 +1268,7 @@ def _create_masks_for_cell(
         label_extent=label_extent,
         boundary_width=boundary_width,
         line_bounds=line_bounds,
+        boundaries_order_col=boundaries_order_col,
     )
 
     results: list[tuple[MaskType, MaskResult]] = []
@@ -1216,6 +1366,7 @@ def _create_masks_with_retry(
                 cell_wkt=task.cell_wkt,
                 label_extent=task.label_extent,
                 boundary_width=task.boundary_width,
+                boundaries_order_col=task.boundaries_order_col,
             )
             return (results, None)
         except _PartialCellFailure as exc:
@@ -1859,9 +2010,15 @@ def create_masks(
     if on_start:
         on_start(total_grids, total_cells, total_tasks)
 
-    results, failures, pool_restarts = _run_work_items(
-        work_items, num_workers, total_tasks, on_progress
-    )
+    _remove_stale_sorted_dirs(output_path)
+    # The sort runs before any worker starts, so it can have half the RAM.
+    sort_memory_mb = total_ram // (2 * 1024 * 1024) if total_ram else memory_limit_mb
+    prefix = f"{_SORTED_DIR_PREFIX}{os.getpid()}-"
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=output_path) as tmp_dir:
+        work_items = _with_sorted_inputs(work_items, Path(tmp_dir), sort_memory_mb)
+        results, failures, pool_restarts = _run_work_items(
+            work_items, num_workers, total_tasks, on_progress
+        )
     return _results_by_type(mask_types, results, failures, pool_restarts, existing, field_dataset)
 
 
