@@ -1356,6 +1356,17 @@ class TestV2MaskFacts:
 
         assert "Fields narrower than" not in text
 
+    def test_narrow_field_note_names_instance_labels_only_when_shipped(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        stats = self._v2_stats()
+        stats["chip_files"] = ["field_boundaries"]
+
+        text = render_agents({"title": "T", "links": []}, stats, [])
+
+        assert "still in `<chip>_fields.parquet` with their ids." in text
+        assert "instance_labels.json" not in text
+
     def test_presence_only_note(self) -> None:
         from ftw_dataset_tools.api.docs import render_agents
 

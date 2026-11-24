@@ -789,7 +789,8 @@ def _narrow_field_note(stats: dict, facts: dict) -> str | None:
     misses the pixel: lines through every pixel they touch leave nothing inside a field
     under about two pixels wide, and wide lines nothing inside one under their width.
     """
-    if "field_boundaries" not in (stats.get("chip_files") or []):
+    chip_files = stats.get("chip_files") or []
+    if "field_boundaries" not in chip_files:
         return None
     width = facts.get("boundary_width_m")
     resolution = facts.get("resolution_m")
@@ -799,11 +800,14 @@ def _narrow_field_note(stats: dict, facts: dict) -> str | None:
         limit = f"about two mask pixels ({2 * float(resolution):g} m)"
     else:
         limit = "about two mask pixels"
-    return (
+    text = (
         f"Fields narrower than {limit} can have no pixels of their own in the masks, "
         "because their boundary lines cover them. They are still in "
-        "`<chip>_fields.parquet` with their ids, but not in `<chip>_instance_labels.json`."
+        "`<chip>_fields.parquet` with their ids"
     )
+    if "instance_labels" in chip_files:
+        text += ", but not in `<chip>_instance_labels.json`"
+    return text + "."
 
 
 def _chip_file_notes(stats: dict) -> list[str]:
