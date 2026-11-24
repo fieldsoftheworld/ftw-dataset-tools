@@ -1324,6 +1324,25 @@ class TestV2MaskFacts:
         # The grid is stated once, under Provenance.
         assert "Masks are 2.5 m per pixel" not in text
 
+    def test_one_pixel_lines_are_stated_on_a_v2_grid(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents, render_readme
+
+        stats = self._v2_stats()
+        stats["mask_facts"] = {**stats["mask_facts"], "boundary_width_m": None}
+        agents = render_agents({"title": "T", "links": []}, stats, [])
+        assert (
+            "Masks are 2.5 m per pixel, with field boundary lines burned into every pixel "
+            "they touch (one to two pixels wide)." in agents
+        )
+        assert "rather than the" not in agents
+
+        readme = render_readme({"links": [], "ftw:mask_resolution_m": 2.5}, stats, [], {})
+        assert "- Masks rasterized at 2.5 m per pixel" in readme
+        assert (
+            "- Field boundary lines are burned into every pixel they touch (one to two pixels wide)"
+            in readme
+        )
+
     def test_presence_only_note(self) -> None:
         from ftw_dataset_tools.api.docs import render_agents
 

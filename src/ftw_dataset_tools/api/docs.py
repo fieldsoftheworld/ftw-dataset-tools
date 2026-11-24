@@ -743,7 +743,10 @@ def _grid_is_notable(facts: dict) -> bool:
 #: The grid sentence by which of (resolution, line width) is recorded.
 _GRID_SENTENCES = {
     (True, True): "Masks are {r:g} m per pixel, with field boundary lines {w:g} m wide.",
-    (True, False): "Masks are {r:g} m per pixel.",
+    (True, False): (
+        "Masks are {r:g} m per pixel, with field boundary lines burned into every pixel "
+        "they touch (one to two pixels wide)."
+    ),
     (False, True): "Field boundary lines in the masks are {w:g} m wide.",
 }
 
@@ -937,6 +940,10 @@ def _mask_config_lines(collection: dict, config_dict: dict, masks: dict) -> list
         lines.append(f"- Masks rasterized at {resolution:g} m per pixel{grid}")
     if facts["boundary_width_m"]:
         lines.append(f"- Field boundary lines are {facts['boundary_width_m']:g} m wide")
+    elif _grid_is_notable(facts):
+        lines.append(
+            "- Field boundary lines are burned into every pixel they touch (one to two pixels wide)"
+        )
     return lines
 
 
