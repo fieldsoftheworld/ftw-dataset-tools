@@ -571,6 +571,12 @@ def stage_reproject(ctx: PipelineContext) -> None:
     else:
         logger.info("CRS is already EPSG:4326, copying to output directory...")
         shutil.copy2(ctx.fields_input, ctx.output_fields_path)
+    stripped = field_ids.strip_float_suffix(ctx.output_fields_path)
+    if stripped:
+        logger.info(
+            f"Field ids are whole numbers written as floats ('123.0'); stored all "
+            f"{stripped:,} without the fraction"
+        )
     _dedupe_field_ids(ctx)
 
 

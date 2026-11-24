@@ -1027,3 +1027,90 @@ class TestErrors:
         )
         with pytest.raises(FieldIdsError, match="no 'geo' metadata"):
             dedupe_fields(src, tmp_path / "out.parquet")
+
+
+class TestStripFloatSuffix:
+    def _ids(self, path: Path) -> list:
+        return pq.read_table(path, columns=["id"]).column("id").to_pylist()
+
+    def test_whole_number_floats_lose_the_fraction(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "in.parquet",
+            [row("432033.0", LEFT), row("105448990.00", RIGHT), row(None, FAR)],
+        )
+        before = pq.ParquetFile(src).schema_arrow.metadata[b"geo"]
+
+        assert field_ids.strip_float_suffix(src) == 2
+
+        assert self._ids(src) == ["432033", "105448990", None]
+        assert pq.ParquetFile(src).schema_arrow.metadata[b"geo"] == before
+        frame = gpd.read_parquet(src)
+        assert frame.geometry.iloc[0].equals(LEFT)
+        assert frame["crop:name"].tolist() == ["wheat", "wheat", "wheat"]
+        assert not list(tmp_path.glob(".*.tmp"))
+
+    @pytest.mark.parametrize(
+        "ids",
+        [
+            ["432033.0", "432034"],  # mixed: not every id is a float
+            ["432033.5", "432034.0"],  # a real fraction
+            ["5_1.0", "6.0"],  # not a plain number
+            ["7", "8"],  # already plain
+        ],
+    )
+    def test_other_text_ids_are_left_alone(self, tmp_path: Path, ids: list[str]) -> None:
+        src = write(tmp_path / "in.parquet", [row(ids[0], LEFT), row(ids[1], RIGHT)])
+        before = src.read_bytes()
+
+        assert field_ids.strip_float_suffix(src) == 0
+
+        assert src.read_bytes() == before
+
+    def test_integer_ids_and_files_without_ids_are_left_alone(self, tmp_path: Path) -> None:
+        ints = write(tmp_path / "ints.parquet", [row(1, LEFT), row(2, RIGHT)])
+        no_ids = tmp_path / "no_ids.parquet"
+        write_geoparquet(no_ids, gdf=gpd.GeoDataFrame(geometry=[LEFT], crs=4326))
+        empty = write(tmp_path / "empty.parquet", [row(None, LEFT)])
+        sizes = {p: p.read_bytes() for p in (ints, no_ids, empty)}
+
+        for path in sizes:
+            assert field_ids.strip_float_suffix(path) == 0
+            assert path.read_bytes() == sizes[path]
+
+    def test_row_groups_are_kept(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.parquet"
+        frame = gpd.GeoDataFrame(
+            {"id": [f"{i}.0" for i in range(300)]}, geometry=[LEFT] * 300, crs=4326
+        )
+        frame.to_parquet(src, row_group_size=120)
+
+        field_ids.strip_float_suffix(src)
+
+        meta = pq.ParquetFile(src).metadata
+        assert [meta.row_group(i).num_rows for i in range(meta.num_row_groups)] == [120, 120, 60]
+        assert self._ids(src) == [str(i) for i in range(300)]
+
+    def test_a_geoparquet_2_file_keeps_its_native_geometry(self, tmp_path: Path) -> None:
+        gpio = pytest.importorskip("geoparquet_io")
+        plain, src = tmp_path / "plain.parquet", tmp_path / "in.parquet"
+        gpd.GeoDataFrame({"id": ["1.0", "2.0"]}, geometry=[LEFT, RIGHT], crs=4326).to_parquet(plain)
+        try:
+            gpio.read(str(plain)).write(str(src), geoparquet_version="2.0")
+        except Exception as err:  # an older geoparquet-io without 2.0
+            pytest.skip(f"geoparquet-io can't write GeoParquet 2.0: {err}")
+
+        def geometry_type(path: Path) -> str:
+            f = pq.ParquetFile(path)
+            return str(f.schema.column(f.schema_arrow.get_field_index("geometry")).logical_type)
+
+        before = geometry_type(src)
+        assert before.startswith("Geometry")
+        # A fresh interpreter, so the 2.0 write above hasn't already imported geoarrow.
+        code = (
+            "import sys; from ftw_dataset_tools.api.field_ids import strip_float_suffix; "
+            "assert strip_float_suffix(sys.argv[1]) == 2"
+        )
+        subprocess.run([sys.executable, "-c", code, str(src)], check=True)
+
+        assert geometry_type(src) == before
+        assert self._ids(src) == ["1", "2"]
