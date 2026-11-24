@@ -113,12 +113,12 @@ class TestMeasurements:
         path = tmp_path / "fields.parquet"
         gdf.to_parquet(path)
         assert top_codes(path, "hcat:code", "hcat:name_en")[0][1] == "Sweet corn"
+        majority = path.with_name("majority.parquet")
+        gdf.iloc[1:5].to_parquet(majority)  # Popcorn, Sweet corn, Seed corn x2 -> Seed corn
+        assert top_codes(majority, "hcat:code", "hcat:name_en")[0][1] == "Seed corn"
         tie = path.with_name("tie.parquet")
-        gdf.iloc[1:5].to_parquet(tie)  # Popcorn, Sweet corn, Seed corn x2 -> Seed corn
+        gdf.iloc[[0, 3]].to_parquet(tie)  # one each -> alphabetical
         assert top_codes(tie, "hcat:code", "hcat:name_en")[0][1] == "Seed corn"
-        tie2 = path.with_name("tie2.parquet")
-        gdf.iloc[[0, 3]].to_parquet(tie2)  # one each -> alphabetical
-        assert top_codes(tie2, "hcat:code", "hcat:name_en")[0][1] == "Seed corn"
 
     def test_top_codes_by_area_detects_non_default_geometry_column(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.styles import top_codes

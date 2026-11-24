@@ -211,7 +211,7 @@ def top_codes(
         if code_col not in columns:
             return []
         # A code can carry several names in the source; show the most common one
-        # (ties broken alphabetically) so tables agree with per-chip names.
+        # (ties broken alphabetically), not the alphabetically first.
         name_expr = (
             f'MODE("{name_col}" ORDER BY "{name_col}")'
             if name_col in columns
