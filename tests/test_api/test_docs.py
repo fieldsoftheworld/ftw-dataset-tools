@@ -817,6 +817,8 @@ class TestSchemaNotes:
 
         assert "carried through from the source dataset" not in agents
         assert "FAO GAUL 2024" in agents
+        assert "Empty when GAUL has no name for the unit" in agents
+        assert "the chip touches no unit" in agents
 
 
 class TestLicenseLink:

@@ -1007,6 +1007,31 @@ class TestCollectionMetadata:
         assert "ftw:split_seed" not in coll
         assert "ftw:split_percents" not in coll
 
+    def test_predefined_split_has_no_percents(self) -> None:
+        from ftw_dataset_tools.api.config import DatasetConfig
+        from ftw_dataset_tools.api.stac import _collection_ftw_properties
+
+        config = DatasetConfig.from_dict(
+            {"fields_file": "unused.parquet", "stages": {"splits": {"split_type": "predefined"}}}
+        )
+
+        props = _collection_ftw_properties(config)
+
+        assert props["ftw:split_type"] == "predefined"
+        assert "ftw:split_percents" not in props
+
+    def test_no_split_or_boundary_width_in_config_echo(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        config = DatasetConfig.from_dict({"fields_file": "unused.parquet"})
+        result = build_catalog(tmp_path, config=config, provenance=config.provenance_dict())
+
+        stages = json.loads(result.collection_path.read_text())["ftw:config"]["config"]["stages"]
+        assert "splits" not in stages
+        assert "boundary_width_m" not in stages["masks"]
+
     def test_scale_properties_only_for_scaled_datasets(self) -> None:
         from ftw_dataset_tools.api.config import DatasetConfig
         from ftw_dataset_tools.api.stac import _collection_ftw_properties
