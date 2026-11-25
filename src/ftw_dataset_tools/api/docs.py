@@ -34,8 +34,9 @@ SEASONS = ("planting", "harvest")
 MOSAIC_QUARTERS = ("q1", "q2", "q3", "q4")
 
 # Columns that would mark a row in items.parquet as a season child item rather
-# than a chip. The catalogue written today mirrors chips only, so the child
-# items are normally read from the item JSON files instead.
+# than a chip. ftwd's stac stage mirrors chips only; the benchmark catalog rebuilds the
+# mirror with the child items too, but marks them by link, not by one of these columns,
+# so the child items are normally read from the item JSON files instead.
 PARENT_COLUMNS = ("parent", "ftw:parent_id", "ftw:parent_chip", "parent_id")
 
 _MISSING_COLUMN = "not found in FROM clause"
@@ -43,8 +44,9 @@ _MISSING_COLUMN = "not found in FROM clause"
 AGENTS_QUERIES: list[tuple[str, str]] = [
     (
         "Chips per split",
+        # Imagery child items in a rebuilt mirror have no split; count only the chips.
         "SELECT \"ftw:split\" AS split, count(*) AS chips FROM read_parquet('{items}') "
-        "GROUP BY 1 ORDER BY 1",
+        'WHERE "ftw:split" IS NOT NULL GROUP BY 1 ORDER BY 1',
     ),
     (
         "Chips with the highest field coverage",

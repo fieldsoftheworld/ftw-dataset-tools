@@ -958,6 +958,28 @@ class TestQueriesResolveAgainstTheCollection:
         assert "read_parquet('items.parquet')" in published[0]
         assert str(tmp_path) not in "\n".join(published)
 
+    def test_split_counts_leave_out_imagery_child_items(self, tmp_path: Path) -> None:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.docs import run_agents_queries
+
+        coll_path, _, _ = _collection_dir(tmp_path)
+        collection = json.loads(coll_path.read_text())
+        gpd.GeoDataFrame(
+            {
+                "id": ["ftw-a", "ftw-a_q1_s2", "ftw-a_q2_s2", "ftw-b", "ftw-b_q1_s2"],
+                "ftw:split": ["train", None, None, "test", None],
+                "ftw:season": [None, "q1", "q2", None, "q1"],
+            },
+            geometry=[box(0, 0, 1, 1)] * 5,
+            crs="EPSG:4326",
+        ).to_parquet(tmp_path / "items.parquet")
+
+        results = {t: rows for t, _sql, rows in run_agents_queries(tmp_path, collection)}
+
+        assert sorted(results["Chips per split"]) == [("test", 1), ("train", 1)]
+
     def test_missing_items_parquet_drops_its_query(self, tmp_path: Path) -> None:
         """A missing input degrades the same way an absent column already does."""
         from ftw_dataset_tools.api.docs import run_agents_queries
