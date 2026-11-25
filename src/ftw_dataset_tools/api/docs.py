@@ -43,8 +43,9 @@ _MISSING_COLUMN = "not found in FROM clause"
 AGENTS_QUERIES: list[tuple[str, str]] = [
     (
         "Chips per split",
+        # Only chip items carry a split; the imagery child items in the mirror don't.
         "SELECT \"ftw:split\" AS split, count(*) AS chips FROM read_parquet('{items}') "
-        "GROUP BY 1 ORDER BY 1",
+        'WHERE "ftw:split" IS NOT NULL GROUP BY 1 ORDER BY 1',
     ),
     (
         "Chips with the highest field coverage",
