@@ -485,7 +485,13 @@ class TestProvenance:
     """Tests for provenance / resolved-config output."""
 
     def test_provenance_dict_shape(self) -> None:
-        config = DatasetConfig.from_dict({"fields_file": "f.parquet", "year": 2023})
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "f.parquet",
+                "year": 2023,
+                "stages": {"splits": {"split_type": "random-uniform"}},
+            }
+        )
         prov = config.provenance_dict()
         assert prov["ftwd_version"]
         assert prov["config_schema_version"] == config_module.CONFIG_SCHEMA_VERSION
@@ -493,6 +499,56 @@ class TestProvenance:
         assert prov["config"]["fields_file"] == "f.parquet"
         # split_percents serialized as a list (YAML-friendly), not a tuple.
         assert prov["config"]["stages"]["splits"]["split_percents"] == [80, 10, 10]
+
+    def test_config_dict_omits_unset_boundary_width_and_splits(self) -> None:
+        data = DatasetConfig.from_dict({"fields_file": "f.parquet", "year": 2023}).config_dict()
+        assert "boundary_width_m" not in data["stages"]["masks"]
+        assert "splits" not in data["stages"]
+
+    def test_config_dict_keeps_set_boundary_width(self) -> None:
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "f.parquet",
+                "year": 2023,
+                "stages": {"masks": {"resolution": 2.5, "boundary_width_m": 10}},
+            }
+        )
+        assert config.config_dict()["stages"]["masks"]["boundary_width_m"] == 10
+
+    def test_config_dict_predefined_split_has_no_percents(self) -> None:
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "f.parquet",
+                "year": 2023,
+                "stages": {"splits": {"split_type": "predefined"}},
+            }
+        )
+        splits = config.config_dict()["stages"]["splits"]
+        assert splits["split_type"] == "predefined"
+        assert "split_percents" not in splits
+
+    def test_predefined_config_dict_loads_back_the_same(self) -> None:
+        raw = {
+            "fields_file": "f.parquet",
+            "year": 2023,
+            "stages": {"splits": {"split_type": "predefined", "random_seed": 7}},
+        }
+        config = DatasetConfig.from_dict(raw)
+        stages = config.config_dict()["stages"]
+        again = DatasetConfig.from_dict({**raw, "stages": stages})
+        assert again.stages.splits.split_type == "predefined"
+        assert again.stages.splits.random_seed == 7
+        assert again.config_dict() == config.config_dict()
+
+    def test_config_dict_without_unset_keys_loads_back_the_same(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet", "year": 2023})
+        stages = config.config_dict()["stages"]
+        again = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "year": 2023, "stages": stages}
+        )
+        assert again.stages.masks.boundary_width_m is None
+        assert again.stages.splits.split_type is None
+        assert again.config_dict() == config.config_dict()
 
     def test_write_provenance_file_roundtrips(self, tmp_path: Path) -> None:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet", "year": 2023})

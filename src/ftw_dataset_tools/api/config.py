@@ -886,7 +886,7 @@ class DatasetConfig:
     # ---- provenance -----------------------------------------------------
 
     def config_dict(self) -> dict[str, Any]:
-        """Return the config as a plain dict with all defaults resolved."""
+        """Return the config as a plain dict with defaults resolved; unset optional settings are left out."""
         data = asdict(self)
         # asdict turns the split_percents tuple into a list; keep it a list for YAML.
         data["stages"]["splits"]["split_percents"] = list(self.stages.splits.split_percents)
@@ -899,6 +899,13 @@ class DatasetConfig:
         # Written only when set, so a config without one resolves exactly as before.
         if self.stages.masks.label_extent is None:
             del data["stages"]["masks"]["label_extent"]
+        # Unset, these are no-ops; written, they read as settings the build used.
+        if self.stages.masks.boundary_width_m is None:
+            del data["stages"]["masks"]["boundary_width_m"]
+        if self.stages.splits.split_type is None:
+            del data["stages"]["splits"]
+        elif self.stages.splits.split_type == "predefined":  # the source sets the split
+            del data["stages"]["splits"]["split_percents"]
         _record_written_paths(data, self.written_paths, self.stages.masks.class_filter)
         return data
 

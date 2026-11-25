@@ -523,9 +523,11 @@ def _collection_ftw_properties(config: DatasetConfig) -> dict:
             {
                 "ftw:split_type": stages.splits.split_type,
                 "ftw:split_seed": stages.splits.random_seed,
-                "ftw:split_percents": list(stages.splits.split_percents),
             }
         )
+        # A predefined split comes from the source, so the configured percents don't apply.
+        if stages.splits.split_type != "predefined":
+            props["ftw:split_percents"] = list(stages.splits.split_percents)
     props |= {
         "ftw:chip_size_km": stages.chips.km_size,
         "ftw:mask_types": list(stages.masks.mask_types),

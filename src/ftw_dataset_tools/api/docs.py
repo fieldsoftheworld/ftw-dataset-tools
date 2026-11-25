@@ -96,7 +96,9 @@ _LANDCOVER_NOTES = {
 
 _ADMIN_WHERE = (
     "the unit containing the chip's centre, or the one it overlaps most when its centre "
-    "is in none (FAO GAUL 2024)"
+    "is in none (FAO GAUL 2024). Empty when GAUL has no name for the unit (as in regions "
+    "without districts) or when the chip touches no unit (offshore, or on islands and "
+    "coastline GAUL leaves out)"
 )
 _ADMIN_NOTES = {
     "admin0_iso3": "ISO 3166-1 alpha-3 code of the country: "
