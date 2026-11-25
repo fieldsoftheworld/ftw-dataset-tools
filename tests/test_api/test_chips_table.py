@@ -572,6 +572,14 @@ def test_published_datasets_walks_groups(world: World) -> None:
     ]
 
 
+def test_published_datasets_skips_a_collection_the_root_links(world: World) -> None:
+    root = world.catalog / "catalog.json"
+    doc = json.loads(root.read_text())
+    doc["links"].insert(0, {"rel": "child", "href": "./chips/collection.json"})
+    root.write_text(json.dumps(doc))
+    assert chips_table.published_datasets(str(root)) == ["bb/bb_2022", "zz/aa_2021"]
+
+
 # --------------------------------------------------------------------------- #
 # License categories
 # --------------------------------------------------------------------------- #

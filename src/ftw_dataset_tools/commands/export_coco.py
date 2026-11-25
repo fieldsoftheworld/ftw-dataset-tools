@@ -42,7 +42,7 @@ def export_coco(
     Examples:
         ftwd export-coco ./austria-dataset
         ftwd export-coco ./austria-dataset -o ./coco --min-area 10
-        ftwd export-coco ./at_2024 --splits https://data.source.coop/ftw/benchmark-data/chips.parquet
+        ftwd export-coco ./at_2024 --splits https://data.source.coop/ftw/benchmark-data/chips/chips.parquet
     """
     from ftw_dataset_tools.api.assets import MaskReadError
     from ftw_dataset_tools.api.coco import SplitsTableError
