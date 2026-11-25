@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pystac
 
+from ftw_dataset_tools.api.imagery.catalog_ops import (
+    QUARTER_NODATA_PROPERTIES,
+    clear_chip_selections,
+    preserve_imagery_selection,
+)
+from ftw_dataset_tools.api.imagery.download_workflow import find_s2_child_items
+from ftw_dataset_tools.api.imagery.mosaic_selection import MosaicSelectionResult, SelectedMosaic
 from ftw_dataset_tools.api.imagery.stac_child_items import (
     _create_season_child_item,
+    attach_existing_seasons,
     create_child_items_from_selection,
+    create_mosaic_child_items,
+    record_quarter_nodata,
 )
 from ftw_dataset_tools.api.stac import PORTOLAN_SCHEMA_URI
 
@@ -1460,3 +1471,183 @@ class TestParentSurvivesAChildFailure:
         saved = json.loads((chip_dir / "chip_001.json").read_text())
         assert saved["properties"]["ftw:calendar_year"] == 2024
         assert saved["properties"]["ftw:planting_day"] == 150
+
+
+_QUARTER_NODATA = {"q1": 0.0, "q2": 2.2874, "q3": 13.0, "q4": 100.0}
+_CHIP_BBOX = (10.0, 50.0, 10.01, 50.01)
+
+
+def _mosaic_selection(nodata: dict[str, float]) -> MosaicSelectionResult:
+    def tile(number: int) -> pystac.Item:
+        item = pystac.Item(
+            id=f"Sentinel-2_mosaic_2024_Q{number}_32UNA_0_0",
+            geometry=None,
+            bbox=None,
+            datetime=None,
+            start_datetime=datetime(2024, 3 * number - 2, 1, tzinfo=UTC),
+            end_datetime=datetime(2024, 3 * number, 28, tzinfo=UTC),
+            properties={"ftw:mosaic_tile": "32UNA_0_0"},
+        )
+        item.add_asset("red", pystac.Asset(href=f"https://example.com/Q{number}/red.tif"))
+        return item
+
+    quarters = {
+        slot: SelectedMosaic(item=tile(int(slot[1])), quarter=slot, year=2024, nodata_pct=pct)
+        for slot, pct in nodata.items()
+    }
+    return MosaicSelectionResult(
+        chip_id="chip_001",
+        bbox=_CHIP_BBOX,
+        requested_year=2024,
+        imagery_year=2024,
+        quarters=quarters,
+    )
+
+
+def _bare_chip(chip_id: str = "chip_001") -> pystac.Item:
+    return pystac.Item(
+        id=chip_id,
+        geometry=None,
+        bbox=_CHIP_BBOX,
+        datetime=datetime(2024, 1, 1, tzinfo=UTC),
+        properties={},
+    )
+
+
+def _mosaic_chip(tmp_path: Path) -> Path:
+    """A chip item with all four quarters selected; returns the chip item's path."""
+    chip_dir = tmp_path / "chips" / "32UNA" / "chip_001"
+    chip_dir.mkdir(parents=True)
+    path = chip_dir / "chip_001.json"
+    parent = _bare_chip()
+    parent.set_self_href(str(path))
+    create_mosaic_child_items(chip_dir, parent, _mosaic_selection(_QUARTER_NODATA))
+    return path
+
+
+def _strip_quarter_nodata(path: Path) -> None:
+    """Make the chip item look like one written before it carried the quarters' nodata."""
+    data = json.loads(path.read_text())
+    for key in QUARTER_NODATA_PROPERTIES:
+        data["properties"].pop(key)
+    path.write_text(json.dumps(data))
+
+
+class TestQuarterNodataOnChip:
+    """Each quarter child's ftw:nodata_pct is mirrored onto the chip item."""
+
+    def test_selection_records_every_quarter(self, tmp_path: Path) -> None:
+        props = pystac.Item.from_file(str(_mosaic_chip(tmp_path))).properties
+
+        assert {key: props.get(key) for key in QUARTER_NODATA_PROPERTIES} == {
+            "ftw:q1_nodata_pct": 0.0,
+            "ftw:q2_nodata_pct": 2.29,
+            "ftw:q3_nodata_pct": 13.0,
+            "ftw:q4_nodata_pct": 100.0,
+        }
+
+    def test_matches_the_childs_nodata(self, tmp_path: Path) -> None:
+        path = _mosaic_chip(tmp_path)
+        child = pystac.Item.from_file(str(path.parent / "chip_001_q2_s2.json"))
+
+        parent = pystac.Item.from_file(str(path))
+        assert parent.properties.get("ftw:q2_nodata_pct") == child.properties["ftw:nodata_pct"]
+
+    def test_scene_children_record_no_nodata(
+        self, tmp_path: Path, mock_selection_result: SceneSelectionResult
+    ) -> None:
+        chip_dir = tmp_path / "chip_001"
+        chip_dir.mkdir()
+        parent = _bare_chip()
+        create_child_items_from_selection(chip_dir, parent, mock_selection_result, 2024, 2.0, 14)
+
+        assert not any(key.endswith("_nodata_pct") for key in parent.properties)
+
+    def test_rebuild_reads_them_from_the_children_on_disk(self, tmp_path: Path) -> None:
+        path = _mosaic_chip(tmp_path)
+        fresh = _bare_chip()
+        attach_existing_seasons(fresh, path.parent)
+
+        assert fresh.properties.get("ftw:q3_nodata_pct") == 13.0
+        assert all(key in fresh.properties for key in QUARTER_NODATA_PROPERTIES)
+
+    def test_a_missing_quarter_leaves_its_property_absent(self, tmp_path: Path) -> None:
+        path = _mosaic_chip(tmp_path)
+        (path.parent / "chip_001_q2_s2.json").unlink()
+        fresh = _bare_chip()
+        attach_existing_seasons(fresh, path.parent)
+        # The previous chip item still holds the deleted quarter's value.
+        preserve_imagery_selection(fresh, path)
+
+        assert "ftw:q2_nodata_pct" not in fresh.properties
+        assert fresh.properties.get("ftw:q1_nodata_pct") == 0.0
+
+    def test_a_chip_without_mosaics_has_none(self, tmp_path: Path) -> None:
+        path = _mosaic_chip(tmp_path)
+        clear_chip_selections(pystac.Item.from_file(str(path)), modes=["mosaics"])
+
+        props = pystac.Item.from_file(str(path)).properties
+        assert not any(key in props for key in QUARTER_NODATA_PROPERTIES)
+
+
+class TestRecordQuarterNodata:
+    """Backfill: chip items written before they carried the quarters' nodata."""
+
+    def test_fills_chip_items_from_the_children_on_disk(self, tmp_path: Path) -> None:
+        path = _mosaic_chip(tmp_path)
+        _strip_quarter_nodata(path)
+
+        assert record_quarter_nodata(find_s2_child_items(tmp_path)) == 1
+
+        props = pystac.Item.from_file(str(path)).properties
+        assert props.get("ftw:q2_nodata_pct") == 2.29
+        assert all(key in props for key in QUARTER_NODATA_PROPERTIES)
+
+    def test_leaves_up_to_date_chip_items_alone(self, tmp_path: Path) -> None:
+        path = _mosaic_chip(tmp_path)
+        before = path.read_bytes()
+
+        assert record_quarter_nodata(find_s2_child_items(tmp_path)) == 0
+        assert path.read_bytes() == before
+
+    def test_a_child_without_nodata_records_none(self, tmp_path: Path) -> None:
+        path = _mosaic_chip(tmp_path)
+        _strip_quarter_nodata(path)
+        q1 = path.parent / "chip_001_q1_s2.json"
+        data = json.loads(q1.read_text())
+        del data["properties"]["ftw:nodata_pct"]
+        q1.write_text(json.dumps(data))
+
+        record_quarter_nodata(find_s2_child_items(tmp_path))
+
+        props = pystac.Item.from_file(str(path)).properties
+        assert "ftw:q1_nodata_pct" not in props
+        assert props.get("ftw:q4_nodata_pct") == 100.0
+
+    def test_an_unlinked_leftover_child_records_nothing(self, tmp_path: Path) -> None:
+        path = _mosaic_chip(tmp_path)
+        data = json.loads(path.read_text())
+        data["links"] = [link for link in data["links"] if link["rel"] != "ftw:q3"]
+        path.write_text(json.dumps(data))
+
+        record_quarter_nodata(find_s2_child_items(tmp_path))
+
+        props = pystac.Item.from_file(str(path)).properties
+        assert "ftw:q3_nodata_pct" not in props
+        assert props.get("ftw:q2_nodata_pct") == 2.29
+
+    def test_a_linked_quarter_with_an_unreadable_child_loses_its_value(
+        self, tmp_path: Path
+    ) -> None:
+        path = _mosaic_chip(tmp_path)
+        (path.parent / "chip_001_q4_s2.json").write_text("{not json")
+
+        assert record_quarter_nodata(find_s2_child_items(tmp_path)) == 1
+        assert "ftw:q4_nodata_pct" not in pystac.Item.from_file(str(path)).properties
+
+    def test_an_unreadable_chip_item_is_skipped(self, tmp_path: Path) -> None:
+        path = _mosaic_chip(tmp_path)
+        path.write_text("{not json")
+
+        assert record_quarter_nodata(find_s2_child_items(tmp_path)) == 0
+        assert path.read_text() == "{not json"

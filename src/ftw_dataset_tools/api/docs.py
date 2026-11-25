@@ -171,6 +171,12 @@ ITEM_PROPERTY_NOTES = {
     "ftw:imagery_year": "mosaic year used",
     "ftw:mosaic_tile": "quarterly mosaic tile the imagery came from",
     "ftw:nodata_pct": "share of the chip (0-100) the quarter's mosaic has no data for",
+    **{
+        f"ftw:q{n}_nodata_pct": f"share of the chip (0-100) the Q{n} mosaic has no data for, "
+        f"copied from the Q{n} child item's `ftw:nodata_pct`; absent when the chip has no "
+        f"Q{n} mosaic (no mosaic tile covers it, or it was never selected)"
+        for n in range(1, 5)
+    },
     "ftw:buffer_days": "half-width of the search window around the target day, in days",
     "ftw:field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
     "ftw:label_extent_pct": "percent of the chip's area inside the label extent, where "
@@ -1032,7 +1038,7 @@ def _limitation_lines(stats: dict) -> list[str]:
         "- Masks are derived from field boundaries declared for a given year; parcels that "
         "changed shape, were subdivided or merged after that declaration are not reflected."
     ]
-    lines += _imagery_caveats(stats.get("imagery"))
+    lines += _imagery_caveats(stats.get("imagery"), stats.get("item_properties") or [])
     lines.append(
         "- Chips on the border of the source dataset may be only partly covered by field "
         "boundaries, and empty area there means unmapped, not fieldless."
@@ -1040,7 +1046,7 @@ def _limitation_lines(stats: dict) -> list[str]:
     return lines
 
 
-def _imagery_caveats(imagery: dict | None) -> list[str]:
+def _imagery_caveats(imagery: dict | None, item_properties: list[str]) -> list[str]:
     """The caveats of the imagery the collection actually has, scenes and/or mosaics."""
     if not imagery:
         return []
@@ -1051,10 +1057,16 @@ def _imagery_caveats(imagery: dict | None) -> list[str]:
             "vary between chips; check `eo:cloud_cover` on the season child items."
         )
     if imagery.get("chips_with_mosaics"):
+        # Chip items an older ftwd wrote carry the share on the children alone.
+        where = (
+            "`ftw:q1_nodata_pct` to `ftw:q4_nodata_pct` on the chip item (or `ftw:nodata_pct` "
+            "on each quarter's child item)"
+            if "ftw:q1_nodata_pct" in item_properties
+            else "`ftw:nodata_pct` on each quarter's child item"
+        )
         lines.append(
             "- Quarterly mosaics are cloudless composites, but where every scene of a quarter "
-            "was cloudy they have no data (-32768) rather than the chip being dropped; check "
-            "`ftw:nodata_pct` on each quarter's child item."
+            f"was cloudy they have no data (-32768) rather than the chip being dropped; check {where}."
         )
     return lines
 
@@ -1296,7 +1308,7 @@ def _agents_quality(stats: dict) -> str:
         "- Empty area inside a chip means unmapped, not necessarily fieldless.",
         "- Chips on the dataset border may be only partly covered by the source boundaries.",
     ]
-    lines += _imagery_caveats(stats.get("imagery"))
+    lines += _imagery_caveats(stats.get("imagery"), stats.get("item_properties") or [])
     if stats.get("split_counts"):
         note = _split_quality_note(stats.get("split_type"))
         if note:

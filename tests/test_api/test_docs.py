@@ -466,6 +466,18 @@ class TestConditionalProse:
         ):
             assert "crop calendar" not in text
             assert "ftw:nodata_pct" in text
+            assert "ftw:q1_nodata_pct" not in text
+
+    def test_mosaic_caveat_points_to_the_chip_properties_when_present(self) -> None:
+        from ftw_dataset_tools.api.docs import render_readme
+
+        imagery = {"chips_with_imagery": 4, "chips_with_scenes": 0, "chips_with_mosaics": 4}
+        properties = [f"ftw:q{n}_nodata_pct" for n in range(1, 5)]
+        stats = _stats(imagery=imagery, item_properties=properties)
+
+        readme = render_readme({"title": "T", "description": "d", "links": []}, stats, [], {})
+
+        assert "`ftw:q1_nodata_pct` to `ftw:q4_nodata_pct` on the chip item" in readme
 
     def test_crop_suggestion_only_when_crops_measured(self) -> None:
         from ftw_dataset_tools.api.docs import render_readme
@@ -819,6 +831,16 @@ class TestSchemaNotes:
         assert "FAO GAUL 2024" in agents
         assert "Empty when GAUL has no name for the unit" in agents
         assert "the chip touches no unit" in agents
+
+    def test_quarter_nodata_properties_have_notes(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents
+
+        properties = [f"ftw:q{n}_nodata_pct" for n in range(1, 5)]
+        agents = render_agents({"title": "T", "links": []}, _stats(item_properties=properties), [])
+
+        assert "see the item JSON" not in agents
+        assert "the Q3 mosaic has no data for" in agents
+        assert "absent when the chip has no Q3 mosaic" in agents
 
 
 class TestLicenseLink:

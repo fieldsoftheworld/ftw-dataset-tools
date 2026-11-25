@@ -18,22 +18,28 @@ from ftw_dataset_tools.api.imagery.catalog_ops import (
     has_mode_selection,
     item_window,
     normalize_imagery_properties,
+    quarter_nodata_property,
     set_temporal_extent,
 )
 from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, refresh_chip_preview
 from ftw_dataset_tools.api.imagery.settings import CHILD_ITEM_BANDS
 from ftw_dataset_tools.api.imagery.slots import (
     IMAGERY_SLOTS,
+    MOSAIC_SLOTS,
     MOSAIC_SOURCE,
     SCENE_SLOTS,
     SLOTS_BY_MODE,
     child_item_id,
+    parse_child_id,
     slot_title,
 )
+from ftw_dataset_tools.api.logging_config import get_logger
 from ftw_dataset_tools.api.stac import MEDIA_TYPE_COG, _add_portolan_schema
 from ftw_dataset_tools.api.stac_items import write_item
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from ftw_dataset_tools.api.imagery.mosaic_selection import (
         MosaicSelectionResult,
         SelectedMosaic,
@@ -45,9 +51,12 @@ __all__ = [
     "attach_season_to_parent",
     "create_child_items_from_selection",
     "create_mosaic_child_items",
+    "record_quarter_nodata",
 ]
 
 SEASONS = SCENE_SLOTS
+
+logger = get_logger(__name__)
 
 # Links that place an item in the catalog tree; children live next to their parent
 # chip item, so the parent's relative hrefs are valid for them verbatim.
@@ -494,6 +503,93 @@ def attach_season_to_parent(
 
     _attach_visual_asset(parent_item, child_item, season)
     _attach_local_image_asset(parent_item, child_item, season, chip_dir, checksums=checksums)
+    _mirror_nodata_pct(parent_item, child_item, season)
+
+
+def _mirror_nodata_pct(parent_item: pystac.Item, child_item: pystac.Item | None, slot: str) -> bool:
+    """Copy a quarter child's ``ftw:nodata_pct`` onto the parent; True if that changed it.
+
+    Scene children carry ``eo:cloud_cover`` instead, which selection already records
+    on the parent as ``ftw:<season>_cloud_cover``. No child, or a child without a
+    numeric value, leaves the parent without it too, rather than a made-up number.
+    """
+    if slot not in MOSAIC_SLOTS:
+        return False
+    key = quarter_nodata_property(slot)
+    before = parent_item.properties.get(key)
+    value = child_item.properties.get("ftw:nodata_pct") if child_item is not None else None
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        parent_item.properties[key] = round(float(value), 2)
+    else:
+        parent_item.properties.pop(key, None)
+    return parent_item.properties.get(key) != before
+
+
+def record_quarter_nodata(children: Iterable[tuple[pystac.Item, Path]]) -> int:
+    """Copy each quarter child's ``ftw:nodata_pct`` onto its chip item on disk.
+
+    For chips whose children were written before chip items carried the quarters'
+    nodata: reads only the item JSONs, so a resumed download fills them in without
+    fetching anything. Only quarters the chip item links count; a linked quarter
+    with no child among ``children`` (deleted or unreadable) loses its value. A chip
+    item is rewritten only when a value changes.
+
+    Args:
+        children: ``(child item, child item path)`` pairs, as ``find_s2_child_items``
+            returns them; scene children are ignored
+
+    Returns:
+        How many chip items were rewritten.
+    """
+    return sum(
+        _record_on_parent(parent_path, quarters)
+        for parent_path, quarters in _quarters_by_parent(children).items()
+    )
+
+
+def _quarters_by_parent(
+    children: Iterable[tuple[pystac.Item, Path]],
+) -> dict[Path, dict[str, pystac.Item]]:
+    """The quarter children by slot, grouped under their chip item's path."""
+    by_parent: dict[Path, dict[str, pystac.Item]] = {}
+    for child, child_path in children:
+        parsed = parse_child_id(child.id)
+        if parsed is not None and parsed[1] in MOSAIC_SLOTS:
+            parent_path = child_path.parent / f"{parsed[0]}.json"
+            by_parent.setdefault(parent_path, {})[parsed[1]] = child
+    return by_parent
+
+
+def _record_on_parent(parent_path: Path, quarters: dict[str, pystac.Item]) -> bool:
+    """Mirror the linked quarters' nodata onto one chip item; True if it was rewritten."""
+    parent_item = _read_chip_item(parent_path)
+    if parent_item is None:
+        return False
+    changed = [
+        _mirror_nodata_pct(parent_item, child, slot)
+        for slot, child in _linked_quarters(parent_item, quarters).items()
+    ]
+    if not any(changed):
+        return False
+    write_item(parent_item, parent_path)
+    return True
+
+
+def _linked_quarters(
+    parent_item: pystac.Item, quarters: dict[str, pystac.Item]
+) -> dict[str, pystac.Item | None]:
+    """Each quarter's child, or None when the chip item does not link the quarter."""
+    linked = {link.rel for link in parent_item.links}
+    return {slot: quarters.get(slot) if f"ftw:{slot}" in linked else None for slot in MOSAIC_SLOTS}
+
+
+def _read_chip_item(path: Path) -> pystac.Item | None:
+    try:
+        return pystac.Item.from_file(str(path))
+    except Exception as err:
+        # A missing or unreadable chip item is the STAC stage's to fix, not this pass's.
+        logger.warning(f"{path.stem}: chip item not readable, quarter nodata not recorded: {err}")
+        return None
 
 
 def attach_existing_seasons(

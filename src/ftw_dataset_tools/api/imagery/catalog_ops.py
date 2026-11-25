@@ -14,7 +14,12 @@ from typing import TYPE_CHECKING
 import pystac
 
 from ftw_dataset_tools.api.imagery.chip_preview import preview_slot, redraw_chip_preview
-from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES, IMAGERY_SLOTS, SLOTS_BY_MODE
+from ftw_dataset_tools.api.imagery.slots import (
+    IMAGERY_MODES,
+    IMAGERY_SLOTS,
+    MOSAIC_SLOTS,
+    SLOTS_BY_MODE,
+)
 from ftw_dataset_tools.api.imagery.thumbnails import PREVIEW_SUFFIX
 from ftw_dataset_tools.api.stac_items import write_item
 
@@ -29,6 +34,7 @@ __all__ = [
     "IMAGERY_TEMPORAL_PROPERTIES",
     "MOSAIC_PROPERTIES",
     "PROPERTIES_BY_MODE",
+    "QUARTER_NODATA_PROPERTIES",
     "SCENE_PROPERTIES",
     "ClearResult",
     "ImageryStats",
@@ -44,6 +50,7 @@ __all__ = [
     "mosaic_requested_year",
     "normalize_imagery_properties",
     "preserve_imagery_selection",
+    "quarter_nodata_property",
     "refresh_temporal_extent",
     "selected_modes",
     "selection_conflict",
@@ -81,8 +88,18 @@ SCENE_PROPERTIES = (
     "ftw:harvest_cloud_cover",
 )
 
+
+def quarter_nodata_property(slot: str) -> str:
+    """The chip property mirroring a quarter child's ``ftw:nodata_pct``, e.g. ``ftw:q1_nodata_pct``."""
+    return f"ftw:{slot}_nodata_pct"
+
+
+#: One per quarter, copied from the quarter's child item, so chips can be filtered on
+#: nodata without reading the children. Absent for a quarter with no child on disk.
+QUARTER_NODATA_PROPERTIES = tuple(quarter_nodata_property(slot) for slot in MOSAIC_SLOTS)
+
 #: What a mosaic selection records on the parent.
-MOSAIC_PROPERTIES = ("ftw:mosaic_requested_year", "ftw:mosaic_year")
+MOSAIC_PROPERTIES = ("ftw:mosaic_requested_year", "ftw:mosaic_year", *QUARTER_NODATA_PROPERTIES)
 
 #: The modes whose selection is complete on the chip, e.g. ``["scenes", "mosaics"]``.
 #: Derived from the slot links, which stay the source of truth.
@@ -284,7 +301,9 @@ def preserve_imagery_selection(item: pystac.Item, existing_item_path: Path) -> b
             item.add_link(link.clone())
 
     for key in (*IMAGERY_PROPERTIES, *IMAGERY_TEMPORAL_PROPERTIES):
-        if key in existing.properties:
+        # Re-read from the children on disk by the rebuild; a stale copy would outlive
+        # a deleted child.
+        if key in existing.properties and key not in QUARTER_NODATA_PROPERTIES:
             item.properties[key] = existing.properties[key]
 
     # Downloaded imagery outlives the catalog, but only advertise assets whose

@@ -779,3 +779,43 @@ class TestKeepRemoteRefsAndLogs:
 
         grid_lines = [msg for msg in caplog.messages if msg.startswith("Grid:")]
         assert sorted(grid_lines) == ["Grid: chip_000_harvest_s2", "Grid: chip_000_planting_s2"]
+
+
+class TestResumeRecordsQuarterNodata:
+    """A resumed download fills chip items' ftw:qN_nodata_pct from the children on disk."""
+
+    @staticmethod
+    def _downloaded_mosaic_chip(tmp_path: Path) -> Path:
+        from .test_stac_child_items import _mosaic_chip, _strip_quarter_nodata
+
+        path = _mosaic_chip(tmp_path)
+        for quarter in ("q1", "q2", "q3", "q4"):
+            child_path = path.parent / f"chip_001_{quarter}_s2.json"
+            child = pystac.Item.from_file(str(child_path))
+            child.assets = {"image": pystac.Asset(href=f"./chip_001_{quarter}_image_s2.tif")}
+            child.save_object(dest_href=str(child_path))
+            (path.parent / f"chip_001_{quarter}_image_s2.tif").write_bytes(b"fake image data")
+        _strip_quarter_nodata(path)
+        return path
+
+    def test_fills_chip_items_without_downloading(self, tmp_path: Path) -> None:
+        path = self._downloaded_mosaic_chip(tmp_path)
+
+        with patch(
+            "ftw_dataset_tools.api.imagery.download_workflow.download_and_clip_scene",
+            side_effect=AssertionError("must not download"),
+        ) as download:
+            result = download_imagery_for_catalog(catalog_dir=tmp_path, resume=True)
+
+        download.assert_not_called()
+        assert (result.skipped, result.failed, result.nodata_recorded) == (4, 0, 1)
+        props = pystac.Item.from_file(str(path)).properties
+        assert props.get("ftw:q1_nodata_pct") == 0.0
+        assert props.get("ftw:q2_nodata_pct") == 2.29
+        assert props.get("ftw:q4_nodata_pct") == 100.0
+
+    def test_a_second_resume_rewrites_nothing(self, tmp_path: Path) -> None:
+        self._downloaded_mosaic_chip(tmp_path)
+        download_imagery_for_catalog(catalog_dir=tmp_path, resume=True)
+
+        assert download_imagery_for_catalog(catalog_dir=tmp_path, resume=True).nodata_recorded == 0
