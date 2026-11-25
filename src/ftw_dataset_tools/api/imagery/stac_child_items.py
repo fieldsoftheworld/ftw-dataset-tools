@@ -248,6 +248,9 @@ def _create_mosaic_child_item(
             "ftw:nodata_pct": round(mosaic.nodata_pct, 2),
         },
     )
+    # Only on a quarter combined from several tiles, so a one-tile child is unchanged.
+    if tiles := tile.properties.get("ftw:mosaic_tiles"):
+        child_item.properties["ftw:mosaic_tiles"] = list(tiles)
     child_item.set_self_href(str(child_path))
     for band, asset in tile.assets.items():
         child_item.assets[band] = asset.clone()

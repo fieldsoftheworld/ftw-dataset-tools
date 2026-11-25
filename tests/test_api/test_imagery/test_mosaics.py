@@ -508,12 +508,12 @@ class TestSelectMosaicsForChip:
         with (
             patch(f"{_SELECTION}.year_available", return_value=True),
             patch(f"{_SELECTION}.containing_tiles", return_value=[]),
+            patch(f"{_SELECTION}.covering_tile_sets", return_value=[]),
         ):
             result = select_mosaics_for_chip("chip_001", CHIP_BBOX, 2024)
         assert not result.success
-        assert (
-            result.skipped_reason
-            == "No complete 2024 mosaics: no single mosaic tile covers the chip"
+        assert result.skipped_reason == (
+            "No complete 2024 mosaics: Q1 no mosaic tile, nor any set of tiles, covers the chip"
         )
 
     def test_an_unavailable_year_is_skipped_not_replaced(self) -> None:

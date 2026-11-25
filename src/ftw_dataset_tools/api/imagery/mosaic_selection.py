@@ -5,10 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from ftw_dataset_tools.api.chip_grid import utm_crs_for_cell
-from ftw_dataset_tools.api.imagery.mosaic_search import containing_tiles, year_available
+import numpy as np
+from shapely.geometry import shape
+
+from ftw_dataset_tools.api.chip_grid import utm_crs_for_cell, utm_grid_for_cell
+from ftw_dataset_tools.api.imagery.image_download import read_band_from_tiles
+from ftw_dataset_tools.api.imagery.mosaic_search import (
+    MOSAIC_HREFS,
+    containing_tiles,
+    covering_tile_sets,
+    year_available,
+)
 from ftw_dataset_tools.api.imagery.nodata_analysis import calculate_nodata_percentage
-from ftw_dataset_tools.api.imagery.settings import DEFAULT_NODATA_MAX
+from ftw_dataset_tools.api.imagery.settings import DEFAULT_NODATA_MAX, MOSAIC_NODATA
 from ftw_dataset_tools.api.imagery.slots import MOSAIC_SLOTS
 from ftw_dataset_tools.api.logging_config import get_logger
 
@@ -84,7 +93,8 @@ def select_mosaics_for_chip(
 
     Only the chip's own year is used, never a nearby one: a dataset's imagery must
     show the same year as its labels. A year is used only if every quarter has a tile
-    wholly containing the chip with the chip's nodata within ``nodata_max`` (same
+    wholly containing the chip, or else a set of tiles covering it together (see
+    :func:`covering_tile_sets`), with the chip's nodata within ``nodata_max`` (same
     check as scene selection). Both are measured on the chip's GeoJSON ``footprint``
     when given, else on ``bbox``.
     """
@@ -115,7 +125,9 @@ def _select_year(
     for number, slot in enumerate(MOSAIC_SLOTS, start=1):
         tiles = containing_tiles(bbox, year, number, footprint, crs)
         if not tiles:
-            return None, "no single mosaic tile covers the chip"
+            tiles = covering_tile_sets(bbox, year, number, footprint, crs)
+        if not tiles:
+            return None, f"Q{number} no mosaic tile, nor any set of tiles, covers the chip"
         tile, nodata, reason = _least_nodata_tile(tiles, bbox, nodata_max, result, footprint)
         if tile is None:
             return None, f"Q{number} {reason}"
@@ -147,12 +159,12 @@ def _least_nodata_tile(
     for tile in tiles:
         result.candidates_checked += 1
         try:
-            nodata = calculate_nodata_percentage(tile.assets["nir"].href, bbox, footprint)
+            nodata = _tile_nodata(tile, result.chip_id, bbox, footprint)
         except Exception as e:
             logger.warning(f"{tile.id}: chip nodata check failed ({e})")
             error = e
             continue
-        nodata_seen.append(f"{tile.properties.get('ftw:mosaic_tile', tile.id)} {nodata:.2f}%")
+        nodata_seen.append(f"{_tile_label(tile)} {nodata:.2f}%")
         if nodata < best_nodata:
             best, best_nodata = tile, nodata
         if nodata == 0:
@@ -162,3 +174,44 @@ def _least_nodata_tile(
     if error is not None:
         raise error
     return None, best_nodata, f"nodata in chip window ({', '.join(nodata_seen)})"
+
+
+def _tile_label(tile: pystac.Item) -> str:
+    tiles = tile.properties.get("ftw:mosaic_tiles")
+    if tiles:
+        return "+".join(tiles)
+    return tile.properties.get("ftw:mosaic_tile", tile.id)
+
+
+def _tile_nodata(
+    tile: pystac.Item,
+    chip_id: str,
+    bbox: tuple[float, float, float, float],
+    footprint: Mapping[str, Any] | None,
+) -> float:
+    """The chip's nodata percentage (0-100) in a tile, or in the image combined from a
+    set of tiles (see :func:`combined_nodata_percentage`)."""
+    hrefs = tile.assets["nir"].extra_fields.get(MOSAIC_HREFS) or []
+    if len(hrefs) > 1:
+        return combined_nodata_percentage(hrefs, chip_id, bbox, footprint)
+    return calculate_nodata_percentage(tile.assets["nir"].href, bbox, footprint)
+
+
+def combined_nodata_percentage(
+    hrefs: list[str],
+    chip_id: str,
+    bbox: tuple[float, float, float, float],
+    footprint: Mapping[str, Any] | None = None,
+) -> float:
+    """Nodata percentage (0-100) of the chip's image combined from several tiles.
+
+    Measured on the image itself: the tiles are read onto the chip's 10 m UTM grid
+    just as the download combines them, so a pixel counts as nodata only when no
+    tile has data for it.
+    """
+    cell = shape(footprint) if footprint is not None else None
+    grid = utm_grid_for_cell(chip_id, bbox, "EPSG:4326", 10.0, cell)
+    _, data = read_band_from_tiles("nir", hrefs, *grid)
+    if data.size == 0:
+        return 100.0
+    return 100.0 * float(np.mean(data == MOSAIC_NODATA))
