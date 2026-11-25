@@ -997,7 +997,7 @@ def _dedupe(
 #: An id that is a whole number written as a float, as some harmonized sources store
 #: integer ids converted to text (Austria's ``'432033.0'``), optionally followed by the
 #: ``~<n>`` a source appends to tell repeated ids apart (``'108295823.0~1'``).
-_FLOAT_ID_PATTERN = r"[0-9]+\.0+(~.+)?"
+_FLOAT_ID_PATTERN = r"[0-9]+\.0+(~[0-9]+)?"
 
 
 def _has_text_column(path: Path, column: str) -> bool:
@@ -1050,8 +1050,8 @@ def strip_float_suffix(path: Path | str, id_col: str = ID_COLUMN) -> int:
 
     ``'432033.0'`` becomes ``'432033'``, the value its instance masks already carry,
     so the ids join to them as text, and ``'108295823.0~1'`` becomes ``'108295823~1'``.
-    Only a text id column whose every non-null value has one of these forms is rewritten; any other file (integer, dictionary-encoded or mixed
-    ids) is left alone. Ids that differ only in their fraction (``'2.0'``, ``'2.00'``)
+    Only a text id column whose every non-null value has one of these forms is
+    rewritten; any other file (integer, dictionary-encoded or mixed ids) is left alone. Ids that differ only in their fraction (``'2.0'``, ``'2.00'``)
     become one id, which the dedupe step then resolves, and a renumbered row's
     ``source_id`` holds the id without its fraction. Rows, row groups, every other
     column and the file metadata are kept. Returns the number of ids rewritten, 0
