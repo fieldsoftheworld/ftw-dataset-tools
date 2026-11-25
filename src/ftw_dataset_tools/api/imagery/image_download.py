@@ -17,6 +17,7 @@ from ftw_dataset_tools.api.assets import add_file_info, add_raster_bands
 from ftw_dataset_tools.api.chip_grid import utm_grid_for_cell
 from ftw_dataset_tools.api.imagery.catalog_ops import normalize_imagery_properties
 from ftw_dataset_tools.api.imagery.chip_preview import refresh_chip_preview, takes_preview
+from ftw_dataset_tools.api.imagery.mosaic_search import MOSAIC_HREFS
 from ftw_dataset_tools.api.imagery.settings import (
     BANDS_OF_INTEREST,
     CHILD_ITEM_BAND_ASSETS,
@@ -53,6 +54,7 @@ __all__ = [
     "find_reference_mask_for_output",
     "on_reference_grid",
     "process_downloaded_scene",
+    "read_band_from_tiles",
     "stack_nodata",
 ]
 
@@ -87,6 +89,11 @@ class DownloadResult:
     crs: str
     success: bool = True
     error: str | None = None
+
+
+def _tile_hrefs(item: pystac.Item, band: str) -> list[str]:
+    """Every tile href of a band built from several mosaic tiles, primary first; else []."""
+    return list(item.assets[band].extra_fields.get(MOSAIC_HREFS) or [])
 
 
 def _get_band_hrefs(
@@ -273,9 +280,7 @@ def read_single_band(
     target_height: int,
 ) -> tuple[str, np.ndarray]:
     """Read one band reprojected to the target grid."""
-    resampling = (
-        Resampling.nearest if band_name in {"scl", "cloud", "snow"} else Resampling.bilinear
-    )
+    resampling = _resampling(band_name)
 
     with (
         rasterio.open(href) as source_dataset,
@@ -291,6 +296,60 @@ def read_single_band(
         data = warped_dataset.read(1)
 
     return band_name, data
+
+
+def read_band_from_tiles(
+    band_name: str,
+    hrefs: list[str],
+    target_crs: CRS,
+    target_transform: Affine,
+    target_width: int,
+    target_height: int,
+) -> tuple[str, np.ndarray]:
+    """Read one band from several overlapping tiles onto the target grid.
+
+    Each tile is warped as :func:`read_single_band` warps one; every pixel then comes
+    from the first of ``hrefs`` with data there, never a blend of two tiles. Tiles
+    after the first are read only while pixels are still missing.
+    """
+    combined, missing = None, None
+    for href in hrefs:
+        with (
+            rasterio.open(href) as source_dataset,
+            WarpedVRT(
+                source_dataset,
+                crs=target_crs,
+                transform=target_transform,
+                width=target_width,
+                height=target_height,
+                resampling=_resampling(band_name),
+            ) as warped_dataset,
+        ):
+            data = warped_dataset.read(1, masked=True)
+        if combined is None:
+            combined, missing = data.data, np.ma.getmaskarray(data)
+        else:
+            combined[missing] = data.data[missing]
+            missing &= np.ma.getmaskarray(data)
+        if not missing.any():
+            break
+    if combined is None:
+        raise ValueError(f"No tiles to read {band_name} from")
+    return band_name, combined
+
+
+def _resampling(band_name: str) -> Resampling:
+    return Resampling.nearest if band_name in {"scl", "cloud", "snow"} else Resampling.bilinear
+
+
+def _read_band(
+    item: pystac.Item, band_name: str, href: str, grid: tuple[CRS, Affine, int, int]
+) -> tuple[str, np.ndarray]:
+    """Read a band from its one href, or from every tile of a multi-tile mosaic quarter."""
+    hrefs = _tile_hrefs(item, band_name)
+    if len(hrefs) > 1:
+        return read_band_from_tiles(band_name, hrefs, *grid)
+    return read_single_band(band_name, href, *grid)
 
 
 def write_cog(
@@ -460,13 +519,11 @@ def download_and_clip_scene(
     with ThreadPoolExecutor(max_workers=min(4, len(found_bands))) as executor:
         futures = {
             executor.submit(
-                read_single_band,
+                _read_band,
+                scene.item,
                 band_name,
                 href,
-                target_crs,
-                target_transform,
-                target_width,
-                target_height,
+                (target_crs, target_transform, target_width, target_height),
             ): band_name
             for band_name, href in band_hrefs.items()
         }

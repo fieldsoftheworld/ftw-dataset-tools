@@ -95,10 +95,23 @@ properties above belong to scenes and are not written for mosaics.
 | `ftw:imagery_year` | child | integer | Mosaic year of this quarter's image |
 | `ftw:season` | child | string | `q1`..`q4` |
 | `ftw:source` | child | string | `sentinel-2-mosaic` |
-| `ftw:mosaic_tile` | child | string | Mosaic tile id, e.g. `31UGR_0_0` |
+| `ftw:mosaic_tile` | child | string | Mosaic tile id, e.g. `31UGR_0_0`; for a quarter built from several tiles, the primary one |
+| `ftw:mosaic_tiles` | child | array of strings | Only on a quarter built from several tiles: every tile, primary first. Absent means the one `ftw:mosaic_tile` |
 | `ftw:nodata_pct` | child | number | Share of the chip (0-100) the quarter's mosaic has no data for (cloudy all quarter, or past the tile's edge); the pixels are nodata (-32768) |
 
 Child items carry `start_datetime`/`end_datetime` for the quarter instead of `datetime`.
+
+Mosaic tiles are clipped to their 100 km MGRS square and overlap their neighbours by
+only ~60 m, and some squares on a UTM zone's western edge have no tile. A chip that no
+single tile contains gets its quarter from the smallest set of tiles that covers it
+together, usually two. Tiles in the chip's own UTM zone rank first, then those covering
+more of the chip. Each pixel comes from the first tile, in that order, with data
+there, warped onto the chip's grid like a single tile. Each remote band asset of such
+a child (until the download replaces them, or kept with `--keep-remote-refs`) has the
+primary tile's `href` and lists every tile's href, primary first, in `ftw:mosaic_hrefs`;
+the `href` alone is not the whole image. `start_datetime`/`end_datetime` span every
+tile's, and `ftw:nodata_pct` is measured on the combined image (on the chip's 10 m
+grid).
 
 ### Both Imagery Modes
 

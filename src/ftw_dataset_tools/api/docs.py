@@ -167,7 +167,10 @@ ITEM_PROPERTY_NOTES = {
     "ftw:mosaic_requested_year": "mosaic year the selection asked for",
     "ftw:mosaic_year": "mosaic year used",
     "ftw:imagery_year": "mosaic year used",
-    "ftw:mosaic_tile": "quarterly mosaic tile the imagery came from",
+    "ftw:mosaic_tile": "quarterly mosaic tile the imagery came from (the primary one when "
+    "several tiles were combined)",
+    "ftw:mosaic_tiles": "every mosaic tile a quarter combined from several tiles came from, "
+    "primary first",
     "ftw:nodata_pct": "share of the chip (0-100) the quarter's mosaic has no data for",
     "ftw:buffer_days": "half-width of the search window around the target day, in days",
     "ftw:field_coverage_pct": "percent of the chip's area covered by mapped field polygons",
