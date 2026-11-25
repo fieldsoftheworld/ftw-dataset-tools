@@ -636,7 +636,7 @@ Write a dataset's instance masks as COCO instance segmentation JSON (`instances_
 ftwd export-coco ./austria-dataset -o ./coco --min-area 10
 
 # Splits from the benchmark's root chips table, matched on the collection id
-ftwd export-coco ./at_2024 --splits https://data.source.coop/ftw/benchmark-data/chips.parquet
+ftwd export-coco ./at_2024 --splits https://data.source.coop/ftw/benchmark-data/chips/chips.parquet
 ftwd export-coco ./at_2024 --splits chips.parquet --split-column split_hash_v1
 ```
 
@@ -654,7 +654,7 @@ per (dataset, chip), with one column per split scheme. Model code picks the colu
 ```bash
 ftwd chips-table catalog/catalog.json \
     --data-base-url https://data.source.coop/ftw/benchmark-data \
-    --previous https://data.source.coop/ftw/benchmark-data/chips.parquet \
+    --previous https://data.source.coop/ftw/benchmark-data/chips/chips.parquet \
     --local staging/pt_2021 \
     --out work/chips.parquet
 ```
@@ -711,8 +711,8 @@ tippecanoe and tile-join on `PATH`):
 
 ```bash
 ftwd chips-tiles --table work/chips.parquet --out work/chips.pmtiles
-ftwd chips-tiles --thumbnail catalog/thumbnail.webp --style catalog/chips.style.json \
-    --tiles-url https://data.source.coop/ftw/benchmark-data/chips.pmtiles
+ftwd chips-tiles --thumbnail catalog/chips/thumbnail.webp --style catalog/chips/styles/split-admin2.json \
+    --tiles-url https://data.source.coop/ftw/benchmark-data/chips/chips.pmtiles
 ```
 
 A location is in every collection that covers it, so the table repeats it; the tiles have

@@ -73,7 +73,7 @@ def chips_table(
     Example:
         ftwd chips-table catalog/catalog.json \\
             --data-base-url https://data.source.coop/ftw/benchmark-data \\
-            --previous https://data.source.coop/ftw/benchmark-data/chips.parquet \\
+            --previous https://data.source.coop/ftw/benchmark-data/chips/chips.parquet \\
             --local staging/pt_2021 --out work/chips.parquet
     """
     from ftw_dataset_tools.api.chips_table import (

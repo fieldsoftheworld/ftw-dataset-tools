@@ -42,9 +42,9 @@ def chips_tiles(
     \b
     Examples:
         ftwd chips-tiles --table work/chips.parquet --out work/chips.pmtiles
-        ftwd chips-tiles --thumbnail catalog/thumbnail.webp \\
-            --style catalog/chips.style.json \\
-            --tiles-url https://data.source.coop/ftw/benchmark-data/chips.pmtiles
+        ftwd chips-tiles --thumbnail catalog/chips/thumbnail.webp \\
+            --style catalog/chips/styles/split-admin2.json \\
+            --tiles-url https://data.source.coop/ftw/benchmark-data/chips/chips.pmtiles
     """
     from ftw_dataset_tools.api.chips_tiles import ChipsTilesError, build_tiles
 
