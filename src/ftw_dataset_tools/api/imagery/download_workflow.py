@@ -28,6 +28,7 @@ from ftw_dataset_tools.api.imagery.parallel import (
 )
 from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 from ftw_dataset_tools.api.imagery.slots import image_filename, parse_child_id
+from ftw_dataset_tools.api.imagery.stac_child_items import record_quarter_nodata
 from ftw_dataset_tools.api.imagery.thumbnails import has_rgb_bands
 from ftw_dataset_tools.api.logging_config import capture_logs, get_logger, replay
 from ftw_dataset_tools.api.stac_items import write_item
@@ -67,6 +68,8 @@ class DownloadWorkflowResult:
     previews_redrawn: int = 0
     #: Stale chip overlays that could not be drawn; logged, not counted as failures.
     previews_redraw_failed: int = 0
+    #: Chip items given their quarters' ``ftw:qN_nodata_pct`` from the children on disk.
+    nodata_recorded: int = 0
 
 
 def find_s2_child_items(
@@ -202,6 +205,12 @@ def download_imagery_for_catalog(
 
     finally:
         progress_bar.close()
+
+    # Chips selected before the chip item carried each quarter's nodata get it here,
+    # from the children already read: a resumed run fills them in without a download.
+    result.nodata_recorded = record_quarter_nodata(child_items)
+    if result.nodata_recorded:
+        logger.info(f"Recorded quarterly nodata on {result.nodata_recorded} chip item(s)")
 
     if generate_thumbnails:
         # A skipped (already downloaded) chip keeps its overlay, though its mask
