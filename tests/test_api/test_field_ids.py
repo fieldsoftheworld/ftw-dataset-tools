@@ -1049,12 +1049,24 @@ class TestStripFloatSuffix:
         assert frame["crop:name"].tolist() == ["wheat", "wheat", "wheat"]
         assert not list(tmp_path.glob(".*.tmp"))
 
+    def test_a_source_suffix_after_the_fraction_is_kept(self, tmp_path: Path) -> None:
+        src = write(
+            tmp_path / "in.parquet",
+            [row("112773227.0", LEFT), row("108295823.0~1", RIGHT), row("108295823.00~2", FAR)],
+        )
+
+        assert field_ids.strip_float_suffix(src) == 3
+
+        assert self._ids(src) == ["112773227", "108295823~1", "108295823~2"]
+
     @pytest.mark.parametrize(
         "ids",
         [
             ["432033.0", "432034"],  # mixed: not every id is a float
             ["432033.5", "432034.0"],  # a real fraction
             ["5_1.0", "6.0"],  # not a plain number
+            ["5.0~", "6.0"],  # an empty source suffix
+            ["5.5~1", "6.0"],  # a real fraction before the suffix
             ["7", "8"],  # already plain
         ],
     )
