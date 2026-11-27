@@ -703,24 +703,31 @@ def _readme_title(collection: dict) -> str:
     return "\n\n".join(parts)
 
 
+def _polygons(count: int) -> str:
+    return f"{count:,} field polygon{'' if count == 1 else 's'}"
+
+
 def _field_count(stats: dict) -> str | None:
     """The field polygons, saying which file holds them and which ones made the masks."""
     used, used_file = stats["fields_total"], stats.get("fields_file")
-    if not used:
-        return None
-    if not used_file:
-        return f"{used:,} field polygons"
     total, all_file = stats.get("all_fields_total"), stats.get("all_fields_file")
+    if not used:
+        # The masks' fields file is missing; the source's count is still worth giving.
+        return f"{_polygons(total)} from the source (`{all_file}`)" if total and all_file else None
+    if not used_file:
+        return _polygons(used)
     if total is not None and all_file:
         return (
-            f"{total:,} field polygons from the source (`{all_file}`), {used:,} of which "
+            f"{_polygons(total)} from the source (`{all_file}`), {used:,} of which "
             f"pass the class filter (`{used_file}`) and make the masks"
         )
     if stats.get("class_filtered"):
+        verbs = ("passes", "makes") if used == 1 else ("pass", "make")
         return (
-            f"{used:,} field polygons that pass the class filter (`{used_file}`) and make the masks"
+            f"{_polygons(used)} that {verbs[0]} the class filter (`{used_file}`) and "
+            f"{verbs[1]} the masks"
         )
-    return f"{used:,} field polygons (`{used_file}`), all of them used for the masks"
+    return f"{_polygons(used)} (`{used_file}`), all of them used for the masks"
 
 
 def _counts(stats: dict) -> str:
@@ -978,13 +985,13 @@ def _readme_crops(stats: dict) -> str:
     covered = sum(share for _, _, share in crops)
     if stats.get("crop_basis") == "chips":
         lead = (
-            "The classes that are the dominant crop of the most chips, with each one's "
-            f"share of all chips (together {covered:.1%}):"
+            "The classes that are the dominant crop of the most chips. Each share is of "
+            f"all chips; together these classes are dominant in {covered:.1%} of them:"
         )
     else:
         lead = (
-            "The classes covering most of the area of the fields that make the masks, with "
-            f"each one's share of all of it (together {covered:.1%}):"
+            "The classes covering most of the area of the fields that make the masks. Each "
+            f"share is of that whole area; together these classes cover {covered:.1%} of it:"
         )
     return f"## Crops\n\nCrops are harmonized to the EuroCrops HCAT taxonomy. {lead}\n\n" + _table(
         ["crop", "HCAT code", "share"], rows

@@ -105,6 +105,48 @@ class TestClearSelections:
         assert result.exit_code == 0, result.output
         assert "No chips have imagery selections to clear." in result.output
 
+    def test_clearing_refreshes_the_collection_extent(self, tmp_path: Path) -> None:
+        """A cleared chip falls back to Jan 1 of its year, so the extent is the build year."""
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(
+            dataset_dir / "ds_fields.parquet"
+        )
+        _write_minimal_collection(dataset_dir / "collection.json")
+        collection = json.loads((dataset_dir / "collection.json").read_text())
+        collection["extent"]["temporal"]["interval"] = [
+            ["2024-01-01T00:00:00Z", "2025-03-01T23:59:59Z"]
+        ]
+        collection["assets"] = {"fields": {"href": "./ds_fields.parquet"}}
+        collection["ftw:config"] = {"config": {"year": 2024}}
+        (dataset_dir / "collection.json").write_text(json.dumps(collection))
+
+        item_path = _write_chip_item(dataset_dir / "chips" / "33UXP" / "ftw-item1", "ftw-item1")
+        item = pystac.Item.from_file(str(item_path))
+        item.properties.update(
+            {
+                "ftw:calendar_year": 2024,
+                "start_datetime": "2024-10-27T00:00:00Z",
+                "end_datetime": "2025-03-01T23:59:59Z",
+            }
+        )
+        for slot in ("planting", "harvest"):
+            item.add_link(pystac.Link(rel=f"ftw:{slot}", target=f"./ftw-item1_{slot}_s2.json"))
+        item.save_object(dest_href=str(item_path))
+
+        result = CliRunner().invoke(
+            cli, ["select-images", str(dataset_dir), "--clear-selections"], input="y\n"
+        )
+
+        assert result.exit_code == 0, result.output
+        collection = json.loads((dataset_dir / "collection.json").read_text())
+        assert collection["extent"]["temporal"]["interval"] == [
+            ["2024-01-01T00:00:00Z", "2024-12-31T23:59:59Z"]
+        ]
+
 
 class TestSelectImagesDirectoryMode:
     """Tests for directory-mode chip discovery under the single-collection layout.

@@ -1476,7 +1476,7 @@ class TestCropShares:
         ]
         crops = docs._readme_crops(stats)
         assert "| Winter wheat | 3301010101 | 40.0% |" in crops
-        assert "make the masks, with each one's share of all of it (together 60.0%)" in crops
+        assert "Each share is of that whole area; together these classes cover 60.0% of it" in crops
 
     def test_chip_shares_are_of_all_chips(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1496,7 +1496,7 @@ class TestCropShares:
 
         assert stats["crop_basis"] == "chips"
         assert stats["top_crops"] == [(3301010101, "Winter wheat", pytest.approx(0.5))]
-        assert "share of all chips (together 50.0%)" in docs._readme_crops(stats)
+        assert "together these classes are dominant in 50.0% of them" in docs._readme_crops(stats)
 
 
 class TestFieldCounts:
@@ -1542,11 +1542,21 @@ class TestFieldCounts:
         write_docs(tmp_path, coll_path, chips, filtered, [], {})
 
         expected = (
-            "1 field polygons that pass the class filter (`ds_fields_filtered.parquet`) "
-            "and make the masks"
+            "1 field polygon that passes the class filter (`ds_fields_filtered.parquet`) "
+            "and makes the masks"
         )
         assert expected in (tmp_path / "README.md").read_text()
         assert "all of them used" not in (tmp_path / "README.md").read_text()
+
+    def test_without_the_filtered_file_the_source_count_is_given(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import write_docs
+
+        coll_path, chips, filtered = self._with_filtered(tmp_path)
+        filtered.unlink()
+        write_docs(tmp_path, coll_path, chips, filtered, [], {})
+
+        readme = (tmp_path / "README.md").read_text()
+        assert "2 chips and 2 field polygons from the source (`ds_fields.parquet`)." in readme
 
     def test_an_unfiltered_build_names_its_one_file(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.docs import write_docs

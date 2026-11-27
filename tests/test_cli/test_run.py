@@ -163,6 +163,24 @@ class TestRunDryRunRemote:
         assert result.exit_code == 0, result.output
         assert "https://x/lu.parquet" in result.output
 
+    def test_dry_run_reports_the_source_collection_and_its_title(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.cli import cli
+
+        cfg = tmp_path / "c.yaml"
+        cfg.write_text(
+            "fields_file: https://x/lu.parquet\n"
+            "source_via: https://x/collection.json\n"
+            "source_title: Luxembourg fields\n"
+            f"output_dir: {tmp_path / 'out'}\n"
+            "year: 2024\n"
+        )
+
+        result = CliRunner().invoke(cli, ["run", str(cfg), "--dry-run"])
+
+        assert result.exit_code == 0, result.output
+        assert "  via: https://x/collection.json" in result.output
+        assert "  title: Luxembourg fields" in result.output
+
 
 class TestPrintSummaryCropComposition:
     def _base_ctx(self, tmp_path: Path) -> Mock:

@@ -869,8 +869,10 @@ def refresh_temporal_extent(
     The stac stage widens the fields' extent to cover each chip's crop season, which
     for a southern-hemisphere chip ends in the next year. Imagery selection then
     narrows each chip to its imagery, so the callers that change the chips afterwards
-    (selection, clearing, a docs rebuild) call this to take the extent the stac stage
-    would now compute: the fields' extent widened to cover every chip item. The file is
+    (selection, clearing, a docs rebuild) call this. The extent becomes the fields' extent
+    (else the build's year) widened to cover every chip item's current dates: its
+    imagery's after selection, the crop season of a chip without imagery, and after a
+    clear the single datetime the chip falls back to (Jan 1 of its year). The file is
     edited as JSON and written only when the extent changes. Returns whether it did.
     When the chip items or the fields' extent cannot be read (no chips on disk, no
     local fields file, or no dates and no ``ftw:config`` year), it is left as it is.
