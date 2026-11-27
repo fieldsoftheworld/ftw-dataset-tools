@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -47,6 +48,25 @@ if TYPE_CHECKING:
     from ftw_dataset_tools.api.imagery.scene_selection import SelectedScene
 
 logger = get_logger(__name__)
+
+# Every scene's bands are read on one long-lived pool. A new pool per scene left sockets open
+# after its threads exited on Linux (not on macOS), and over a few hundred thousand scenes that
+# used up the host's local ports, after which DNS lookups and so every band read failed.
+_BAND_READ_THREADS = 256
+_band_read_pool: ThreadPoolExecutor | None = None
+_band_read_pool_lock = threading.Lock()
+
+
+def _band_reader() -> ThreadPoolExecutor:
+    """The shared pool band reads run on, started on first use."""
+    global _band_read_pool
+    with _band_read_pool_lock:
+        if _band_read_pool is None:
+            _band_read_pool = ThreadPoolExecutor(
+                max_workers=_BAND_READ_THREADS, thread_name_prefix="band-read"
+            )
+        return _band_read_pool
+
 
 __all__ = [
     "DownloadResult",
@@ -516,30 +536,30 @@ def download_and_clip_scene(
     failed_band = None
     failed_error = None
 
-    with ThreadPoolExecutor(max_workers=min(4, len(found_bands))) as executor:
-        futures = {
-            executor.submit(
-                _read_band,
-                scene.item,
-                band_name,
-                href,
-                (target_crs, target_transform, target_width, target_height),
-            ): band_name
-            for band_name, href in band_hrefs.items()
-        }
+    executor = _band_reader()
+    futures = {
+        executor.submit(
+            _read_band,
+            scene.item,
+            band_name,
+            href,
+            (target_crs, target_transform, target_width, target_height),
+        ): band_name
+        for band_name, href in band_hrefs.items()
+    }
 
-        for future in as_completed(futures):
-            band_name = futures[future]
-            try:
-                name, data = future.result()
-                band_results[name] = data
-            except Exception as e:
-                failed_band = band_name
-                failed_error = str(e)
-                # Cancel remaining futures
-                for f in futures:
-                    f.cancel()
-                break
+    for future in as_completed(futures):
+        band_name = futures[future]
+        try:
+            name, data = future.result()
+            band_results[name] = data
+        except Exception as e:
+            failed_band = band_name
+            failed_error = str(e)
+            # Cancel remaining futures
+            for f in futures:
+                f.cancel()
+            break
 
     if failed_band is not None:
         return DownloadResult(
