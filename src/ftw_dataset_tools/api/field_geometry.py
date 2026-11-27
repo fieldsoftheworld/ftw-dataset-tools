@@ -24,6 +24,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import shapely
 
+from ftw_dataset_tools.api.field_ids import _native_geometry_columns
 from ftw_dataset_tools.api.geo import (
     detect_geometry_column,
     ensure_spatial_loaded,
@@ -137,7 +138,7 @@ def _repairs(
     """Each invalid row's repaired geometry, None for one to drop; counted on ``result``."""
     repairs: dict[int, shapely.Geometry | None] = {}
     for row, (wkb, fid) in invalid.items():
-        fixed = repaired_shape(shapely.from_wkb(wkb))
+        fixed = _repaired_wkb(wkb)
         repairs[row] = fixed
         if fixed is None:
             result.dropped += 1
@@ -148,6 +149,14 @@ def _repairs(
         if fid is not None and len(examples) < _EXAMPLES:
             examples.append(fid)
     return repairs
+
+
+def _repaired_wkb(wkb: bytes) -> shapely.Geometry | None:
+    """The repair of one stored geometry; a ring left unclosed is closed first."""
+    try:
+        return repaired_shape(shapely.from_wkb(wkb, on_invalid="fix"))
+    except shapely.errors.GEOSException:
+        return None  # nothing GEOS can read back as an area
 
 
 @dataclass(frozen=True)
@@ -174,7 +183,7 @@ def _rewrite(
     result: RepairResult,
 ) -> None:
     """Write ``src`` to ``dst`` one row group at a time, with ``repairs`` applied."""
-    if _native_geometry(src):
+    if _native_geometry_columns(src):
         import geoarrow.pyarrow  # noqa: F401  (keeps a Parquet GEOMETRY column native)
     with pq.ParquetFile(src) as source:
         schema = source.schema_arrow
@@ -182,24 +191,18 @@ def _rewrite(
         kept = [g.geom_type for g in repairs.values() if g is not None]
         metadata = _metadata(schema.metadata or {}, geom_col, set(kept), result)
         schema = schema.with_metadata(metadata)
+        positions = np.fromiter(repairs, dtype=np.int64)  # in row order
+        shapes = list(repairs.values())
         start = 0
         with pq.ParquetWriter(
             dst, schema, compression="zstd", compression_level=_ZSTD_LEVEL
         ) as writer:
             for i in range(source.num_row_groups):
                 table = source.read_row_group(i)
-                rows = {r - start: g for r, g in repairs.items() if start <= r < start + len(table)}
+                lo, hi = np.searchsorted(positions, [start, start + len(table)])
+                rows = {int(positions[k]) - start: shapes[k] for k in range(lo, hi)}
                 start += len(table)
                 writer.write_table(_apply(table, columns, rows).cast(schema))
-
-
-def _native_geometry(src: Path) -> bool:
-    """Whether ``src`` stores a column with Parquet's GEOMETRY or GEOGRAPHY type."""
-    schema = pq.ParquetFile(src).schema
-    return any(
-        str(schema.column(i).logical_type).startswith(("Geometry", "Geography"))
-        for i in range(len(schema))
-    )
 
 
 def _apply(
@@ -262,7 +265,11 @@ def _metadata(
     metadata: dict[bytes, bytes], geom_col: str, added_types: set[str], result: RepairResult
 ) -> dict[bytes, bytes]:
     """The file's metadata with ``geo`` listing any new geometry type, and a pandas range
-    index shortened by the rows dropped."""
+    index shortened by the rows dropped.
+
+    The file-level ``geo`` bbox is kept: a repair only shrinks or removes shapes, so it
+    still contains every geometry.
+    """
     metadata = {k: v for k, v in metadata.items() if k != b"ARROW:schema"}
     if b"geo" in metadata:
         geo = json.loads(metadata[b"geo"])

@@ -154,3 +154,86 @@ class TestOutwardBounds:
         high = field_geometry._outward(values, pa.float32(), down=False).to_numpy()
         assert (low.astype(np.float64) <= values).all()
         assert (high.astype(np.float64) >= values).all()
+
+
+def _polygon_wkb(coords: list[tuple[float, float]]) -> bytes:
+    """A WKB polygon with exactly ``coords`` as its ring, closed or not."""
+    import struct
+
+    wkb = struct.pack("<BII", 1, 3, 1) + struct.pack("<I", len(coords))
+    return wkb + b"".join(struct.pack("<dd", x, y) for x, y in coords)
+
+
+class TestUnusualInput:
+    def test_unclosed_ring_is_closed_not_a_crash(self, tmp_path: Path) -> None:
+        path = tmp_path / "fields.parquet"
+        table = pa.table(
+            {
+                "id": ["1", "2"],
+                "geometry": [
+                    _polygon_wkb([(0, 0), (1, 0), (1, 1), (0, 1)]),  # unclosed
+                    shapely.to_wkb(box(2, 0, 3, 1)),
+                ],
+            }
+        )
+        geo = {
+            "version": "1.1.0",
+            "primary_column": "geometry",
+            "columns": {"geometry": {"encoding": "WKB", "geometry_types": ["Polygon"]}},
+        }
+        pq.write_table(table.replace_schema_metadata({"geo": json.dumps(geo)}), path)
+
+        result = field_geometry.repair_geometries(path)
+
+        assert result.repaired == 1
+        shapes = shapely.from_wkb(pq.read_table(path).column("geometry").to_pylist())
+        assert shapes[0].equals(box(0, 0, 1, 1))
+
+    def test_null_geometries_pass_through(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, [None, BOW_TIE, box(80, 0, 90, 10)])
+
+        result = field_geometry.repair_geometries(path)
+
+        assert (result.repaired, result.dropped) == (1, 0)
+        table = pq.read_table(path)
+        assert table.column("geometry")[0].as_py() is None
+        assert table.column("id").to_pylist() == ["1", "2", "3"]
+
+    def test_float32_bbox_contains_the_repaired_shape(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, [shapely.affinity.translate(SPIKE, 0.1, 0.3)])
+        table = pq.read_table(path)
+        bbox_type = pa.struct([(n, pa.float32()) for n in ("xmin", "ymin", "xmax", "ymax")])
+        index = table.schema.get_field_index("bbox")
+        table = table.set_column(index, "bbox", table.column("bbox").cast(bbox_type))
+        pq.write_table(table, path)
+
+        field_geometry.repair_geometries(path)
+
+        table = pq.read_table(path)
+        assert table.schema.field("bbox").type == bbox_type
+        bbox = table.column("bbox")[0].as_py()
+        xmin, ymin, xmax, ymax = shapely.from_wkb(table.column("geometry")[0].as_py()).bounds
+        assert bbox["xmin"] <= xmin and bbox["ymin"] <= ymin
+        assert bbox["xmax"] >= xmax and bbox["ymax"] >= ymax
+
+    def test_native_geometry_column_stays_native(self, tmp_path: Path) -> None:
+        import duckdb
+
+        path = tmp_path / "native.parquet"
+        con = duckdb.connect()
+        con.execute("INSTALL spatial; LOAD spatial")
+        con.execute(
+            f"""COPY (SELECT * FROM (VALUES
+                    ('1', ST_GeomFromText('{BOW_TIE.wkt}')),
+                    ('2', ST_GeomFromText('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))'))
+                ) t(id, geometry))
+                TO '{path}' (FORMAT parquet, GEOPARQUET_VERSION 'V2')"""
+        )
+        con.close()
+
+        result = field_geometry.repair_geometries(path)
+
+        assert result.repaired == 1
+        column = pq.ParquetFile(path).schema.column(1)
+        assert str(column.logical_type).startswith("Geometry")
+        assert field_geometry._invalid_rows(path, "geometry") == {}

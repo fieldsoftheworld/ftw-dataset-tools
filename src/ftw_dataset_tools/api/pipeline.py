@@ -579,10 +579,11 @@ def stage_reproject(ctx: PipelineContext) -> None:
             f"Field ids are whole numbers written as floats ('123.0'); stored all "
             f"{stripped:,} without the fraction"
         )
-    _dedupe_field_ids(ctx)
     # Every later stage reads these polygons: repaired once here, the boundary lines,
-    # the mask fill and the per-chip outlines all follow the same valid shape.
+    # the mask fill and the per-chip outlines all follow the same valid shape. Before
+    # the dedupe, so it compares valid shapes and keeps a row that has an area.
     ctx.repair_result = field_geometry.repair_geometries(ctx.output_fields_path)
+    _dedupe_field_ids(ctx)
 
 
 def _dedupe_field_ids(ctx: PipelineContext) -> None:
