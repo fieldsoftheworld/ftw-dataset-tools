@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 
-from ftw_dataset_tools.api import field_ids
+from ftw_dataset_tools.api import field_ids, hidden_fields
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.imagery.catalog_ops import chip_item_files, iter_chip_dirs
 from ftw_dataset_tools.api.logging_config import get_logger
@@ -140,7 +140,8 @@ FIELD_COLUMN_NOTES = {
     "identical rows were kept once, the parts of one field were merged into one row, "
     "and of several declarations for the same polygon one was kept (one the class "
     "filter includes, if the build has one); any other rows sharing an id became "
-    "`<id>_1`, `<id>_2`, ...",
+    "`<id>_1`, `<id>_2` and so on. An id ending in `~<n>` (`115462620~1`) came so from "
+    "the source, which numbered rows it gave one id; those are separate fields here",
     "source_id": "the field's id in the source dataset; differs from `id` only for rows "
     "renumbered `<id>_<n>` because the source gave several different fields one id",
     "other_crop_names": "for a parcel the source declared more than once with different "
@@ -559,6 +560,7 @@ def collect_stats(
         "chip_columns": chip_columns,
         "field_columns": field_columns,
         "field_ids_unique": ids_unique,
+        "hidden_fields": hidden_fields.recorded(fields) if fields.exists() else None,
         "item_properties": item_properties,
         "split_type": _split_type(collection, config_dict or {}),
         "chip_files": chip_files,
@@ -857,6 +859,7 @@ def _mask_notes(stats: dict, *, grid: bool = True) -> list[str]:
         _decode_note(stats, facts),
         *_chip_file_notes(stats),
         _narrow_field_note(stats, facts),
+        _hidden_fields_note(stats),
     ]
     return [note for note in notes if note]
 
@@ -887,6 +890,21 @@ def _narrow_field_note(stats: dict, facts: dict) -> str | None:
     if "instance_labels" in chip_files:
         text += ", but not in `<chip>_instance_labels.json`"
     return text + "."
+
+
+def _hidden_fields_note(stats: dict) -> str | None:
+    """How many fields were dropped because the instance mask could not show them."""
+    hidden = stats.get("hidden_fields")
+    if not hidden:
+        return None
+    count, share = int(hidden.get("dropped", 0)), float(hidden.get("share", 0))
+    fields = "field was" if count == 1 else "fields were"
+    return (
+        f"{count:,} {fields} left out of the masks, boundary lines and per-chip outlines "
+        f"because at least {share:.0%} of each lay under fields drawn over it in the "
+        "instance mask (duplicate or nested polygons it could not show). The full fields "
+        "table (`fields`) still has them."
+    )
 
 
 def _chip_file_notes(stats: dict) -> list[str]:

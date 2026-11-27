@@ -642,12 +642,27 @@ def _get_geometries_in_bounds(
     # Without a crop column rows keep the file's order (DuckDB preserves it), or the
     # original file's for a sorted copy: where fields overlap the later row wins, and a
     # chip numbered 1..n follows that order.
-    if crop_column is not None:
-        query += " ORDER BY id, wkt, crop"
+    paint_order = instance_paint_order(id_col, geom_col, crop_column)
+    if paint_order is not None:
+        query += f" ORDER BY {paint_order}"
     elif order_col is not None:
         query += f' ORDER BY "{order_col}"'
 
     return conn.execute(query).fetchall()
+
+
+def instance_paint_order(id_col: str | None, geom_col: str, crop_column: str | None) -> str | None:
+    """The ORDER BY in which the instance mask burns fields, or None for file order.
+
+    Rows are burned in this order and a later row paints over an earlier one, so it
+    decides which of two overlapping fields shows. ``api/hidden_fields.py`` ranks the
+    fields by it too.
+    """
+    if crop_column is None:
+        return None
+    crop_sql = crop_column.replace('"', '""')
+    order = f'ST_AsText("{geom_col}"), CAST("{crop_sql}" AS VARCHAR)'
+    return f'"{id_col}", {order}' if id_col else order
 
 
 def _wkt_to_geometry(wkt: str):

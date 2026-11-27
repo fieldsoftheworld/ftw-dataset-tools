@@ -36,6 +36,7 @@ from ftw_dataset_tools.api import (
     field_embeddings,
     field_ids,
     field_stats,
+    hidden_fields,
     label_extent,
     land_cover,
     masks,
@@ -185,6 +186,7 @@ class PipelineContext:
     was_reprojected: bool = False
     source_crs: str | None = None
     dedup_result: field_ids.DedupResult | None = None
+    hidden_result: hidden_fields.HiddenFieldsResult | None = None
     chips_result: field_stats.FieldStatsResult | None = None
     crop_stats_result: crop_stats.CropStatsResult | None = None
     label_extent_result: label_extent.LabelExtentChipsResult | None = None
@@ -212,9 +214,10 @@ class PipelineContext:
         name = self.field_dataset
         self.output_fields_path = self.output_dir / f"{name}_fields.parquet"
         # Field polygons consumed by chips/splits/boundaries/masks. When a class
-        # filter is configured, these stages read the filtered file; otherwise the
-        # full reprojected fields file. STAC always references output_fields_path.
-        if self.config.class_filter is not None:
+        # filter is configured or hidden fields are dropped, these stages read the
+        # filtered file; otherwise the full reprojected fields file. STAC always
+        # references output_fields_path.
+        if self.filters_fields:
             self.field_polygons_path = self.output_dir / f"{name}_fields_filtered.parquet"
         else:
             self.field_polygons_path = self.output_fields_path
@@ -224,9 +227,19 @@ class PipelineContext:
         self.chips_base_dir = stac.chips_base_dir_for(self.output_dir)
 
     @property
+    def filters_fields(self) -> bool:
+        """Whether the filter stage writes the field polygons the later stages read."""
+        return filters_fields(self.config)
+
+    @property
     def field_polygons_producer(self) -> str:
         """Which stage produces field_polygons_path (for input-error messages)."""
-        return "filter" if self.config.class_filter is not None else "reproject"
+        return "filter" if self.filters_fields else "reproject"
+
+
+def filters_fields(config: DatasetConfig) -> bool:
+    """Whether the recipe filters the fields: a class filter, or dropping hidden fields."""
+    return config.class_filter is not None or config.stages.masks.drop_hidden_fields
 
 
 def _input_name_stem(config: DatasetConfig) -> str:
@@ -390,7 +403,7 @@ def resolve_stages(
 
 def _stage_enabled(stage: str, config: DatasetConfig) -> bool:
     if stage == "filter":
-        return config.class_filter is not None
+        return filters_fields(config)
     if stage == "scale":
         return config.stages.scale.percent < 100
     if stage == "splits":
@@ -632,16 +645,34 @@ def _write_default_crs(src: Path | str, dst: Path) -> None:
 
 
 def stage_filter(ctx: PipelineContext) -> None:
-    """Apply the class filter, writing field-only polygons for downstream stages.
+    """Apply the class filter and drop hidden fields, writing the polygons later stages read.
 
-    No-op when no class filter is configured. The full source stays in
-    output_fields_path; only include-classes are written to field_polygons_path.
+    No-op when neither is configured. The full source stays in output_fields_path;
+    field_polygons_path gets the include-classes, without the fields the instance mask
+    cannot show when stages.masks.drop_hidden_fields is on.
     """
-    cf = ctx.config.class_filter
-    if cf is None:
+    if not ctx.filters_fields:
         return
     _require(ctx.output_fields_path, stage="filter", produced_by="reproject")
+    if ctx.config.class_filter is not None:
+        _apply_class_filter(ctx, ctx.config.class_filter)
+    masks_cfg = ctx.config.stages.masks
+    if masks_cfg.drop_hidden_fields:
+        filtered = ctx.config.class_filter is not None
+        source = ctx.field_polygons_path if filtered else ctx.output_fields_path
+        logger.info("Dropping the fields the instance mask cannot show...")
+        try:
+            ctx.hidden_result = hidden_fields.drop_hidden_fields(
+                source,
+                ctx.field_polygons_path,
+                share=masks_cfg.hidden_field_share,
+                crop_column=masks_cfg.crop_column,
+            )
+        except hidden_fields.HiddenFieldsError as err:
+            raise StageInputError(str(err)) from err
 
+
+def _apply_class_filter(ctx: PipelineContext, cf: config_module.ClassFilter) -> None:
     column = class_filter.resolve_column(ctx.output_fields_path, cf)
     logger.info(f"Filtering fields by column '{column}'...")
     distinct = class_filter.get_distinct_classes(ctx.output_fields_path, column)
@@ -955,7 +986,7 @@ def stage_stac(ctx: PipelineContext) -> None:
     _require(ctx.chips_path, stage="stac", produced_by="chips")
     _require(ctx.output_fields_path, stage="stac", produced_by="reproject")
     _require(ctx.boundary_lines_path, stage="stac", produced_by="boundaries")
-    if ctx.config.class_filter is not None:
+    if ctx.filters_fields:
         _require(ctx.field_polygons_path, stage="stac", produced_by="filter")
     _require_label_extent_match(ctx, stage="stac")
 
@@ -968,9 +999,7 @@ def stage_stac(ctx: PipelineContext) -> None:
         fields_file=ctx.output_fields_path,
         chips_file=ctx.chips_path,
         boundary_lines_file=ctx.boundary_lines_path,
-        filtered_fields_file=(
-            ctx.field_polygons_path if ctx.config.class_filter is not None else None
-        ),
+        filtered_fields_file=ctx.field_polygons_path if ctx.filters_fields else None,
         field_embeddings_file=_published_field_embeddings(ctx),
         year=ctx.effective_year,
         provenance=ctx.provenance,

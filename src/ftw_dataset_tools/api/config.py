@@ -22,6 +22,7 @@ import yaml
 from ftw_dataset_tools import __version__
 from ftw_dataset_tools.api import chip_grid, field_stats, scale, splits
 from ftw_dataset_tools.api.chip_borders import DEFAULT_BORDER_GAP_CHIPS
+from ftw_dataset_tools.api.hidden_fields import DEFAULT_SHARE as DEFAULT_HIDDEN_FIELD_SHARE
 from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
 from ftw_dataset_tools.api.imagery.slots import (
     DEFAULT_IMAGERY_MODE,
@@ -354,6 +355,12 @@ class MasksConfig:
     # (0); outside, unknown (3). Chips wholly outside are dropped. Optional; an
     # alternative to presence_only.
     label_extent: str | None = None
+    # Drop the fields the instance mask cannot show: those with at least
+    # hidden_field_share of their area under fields burned over them (duplicates,
+    # nested slivers). They then get no boundary lines and no outlines either, and the
+    # masks read a filtered fields file. Off by default.
+    drop_hidden_fields: bool = False
+    hidden_field_share: float = DEFAULT_HIDDEN_FIELD_SHARE
 
 
 @dataclass
@@ -844,6 +851,7 @@ class DatasetConfig:
             )
         if not isinstance(self.stages.masks.field_vectors, bool):
             raise ConfigError("stages.masks.field_vectors must be true or false")
+        self._validate_hidden_fields()
 
         self._validate_label_extent()
 
@@ -855,6 +863,21 @@ class DatasetConfig:
         ):
             raise ConfigError(
                 "stages.masks.crop_column requires a column name and mask_types: [instance]"
+            )
+
+    def _validate_hidden_fields(self) -> None:
+        masks = self.stages.masks
+        if not isinstance(masks.drop_hidden_fields, bool):
+            raise ConfigError("stages.masks.drop_hidden_fields must be true or false")
+        share = masks.hidden_field_share
+        if isinstance(share, bool) or not isinstance(share, int | float) or not 0 < share <= 1:
+            raise ConfigError(
+                "stages.masks.hidden_field_share must be a share of a field's area, "
+                f"above 0 and at most 1 (got {share!r})"
+            )
+        if share != DEFAULT_HIDDEN_FIELD_SHARE and not masks.drop_hidden_fields:
+            raise ConfigError(
+                "stages.masks.hidden_field_share needs stages.masks.drop_hidden_fields: true"
             )
 
     def _validate_label_extent(self) -> None:
@@ -909,6 +932,9 @@ class DatasetConfig:
             del data["stages"]["masks"]["boundary_width_m"]
         if self.source_title is None:
             del data["source_title"]
+        if not self.stages.masks.drop_hidden_fields:
+            del data["stages"]["masks"]["drop_hidden_fields"]
+            del data["stages"]["masks"]["hidden_field_share"]
         if self.stages.splits.split_type is None:
             del data["stages"]["splits"]
         elif self.stages.splits.split_type == "predefined":  # the source sets the split

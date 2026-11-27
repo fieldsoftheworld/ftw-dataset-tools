@@ -1,0 +1,316 @@
+"""Drop the fields the instance mask cannot show.
+
+Some sources hold fields that lie (almost) entirely under other fields: the same parcel
+declared twice under two ids, or a sliver nested inside a field. The instance mask
+burns fields in one order (:func:`~ftw_dataset_tools.api.masks.instance_paint_order`:
+file order, or by id, geometry and crop when the masks have a crop column), and a
+later field paints over an earlier one, so such a field gets few or no pixels while its
+outline is still burned as boundary lines across the field that shows.
+
+:func:`drop_hidden_fields` drops each field of which at least ``share`` of the area
+lies under fields burned after it that are themselves kept, so the field that shows
+today stays and the visible fields' pixels don't change. Partial overlaps stay.
+
+It runs in three passes, so a source with millions of fields stays cheap: an STRtree
+over the fields' bounding boxes finds the fields whose box overlap with later fields
+could reach ``share`` of their area; for those, the exact overlap with each later field
+is summed (an upper bound of the area covered); only fields that pass both get the
+union of the later fields that cover them.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import duckdb
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+import shapely
+
+from ftw_dataset_tools.api.field_ids import _native_geometry_columns
+from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
+from ftw_dataset_tools.api.logging_config import get_logger
+from ftw_dataset_tools.api.masks import _instance_id_column, instance_paint_order
+
+logger = get_logger(__name__)
+
+DEFAULT_SHARE = 0.95
+#: Key of the Parquet key-value metadata recording what was dropped, read by the docs.
+METADATA_KEY = "ftw:hidden_fields"
+_ID_COLUMN = "id"
+_EXAMPLES = 5
+# Fields per STRtree query: bounds the candidate pairs held at once.
+_CHUNK = 200_000
+_ZSTD_LEVEL = 6
+
+
+class HiddenFieldsError(ValueError):
+    """Raised when the fields cannot be ranked the way the instance mask burns them."""
+
+
+@dataclass
+class HiddenFieldsResult:
+    """What :func:`drop_hidden_fields` dropped."""
+
+    rows_in: int = 0
+    dropped: int = 0
+    share: float = DEFAULT_SHARE
+    dropped_ids: list[str] = field(default_factory=list)  # up to _EXAMPLES
+
+    def summary(self) -> str:
+        """One line for the log."""
+        line = (
+            f"Dropped {self.dropped:,} of {self.rows_in:,} fields with at least "
+            f"{self.share:.0%} of their area under fields drawn over them"
+        )
+        if self.dropped_ids:
+            line += f" (e.g. id {', '.join(self.dropped_ids)})"
+        return line
+
+    def record(self) -> dict:
+        """What the fields file records under :data:`METADATA_KEY`."""
+        return {"dropped": self.dropped, "share": self.share, "rows_in": self.rows_in}
+
+
+def recorded(path: Path | str) -> dict | None:
+    """What :func:`drop_hidden_fields` recorded in ``path``, or None if it didn't write it."""
+    metadata = pq.read_schema(path).metadata or {}
+    raw = metadata.get(METADATA_KEY.encode())
+    return json.loads(raw) if raw else None
+
+
+# --------------------------------------------------------------------------- #
+# Ranking the fields
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class _Index:
+    """Every field's paint rank, bounding box and area (0 when invalid), by row."""
+
+    paint: np.ndarray
+    bounds: np.ndarray  # (n, 4)
+    area: np.ndarray
+
+
+def _index(path: Path, geom_col: str, crop_column: str | None) -> _Index:
+    """The fields in row order, ranked the way the instance mask burns them."""
+    con = duckdb.connect(":memory:")
+    try:
+        ensure_spatial_loaded(con)
+        id_col = _instance_id_column(con, path)
+        order = instance_paint_order(id_col, geom_col, crop_column) or "file_row_number"
+        g = f'"{geom_col}"'
+        cols = con.execute(
+            f"""SELECT row_number() OVER (ORDER BY {order}) AS paint,
+                       coalesce(ST_XMin({g}), 'NaN') AS x0, coalesce(ST_YMin({g}), 'NaN') AS y0,
+                       coalesce(ST_XMax({g}), 'NaN') AS x1, coalesce(ST_YMax({g}), 'NaN') AS y1,
+                       coalesce(CASE WHEN ST_IsValid({g}) THEN ST_Area({g}) END, 0) AS area
+                FROM read_parquet('{sql_path(path)}', file_row_number = true)
+                ORDER BY file_row_number"""
+        ).fetchnumpy()
+    except duckdb.BinderException as err:
+        raise HiddenFieldsError(f"Cannot rank the fields of {path.name}: {err}") from err
+    finally:
+        con.close()
+    bounds = np.column_stack([np.asarray(cols[k], dtype=float) for k in ("x0", "y0", "x1", "y1")])
+    area = np.nan_to_num(np.asarray(cols["area"], dtype=float))
+    return _Index(np.asarray(cols["paint"]), bounds, area)
+
+
+# --------------------------------------------------------------------------- #
+# Finding the hidden fields
+# --------------------------------------------------------------------------- #
+
+
+def _box_overlap(bounds: np.ndarray, pairs: np.ndarray) -> np.ndarray:
+    a, b = bounds[pairs[:, 0]], bounds[pairs[:, 1]]
+    width = np.minimum(a[:, 2], b[:, 2]) - np.maximum(a[:, 0], b[:, 0])
+    height = np.minimum(a[:, 3], b[:, 3]) - np.maximum(a[:, 1], b[:, 1])
+    return np.clip(width, 0, None) * np.clip(height, 0, None)
+
+
+def _reaching(pairs: np.ndarray, overlap: np.ndarray, area: np.ndarray, share: float) -> np.ndarray:
+    """The pairs whose field's summed overlap reaches ``share`` of its area (or it's invalid)."""
+    total = np.bincount(pairs[:, 0], weights=overlap, minlength=len(area))
+    reach = (total >= share * area) & (total > 0)
+    return pairs[reach[pairs[:, 0]] & (overlap > 0)]
+
+
+def _candidate_pairs(index: _Index, share: float) -> np.ndarray:
+    """Pairs of fields whose bounding boxes could hide the first under the later ones."""
+    bounds = index.bounds
+    valid = np.isfinite(bounds).all(axis=1) & (bounds[:, 0] <= bounds[:, 2])
+    rows = np.flatnonzero(valid)
+    tree = shapely.STRtree(shapely.box(*bounds[rows].T))
+    found = []
+    for start in range(0, len(rows), _CHUNK):
+        chunk = rows[start : start + _CHUNK]
+        b = bounds[chunk]
+        under, over = tree.query(shapely.box(b[:, 0], b[:, 1], b[:, 2], b[:, 3]))
+        pairs = np.column_stack([chunk[under], rows[over]])
+        pairs = pairs[index.paint[pairs[:, 1]] > index.paint[pairs[:, 0]]]
+        found.append(_reaching(pairs, _box_overlap(bounds, pairs), index.area, share))
+    return np.concatenate(found) if found else np.empty((0, 2), dtype=np.int64)
+
+
+def _shapes(path: Path, geom_col: str, rows: np.ndarray) -> dict[int, shapely.Geometry]:
+    """The valid geometries of ``rows``, by row number."""
+    con = duckdb.connect(":memory:")
+    try:
+        ensure_spatial_loaded(con)
+        con.register("wanted", pa.table({"row": pa.array(rows, pa.int64())}))
+        found = con.execute(
+            f"""SELECT file_row_number, ST_AsWKB("{geom_col}")
+                FROM read_parquet('{sql_path(path)}', file_row_number = true)
+                WHERE file_row_number IN (SELECT row FROM wanted)"""
+        ).fetchall()
+    finally:
+        con.close()
+    positions = [int(r) for r, _ in found]
+    shapes = shapely.make_valid(shapely.from_wkb([bytes(w) for _, w in found], on_invalid="fix"))
+    return dict(zip(positions, shapes, strict=True))
+
+
+def _exact_pairs(
+    pairs: np.ndarray, shapes: dict[int, shapely.Geometry], share: float
+) -> tuple[np.ndarray, dict[int, float]]:
+    """The pairs whose field's summed exact overlap still reaches ``share``, and the areas."""
+    unders = [shapes[int(r)] for r in pairs[:, 0]]
+    overs = [shapes[int(r)] for r in pairs[:, 1]]
+    overlap = shapely.area(shapely.intersection(unders, overs))
+    rows = np.unique(pairs[:, 0])
+    area = {int(r): float(shapely.area(shapes[int(r)])) for r in rows}
+    areas = np.zeros(int(pairs[:, 0].max()) + 1)
+    areas[rows] = [area[int(r)] for r in rows]
+    return _reaching(pairs, overlap, areas, share), area
+
+
+def _covered_share(shape: shapely.Geometry, covers: list[shapely.Geometry]) -> float:
+    if not covers or shapely.area(shape) <= 0:
+        return 0.0
+    covered = shapely.intersection(shape, shapely.union_all(covers))
+    return float(shapely.area(covered)) / float(shapely.area(shape))
+
+
+def _hidden(
+    pairs: np.ndarray, shapes: dict[int, shapely.Geometry], paint: np.ndarray, share: float
+) -> list[int]:
+    """The fields hidden under later fields that are kept, decided last burned first."""
+    later: dict[int, list[int]] = {}
+    for under, over in pairs:
+        later.setdefault(int(under), []).append(int(over))
+    dropped: set[int] = set()
+    for row in sorted(later, key=lambda r: paint[r], reverse=True):
+        covers = [shapes[o] for o in later[row] if o not in dropped]
+        if _covered_share(shapes[row], covers) >= share:
+            dropped.add(row)
+    return sorted(dropped)
+
+
+def find_hidden_fields(
+    path: Path | str, *, share: float = DEFAULT_SHARE, crop_column: str | None = None
+) -> list[int]:
+    """The row numbers of the fields in ``path`` the instance mask cannot show.
+
+    ``crop_column`` is the masks' crop column: with one, the masks burn the fields in
+    another order (see :func:`~ftw_dataset_tools.api.masks.instance_paint_order`).
+
+    Raises:
+        HiddenFieldsError: If the fields can't be ranked (e.g. no ``crop_column``).
+    """
+    path = Path(path)
+    geom_col = detect_geometry_column(path) or "geometry"
+    index = _index(path, geom_col, crop_column)
+    pairs = _candidate_pairs(index, share)
+    if len(pairs) == 0:
+        return []
+    shapes = _shapes(path, geom_col, np.unique(pairs))
+    pairs, _ = _exact_pairs(pairs, shapes, share)
+    if len(pairs) == 0:
+        return []
+    return _hidden(pairs, shapes, index.paint, share)
+
+
+# --------------------------------------------------------------------------- #
+# Writing the fields that show
+# --------------------------------------------------------------------------- #
+
+
+def drop_hidden_fields(
+    src: Path | str,
+    dst: Path | str,
+    *,
+    share: float = DEFAULT_SHARE,
+    crop_column: str | None = None,
+) -> HiddenFieldsResult:
+    """Write ``src`` to ``dst`` without the fields the instance mask cannot show.
+
+    Every other row, its columns and the file metadata are kept in order; ``dst`` may
+    be ``src``. ``dst`` records the count under :data:`METADATA_KEY` for the docs.
+
+    Raises:
+        HiddenFieldsError: If the fields can't be ranked (e.g. no ``crop_column``).
+    """
+    src, dst = Path(src), Path(dst)
+    hidden = find_hidden_fields(src, share=share, crop_column=crop_column)
+    result = HiddenFieldsResult(rows_in=pq.ParquetFile(src).metadata.num_rows, share=share)
+    result.dropped = len(hidden)
+    result.dropped_ids = _ids(src, hidden[:_EXAMPLES])
+    tmp = dst.with_name(f".{dst.name}.hidden.tmp")
+    try:
+        _write_without(src, tmp, np.asarray(hidden, dtype=np.int64), result)
+        tmp.replace(dst)
+    finally:
+        tmp.unlink(missing_ok=True)
+    logger.info(result.summary())
+    return result
+
+
+def _ids(path: Path, rows: list[int]) -> list[str]:
+    if not rows or _ID_COLUMN not in pq.read_schema(path).names:
+        return []
+    table = pq.read_table(path, columns=[_ID_COLUMN])
+    return [str(table.column(0)[r].as_py()) for r in rows]
+
+
+def _write_without(src: Path, dst: Path, hidden: np.ndarray, result: HiddenFieldsResult) -> None:
+    """Copy ``src`` to ``dst`` one row group at a time, leaving out the ``hidden`` rows."""
+    if _native_geometry_columns(src):
+        import geoarrow.pyarrow  # noqa: F401  (keeps a Parquet GEOMETRY column native)
+    with pq.ParquetFile(src) as source:
+        schema = source.schema_arrow
+        schema = schema.with_metadata(_metadata(schema.metadata or {}, result))
+        start = 0
+        with pq.ParquetWriter(
+            dst, schema, compression="zstd", compression_level=_ZSTD_LEVEL
+        ) as writer:
+            for i in range(source.num_row_groups):
+                table = source.read_row_group(i)
+                keep = np.ones(len(table), dtype=bool)
+                lo, hi = np.searchsorted(hidden, [start, start + len(table)])
+                keep[hidden[lo:hi] - start] = False
+                start += len(table)
+                writer.write_table(table.filter(pa.array(keep)).cast(schema))
+
+
+def _metadata(metadata: dict[bytes, bytes], result: HiddenFieldsResult) -> dict[bytes, bytes]:
+    """The source's metadata with the record added and a pandas range index shortened."""
+    metadata = {k: v for k, v in metadata.items() if k != b"ARROW:schema"}
+    metadata[METADATA_KEY.encode()] = json.dumps(result.record()).encode()
+    if b"pandas" in metadata and result.dropped:
+        pandas = json.loads(metadata[b"pandas"])
+        pandas["index_columns"] = [
+            _shortened(index, result.dropped) for index in pandas.get("index_columns", [])
+        ]
+        metadata[b"pandas"] = json.dumps(pandas).encode()
+    return metadata
+
+
+def _shortened(index: object, dropped: int) -> object:
+    if not isinstance(index, dict) or index.get("kind") != "range":
+        return index
+    return {**index, "stop": index.get("stop", 0) - dropped * index.get("step", 1)}

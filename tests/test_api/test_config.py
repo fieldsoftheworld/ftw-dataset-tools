@@ -330,6 +330,36 @@ class TestFromDict:
         with pytest.raises(ConfigError, match=message):
             DatasetConfig.from_dict({"fields_file": "f.parquet", "stages": {"masks": masks_cfg}})
 
+    def test_drop_hidden_fields_is_off_by_default(self) -> None:
+        config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+
+        assert config.stages.masks.drop_hidden_fields is False
+        assert config.stages.masks.hidden_field_share == 0.95
+
+    def test_drop_hidden_fields_with_a_share(self) -> None:
+        masks_cfg = {"drop_hidden_fields": True, "hidden_field_share": 0.9}
+        config = DatasetConfig.from_dict(
+            {"fields_file": "f.parquet", "stages": {"masks": masks_cfg}}
+        )
+
+        assert config.stages.masks.hidden_field_share == 0.9
+        written = config.config_dict()["stages"]["masks"]
+        assert (written["drop_hidden_fields"], written["hidden_field_share"]) == (True, 0.9)
+
+    @pytest.mark.parametrize(
+        ("masks_cfg", "message"),
+        [
+            ({"drop_hidden_fields": "yes"}, "drop_hidden_fields must be true or false"),
+            ({"drop_hidden_fields": True, "hidden_field_share": 0}, "above 0 and at most 1"),
+            ({"drop_hidden_fields": True, "hidden_field_share": 1.5}, "above 0 and at most 1"),
+            ({"drop_hidden_fields": True, "hidden_field_share": True}, "above 0 and at most 1"),
+            ({"hidden_field_share": 0.9}, "needs stages.masks.drop_hidden_fields"),
+        ],
+    )
+    def test_bad_hidden_fields_settings(self, masks_cfg: dict, message: str) -> None:
+        with pytest.raises(ConfigError, match=message):
+            DatasetConfig.from_dict({"fields_file": "f.parquet", "stages": {"masks": masks_cfg}})
+
     def test_masks_field_vectors_default_true(self) -> None:
         config = DatasetConfig.from_dict({"fields_file": "f.parquet"})
 

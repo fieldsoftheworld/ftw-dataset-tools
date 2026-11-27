@@ -119,6 +119,34 @@ class TestCollectStats:
         assert "unique in this table" not in agents
         assert "`source_id`" not in agents
 
+    def test_dropped_hidden_fields_are_reported(self, tmp_path: Path) -> None:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api import hidden_fields
+        from ftw_dataset_tools.api.docs import collect_stats, render_agents, render_readme
+
+        _, chips, fields = _collection_dir(tmp_path)
+        assert collect_stats(tmp_path, chips, fields)["hidden_fields"] is None
+        text = render_agents(
+            {"title": "T", "links": []}, collect_stats(tmp_path, chips, fields), []
+        )
+        assert "left out of the masks" not in text
+
+        gpd.GeoDataFrame(
+            {"id": [1, 2, 3]}, geometry=[box(0, 0, 1, 1)] * 2 + [box(1, 0, 2, 1)], crs="EPSG:4326"
+        ).to_parquet(fields)
+        hidden_fields.drop_hidden_fields(fields, fields)
+        stats = collect_stats(tmp_path, chips, fields)
+
+        assert stats["hidden_fields"]["dropped"] == 1
+        line = (
+            "1 field was left out of the masks, boundary lines and per-chip outlines because "
+            "at least 95% of each lay under fields drawn over it in the instance mask"
+        )
+        assert line in render_agents({"title": "T", "links": []}, stats, [])
+        assert line in render_readme({"links": []}, stats, [], {})
+
     def test_split_type_from_collection_or_config(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.docs import collect_stats
 
