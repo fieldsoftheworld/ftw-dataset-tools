@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
@@ -531,7 +532,7 @@ class TestDownloadAndClipScene:
         tmp_path: Path,
         mock_selected_scene: SelectedScene,
     ) -> None:
-        """A band that cannot be read fails the scene and names the band."""
+        """A band that cannot be read fails the scene, names the band, and waits for the rest."""
         reference = tmp_path / "reference.tif"
         self._write_single_band_raster(
             reference,
@@ -539,9 +540,13 @@ class TestDownloadAndClipScene:
             from_origin(10.0, 50.01, 0.00125, 0.00125),
         )
 
+        finished: list[str] = []
+
         def read_band(_item, band_name, _href, grid):
             if band_name == "nir":
                 raise OSError("Could not resolve host")
+            time.sleep(0.2)
+            finished.append(band_name)
             return band_name, np.zeros((grid[3], grid[2]), dtype=np.uint16)
 
         output_path = tmp_path / "chip_001_2024_planting_image_s2.tif"
@@ -558,6 +563,8 @@ class TestDownloadAndClipScene:
         assert result.success is False
         assert result.error == "Failed to read band nir: Could not resolve host"
         assert not output_path.exists()
+        # The other reads had finished by the time the scene failed, not left running.
+        assert sorted(finished) == ["blue", "green", "red"]
 
 
 class TestMissingBandsError:

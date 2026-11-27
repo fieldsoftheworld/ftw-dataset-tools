@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -556,9 +556,11 @@ def download_and_clip_scene(
         except Exception as e:
             failed_band = band_name
             failed_error = str(e)
-            # Cancel remaining futures
+            # Cancel the reads not yet started, and wait for the running ones so a
+            # failing scene's leftovers don't pile up on the shared pool.
             for f in futures:
                 f.cancel()
+            wait(futures)
             break
 
     if failed_band is not None:
@@ -721,7 +723,7 @@ def process_downloaded_scene(
             add_file_info(item.assets["thumbnail"], thumbnail_path)
             result.thumbnail_path = thumbnail_path
         except ThumbnailError:
-            pass
+            wait(futures)
 
     # Update parent chip item with asset reference
     parent_item_path = item_path.parent / f"{base_id}.json"
