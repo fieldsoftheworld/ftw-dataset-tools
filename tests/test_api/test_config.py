@@ -850,6 +850,24 @@ class TestSourceKeys:
         assert config.stages.fetch.cache_dir == "/tmp/c"
         assert config.stages.fetch.refresh is True
 
+    def test_source_title_names_the_via_collection(self) -> None:
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "f.parquet",
+                "source_via": "https://x/collection.json",
+                "source_title": "Source X",
+            }
+        )
+
+        assert config.source_title == "Source X"
+        assert config.config_dict()["source_title"] == "Source X"
+        unset = DatasetConfig.from_dict({"fields_file": "f.parquet"})
+        assert "source_title" not in unset.config_dict()
+
+    def test_source_title_needs_source_via(self) -> None:
+        with pytest.raises(ConfigError, match="source_via"):
+            DatasetConfig.from_dict({"fields_file": "f.parquet", "source_title": "Source X"})
+
     def test_source_via_must_be_url(self) -> None:
         with pytest.raises(ConfigError, match="source_via"):
             DatasetConfig.from_dict({"fields_file": "f.parquet", "source_via": "not a url"})

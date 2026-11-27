@@ -28,6 +28,7 @@ from pystac import (
 from pystac.extensions.classification import ClassificationExtension
 from pystac.extensions.version import VersionExtension
 from pystac.layout import TemplateLayoutStrategy
+from pystac.utils import datetime_to_str
 
 from ftw_dataset_tools.api import admin_names, field_embeddings, land_cover
 from ftw_dataset_tools.api.assets import (
@@ -830,7 +831,6 @@ def refresh_item_assets(catalog_dir: Path | str) -> None:
     edited as JSON so everything else the stac stage wrote stays as it was. Chips are
     read one at a time and the scan stops once every mode is found.
     """
-    from ftw_dataset_tools.api.fs import create_temp_file, finalize_temp_file
     from ftw_dataset_tools.api.imagery.selection_workflow import iter_chip_items
     from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES, IMAGERY_SLOTS
 
@@ -858,9 +858,94 @@ def refresh_item_assets(catalog_dir: Path | str) -> None:
     if updated == declared:
         return
     collection["item_assets"] = updated
+    _write_collection_json(collection, path)
+
+
+def refresh_temporal_extent(
+    catalog_dir: Path | str, collection_json: Path | str | None = None
+) -> bool:
+    """Make a written collection's temporal extent span its chip items as they are now.
+
+    The stac stage widens the fields' extent to cover each chip's crop season, which
+    for a southern-hemisphere chip ends in the next year. Imagery selection then
+    narrows each chip to its imagery, so the callers that change the chips afterwards
+    (selection, clearing, a docs rebuild) call this. The extent becomes the fields' extent
+    (else the build's year) widened to cover every chip item's current dates: its
+    imagery's after selection, the crop season of a chip without imagery, and after a
+    clear the single datetime the chip falls back to (Jan 1 of its year). The file is
+    edited as JSON and written only when the extent changes. Returns whether it did.
+    When the chip items or the fields' extent cannot be read (no chips on disk, no
+    local fields file, or no dates and no ``ftw:config`` year), it is left as it is.
+
+    Args:
+        catalog_dir: The collection directory, holding ``chips/`` and the fields file.
+        collection_json: The collection file, when not ``catalog_dir/collection.json``.
+    """
+    path = Path(collection_json) if collection_json else Path(catalog_dir) / "collection.json"
+    if not path.exists():
+        return False
+    collection = json.loads(path.read_text(encoding="utf-8"))
+    windows = _chip_item_windows(Path(catalog_dir))
+    base = _fields_extent(collection, Path(catalog_dir))
+    # Without both halves the stac stage's extent cannot be recomputed; keep it.
+    if not windows or base is None:
+        return False
+    windows.append(base)
+    interval = [
+        datetime_to_str(min(start for start, _ in windows).astimezone(UTC)),
+        datetime_to_str(max(end for _, end in windows).astimezone(UTC)),
+    ]
+    temporal = collection.setdefault("extent", {}).setdefault("temporal", {})
+    if temporal.get("interval") == [interval]:
+        return False
+    temporal["interval"] = [interval]
+    _write_collection_json(collection, path)
+    return True
+
+
+def _write_collection_json(collection: dict, path: Path) -> None:
+    from ftw_dataset_tools.api.fs import create_temp_file, finalize_temp_file
+
     tmp = create_temp_file(path)
     tmp.write_text(json.dumps(collection, indent=2) + "\n", encoding="utf-8")
     finalize_temp_file(tmp, path)
+
+
+def _parse_time(value: object) -> datetime | None:
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _chip_item_windows(catalog_dir: Path) -> list[tuple[datetime, datetime]]:
+    """Each chip item's start/end datetimes (else its datetime twice), read as JSON."""
+    from ftw_dataset_tools.api.imagery.catalog_ops import chip_item_files
+
+    windows = []
+    for item_path in chip_item_files(catalog_dir):
+        try:
+            props = json.loads(item_path.read_text(encoding="utf-8")).get("properties") or {}
+            start = _parse_time(props.get("start_datetime") or props.get("datetime"))
+            end = _parse_time(props.get("end_datetime") or props.get("datetime"))
+        except (OSError, ValueError):
+            continue  # an unreadable chip is reported by selection, not here
+        if start is not None and end is not None:
+            windows.append((start, end))
+    return windows
+
+
+def _fields_extent(collection: dict, catalog_dir: Path) -> tuple[datetime, datetime] | None:
+    """The extent the stac stage starts from: the fields' dates, else the build's year."""
+    href = ((collection.get("assets") or {}).get("fields") or {}).get("href")
+    fields_file = catalog_dir / str(href).removeprefix("./") if href else None
+    if fields_file is None or not fields_file.is_file():
+        return None
+    year = ((collection.get("ftw:config") or {}).get("config") or {}).get("year")
+    try:
+        return _resolve_temporal_extent(fields_file, year)
+    except (ValueError, OSError, duckdb.Error):
+        return None
 
 
 def _create_collection(
@@ -1221,6 +1306,10 @@ def _build_chip_items(
     return items, item_squares
 
 
+#: The ``via`` link's title when the config does not name the source collection.
+SOURCE_VIA_TITLE = "Field boundary collection the chips were cut from"
+
+
 def _apply_collection_context(
     collection: pystac.Collection,
     config: DatasetConfig | None,
@@ -1246,7 +1335,7 @@ def _apply_collection_context(
                 rel="via",
                 target=config.source_via,
                 media_type="application/json",
-                title="Source field boundary collection",
+                title=config.source_title or SOURCE_VIA_TITLE,
             )
         )
     if config is not None and config.stages.chips.admin_names:

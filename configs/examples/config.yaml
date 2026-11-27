@@ -24,6 +24,7 @@ fields_file: austria_fields.parquet
 # downloaded once into the fetch cache and reused on later runs:
 # fields_file: https://data.source.coop/ftw/harmonized-field-data/lu/latest/lu.parquet
 # source_via: https://data.source.coop/ftw/harmonized-field-data/lu/collection.json  # written as a rel:via link
+# source_title: "Luxembourg field boundaries"  # the via link's title (needs source_via)
 
 # Output directory. If omitted, defaults to "{input_stem}-dataset".
 output_dir: ./austria-dataset

@@ -257,8 +257,11 @@ When the config sets `source_via`, the collection also gets a `via` link pointin
 upstream collection:
 
 ```json
-{"rel": "via", "href": "https://.../collection.json", "type": "application/json", "title": "Source field boundary collection"}
+{"rel": "via", "href": "https://.../collection.json", "type": "application/json", "title": "Mapping Africa: crop field boundary labels for Africa, 2017-2023"}
 ```
+
+The title is the config's `source_title`, or "Field boundary collection the chips were cut
+from" when it has none.
 
 `ftw:config` (the config with every default resolved; file references such as
 `stages.masks.class_filter`, `stages.masks.label_extent` and `stages.chips.grid_file`

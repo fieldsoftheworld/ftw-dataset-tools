@@ -30,7 +30,7 @@ from ftw_dataset_tools.api.imagery.selection_workflow import (
 )
 from ftw_dataset_tools.api.imagery.slots import IMAGERY_MODES
 from ftw_dataset_tools.api.imagery.summary import selection_summary_lines
-from ftw_dataset_tools.api.stac import refresh_item_assets
+from ftw_dataset_tools.api.stac import refresh_item_assets, refresh_temporal_extent
 from ftw_dataset_tools.api.stac_items import copy_catalog
 from ftw_dataset_tools.commands.cli_logging import is_verbose
 from ftw_dataset_tools.commands.imagery_mode import (
@@ -175,6 +175,7 @@ def _clear_all_selections(
             chips_cleared += 1
             pbar.update(1)
     refresh_item_assets(catalog_dir)
+    refresh_temporal_extent(catalog_dir)
 
     click.echo("")
     click.echo(click.style("Cleared imagery selections:", fg="green"))
