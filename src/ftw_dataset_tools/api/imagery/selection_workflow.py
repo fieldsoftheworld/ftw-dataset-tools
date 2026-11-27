@@ -49,7 +49,7 @@ from ftw_dataset_tools.api.imagery.stac_child_items import (
     create_mosaic_child_items,
 )
 from ftw_dataset_tools.api.logging_config import capture_logs, get_logger
-from ftw_dataset_tools.api.stac import refresh_item_assets
+from ftw_dataset_tools.api.stac import refresh_item_assets, refresh_temporal_extent
 
 if TYPE_CHECKING:
     import logging
@@ -502,8 +502,10 @@ def select_imagery_modes_for_catalog(
             )
     finally:
         # Selection runs after the stac stage wrote the collection: declare what
-        # landed, also when a mode failed after another had changed the chips.
+        # landed and the dates it spans, also when a mode failed after another had
+        # changed the chips.
         refresh_item_assets(catalog_dir)
+        refresh_temporal_extent(catalog_dir)
     return result
 
 

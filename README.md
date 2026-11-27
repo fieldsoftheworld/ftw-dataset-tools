@@ -144,7 +144,8 @@ checksum should attest to bytes that could not have been swapped in transit. It 
 the URL, and the cached copy is reused on later runs; set `stages.fetch.refresh: true`
 to force a re-download. `ftwd run config.yaml --dry-run` prints the source and never
 downloads it. Set `source_via` to the URL of the upstream collection to record it as a
-`via` link on the output STAC collection. The resolved provenance
+`via` link on the output STAC collection, and `source_title` to that collection's title
+to use it as the link's title. The resolved provenance
 (`ftwd-config.resolved.yaml` and `ftw:config`) records a `source` block (`href`, `via`,
 `sha256`, `size`, `fetched_at`) for both remote and local inputs — for a local input
 `href` is just the filename, so the build machine's directory layout is not published — plus

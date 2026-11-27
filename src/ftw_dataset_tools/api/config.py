@@ -116,6 +116,7 @@ _ALLOWED_TOP_KEYS = (
     "year",
     "skip_reproject",
     "source_via",
+    "source_title",
     "stages",
     "metadata",
 )
@@ -595,6 +596,7 @@ class DatasetConfig:
     year: int | None = None
     skip_reproject: bool = False
     source_via: str | None = None
+    source_title: str | None = None
     stages: StagesConfig = field(default_factory=StagesConfig)
     metadata: MetadataConfig | None = None
     class_filter: ClassFilter | None = None
@@ -634,6 +636,7 @@ class DatasetConfig:
             year=data.get("year"),
             skip_reproject=bool(data.get("skip_reproject", False)),
             source_via=_opt_str(data.get("source_via")),
+            source_title=_opt_str(data.get("source_title")),
             stages=stages,
             metadata=metadata,
         )
@@ -714,6 +717,8 @@ class DatasetConfig:
             )
         if self.source_via is not None and not self.source_via.startswith("https://"):
             raise ConfigError("source_via must be an https URL.")
+        if self.source_title is not None and self.source_via is None:
+            raise ConfigError("source_title names the source_via collection; set source_via too.")
 
         split_type = self.stages.splits.split_type
         if split_type is not None and split_type not in splits.SPLIT_TYPE_CHOICES:
@@ -902,6 +907,8 @@ class DatasetConfig:
         # Unset, these are no-ops; written, they read as settings the build used.
         if self.stages.masks.boundary_width_m is None:
             del data["stages"]["masks"]["boundary_width_m"]
+        if self.source_title is None:
+            del data["source_title"]
         if self.stages.splits.split_type is None:
             del data["stages"]["splits"]
         elif self.stages.splits.split_type == "predefined":  # the source sets the split
