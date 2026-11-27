@@ -900,10 +900,10 @@ def _hidden_fields_note(stats: dict) -> str | None:
     count, share = int(hidden.get("dropped", 0)), float(hidden.get("share", 0))
     fields = "field was" if count == 1 else "fields were"
     return (
-        f"{count:,} {fields} left out of the masks, boundary lines and per-chip outlines "
-        f"because at least {share:.0%} of each lay under fields drawn over it in the "
-        "instance mask (duplicate or nested polygons it could not show). The full fields "
-        "table (`fields`) still has them."
+        f"{count:,} {fields} left out of the masks, boundary lines, per-chip outlines and "
+        f"chip statistics because at least {share:.0%} of each lay under fields drawn over "
+        "it in the instance mask (duplicate or nested polygons it could not show). The "
+        "full fields table (`fields`) still has them."
     )
 
 

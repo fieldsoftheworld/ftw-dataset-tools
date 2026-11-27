@@ -548,6 +548,35 @@ def _require_label_extent_match(ctx: PipelineContext, *, stage: str) -> None:
     )
 
 
+def _hidden_fields_setting(ctx: PipelineContext) -> dict | None:
+    masks_cfg = ctx.config.stages.masks
+    if not masks_cfg.drop_hidden_fields:
+        return None
+    return {"share": masks_cfg.hidden_field_share, "crop_column": masks_cfg.crop_column}
+
+
+def _require_hidden_fields_match(ctx: PipelineContext, *, stage: str) -> None:
+    """Ensure the filtered fields were written with this run's hidden-field setting.
+
+    The filter stage drops the hidden fields; a run starting later (``--from masks``)
+    after the setting, its share or the masks' crop column changed would otherwise
+    burn fields dropped under the old setting, or keep ones the new one drops.
+    """
+    path = ctx.field_polygons_path
+    if not ctx.filters_fields or not path.exists():
+        return
+    record = hidden_fields.recorded(path)
+    written = None if record is None else {k: record.get(k) for k in ("share", "crop_column")}
+    if written == _hidden_fields_setting(ctx):
+        return
+    how = "without dropping hidden fields" if written is None else f"with {written}"
+    raise StageInputError(
+        f"Stage '{stage}': {path.name} was written {how}, which doesn't match "
+        "stages.masks.drop_hidden_fields, hidden_field_share and crop_column. "
+        "Rerun from the 'filter' stage."
+    )
+
+
 # ---- stage implementations ----------------------------------------------
 
 
@@ -725,6 +754,7 @@ def _subset_local_grid(ctx: PipelineContext, grid_file: str) -> str:
 def stage_chips(ctx: PipelineContext) -> None:
     """Create chips with field coverage statistics."""
     _require(ctx.field_polygons_path, stage="chips", produced_by=ctx.field_polygons_producer)
+    _require_hidden_fields_match(ctx, stage="chips")
     chips_cfg = ctx.config.stages.chips
     grid_file = chips_cfg.grid_file
     grid_source = chips_cfg.grid_source or field_stats.DEFAULT_FTW_GRID_SOURCE
@@ -841,6 +871,7 @@ def stage_splits(ctx: PipelineContext) -> None:
 def stage_boundaries(ctx: PipelineContext) -> None:
     """Create boundary lines from field polygons."""
     _require(ctx.field_polygons_path, stage="boundaries", produced_by=ctx.field_polygons_producer)
+    _require_hidden_fields_match(ctx, stage="boundaries")
     logger.info("Creating boundary lines...")
     result = boundaries.create_boundaries(
         input_path=str(ctx.field_polygons_path),
@@ -910,6 +941,7 @@ def stage_masks(ctx: PipelineContext) -> None:
     _require(ctx.field_polygons_path, stage="masks", produced_by=ctx.field_polygons_producer)
     _require(ctx.boundary_lines_path, stage="masks", produced_by="boundaries")
     _require_label_extent_match(ctx, stage="masks")
+    _require_hidden_fields_match(ctx, stage="masks")
 
     chip_dirs = _build_chip_dirs(ctx)
     logger.info(f"Created {len(chip_dirs)} chip directories")
@@ -989,6 +1021,7 @@ def stage_stac(ctx: PipelineContext) -> None:
     if ctx.filters_fields:
         _require(ctx.field_polygons_path, stage="stac", produced_by="filter")
     _require_label_extent_match(ctx, stage="stac")
+    _require_hidden_fields_match(ctx, stage="stac")
 
     _drop_unpublished_columns(ctx)
 

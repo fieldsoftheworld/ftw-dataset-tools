@@ -5,8 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
+import numpy as np
 import pyarrow.parquet as pq
 import pytest
+import shapely
 from shapely.geometry import box
 
 from ftw_dataset_tools.api import hidden_fields
@@ -94,6 +96,39 @@ class TestFindHiddenFields:
         path = _write(tmp_path, [("a", None), ("b", HOST), ("c", HOST)])
         assert hidden_fields.find_hidden_fields(path) == [1]
 
+    def test_exact_duplicates_at_share_one(self, tmp_path: Path) -> None:
+        """Area rounding must not keep a duplicate when every bit of it is covered."""
+        rng = np.random.default_rng(1)
+        rows = []
+        for k in range(30):
+            ring = rng.uniform(0, 1, (7, 2)) * 0.01 + [k * 0.02, 45.0]
+            shape = shapely.convex_hull(shapely.multipoints(ring))
+            rows += [(f"{k}a", shape), (f"{k}b", shape)]
+        path = _write(tmp_path, rows)
+        assert hidden_fields.find_hidden_fields(path, share=1.0) == list(range(0, 60, 2))
+
+    def test_invalid_field_is_judged_by_its_valid_shape(self, tmp_path: Path) -> None:
+        bow_tie = shapely.from_wkt("POLYGON ((0 0, 10 10, 10 0, 0 10, 0 0))")
+        path = _write(tmp_path, [("bow", bow_tie), ("host", HOST)])
+        assert hidden_fields.find_hidden_fields(path) == [0]
+
+    def test_many_chunks_and_row_groups(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(hidden_fields, "_CHUNK", 3)
+        rows = []
+        for k in range(10):
+            cell = box(k * 20, 0, k * 20 + 10, 10)
+            rows += [(f"{k}a", cell), (f"{k}b", cell)]
+        path = tmp_path / "fields.parquet"
+        gpd.GeoDataFrame(
+            {"id": [fid for fid, _ in rows]}, geometry=[s for _, s in rows], crs="EPSG:4326"
+        ).to_parquet(path, row_group_size=3)
+        dst = tmp_path / "out.parquet"
+        result = hidden_fields.drop_hidden_fields(path, dst)
+        assert result.dropped == 10
+        assert _ids(dst) == [f"{k}b" for k in range(10)]
+
     def test_unknown_crop_column_is_an_error(self, tmp_path: Path) -> None:
         path = _write(tmp_path, [("a", HOST), ("b", HOST)])
         with pytest.raises(hidden_fields.HiddenFieldsError, match="Cannot rank"):
@@ -115,7 +150,12 @@ class TestDropHiddenFields:
         assert result.dropped_ids == ["sliver", "a"]
         assert _ids(dst) == ["b", "far"]
         assert pq.read_schema(dst).metadata[b"geo"] == pq.read_schema(src).metadata[b"geo"]
-        assert hidden_fields.recorded(dst) == {"dropped": 2, "share": 0.95, "rows_in": 4}
+        assert hidden_fields.recorded(dst) == {
+            "dropped": 2,
+            "share": 0.95,
+            "crop_column": None,
+            "rows_in": 4,
+        }
         assert hidden_fields.recorded(src) is None
         # pandas' range index follows the rows left.
         assert gpd.read_parquet(dst)["crop"].tolist() == ["z", "w"]
@@ -125,7 +165,12 @@ class TestDropHiddenFields:
         result = hidden_fields.drop_hidden_fields(path, path)
         assert result.dropped == 0
         assert _ids(path) == ["a", "b"]
-        assert hidden_fields.recorded(path) == {"dropped": 0, "share": 0.95, "rows_in": 2}
+        assert hidden_fields.recorded(path) == {
+            "dropped": 0,
+            "share": 0.95,
+            "crop_column": None,
+            "rows_in": 2,
+        }
 
     def test_logs_the_summary(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         path = _write(tmp_path, [("a", HOST), ("b", HOST)])

@@ -9,7 +9,9 @@ outline is still burned as boundary lines across the field that shows.
 
 :func:`drop_hidden_fields` drops each field of which at least ``share`` of the area
 lies under fields burned after it that are themselves kept, so the field that shows
-today stays and the visible fields' pixels don't change. Partial overlaps stay.
+today stays. Partial overlaps stay. A dropped field leaves the chips' field counts,
+coverage and crop shares too, since those stages read the same polygons, and the at
+most ``1 - share`` of it that showed goes to whatever lies beneath it.
 
 It runs in three passes, so a source with millions of fields stays cheap: an STRtree
 over the fields' bounding boxes finds the fields whose box overlap with later fields
@@ -21,6 +23,7 @@ union of the later fields that cover them.
 from __future__ import annotations
 
 import json
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,6 +33,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import shapely
 
+from ftw_dataset_tools.api.config import DEFAULT_HIDDEN_FIELD_SHARE
 from ftw_dataset_tools.api.field_ids import _native_geometry_columns
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.logging_config import get_logger
@@ -37,7 +41,10 @@ from ftw_dataset_tools.api.masks import _instance_id_column, instance_paint_orde
 
 logger = get_logger(__name__)
 
-DEFAULT_SHARE = 0.95
+DEFAULT_SHARE = DEFAULT_HIDDEN_FIELD_SHARE
+# Relative slack on area comparisons: a duplicate's computed overlap can come out a
+# hair below its area, which would keep it at share 1.
+_AREA_TOLERANCE = 1e-9
 #: Key of the Parquet key-value metadata recording what was dropped, read by the docs.
 METADATA_KEY = "ftw:hidden_fields"
 _ID_COLUMN = "id"
@@ -45,6 +52,7 @@ _EXAMPLES = 5
 # Fields per STRtree query: bounds the candidate pairs held at once.
 _CHUNK = 200_000
 _ZSTD_LEVEL = 6
+_MEMORY_LIMIT = "4GB"
 
 
 class HiddenFieldsError(ValueError):
@@ -58,6 +66,7 @@ class HiddenFieldsResult:
     rows_in: int = 0
     dropped: int = 0
     share: float = DEFAULT_SHARE
+    crop_column: str | None = None
     dropped_ids: list[str] = field(default_factory=list)  # up to _EXAMPLES
 
     def summary(self) -> str:
@@ -72,7 +81,12 @@ class HiddenFieldsResult:
 
     def record(self) -> dict:
         """What the fields file records under :data:`METADATA_KEY`."""
-        return {"dropped": self.dropped, "share": self.share, "rows_in": self.rows_in}
+        return {
+            "dropped": self.dropped,
+            "share": self.share,
+            "crop_column": self.crop_column,
+            "rows_in": self.rows_in,
+        }
 
 
 def recorded(path: Path | str) -> dict | None:
@@ -97,28 +111,41 @@ class _Index:
 
 
 def _index(path: Path, geom_col: str, crop_column: str | None) -> _Index:
-    """The fields in row order, ranked the way the instance mask burns them."""
-    con = duckdb.connect(":memory:")
-    try:
-        ensure_spatial_loaded(con)
-        id_col = _instance_id_column(con, path)
-        order = instance_paint_order(id_col, geom_col, crop_column) or "file_row_number"
-        g = f'"{geom_col}"'
-        cols = con.execute(
-            f"""SELECT row_number() OVER (ORDER BY {order}) AS paint,
-                       coalesce(ST_XMin({g}), 'NaN') AS x0, coalesce(ST_YMin({g}), 'NaN') AS y0,
-                       coalesce(ST_XMax({g}), 'NaN') AS x1, coalesce(ST_YMax({g}), 'NaN') AS y1,
-                       coalesce(CASE WHEN ST_IsValid({g}) THEN ST_Area({g}) END, 0) AS area
-                FROM read_parquet('{sql_path(path)}', file_row_number = true)
-                ORDER BY file_row_number"""
-        ).fetchnumpy()
-    except duckdb.BinderException as err:
-        raise HiddenFieldsError(f"Cannot rank the fields of {path.name}: {err}") from err
-    finally:
-        con.close()
+    """The fields in row order, ranked the way the instance mask burns them.
+
+    The ranking sorts every field (by its WKT too, with a crop column), so DuckDB is
+    held to a memory limit and spills beside the file rather than growing unbounded.
+    """
+    with tempfile.TemporaryDirectory(dir=path.parent, prefix=".ftwd-hidden-") as spill:
+        con = duckdb.connect(":memory:")
+        try:
+            con.execute(f"SET memory_limit = '{_MEMORY_LIMIT}'")
+            con.execute(f"SET temp_directory = '{sql_path(spill)}'")
+            ensure_spatial_loaded(con)
+            cols = _rank(con, path, geom_col, crop_column)
+        except duckdb.BinderException as err:
+            raise HiddenFieldsError(f"Cannot rank the fields of {path.name}: {err}") from err
+        finally:
+            con.close()
     bounds = np.column_stack([np.asarray(cols[k], dtype=float) for k in ("x0", "y0", "x1", "y1")])
     area = np.nan_to_num(np.asarray(cols["area"], dtype=float))
     return _Index(np.asarray(cols["paint"]), bounds, area)
+
+
+def _rank(
+    con: duckdb.DuckDBPyConnection, path: Path, geom_col: str, crop_column: str | None
+) -> dict:
+    id_col = _instance_id_column(con, path)
+    order = instance_paint_order(id_col, geom_col, crop_column) or "file_row_number"
+    g = f'"{geom_col}"'
+    return con.execute(
+        f"""SELECT row_number() OVER (ORDER BY {order}) AS paint,
+                   coalesce(ST_XMin({g}), 'NaN') AS x0, coalesce(ST_YMin({g}), 'NaN') AS y0,
+                   coalesce(ST_XMax({g}), 'NaN') AS x1, coalesce(ST_YMax({g}), 'NaN') AS y1,
+                   coalesce(CASE WHEN ST_IsValid({g}) THEN ST_Area({g}) END, 0) AS area
+            FROM read_parquet('{sql_path(path)}', file_row_number = true)
+            ORDER BY file_row_number"""
+    ).fetchnumpy()
 
 
 # --------------------------------------------------------------------------- #
@@ -136,7 +163,7 @@ def _box_overlap(bounds: np.ndarray, pairs: np.ndarray) -> np.ndarray:
 def _reaching(pairs: np.ndarray, overlap: np.ndarray, area: np.ndarray, share: float) -> np.ndarray:
     """The pairs whose field's summed overlap reaches ``share`` of its area (or it's invalid)."""
     total = np.bincount(pairs[:, 0], weights=overlap, minlength=len(area))
-    reach = (total >= share * area) & (total > 0)
+    reach = (total >= share * area * (1 - _AREA_TOLERANCE)) & (total > 0)
     return pairs[reach[pairs[:, 0]] & (overlap > 0)]
 
 
@@ -193,7 +220,8 @@ def _covered_share(shape: shapely.Geometry, covers: list[shapely.Geometry]) -> f
     if not covers or shapely.area(shape) <= 0:
         return 0.0
     covered = shapely.intersection(shape, shapely.union_all(covers))
-    return float(shapely.area(covered)) / float(shapely.area(shape))
+    covered_share = float(shapely.area(covered)) / float(shapely.area(shape))
+    return covered_share * (1 + _AREA_TOLERANCE)
 
 
 def _hidden(
@@ -257,7 +285,9 @@ def drop_hidden_fields(
     """
     src, dst = Path(src), Path(dst)
     hidden = find_hidden_fields(src, share=share, crop_column=crop_column)
-    result = HiddenFieldsResult(rows_in=pq.ParquetFile(src).metadata.num_rows, share=share)
+    result = HiddenFieldsResult(
+        rows_in=pq.ParquetFile(src).metadata.num_rows, share=share, crop_column=crop_column
+    )
     result.dropped = len(hidden)
     result.dropped_ids = _ids(src, hidden[:_EXAMPLES])
     tmp = dst.with_name(f".{dst.name}.hidden.tmp")

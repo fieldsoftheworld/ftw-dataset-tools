@@ -22,7 +22,6 @@ import yaml
 from ftw_dataset_tools import __version__
 from ftw_dataset_tools.api import chip_grid, field_stats, scale, splits
 from ftw_dataset_tools.api.chip_borders import DEFAULT_BORDER_GAP_CHIPS
-from ftw_dataset_tools.api.hidden_fields import DEFAULT_SHARE as DEFAULT_HIDDEN_FIELD_SHARE
 from ftw_dataset_tools.api.imagery.parallel import MAX_WORKERS
 from ftw_dataset_tools.api.imagery.slots import (
     DEFAULT_IMAGERY_MODE,
@@ -51,6 +50,9 @@ VALID_MASK_TYPES = (
 # opt-in: they are derived products, and the float32 distance map noticeably
 # increases dataset size.
 DEFAULT_MASK_TYPES = ("instance", "semantic_2_class", "semantic_3_class")
+# stages.masks.hidden_field_share: the share of a field's area under fields burned
+# over it at which drop_hidden_fields drops it (see api/hidden_fields.py).
+DEFAULT_HIDDEN_FIELD_SHARE = 0.95
 
 # Mask types derived from another mask rather than burned in from vectors, and
 # the type they derive from. Kept as strings here so config validation stays
@@ -357,8 +359,9 @@ class MasksConfig:
     label_extent: str | None = None
     # Drop the fields the instance mask cannot show: those with at least
     # hidden_field_share of their area under fields burned over them (duplicates,
-    # nested slivers). They then get no boundary lines and no outlines either, and the
-    # masks read a filtered fields file. Off by default.
+    # nested slivers). They then get no boundary lines, outlines, chip field counts or
+    # crop shares either: every stage from chips on reads a filtered fields file. Off
+    # by default.
     drop_hidden_fields: bool = False
     hidden_field_share: float = DEFAULT_HIDDEN_FIELD_SHARE
 

@@ -141,8 +141,9 @@ class TestCollectStats:
 
         assert stats["hidden_fields"]["dropped"] == 1
         line = (
-            "1 field was left out of the masks, boundary lines and per-chip outlines because "
-            "at least 95% of each lay under fields drawn over it in the instance mask"
+            "1 field was left out of the masks, boundary lines, per-chip outlines and chip "
+            "statistics because at least 95% of each lay under fields drawn over it in the "
+            "instance mask"
         )
         assert line in render_agents({"title": "T", "links": []}, stats, [])
         assert line in render_readme({"links": []}, stats, [], {})

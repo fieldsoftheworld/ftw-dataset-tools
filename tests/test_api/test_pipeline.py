@@ -823,6 +823,27 @@ class TestDropHiddenFields:
         assert gpd.read_parquet(ctx.field_polygons_path)["id"].tolist() == [2, 4]
         assert gpd.read_parquet(ctx.output_fields_path)["id"].tolist() == [1, 2, 3, 4]
 
+    def test_later_stages_refuse_fields_filtered_with_another_setting(self, tmp_path: Path) -> None:
+        ctx = self._ctx(tmp_path, "stale")
+        ctx.config.class_filter = ClassFilter("crop", ["wheat", "maize", "rye"], [])
+        pipeline.run_pipeline(ctx, ["reproject", "filter"])
+        pipeline.stage_boundaries(ctx)  # class filter only: nothing recorded, matches
+
+        # Turned on without rerunning the filter stage.
+        ctx.config.stages.masks.drop_hidden_fields = True
+        with pytest.raises(StageInputError, match="without dropping hidden fields"):
+            pipeline.stage_boundaries(ctx)
+        pipeline.run_pipeline(ctx, ["filter", "boundaries"])
+
+        # A different share, or turned off again.
+        ctx.config.stages.masks.hidden_field_share = 0.5
+        with pytest.raises(StageInputError, match="Rerun from the 'filter' stage"):
+            pipeline.stage_masks(ctx)
+        ctx.config.stages.masks.drop_hidden_fields = False
+        ctx.config.stages.masks.hidden_field_share = 0.95
+        with pytest.raises(StageInputError, match="Rerun from the 'filter' stage"):
+            pipeline.stage_chips(ctx)
+
     def test_class_filter_runs_first(self, tmp_path: Path) -> None:
         """A field the class filter drops is never burned, so it hides nothing."""
         ctx = self._ctx(tmp_path, "both", drop_hidden_fields=True)

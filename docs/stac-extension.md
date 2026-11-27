@@ -250,7 +250,7 @@ describing how the whole dataset was built:
 
 With `stages.masks.drop_hidden_fields`, the `fields_filtered` asset carries
 `ftw:hidden_fields_dropped` (integer): how many fields were left out of the masks,
-boundary lines and per-chip outlines because at least `hidden_field_share` of their area
+boundary lines, per-chip outlines and chip statistics because at least `hidden_field_share` of their area
 lay under fields the instance mask burns over them.
 
 `license`, `providers`, `keywords`, `version` (from the
