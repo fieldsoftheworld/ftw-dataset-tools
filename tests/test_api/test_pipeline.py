@@ -565,6 +565,97 @@ class TestReprojectStage:
             pipeline.stage_reproject(ctx)
 
 
+class TestInvalidFieldGeometries:
+    """Invalid source polygons are repaired once, so no line crosses a field's interior."""
+
+    # A spike runs from the left edge into the field and back: ST_Boundary of the
+    # invalid ring draws it as a line across the field.
+    SPIKE = (
+        "POLYGON ((18.002 40.002, 18.006 40.002, 18.006 40.006, 18.002 40.006, "
+        "18.002 40.004, 18.0045 40.004, 18.002 40.004, 18.002 40.002))"
+    )
+    BOW_TIE = (
+        "POLYGON ((18.007 40.002, 18.009 40.004, 18.009 40.002, 18.007 40.004, 18.007 40.002))"
+    )
+
+    def _ctx(self, tmp_path: Path) -> pipeline.PipelineContext:
+        import shapely
+
+        fields = tmp_path / "src.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1, 2]},
+            geometry=[shapely.from_wkt(self.SPIKE), shapely.from_wkt(self.BOW_TIE)],
+            crs="EPSG:4326",
+        ).to_parquet(fields)
+        config = _config(
+            fields,
+            tmp_path / "out",
+            year=2024,
+            stages={
+                "masks": {
+                    "mask_types": ["instance", "semantic_3_class"],
+                    "resolution": 2.5,
+                    "workers": 1,
+                }
+            },
+        )
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        ctx.chips_base_dir.mkdir()
+        gpd.GeoDataFrame(
+            {"id": ["cell_001"], "field_coverage_pct": [20.0]},
+            geometry=[box(18.0, 40.0, 18.01, 40.01)],
+            crs="EPSG:4326",
+        ).to_parquet(ctx.chips_path)
+        return ctx
+
+    def test_reproject_repairs_the_fields(self, tmp_path: Path) -> None:
+        import shapely
+
+        ctx = self._ctx(tmp_path)
+        pipeline.stage_reproject(ctx)
+        assert ctx.repair_result is not None
+        assert ctx.repair_result.repaired == 2
+        written = gpd.read_parquet(ctx.output_fields_path)
+        assert written.is_valid.all()
+        assert written.geometry[0].equals(box(18.002, 40.002, 18.006, 40.006))
+        assert shapely.get_num_geometries(written.geometry[1]) == 2
+
+    def test_no_line_pixels_inside_a_repaired_field(self, tmp_path: Path) -> None:
+        import numpy as np
+        import rasterio
+        import shapely
+        from rasterio.features import geometry_mask
+
+        from ftw_dataset_tools.api.chip_grid import reprojector
+
+        ctx = self._ctx(tmp_path)
+        pipeline.run_pipeline(ctx, ["reproject", "boundaries", "masks"])
+
+        chip = next(ctx.chips_base_dir.rglob("*_semantic_3_class.tif")).parent
+        with rasterio.open(next(chip.glob("*_semantic_3_class.tif"))) as src:
+            semantic, transform, crs = src.read(1), src.transform, src.crs
+        with rasterio.open(next(chip.glob("*_instance.tif"))) as src:
+            instance = src.read(1)
+        # The shapes the repair gives: the field without its spike, the bow tie's triangles.
+        expected = {
+            1: box(18.002, 40.002, 18.006, 40.006),
+            2: shapely.from_wkt(
+                "MULTIPOLYGON (((18.007 40.002, 18.008 40.003, 18.007 40.004, 18.007 40.002)), "
+                "((18.009 40.002, 18.009 40.004, 18.008 40.003, 18.009 40.002)))"
+            ),
+        }
+        to_mask = reprojector("EPSG:4326", crs)
+        for field_id, shape in expected.items():
+            # Two pixels in from the field's edge: no boundary line may reach here.
+            interior = shapely.transform(shape, to_mask).buffer(-5.0)
+            inside = ~geometry_mask([interior], semantic.shape, transform)
+            assert inside.sum() > 100
+            assert not (semantic[inside] == 2).any(), field_id
+            assert (instance[inside] == field_id).all(), field_id
+        assert np.isin(np.unique(instance), [0, 1, 2]).all()
+
+
 class TestRunPipelineProvenance:
     """End-to-end (no network): run only the reproject stage via run_pipeline."""
 

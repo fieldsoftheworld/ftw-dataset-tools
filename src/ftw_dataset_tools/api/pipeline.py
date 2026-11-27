@@ -8,7 +8,7 @@ context and execute the same stages.
 Intermediate outputs live in the output directory under a fixed naming
 convention, so any stage can be re-run on its own as long as its inputs exist:
 
-    {output_dir}/{name}_fields.parquet          (reproject, with unique ids)
+    {output_dir}/{name}_fields.parquet          (reproject: unique ids, valid polygons)
     {output_dir}/{name}_chips.parquet           (chips, scale, splits)
     {output_dir}/{name}_boundary_lines.parquet  (boundaries)
     {output_dir}/collection.json                 (stac)
@@ -34,6 +34,7 @@ from ftw_dataset_tools.api import (
     crop_stats,
     docs,
     field_embeddings,
+    field_geometry,
     field_ids,
     field_stats,
     label_extent,
@@ -185,6 +186,7 @@ class PipelineContext:
     was_reprojected: bool = False
     source_crs: str | None = None
     dedup_result: field_ids.DedupResult | None = None
+    repair_result: field_geometry.RepairResult | None = None
     chips_result: field_stats.FieldStatsResult | None = None
     crop_stats_result: crop_stats.CropStatsResult | None = None
     label_extent_result: label_extent.LabelExtentChipsResult | None = None
@@ -578,6 +580,9 @@ def stage_reproject(ctx: PipelineContext) -> None:
             f"{stripped:,} without the fraction"
         )
     _dedupe_field_ids(ctx)
+    # Every later stage reads these polygons: repaired once here, the boundary lines,
+    # the mask fill and the per-chip outlines all follow the same valid shape.
+    ctx.repair_result = field_geometry.repair_geometries(ctx.output_fields_path)
 
 
 def _dedupe_field_ids(ctx: PipelineContext) -> None:
