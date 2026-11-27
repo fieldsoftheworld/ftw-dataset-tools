@@ -9,8 +9,8 @@
 # Cerrado appears on 161 polygons (about 24,000 ha), the largest 2,622 ha.
 # Filtering on March drops 198 of the 1,854 polygons (26 of them Eucalyptus). One month can't
 # follow every trajectory: 3 dropped conversion areas became pasture later in the year, and id
-# 386 (14 ha) is "Not identified" in March but soybean and millet around it. A rule of "a crop
-# in any month" would keep 4 more polygons.
+# 386 (14 ha) is "Not identified" in March but soybean and millet around it. A rule of "a kept
+# class in any month" would keep these 4 too.
 # Field: every crop, pasture, Brachiaria and Hay (managed grassland is field, as in the other
 # filters), and "Uncultivated soil": crop residue, bare or tilled soil between crops (every
 # polygon with it in March carries a crop in another month).
