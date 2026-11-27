@@ -1,0 +1,30 @@
+# Class filter for the LEM+ benchmark in western Bahia (br_ba_lem). The source gives each
+# polygon's land use per month from 2019-10 to 2020-09 and no crop code; this filter reads
+# March 2020, mid-season.
+#
+# Background: native Cerrado, "Not identified", "Conversion area" (land being cleared) and
+# Eucalyptus plantation. 168 polygons (about 10% of the labelled area, 25,000 ha) are one of
+# the first three in every month: Cerrado alone is 161 polygons over 27,000 ha, one of them
+# 2,622 ha. Filtering on March drops 198 of the 1,854 polygons (26 of them Eucalyptus); 4 of
+# the others are a crop or pasture in some other month (conversion areas that became pasture).
+# Field: every crop, pasture and Brachiaria (managed grassland is field, as in the other
+# filters), and "Uncultivated soil", which in March is a field between crops.
+column: "2020-03"
+include:
+  - Beans
+  - Brachiaria
+  - Coffee
+  - Corn
+  - Cotton
+  - Crotalaria
+  - Hay
+  - Millet
+  - Pasture
+  - Sorghum
+  - Soybean
+  - Uncultivated soil
+exclude:
+  - Cerrado
+  - Conversion area
+  - Eucalyptus
+  - Not identified
