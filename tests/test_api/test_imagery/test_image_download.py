@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
@@ -487,6 +489,82 @@ class TestDownloadAndClipScene:
         )
 
         assert "Resolution must be > 0" not in (result.error or "")
+
+    def test_band_reads_reuse_one_pool_across_scenes(
+        self,
+        tmp_path: Path,
+        mock_selected_scene: SelectedScene,
+    ) -> None:
+        """Scene after scene, bands are read on the same few long-lived threads.
+
+        A new pool per scene leaked sockets on Linux until the host ran out of local ports.
+        """
+        reference = tmp_path / "reference.tif"
+        self._write_single_band_raster(
+            reference,
+            np.zeros((8, 8), dtype=np.uint8),
+            from_origin(10.0, 50.01, 0.00125, 0.00125),
+        )
+        threads: set[str] = set()
+
+        def read_band(_item, band_name, _href, grid):
+            threads.add(threading.current_thread().name)
+            return band_name, np.zeros((grid[3], grid[2]), dtype=np.uint16)
+
+        with patch(
+            "ftw_dataset_tools.api.imagery.image_download._read_band", side_effect=read_band
+        ):
+            for scene in range(10):
+                result = download_and_clip_scene(
+                    scene=mock_selected_scene,
+                    bbox=(10.0, 50.0, 10.01, 50.01),
+                    output_path=tmp_path / f"chip_{scene}_2024_planting_image_s2.tif",
+                    reference_raster=reference,
+                )
+                assert result.success is True, result.error
+
+        assert all(name.startswith("band-read") for name in threads)
+        # Ten scenes of four bands on fresh pools would start 40 threads.
+        assert len(threads) <= 2 * len(BANDS_OF_INTEREST)
+
+    def test_failed_band_read_fails_the_scene(
+        self,
+        tmp_path: Path,
+        mock_selected_scene: SelectedScene,
+    ) -> None:
+        """A band that cannot be read fails the scene, names the band, and waits for the rest."""
+        reference = tmp_path / "reference.tif"
+        self._write_single_band_raster(
+            reference,
+            np.zeros((8, 8), dtype=np.uint8),
+            from_origin(10.0, 50.01, 0.00125, 0.00125),
+        )
+
+        finished: list[str] = []
+
+        def read_band(_item, band_name, _href, grid):
+            if band_name == "nir":
+                raise OSError("Could not resolve host")
+            time.sleep(0.2)
+            finished.append(band_name)
+            return band_name, np.zeros((grid[3], grid[2]), dtype=np.uint16)
+
+        output_path = tmp_path / "chip_001_2024_planting_image_s2.tif"
+        with patch(
+            "ftw_dataset_tools.api.imagery.image_download._read_band", side_effect=read_band
+        ):
+            result = download_and_clip_scene(
+                scene=mock_selected_scene,
+                bbox=(10.0, 50.0, 10.01, 50.01),
+                output_path=output_path,
+                reference_raster=reference,
+            )
+
+        assert result.success is False
+        assert result.error == "Failed to read band nir: Could not resolve host"
+        assert not output_path.exists()
+        # The other reads had finished by the time the scene failed, not left running.
+        assert sorted(finished) == ["blue", "green", "red"]
 
 
 class TestMissingBandsError:
