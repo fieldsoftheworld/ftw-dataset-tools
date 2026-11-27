@@ -505,7 +505,7 @@ def _split_type(collection: dict, config_dict: dict) -> str | None:
 
 
 def _all_fields_file(collection: dict, output_dir: Path, fields: Path) -> Path | None:
-    """The collection's full fields file when the masks used another (the class filter's)."""
+    """The collection's full fields file when the masks used another (filtered) one."""
     href = (collection.get("assets") or {}).get("fields", {}).get("href")
     if not href or "://" in str(href):
         return None
@@ -513,6 +513,20 @@ def _all_fields_file(collection: dict, output_dir: Path, fields: Path) -> Path |
     if not path.is_file() or (fields.exists() and path.resolve() == fields.resolve()):
         return None
     return path
+
+
+def _class_filtered(collection: dict, hidden: dict | None, all_fields_total: int | None) -> bool:
+    """Whether the masks' fields passed a class filter.
+
+    A ``fields_filtered`` asset comes from the class filter, from dropping hidden fields,
+    or both. The drop records how many fields it started from: all of the source's
+    fields means no class filter ran before it.
+    """
+    if "fields_filtered" not in (collection.get("assets") or {}):
+        return False
+    if hidden is None or all_fields_total is None:
+        return hidden is None or hidden.get("rows_in") is None
+    return hidden.get("rows_in") != all_fields_total
 
 
 def collect_stats(
@@ -528,6 +542,7 @@ def collect_stats(
 
     all_fields = _all_fields_file(collection, output_dir, fields)
     top_crops, crop_basis = _top_crops(chips, fields)
+    hidden = hidden_fields.recorded(fields) if fields.exists() else None
 
     con = _connect()
     try:
@@ -552,7 +567,7 @@ def collect_stats(
         "fields_file": fields.name,
         "all_fields_total": all_fields_total,
         "all_fields_file": all_fields.name if all_fields else None,
-        "class_filtered": "fields_filtered" in (collection.get("assets") or {}),
+        "class_filtered": _class_filtered(collection, hidden, all_fields_total),
         "top_crops": top_crops,
         "crop_basis": crop_basis,
         "imagery": imagery,
@@ -560,7 +575,7 @@ def collect_stats(
         "chip_columns": chip_columns,
         "field_columns": field_columns,
         "field_ids_unique": ids_unique,
-        "hidden_fields": hidden_fields.recorded(fields) if fields.exists() else None,
+        "hidden_fields": hidden,
         "item_properties": item_properties,
         "split_type": _split_type(collection, config_dict or {}),
         "chip_files": chip_files,
@@ -718,6 +733,8 @@ def _field_count(stats: dict) -> str | None:
         return f"{_polygons(total)} from the source (`{all_file}`)" if total and all_file else None
     if not used_file:
         return _polygons(used)
+    if stats.get("hidden_fields"):
+        return _field_count_without_hidden(stats)
     if total is not None and all_file:
         return (
             f"{_polygons(total)} from the source (`{all_file}`), {used:,} of which "
@@ -730,6 +747,22 @@ def _field_count(stats: dict) -> str | None:
             f"{verbs[1]} the masks"
         )
     return f"{_polygons(used)} (`{used_file}`), all of them used for the masks"
+
+
+def _field_count_without_hidden(stats: dict) -> str:
+    """The field count of a build that dropped hidden fields, class filter and drop apart."""
+    used, used_file = stats["fields_total"], stats["fields_file"]
+    total, all_file = stats.get("all_fields_total"), stats.get("all_fields_file")
+    hidden = stats["hidden_fields"]
+    dropped, passed = int(hidden.get("dropped", 0)), hidden.get("rows_in")
+    steps = []
+    if total is not None and all_file:
+        steps.append(f"{_polygons(total)} from the source (`{all_file}`)")
+    if stats.get("class_filtered") and passed is not None:
+        steps.append(f"{passed:,} of which pass the class filter")
+    steps.append(f"{dropped:,} hidden under other fields left out")
+    verb = "makes" if used == 1 else "make"
+    return f"{', '.join(steps)}, leaving {used:,} (`{used_file}`) that {verb} the masks"
 
 
 def _counts(stats: dict) -> str:

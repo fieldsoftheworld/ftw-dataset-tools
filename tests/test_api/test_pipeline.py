@@ -873,6 +873,35 @@ class TestDropHiddenFields:
         outlines = next(after["dir"].glob("*_fields.parquet"))
         assert sorted(gpd.read_parquet(outlines)["id"]) == [2, 4]
 
+    def test_skip_existing_rebuilds_masks_when_the_setting_changes(self, tmp_path: Path) -> None:
+        import rasterio
+
+        from ftw_dataset_tools.api import masks as masks_module
+
+        off = self._ctx(tmp_path, "run", skip_existing=True)
+        pipeline.run_pipeline(off, ["reproject", "boundaries", "masks"])
+        before = self._masks(off)
+        host = self._inside(before, self.HOST)
+        assert (before["semantic_3_class"][host] == 2).any()
+
+        config = off.config
+        config.stages.masks.drop_hidden_fields = True
+        on = pipeline.build_context(config)
+        pipeline.run_pipeline(on, ["filter", "boundaries", "masks"])
+        after = self._masks(on)
+
+        assert not (after["semantic_3_class"][host] == 2).any()
+        tif = next(after["dir"].glob("*_instance.tif"))
+        with rasterio.open(tif) as src:
+            tag = src.tags()[masks_module.HIDDEN_FIELDS_TAG]
+        assert json.loads(tag) == {"crop_column": None, "share": 0.95}
+        assert on.masks_results["instance"].masks_existing == 0
+
+        # Rerun unchanged: every mask is kept.
+        pipeline.run_pipeline(on, ["masks"])
+        assert on.masks_results["instance"].total_created == 0
+        assert on.masks_results["instance"].masks_existing == 1
+
     def test_with_a_crop_column_the_field_that_shows_stays(self, tmp_path: Path) -> None:
         """With a crop column the masks burn by id; the kept duplicate is the one shown."""
         stages = ["reproject", "filter", "boundaries", "masks"]

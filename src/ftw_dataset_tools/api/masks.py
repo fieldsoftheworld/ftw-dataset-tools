@@ -865,6 +865,8 @@ class _MaskTask:
     boundary_width: float | None = None
     # Set when boundaries_path is a sorted copy: its column of source row numbers.
     boundaries_order_col: str | None = None
+    # HIDDEN_FIELDS_TAG for the fields file, written on every output.
+    hidden_fields_tag: str | None = None
 
 
 def _grid_raster_geometry(
@@ -1062,6 +1064,25 @@ def _burn_label_extent(
 LABEL_EXTENT_TAG = "FTW_LABEL_EXTENT"
 # Set on masks whose boundary lines were buffered to a width in metres.
 BOUNDARY_WIDTH_TAG = "FTW_BOUNDARY_WIDTH_M"
+# On masks burned from fields without their hidden fields: the share and crop column
+# they were dropped with (see api/hidden_fields.py), so a changed setting rebuilds them.
+HIDDEN_FIELDS_TAG = "FTW_HIDDEN_FIELDS"
+# The fields file's Parquet metadata key api/hidden_fields.py records the drop under.
+HIDDEN_FIELDS_METADATA_KEY = "ftw:hidden_fields"
+
+
+def hidden_fields_tag(fields_file: str | Path) -> str | None:
+    """The ``HIDDEN_FIELDS_TAG`` value for masks burned from ``fields_file``, or None."""
+    import pyarrow.parquet as pq
+
+    raw = (pq.read_schema(fields_file).metadata or {}).get(HIDDEN_FIELDS_METADATA_KEY.encode())
+    if raw is None:
+        return None
+    record = json.loads(raw)
+    return json.dumps(
+        {"share": record.get("share"), "crop_column": record.get("crop_column")},
+        sort_keys=True,
+    )
 
 
 def _width_tag(boundary_width: float | None) -> str | None:
@@ -1235,6 +1256,7 @@ def _create_masks_for_cell(
     label_extent: LabelExtent | None = None,
     boundary_width: float | None = None,
     boundaries_order_col: str | None = None,
+    hidden_tag: str | None = None,
 ) -> list[tuple[MaskType, MaskResult]]:
     """Rasterize ``source_type`` once for a grid cell and write every output from it.
 
@@ -1292,6 +1314,8 @@ def _create_masks_for_cell(
             mask, tags = _output_layer(mask_type, source, label_extent)
             if boundary_width is not None:
                 tags = {**tags, BOUNDARY_WIDTH_TAG: _width_tag(boundary_width)}
+            if hidden_tag is not None:
+                tags = {**tags, HIDDEN_FIELDS_TAG: hidden_tag}
 
             # Instance ids are arbitrary and often global, so a viewer needs the chip's own
             # id range to stretch over: keeping the background out of the embedded statistics
@@ -1382,6 +1406,7 @@ def _create_masks_with_retry(
                 label_extent=task.label_extent,
                 boundary_width=task.boundary_width,
                 boundaries_order_col=task.boundaries_order_col,
+                hidden_tag=task.hidden_fields_tag,
             )
             return (results, None)
         except _PartialCellFailure as exc:
@@ -1695,6 +1720,7 @@ def _outputs_to_write(
     grid: Callable[[], tuple[CRS, Affine, int, int]] | None = None,
     label_extent: LabelExtent | None = None,
     boundary_width: float | None = None,
+    hidden_tag: str | None = None,
 ) -> list[tuple[MaskType, str]]:
     """The (mask type, path) outputs of one cell's group that still need writing.
 
@@ -1722,6 +1748,7 @@ def _outputs_to_write(
                 grid,
                 _extent_tag(mask_type, label_extent),
                 _width_tag(boundary_width),
+                hidden_tag,
             )
         ):
             existing[mask_type] += 1
@@ -1736,12 +1763,14 @@ def _reusable(
     grid: Callable[[], tuple[CRS, Affine, int, int]] | None,
     extent_tag: str | None,
     width_tag: str | None = None,
+    hidden_tag: str | None = None,
 ) -> bool:
     """Whether a mask already on disk can stand for the one this run would write.
 
     A rerun with ``skip_existing`` must not keep a mask from a build on another grid
     (lon/lat instead of UTM or the reverse, another resolution, another origin), nor
-    one burned with another label extent, or with one where this run has none.
+    one burned with another label extent, or with one where this run has none, nor
+    one burned from fields with hidden fields dropped another way (or not at all).
     """
     try:
         with rasterio.open(mask_path) as src:
@@ -1749,6 +1778,7 @@ def _reusable(
             if (
                 tags.get(LABEL_EXTENT_TAG) != extent_tag
                 or tags.get(BOUNDARY_WIDTH_TAG) != width_tag
+                or tags.get(HIDDEN_FIELDS_TAG) != hidden_tag
             ):
                 return False
             return grid is None or _on_grid(src, grid())
@@ -1991,6 +2021,7 @@ def create_masks(
 
     # Per-type tally of outputs left in place because skip_existing found them.
     existing: dict[MaskType, int] = dict.fromkeys(mask_types, 0)
+    hidden_tag = hidden_fields_tag(boundaries_path)
     work_items = _build_work_items(
         grid_cells,
         groups,
@@ -2008,6 +2039,7 @@ def create_masks(
             "utm": utm,
             "label_extent": extent,
             "boundary_width": boundary_width,
+            "hidden_fields_tag": hidden_tag,
         },
         chip_dirs=chip_dirs,
         year=year,
@@ -2016,6 +2048,7 @@ def create_masks(
         crop_column=crop_column,
         label_extent=extent,
         boundary_width=boundary_width,
+        hidden_tag=hidden_tag,
     )
 
     # Announce (and count progress against) the work that is actually queued:

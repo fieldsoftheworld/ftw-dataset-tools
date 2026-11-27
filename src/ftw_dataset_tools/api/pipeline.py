@@ -856,6 +856,7 @@ def stage_scale(ctx: PipelineContext) -> None:
 def stage_splits(ctx: PipelineContext) -> None:
     """Assign train/val/test splits to the chips file."""
     _require(ctx.chips_path, stage="splits", produced_by="chips")
+    _require_hidden_fields_match(ctx, stage="splits")
     split_cfg = ctx.config.stages.splits
     logger.info(f"Assigning {split_cfg.split_type} splits...")
     ctx.splits_result = splits.assign_splits(
@@ -1232,6 +1233,7 @@ def stage_docs(ctx: PipelineContext) -> None:
     _require(collection_json, stage="docs", produced_by="stac")
     _require(ctx.chips_path, stage="docs", produced_by="chips")
     _require(ctx.field_polygons_path, stage="docs", produced_by=ctx.field_polygons_producer)
+    _require_hidden_fields_match(ctx, stage="docs")
 
     built = _build_tiles(ctx)
     style_results = _write_styles(ctx, built)

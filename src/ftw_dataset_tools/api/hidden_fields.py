@@ -23,7 +23,9 @@ union of the later fields that cover them.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,7 +39,12 @@ from ftw_dataset_tools.api.config import DEFAULT_HIDDEN_FIELD_SHARE
 from ftw_dataset_tools.api.field_ids import _native_geometry_columns
 from ftw_dataset_tools.api.geo import detect_geometry_column, ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.logging_config import get_logger
-from ftw_dataset_tools.api.masks import _instance_id_column, instance_paint_order
+from ftw_dataset_tools.api.masks import (
+    HIDDEN_FIELDS_METADATA_KEY,
+    _instance_id_column,
+    _total_ram_bytes,
+    instance_paint_order,
+)
 
 logger = get_logger(__name__)
 
@@ -46,13 +53,21 @@ DEFAULT_SHARE = DEFAULT_HIDDEN_FIELD_SHARE
 # hair below its area, which would keep it at share 1.
 _AREA_TOLERANCE = 1e-9
 #: Key of the Parquet key-value metadata recording what was dropped, read by the docs.
-METADATA_KEY = "ftw:hidden_fields"
+METADATA_KEY = HIDDEN_FIELDS_METADATA_KEY
 _ID_COLUMN = "id"
 _EXAMPLES = 5
 # Fields per STRtree query: bounds the candidate pairs held at once.
 _CHUNK = 200_000
+# Candidate pairs per exact-overlap task; tasks run on a thread pool (GEOS releases
+# the GIL), and only one task's geometries are decoded at a time per thread.
+_PAIR_CHUNK = 50_000
 _ZSTD_LEVEL = 6
-_MEMORY_LIMIT = "4GB"
+# DuckDB's share of RAM for the scan (at least _MIN_MEMORY_MB), on at most _THREADS
+# threads: each thread buffers row groups of geometry, so 192 threads ran out of a
+# 4 GB limit on a 6.6M-field file before the first row came back.
+_MEMORY_FRACTION = 0.25
+_MIN_MEMORY_MB = 4096
+_THREADS = 8
 
 
 class HiddenFieldsError(ValueError):
@@ -113,15 +128,11 @@ class _Index:
 def _index(path: Path, geom_col: str, crop_column: str | None) -> _Index:
     """The fields in row order, ranked the way the instance mask burns them.
 
-    The ranking sorts every field (by its WKT too, with a crop column), so DuckDB is
-    held to a memory limit and spills beside the file rather than growing unbounded.
+    DuckDB is held to a share of RAM and a few threads, and spills beside the file.
     """
     with tempfile.TemporaryDirectory(dir=path.parent, prefix=".ftwd-hidden-") as spill:
-        con = duckdb.connect(":memory:")
+        con = _connect(Path(spill))
         try:
-            con.execute(f"SET memory_limit = '{_MEMORY_LIMIT}'")
-            con.execute(f"SET temp_directory = '{sql_path(spill)}'")
-            ensure_spatial_loaded(con)
             cols = _rank(con, path, geom_col, crop_column)
         except duckdb.BinderException as err:
             raise HiddenFieldsError(f"Cannot rank the fields of {path.name}: {err}") from err
@@ -132,14 +143,33 @@ def _index(path: Path, geom_col: str, crop_column: str | None) -> _Index:
     return _Index(np.asarray(cols["paint"]), bounds, area)
 
 
+def _memory_limit_mb() -> int:
+    total = _total_ram_bytes()
+    if total is None:
+        return _MIN_MEMORY_MB
+    return max(_MIN_MEMORY_MB, int(_MEMORY_FRACTION * total / 2**20))
+
+
+def _connect(spill: Path) -> duckdb.DuckDBPyConnection:
+    con = duckdb.connect(":memory:")
+    con.execute(f"SET memory_limit = '{_memory_limit_mb()}MB'")
+    con.execute(f"SET threads = {min(_THREADS, os.cpu_count() or 1)}")
+    con.execute(f"SET temp_directory = '{sql_path(spill)}'")
+    con.execute("SET enable_progress_bar = false")
+    ensure_spatial_loaded(con)
+    return con
+
+
 def _rank(
     con: duckdb.DuckDBPyConnection, path: Path, geom_col: str, crop_column: str | None
 ) -> dict:
+    """Each field's paint rank, bounds and area; file order needs no sort."""
     id_col = _instance_id_column(con, path)
-    order = instance_paint_order(id_col, geom_col, crop_column) or "file_row_number"
+    order = instance_paint_order(id_col, geom_col, crop_column)
+    paint = f"row_number() OVER (ORDER BY {order})" if order else "file_row_number"
     g = f'"{geom_col}"'
     return con.execute(
-        f"""SELECT row_number() OVER (ORDER BY {order}) AS paint,
+        f"""SELECT {paint} AS paint,
                    coalesce(ST_XMin({g}), 'NaN') AS x0, coalesce(ST_YMin({g}), 'NaN') AS y0,
                    coalesce(ST_XMax({g}), 'NaN') AS x1, coalesce(ST_YMax({g}), 'NaN') AS y1,
                    coalesce(CASE WHEN ST_IsValid({g}) THEN ST_Area({g}) END, 0) AS area
@@ -184,36 +214,63 @@ def _candidate_pairs(index: _Index, share: float) -> np.ndarray:
     return np.concatenate(found) if found else np.empty((0, 2), dtype=np.int64)
 
 
-def _shapes(path: Path, geom_col: str, rows: np.ndarray) -> dict[int, shapely.Geometry]:
-    """The valid geometries of ``rows``, by row number."""
-    con = duckdb.connect(":memory:")
-    try:
-        ensure_spatial_loaded(con)
-        con.register("wanted", pa.table({"row": pa.array(rows, pa.int64())}))
-        found = con.execute(
-            f"""SELECT file_row_number, ST_AsWKB("{geom_col}")
-                FROM read_parquet('{sql_path(path)}', file_row_number = true)
-                WHERE file_row_number IN (SELECT row FROM wanted)"""
-        ).fetchall()
-    finally:
-        con.close()
-    positions = [int(r) for r, _ in found]
-    shapes = shapely.make_valid(shapely.from_wkb([bytes(w) for _, w in found], on_invalid="fix"))
-    return dict(zip(positions, shapes, strict=True))
+def _wkbs(path: Path, geom_col: str, rows: np.ndarray) -> dict[int, bytes]:
+    """The WKB of ``rows``, by row number: compact until a task decodes it."""
+    with tempfile.TemporaryDirectory(dir=path.parent, prefix=".ftwd-hidden-") as spill:
+        con = _connect(Path(spill))
+        try:
+            con.register("wanted", pa.table({"row": pa.array(rows, pa.int64())}))
+            table = con.execute(
+                f"""SELECT file_row_number AS row, ST_AsWKB("{geom_col}") AS wkb
+                    FROM read_parquet('{sql_path(path)}', file_row_number = true)
+                    WHERE file_row_number IN (SELECT row FROM wanted)"""
+            ).fetch_arrow_table()
+        finally:
+            con.close()
+    return dict(zip(table.column("row").to_pylist(), table.column("wkb").to_pylist(), strict=True))
 
 
-def _exact_pairs(
-    pairs: np.ndarray, shapes: dict[int, shapely.Geometry], share: float
-) -> tuple[np.ndarray, dict[int, float]]:
-    """The pairs whose field's summed exact overlap still reaches ``share``, and the areas."""
+def _decode(wkbs: dict[int, bytes], rows: np.ndarray) -> dict[int, shapely.Geometry]:
+    unique = np.unique(rows)
+    shapes = shapely.make_valid(shapely.from_wkb([wkbs[int(r)] for r in unique], on_invalid="fix"))
+    return dict(zip(unique.tolist(), shapes, strict=True))
+
+
+def _overlaps(pairs: np.ndarray, wkbs: dict[int, bytes]) -> tuple[np.ndarray, dict[int, float]]:
+    """Each pair's exact overlap, and the area of each pair's first field."""
+    shapes = _decode(wkbs, pairs)
     unders = [shapes[int(r)] for r in pairs[:, 0]]
     overs = [shapes[int(r)] for r in pairs[:, 1]]
     overlap = shapely.area(shapely.intersection(unders, overs))
-    rows = np.unique(pairs[:, 0])
-    area = {int(r): float(shapely.area(shapes[int(r)])) for r in rows}
+    return overlap, {r: float(shapely.area(shapes[r])) for r in np.unique(pairs[:, 0]).tolist()}
+
+
+def _exact_pairs(pairs: np.ndarray, wkbs: dict[int, bytes], share: float) -> np.ndarray:
+    """The pairs whose field's summed exact overlap still reaches ``share``.
+
+    Pairs are sorted by their first field, so each task holds every pair of its fields.
+    """
+    pairs = pairs[np.argsort(pairs[:, 0], kind="stable")]
+    cuts = _task_cuts(pairs[:, 0])
+    tasks = [pairs[a:b] for a, b in zip(cuts[:-1], cuts[1:], strict=True)]
+    with ThreadPoolExecutor(min(_THREADS, os.cpu_count() or 1)) as pool:
+        results = list(pool.map(lambda task: _overlaps(task, wkbs), tasks))
+    overlap = np.concatenate([o for o, _ in results])
     areas = np.zeros(int(pairs[:, 0].max()) + 1)
-    areas[rows] = [area[int(r)] for r in rows]
-    return _reaching(pairs, overlap, areas, share), area
+    for _, area in results:
+        areas[list(area)] = list(area.values())
+    return _reaching(pairs, overlap, areas, share)
+
+
+def _task_cuts(unders: np.ndarray) -> list[int]:
+    """Indexes splitting sorted ``unders`` into tasks of about _PAIR_CHUNK pairs."""
+    cuts = [0]
+    while cuts[-1] < len(unders):
+        end = min(cuts[-1] + _PAIR_CHUNK, len(unders))
+        if end < len(unders):  # never split one field's pairs across tasks
+            end = int(np.searchsorted(unders, unders[end - 1], side="right"))
+        cuts.append(end)
+    return cuts
 
 
 def _covered_share(shape: shapely.Geometry, covers: list[shapely.Geometry]) -> float:
@@ -225,9 +282,10 @@ def _covered_share(shape: shapely.Geometry, covers: list[shapely.Geometry]) -> f
 
 
 def _hidden(
-    pairs: np.ndarray, shapes: dict[int, shapely.Geometry], paint: np.ndarray, share: float
+    pairs: np.ndarray, wkbs: dict[int, bytes], paint: np.ndarray, share: float
 ) -> list[int]:
     """The fields hidden under later fields that are kept, decided last burned first."""
+    shapes = _decode(wkbs, pairs)
     later: dict[int, list[int]] = {}
     for under, over in pairs:
         later.setdefault(int(under), []).append(int(over))
@@ -256,11 +314,11 @@ def find_hidden_fields(
     pairs = _candidate_pairs(index, share)
     if len(pairs) == 0:
         return []
-    shapes = _shapes(path, geom_col, np.unique(pairs))
-    pairs, _ = _exact_pairs(pairs, shapes, share)
+    wkbs = _wkbs(path, geom_col, np.unique(pairs))
+    pairs = _exact_pairs(pairs, wkbs, share)
     if len(pairs) == 0:
         return []
-    return _hidden(pairs, shapes, index.paint, share)
+    return _hidden(pairs, wkbs, index.paint, share)
 
 
 # --------------------------------------------------------------------------- #
