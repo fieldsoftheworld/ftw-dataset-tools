@@ -536,6 +536,57 @@ class TestReviewFindings:
         assert rows_by_id(out)["f"]["pixels"] == 25
 
 
+# Four fields 30 km apart, each read in its own window.
+REUSE_GEOMS = {f"f{i}": box(X + i * 30_000, Y, X + i * 30_000 + 50, Y + 50) for i in range(4)}
+
+
+class TestReuseUnchangedFields:
+    """After snapshot_fields, a rerun reads only the fields whose id or geometry changed."""
+
+    def _first_run(self, tmp_path: Path) -> tuple[Path, Path]:
+        fields = write_fields(tmp_path / "fields.parquet", REUSE_GEOMS)
+        out = tmp_path / "o.parquet"
+        both = {"aef": FakeSource(0), "olmoearth": FakeSource(1)}
+        add_field_embeddings(fields, out, year=2022, workers=1, sources=both)
+        return fields, out
+
+    def test_only_changed_and_new_fields_are_read(self, tmp_path: Path) -> None:
+        fields, out = self._first_run(tmp_path)
+        assert fe.snapshot_fields(out, fields, year=2022)
+
+        changed = dict(REUSE_GEOMS)
+        changed["f1"] = box(X + 30_000, Y, X + 30_000 + 70, Y + 50)  # geometry changed
+        del changed["f3"]
+        changed["new"] = box(X + 200_000, Y, X + 200_050, Y + 50)
+        write_fields(fields, changed)
+        again = FakeSource(0)
+        sources = {"aef": again, "olmoearth": FakeSource(1)}
+        add_field_embeddings(fields, out, year=2022, workers=1, sources=sources)
+
+        assert len(again.reads) == 2  # f1 and "new"; f0 and f2 kept
+        rows = rows_by_id(out)
+        assert list(rows) == ["f0", "f1", "f2", "new"]
+        for fid, geom in changed.items():
+            TestAddFieldEmbeddings().assert_stats(rows[fid], "aef", again, geom)
+        assert fe.is_current(out, fields, year=2022)
+        assert not fe.snapshot_path(out).exists()
+
+    def test_no_snapshot_without_current_embeddings(self, tmp_path: Path) -> None:
+        fields, out = self._first_run(tmp_path)
+        assert not fe.snapshot_fields(out, fields, year=2023)
+        write_fields(fields, {"f0": box(X, Y, X + 60, Y + 50)})
+        assert not fe.snapshot_fields(out, fields, year=2022)
+        assert not fe.snapshot_fields(tmp_path / "missing.parquet", fields, year=2022)
+        assert not fe.snapshot_path(out).exists()
+
+    def test_a_snapshot_of_other_products_is_not_reused(self, tmp_path: Path) -> None:
+        fields, out = self._first_run(tmp_path)
+        assert fe.snapshot_fields(out, fields, year=2022)
+        aef = FakeSource(0)
+        add_field_embeddings(fields, out, year=2022, workers=1, sources={"aef": aef})
+        assert len(aef.reads) == len(REUSE_GEOMS)
+
+
 class TestIsCurrent:
     def test_same_fields_year_and_products(self, tmp_path: Path) -> None:
         fields = write_fields(tmp_path / "f.parquet", {"a": box(X, Y, X + 50, Y + 50)})

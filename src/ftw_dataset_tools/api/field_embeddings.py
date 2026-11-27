@@ -1107,6 +1107,100 @@ def is_current(path: Path | str, fields_file: Path | str, *, year: int, id_col: 
     )
 
 
+# ---- reusing an earlier file's statistics ------------------------------------------
+
+#: Key of the snapshot's metadata holding the fingerprint of the fields it describes.
+_SNAPSHOT_KEY = "ftw:fields_fingerprint"
+# Description entries that must match for an earlier file's rows to be reused; only
+# the fields may differ.
+_REUSE_KEYS = ("algorithm_version", "year", "id_column", "requested_products", "products")
+
+
+def snapshot_path(output_file: Path | str) -> Path:
+    """Where :func:`snapshot_fields` records the fields ``output_file`` was computed for."""
+    output_file = Path(output_file)
+    return output_file.with_name(f".{output_file.name}.fields.parquet")
+
+
+def _digest_sql(geom_col: str, id_col: str) -> str:
+    return f'CAST("{id_col}" AS VARCHAR) AS id, md5(ST_AsWKB("{geom_col}")::BLOB) AS digest'
+
+
+def snapshot_fields(
+    output_file: Path | str, fields_file: Path | str, *, year: int, id_col: str = "id"
+) -> bool:
+    """Record each field's id and geometry digest, before ``fields_file`` is rewritten.
+
+    Only when ``output_file`` holds the statistics of exactly these fields: the next
+    :func:`add_field_embeddings` on the rewritten file then keeps every field whose id
+    and geometry are unchanged and computes only the others. Returns whether a snapshot
+    was written.
+    """
+    output_file, fields_file = Path(output_file), Path(fields_file)
+    try:
+        if not is_current(output_file, fields_file, year=year, id_col=id_col):
+            return False
+        geom_col, _ = _check_fields(fields_file, id_col)
+    except (FieldEmbeddingsError, duckdb.Error, OSError):
+        return False
+    fingerprint = read_description(output_file)["fields_fingerprint"]
+    dest = snapshot_path(output_file)
+    tmp = dest.with_name(dest.name + ".tmp")
+    con = duckdb.connect(":memory:")
+    try:
+        ensure_spatial_loaded(con)
+        con.execute(f"""
+            COPY (SELECT {_digest_sql(geom_col, id_col)} FROM read_parquet('{sql_path(fields_file)}'))
+            TO '{sql_path(tmp)}' (FORMAT parquet, KV_METADATA {{'{_SNAPSHOT_KEY}': '{fingerprint}'}})""")
+    finally:
+        con.close()
+    tmp.replace(dest)
+    return True
+
+
+def _snapshot_matches(output_path: Path, description: dict) -> bool:
+    """Whether the snapshot describes ``output_path``'s fields, computed like this run."""
+    snapshot = snapshot_path(output_path)
+    if not (snapshot.exists() and output_path.exists()):
+        return False
+    previous = read_description(output_path) or {}
+    if any(previous.get(k) != description.get(k) for k in _REUSE_KEYS):
+        return False
+    recorded = (pq.read_metadata(snapshot).metadata or {}).get(_SNAPSHOT_KEY.encode())
+    return recorded is not None and recorded.decode() == previous.get("fields_fingerprint")
+
+
+def _reuse_previous(
+    con: duckdb.DuckDBPyConnection,
+    fields_sql: str,
+    geom_col: str,
+    id_col: str,
+    output_path: Path,
+    parts: _Parts,
+) -> int:
+    """Save the earlier output's rows for fields with the same id and geometry as a part.
+
+    Ids repeated on either side are left to be computed. Returns the fields reused.
+    """
+    unique = "QUALIFY count(*) OVER (PARTITION BY id) = 1"
+    stats = ", ".join(f'old."{c}"' for c in OUTPUT_COLUMNS)
+    table = con.execute(f"""
+        WITH new AS (
+            SELECT file_row_number AS rid, {_digest_sql(geom_col, id_col)}
+            FROM {fields_sql} {unique}),
+        snap AS (SELECT * FROM read_parquet('{sql_path(snapshot_path(output_path))}') {unique}),
+        old AS (
+            SELECT CAST("{id_col}" AS VARCHAR) AS id, * EXCLUDE ("{id_col}")
+            FROM read_parquet('{sql_path(output_path)}') {unique})
+        SELECT new.rid, {stats}
+        FROM new JOIN snap USING (id, digest) JOIN old USING (id)
+        WHERE new.rid IN (SELECT rid FROM _keys)
+        ORDER BY new.rid""").fetch_arrow_table()
+    if table.num_rows:
+        parts.write(table.select(SCHEMA.names).cast(SCHEMA).to_batches())
+    return table.num_rows
+
+
 def add_field_embeddings(
     fields_file: Path | str,
     output_file: Path | str,
@@ -1124,6 +1218,10 @@ def add_field_embeddings(
     stopped part way (a network failure, a killed process) resumes from there when
     started again on the same fields, year and products. The folder is removed once
     the output is written.
+
+    When :func:`snapshot_fields` recorded the fields an earlier ``output_file`` was
+    computed for, fields whose id and geometry are unchanged keep their statistics
+    and only the others are read.
 
     Args:
         fields_file: Field polygons (GeoParquet, any CRS).
@@ -1154,6 +1252,9 @@ def add_field_embeddings(
         try:
             _warn_on_ids(con, fields_sql, id_col)
             total = _plan(con, fields_sql, geom_col, crs)
+            if parts.count == 0 and _snapshot_matches(output_path, description):
+                reused = _reuse_previous(con, fields_sql, geom_col, id_col, output_path, parts)
+                logger.info(f"Keeping {reused:,} of {total:,} fields' statistics: unchanged")
             resumed = parts.skip_done(con)
             if resumed:
                 logger.info(f"Resuming: {resumed:,} of {total:,} fields already done")
@@ -1180,6 +1281,7 @@ def add_field_embeddings(
         finally:
             con.close()
         parts.remove()
+    snapshot_path(output_path).unlink(missing_ok=True)
     logger.info(field_embeddings_summary(result))
     return result
 

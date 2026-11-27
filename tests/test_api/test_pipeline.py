@@ -1881,6 +1881,32 @@ def _embeddings_ctx(tmp_path: Path, monkeypatch, *, on: bool) -> pipeline.Pipeli
 
 
 class TestChipsStageFieldEmbeddings:
+    def test_reproject_records_the_previous_fields_first(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The snapshot sees the earlier run's fields file, before reproject rewrites it."""
+        from ftw_dataset_tools.api import field_embeddings
+
+        config = _config(
+            sample_geoparquet_4326,
+            tmp_path / "out",
+            year=2023,
+            stages={"chips": {"field_embeddings": True}},
+        )
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        ctx.output_fields_path.write_bytes(b"previous run")
+        seen: list[tuple] = []
+
+        def snapshot(out, fields, *, year):
+            seen.append((Path(out), Path(fields).read_bytes(), year))
+            return True
+
+        monkeypatch.setattr(field_embeddings, "snapshot_fields", snapshot)
+        pipeline.stage_reproject(ctx)
+
+        assert seen == [(ctx.field_embeddings_path, b"previous run", 2023)]
+
     def _record(self, monkeypatch) -> list[tuple]:
         from ftw_dataset_tools.api import field_embeddings
 

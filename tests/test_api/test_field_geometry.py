@@ -237,3 +237,81 @@ class TestUnusualInput:
         column = pq.ParquetFile(path).schema.column(1)
         assert str(column.logical_type).startswith("Geometry")
         assert field_geometry._invalid_rows(path, "geometry") == {}
+
+
+# The last edge folds back across the first, leaving a ~0.6 m² triangle beside a
+# ~1.2 ha field (in degrees near the equator).
+FOLDED = shapely.from_wkt("POLYGON ((0 0, 0.001 0, 0.001 0.001, 0 0.001, 0.00001 -0.00001, 0 0))")
+
+
+class TestSliverParts:
+    def test_folded_triangle_is_left_out(self, tmp_path: Path) -> None:
+        assert field_geometry.repaired_shape(FOLDED).geom_type == "MultiPolygon"
+        path = _write(tmp_path, [FOLDED])
+
+        field_geometry.repair_geometries(path)
+
+        shape = shapely.from_wkb(pq.read_table(path).column("geometry")[0].as_py())
+        assert shape.geom_type == "Polygon"
+        assert shape.is_valid
+        geo = json.loads(pq.read_schema(path).metadata[b"geo"])
+        assert geo["columns"]["geometry"]["geometry_types"] == ["Polygon"]
+
+    def test_a_field_of_only_tiny_parts_stays_whole(self) -> None:
+        from ftw_dataset_tools.api.chip_grid import reprojector
+
+        tiny = shapely.affinity.scale(BOW_TIE, 1e-6, 1e-6, origin=(0, 0))
+        fixed = field_geometry.repaired_shape(tiny, reprojector("EPSG:4326", "EPSG:6933"))
+        assert fixed.geom_type == "MultiPolygon"
+        assert len(fixed.geoms) == 2
+
+
+class TestBboxNulls:
+    def test_null_bbox_sides_stay_null(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, [box(80, 0, 90, 10), BOW_TIE])
+        table = pq.read_table(path)
+        index = table.schema.get_field_index("bbox")
+        bboxes = table.column("bbox").to_pylist()
+        bboxes[0] = {**bboxes[0], "xmin": None}
+        table = table.set_column(
+            index, "bbox", pa.array(bboxes, type=table.schema.field("bbox").type)
+        )
+        pq.write_table(table, path)
+
+        field_geometry.repair_geometries(path)
+
+        written = pq.read_table(path).column("bbox").to_pylist()
+        assert written[0]["xmin"] is None
+        assert written[0]["xmax"] == 90
+        assert written[1] == {"xmin": 0, "ymin": 0, "xmax": 10, "ymax": 10}
+
+
+class TestUnreadable:
+    def test_counted_apart_from_no_area(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = _write(tmp_path, [BOW_TIE, FLAT])
+
+        def broken(*_args, **_kwargs):
+            raise shapely.errors.GEOSException("unreadable")
+
+        monkeypatch.setattr(field_geometry, "repaired_shape", broken)
+        result = field_geometry.repair_geometries(path)
+
+        assert (result.unreadable, result.dropped, result.repaired) == (2, 0, 0)
+        assert "dropped 2 GEOS could not read" in result.summary()
+        assert pq.read_table(path).num_rows == 0
+
+
+class TestWarnIfInvalid:
+    def test_warns_with_the_count(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        path = _write(tmp_path, [BOW_TIE, SPIKE, box(80, 0, 90, 10)])
+        with caplog.at_level("WARNING"):
+            assert field_geometry.warn_if_invalid(path) == 2
+        assert "has 2 invalid geometries" in caplog.text
+
+    def test_quiet_for_valid_and_non_geo_files(self, tmp_path: Path) -> None:
+        assert field_geometry.warn_if_invalid(_write(tmp_path, [box(0, 0, 1, 1)])) == 0
+        plain = tmp_path / "plain.parquet"
+        pq.write_table(pa.table({"id": [1]}), plain)
+        assert field_geometry.warn_if_invalid(plain) == 0

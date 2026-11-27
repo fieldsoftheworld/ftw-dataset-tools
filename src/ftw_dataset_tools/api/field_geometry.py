@@ -7,8 +7,9 @@ and each consumer of the fields (lines, mask fill, per-chip outlines) would read
 broken shape its own way. The reproject stage therefore replaces every invalid
 geometry with the polygonal part of its repair (``make_valid`` with the
 ``structure`` method: the area the rings enclose, overlapping parts unioned, and
-collapsed slits, spikes and other line or point debris left out). A field with no
-area left is dropped. Valid geometries, every other column, the row order and the
+collapsed slits, spikes and other line or point debris left out). Parts of the
+repair under 1 m² (the folded triangles a crossing leaves) are left out too, unless
+every part is that small. A field with no area left is dropped. Valid geometries, every other column, the row order and the
 file metadata are kept; the bbox column is recomputed for the repaired rows.
 """
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import duckdb
 import numpy as np
@@ -24,14 +26,19 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import shapely
 
-from ftw_dataset_tools.api.field_ids import _native_geometry_columns
+from ftw_dataset_tools.api.chip_grid import reprojector
+from ftw_dataset_tools.api.field_ids import AREA_CRS, SLIVER_M2, _native_geometry_columns
 from ftw_dataset_tools.api.geo import (
     detect_geometry_column,
     ensure_spatial_loaded,
+    geoparquet_crs,
     get_bbox_column_name,
     sql_path,
 )
 from ftw_dataset_tools.api.logging_config import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = get_logger(__name__)
 
@@ -50,12 +57,13 @@ class RepairResult:
     rows_in: int = 0
     repaired: int = 0  # invalid geometries replaced by their repair
     dropped: int = 0  # invalid geometries with no area left; their rows were removed
+    unreadable: int = 0  # geometries GEOS could not read at all; also removed
     repaired_ids: list[str] = field(default_factory=list)  # up to _EXAMPLES
     dropped_ids: list[str] = field(default_factory=list)  # up to _EXAMPLES
 
     @property
     def changed(self) -> bool:
-        return bool(self.repaired or self.dropped)
+        return bool(self.repaired or self.dropped or self.unreadable)
 
     def summary(self) -> str:
         """One line for the log."""
@@ -68,18 +76,38 @@ class RepairResult:
             line += f"; dropped {self.dropped:,} with no area left"
             if self.dropped_ids:
                 line += f" (e.g. id {', '.join(self.dropped_ids)})"
+        if self.unreadable:
+            line += f"; dropped {self.unreadable:,} GEOS could not read"
         return line
 
 
-def repaired_shape(shape: shapely.Geometry) -> shapely.Geometry | None:
-    """The polygonal part of ``shape``'s repair, or None when it has no area."""
+def repaired_shape(
+    shape: shapely.Geometry, to_area_crs: Callable | None = None
+) -> shapely.Geometry | None:
+    """The polygonal part of ``shape``'s repair, or None when it has no area.
+
+    With ``to_area_crs`` (a ``shapely.transform`` function into an equal-area CRS in
+    metres), parts under ``SLIVER_M2`` are left out unless all of them are.
+    """
     fixed = shapely.make_valid(shape, method="structure", keep_collapsed=False)
     if fixed.geom_type not in _POLYGONAL:
         parts = [p for p in shapely.get_parts(fixed) if p.geom_type in _POLYGONAL]
         fixed = shapely.union_all(parts) if parts else None
     if fixed is None or fixed.is_empty or fixed.area <= 0:
         return None
-    return fixed
+    return _without_slivers(fixed, to_area_crs) if to_area_crs is not None else fixed
+
+
+def _without_slivers(shape: shapely.Geometry, to_area_crs: Callable) -> shapely.Geometry:
+    """``shape`` without its parts under ``SLIVER_M2``, unless that is all of it."""
+    pieces = shapely.get_parts(shape)
+    if len(pieces) == 1:
+        return shape
+    areas = shapely.area(shapely.transform(pieces, to_area_crs))
+    kept = [p for p, a in zip(pieces, areas, strict=True) if a >= SLIVER_M2]
+    if not kept or len(kept) == len(pieces):
+        return shape
+    return kept[0] if len(kept) == 1 else shapely.MultiPolygon(kept)
 
 
 def _quoted(column: str) -> str:
@@ -121,7 +149,8 @@ def repair_geometries(path: Path | str) -> RepairResult:
     result = RepairResult(rows_in=pq.ParquetFile(path).metadata.num_rows)
     invalid = _invalid_rows(path, geom_col)
     if invalid:
-        repairs = _repairs(invalid, result)
+        to_area_crs = reprojector(geoparquet_crs(path, geom_col), AREA_CRS)
+        repairs = _repairs(invalid, result, to_area_crs)
         tmp = path.with_name(f".{path.name}.repair.tmp")
         try:
             _rewrite(path, tmp, geom_col, repairs, result)
@@ -133,30 +162,53 @@ def repair_geometries(path: Path | str) -> RepairResult:
 
 
 def _repairs(
-    invalid: dict[int, tuple[bytes, str | None]], result: RepairResult
+    invalid: dict[int, tuple[bytes, str | None]], result: RepairResult, to_area_crs: Callable
 ) -> dict[int, shapely.Geometry | None]:
     """Each invalid row's repaired geometry, None for one to drop; counted on ``result``."""
     repairs: dict[int, shapely.Geometry | None] = {}
     for row, (wkb, fid) in invalid.items():
-        fixed = _repaired_wkb(wkb)
+        try:
+            fixed = repaired_shape(shapely.from_wkb(wkb, on_invalid="fix"), to_area_crs)
+        except shapely.errors.GEOSException:
+            repairs[row] = None
+            result.unreadable += 1
+            continue
         repairs[row] = fixed
-        if fixed is None:
-            result.dropped += 1
-            examples = result.dropped_ids
-        else:
-            result.repaired += 1
-            examples = result.repaired_ids
-        if fid is not None and len(examples) < _EXAMPLES:
-            examples.append(fid)
+        _count(result, fixed, fid)
     return repairs
 
 
-def _repaired_wkb(wkb: bytes) -> shapely.Geometry | None:
-    """The repair of one stored geometry; a ring left unclosed is closed first."""
+def _count(result: RepairResult, fixed: shapely.Geometry | None, fid: str | None) -> None:
+    if fixed is None:
+        result.dropped += 1
+        examples = result.dropped_ids
+    else:
+        result.repaired += 1
+        examples = result.repaired_ids
+    if fid is not None and len(examples) < _EXAMPLES:
+        examples.append(fid)
+
+
+def warn_if_invalid(path: Path | str) -> int:
+    """Log a warning when ``path`` holds invalid geometries; returns how many.
+
+    The pipeline repairs them in its reproject stage. A standalone command given a
+    raw file burns them as they are, so their boundary lines may cross the fields.
+    """
+    path = Path(path)
+    geom_col = detect_geometry_column(path)
+    if geom_col is None:
+        return 0  # not GeoParquet: the command reports that itself
     try:
-        return repaired_shape(shapely.from_wkb(wkb, on_invalid="fix"))
-    except shapely.errors.GEOSException:
-        return None  # nothing GEOS can read back as an area
+        count = len(_invalid_rows(path, geom_col))
+    except duckdb.Error:
+        return 0
+    if count:
+        logger.warning(
+            f"{path.name} has {count:,} invalid geometries; their boundary lines can cross "
+            "the field. `ftwd run` repairs them in its reproject stage."
+        )
+    return count
 
 
 @dataclass(frozen=True)
@@ -241,24 +293,36 @@ def _set_bboxes(table: pa.Table, index: int, fixed: dict[int, shapely.Geometry])
         f.name: column.field(f.name).to_numpy(zero_copy_only=False).copy() for f in column.type
     }
     rows = np.fromiter(fixed, dtype=np.int64)
+    # Null sides stay null, except on the rows whose bounds are written here.
+    nulls = {}
+    for f in column.type:
+        null = column.field(f.name).is_null().to_numpy(zero_copy_only=False).copy()
+        null[rows] = False
+        nulls[f.name] = null
     bounds = shapely.bounds(np.array(list(fixed.values()), dtype=object))
     for k, name in enumerate(("xmin", "ymin", "xmax", "ymax")):
         if name in sides:
             sides[name] = sides[name].astype(np.float64)
             sides[name][rows] = bounds[:, k]
-    arrays = [_outward(sides[f.name], f.type, down=f.name in ("xmin", "ymin")) for f in column.type]
+    arrays = [
+        _outward(sides[f.name], f.type, down=f.name in ("xmin", "ymin"), nulls=nulls[f.name])
+        for f in column.type
+    ]
     values = pa.StructArray.from_arrays(arrays, fields=list(column.type), mask=column.is_null())
     return table.set_column(index, table.schema.field(index), values)
 
 
-def _outward(values: np.ndarray, kind: pa.DataType, *, down: bool) -> pa.Array:
-    """``values`` as ``kind``; a float32 bound is rounded away from the geometry."""
-    if not pa.types.is_float32(kind):
-        return pa.array(values, type=kind)
-    narrow = values.astype(np.float32)
-    off = narrow > values if down else narrow < values
-    narrow[off] = np.nextafter(narrow[off], np.float32(-np.inf if down else np.inf))
-    return pa.array(narrow, type=kind)
+def _outward(
+    values: np.ndarray, kind: pa.DataType, *, down: bool, nulls: np.ndarray | None = None
+) -> pa.Array:
+    """``values`` as ``kind``, ``nulls`` masked; a float32 bound is rounded away from
+    the geometry."""
+    if pa.types.is_float32(kind):
+        narrow = values.astype(np.float32)
+        off = narrow > values if down else narrow < values
+        narrow[off] = np.nextafter(narrow[off], np.float32(-np.inf if down else np.inf))
+        values = narrow
+    return pa.array(values, type=kind, mask=nulls)
 
 
 def _metadata(
