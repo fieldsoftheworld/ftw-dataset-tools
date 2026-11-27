@@ -723,7 +723,7 @@ def process_downloaded_scene(
             add_file_info(item.assets["thumbnail"], thumbnail_path)
             result.thumbnail_path = thumbnail_path
         except ThumbnailError:
-            wait(futures)
+            pass
 
     # Update parent chip item with asset reference
     parent_item_path = item_path.parent / f"{base_id}.json"
