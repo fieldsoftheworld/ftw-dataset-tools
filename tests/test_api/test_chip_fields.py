@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
 import rasterio
 from rasterio.transform import from_origin
@@ -262,8 +264,12 @@ def test_outlines_skip_the_gpio_writer(
     result = write_chip_fields(fields, dataset)
 
     assert (result.written, result.failed) == (1, [])
-    out = gpd.read_parquet(chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024"))
+    path = chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024")
+    out = gpd.read_parquet(path)
     assert (out.crs, list(out["id"])) == (UTM, ["a", "b"])
+    geo = json.loads(pq.read_schema(path).metadata[b"geo"])["columns"]["geometry"]
+    assert geo["bbox"] == pytest.approx(list(out.total_bounds))
+    assert pq.ParquetFile(path).metadata.row_group(0).column(0).compression == "ZSTD"
 
 
 def test_remove_chip_fields(tmp_path: Path, dataset: Path) -> None:

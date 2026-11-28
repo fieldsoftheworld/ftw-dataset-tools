@@ -215,6 +215,8 @@ def _with_geo_metadata(table: pa.Table, geom_col: str, crs) -> pa.Table:
         "geometry_types": sorted({g.geom_type for g in shapes}),
         "crs": json.loads(crs.to_json()),
     }
+    if len(shapes):
+        column["bbox"] = [float(v) for v in shapely.total_bounds(shapes)]
     geo = {"version": "1.1.0", "primary_column": geom_col, "columns": {geom_col: column}}
     return table.replace_schema_metadata({**(table.schema.metadata or {}), b"geo": json.dumps(geo)})
 
@@ -225,11 +227,12 @@ def _write(table: pa.Table, geom_col: str, crs, out: Path) -> None:
     tmp = out.with_name(f".{out.name}.tmp")
     try:
         geo_table = _with_geo_metadata(table, geom_col, CRS.from_user_input(crs))
-        # pyarrow, not gpio: gpio's DuckDB writer opens a connection and loads the spatial
-        # extension on every call, ~90 ms for a chip's few rows and ~9 files/s across
-        # threads, which made this step take hours on big datasets. Its in-memory writer
-        # needs DuckDB 1.5. The table already carries its full 'geo' metadata.
-        pq.write_table(geo_table, tmp, compression="zstd")
+        # pyarrow, not gpio: gpio 1.x's default writer opens a DuckDB connection and loads
+        # the spatial extension on every call, ~90 ms for a chip's few rows and ~9 files/s
+        # across threads, which made this step take hours on big datasets. Its in-memory
+        # writer needs DuckDB 1.5. The table already carries its full 'geo' metadata; level
+        # 15 is what gpio wrote.
+        pq.write_table(geo_table, tmp, compression="zstd", compression_level=15)
         tmp.replace(out)
     finally:
         tmp.unlink(missing_ok=True)
