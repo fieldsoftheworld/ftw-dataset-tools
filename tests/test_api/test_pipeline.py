@@ -609,6 +609,27 @@ class TestInvalidFieldGeometries:
         ).to_parquet(ctx.chips_path)
         return ctx
 
+    def test_hidden_fields_are_found_on_the_repaired_shapes(self, tmp_path: Path) -> None:
+        import shapely
+
+        fields = tmp_path / "dup.parquet"
+        spike = shapely.from_wkt(self.SPIKE)
+        gpd.GeoDataFrame(
+            {"id": [1, 2]}, geometry=[spike, box(18.002, 40.002, 18.006, 40.006)], crs="EPSG:4326"
+        ).to_parquet(fields)
+        config = _config(
+            fields, tmp_path / "out", year=2024, stages={"masks": {"drop_hidden_fields": True}}
+        )
+        ctx = pipeline.build_context(config)
+        pipeline.run_pipeline(ctx, ["reproject", "filter"])
+
+        # Repaired, field 1 is field 2's square, which is burned over it.
+        assert ctx.repair_result.repaired == 1
+        assert ctx.hidden_result.dropped == 1
+        kept = gpd.read_parquet(ctx.field_polygons_path)
+        assert kept["id"].tolist() == [2]
+        assert kept.is_valid.all()
+
     def test_reproject_repairs_the_fields(self, tmp_path: Path) -> None:
         import shapely
 

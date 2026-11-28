@@ -1187,16 +1187,16 @@ def _reuse_previous(
     id_col: str,
     output_path: Path,
     parts: _Parts,
-) -> int:
+    reused: list[int],
+) -> None:
     """Save the earlier output's rows for fields with the same id and geometry as parts.
 
     Streamed into parts of ``PART_ROWS``, under the sort's memory limit and a few
     threads: a national dataset reuses millions of rows of statistics. Ids repeated on
-    either side are left to be computed. Returns the fields reused.
+    either side are left to be computed. ``reused[0]`` counts the fields saved so far.
     """
     unique = "QUALIFY count(*) OVER (PARTITION BY id) = 1"
     stats = ", ".join(f'old."{c}"' for c in OUTPUT_COLUMNS)
-    reused = 0
     with sort_memory(con), _bounded_scan(con, _PLAN_THREADS):
         reader = con.execute(f"""
             WITH new AS (
@@ -1214,8 +1214,7 @@ def _reuse_previous(
             if batch.num_rows:
                 table = pa.Table.from_batches([batch]).select(SCHEMA.names).cast(SCHEMA)
                 parts.write(table.to_batches())
-                reused += batch.num_rows
-    return reused
+                reused[0] += batch.num_rows
 
 
 def _try_reuse(
@@ -1226,18 +1225,19 @@ def _try_reuse(
     output_path: Path,
     parts: _Parts,
 ) -> int:
-    """:func:`_reuse_previous`, or 0 when it fails; the snapshot is gone either way.
+    """:func:`_reuse_previous`; returns the fields reused, also when it fails part way.
 
-    Rows saved before a failure are complete parts and stay, so the run goes on to
-    compute the rest, and a rerun never retries the reuse.
+    The snapshot goes once the reuse is done or has failed, so a failing reuse is not
+    retried by every rerun; rows saved before a failure are complete parts and stay.
+    An interrupted run keeps the snapshot, and its rerun reuses the fields still to do.
     """
+    reused = [0]
     try:
-        return _reuse_previous(con, fields_sql, geom_col, id_col, output_path, parts)
+        _reuse_previous(con, fields_sql, geom_col, id_col, output_path, parts, reused)
     except duckdb.Error as err:
-        logger.warning(f"Could not reuse the earlier statistics ({err}); computing them")
-        return 0
-    finally:
-        snapshot_path(output_path).unlink(missing_ok=True)
+        logger.warning(f"Could not reuse all earlier statistics ({err}); computing the rest")
+    snapshot_path(output_path).unlink(missing_ok=True)
+    return reused[0]
 
 
 def add_field_embeddings(
@@ -1291,12 +1291,15 @@ def add_field_embeddings(
         try:
             _warn_on_ids(con, fields_sql, id_col)
             total = _plan(con, fields_sql, geom_col, crs)
-            if parts.count == 0 and _snapshot_matches(output_path, description):
-                reused = _try_reuse(con, fields_sql, geom_col, id_col, output_path, parts)
-                logger.info(f"Keeping {reused:,} of {total:,} fields' statistics: unchanged")
             resumed = parts.skip_done(con)
             if resumed:
                 logger.info(f"Resuming: {resumed:,} of {total:,} fields already done")
+            if _snapshot_matches(output_path, description):
+                # Only fields still to do (in _keys) are reused, so a run interrupted
+                # part way through the reuse picks it up where it stopped.
+                reused = _try_reuse(con, fields_sql, geom_col, id_col, output_path, parts)
+                logger.info(f"Keeping {reused:,} of {total:,} fields' statistics: unchanged")
+                resumed = parts.skip_done(con)
             if sources:
                 _compute(
                     con,

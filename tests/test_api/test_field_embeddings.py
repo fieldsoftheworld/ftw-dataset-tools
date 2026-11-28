@@ -595,7 +595,8 @@ class TestReuseUnchangedFields:
         fields, out = self._first_run(tmp_path)
         assert fe.snapshot_fields(out, fields, year=2022)
 
-        def broken(*_args):
+        def broken(*args):
+            args[-1][0] += 0  # nothing saved before the failure
             raise duckdb.OutOfMemoryException("out of memory")
 
         monkeypatch.setattr(fe, "_reuse_previous", broken)
@@ -605,6 +606,30 @@ class TestReuseUnchangedFields:
 
         assert len(again.reads) == len(REUSE_GEOMS)
         assert not fe.snapshot_path(out).exists()  # a rerun won't try again
+        assert fe.is_current(out, fields, year=2022)
+
+    def test_an_interrupted_reuse_resumes(self, tmp_path: Path, monkeypatch) -> None:
+        fields, out = self._first_run(tmp_path)
+        assert fe.snapshot_fields(out, fields, year=2022)
+        monkeypatch.setattr(fe, "PART_ROWS", 1)
+        write = fe._Parts.write
+
+        def interrupted(self, batches):
+            write(self, batches)
+            if self.count == 2:
+                raise KeyboardInterrupt
+
+        monkeypatch.setattr(fe._Parts, "write", interrupted)
+        sources = {"aef": FakeSource(0), "olmoearth": FakeSource(1)}
+        with pytest.raises(KeyboardInterrupt):
+            add_field_embeddings(fields, out, year=2022, workers=1, sources=sources)
+        assert fe.snapshot_path(out).exists()
+
+        monkeypatch.setattr(fe._Parts, "write", write)
+        again = FakeSource(0)
+        sources = {"aef": again, "olmoearth": FakeSource(1)}
+        add_field_embeddings(fields, out, year=2022, workers=1, sources=sources)
+        assert again.reads == []  # the other two were reused too
         assert fe.is_current(out, fields, year=2022)
 
     def test_fields_in_another_crs_reuse_nothing(self, tmp_path: Path) -> None:
