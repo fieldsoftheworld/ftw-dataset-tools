@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
 import rasterio
 from rasterio.transform import from_origin
@@ -181,6 +183,27 @@ def test_column_types_survive_including_empty_chips(tmp_path: Path) -> None:
     assert gpd.read_parquet(chip_fields_path(full))["n"].tolist()[0] == 7
 
 
+def test_timestamps_keep_the_source_zone(tmp_path: Path, dataset: Path) -> None:
+    """DuckDB reads them in the machine's zone; the outlines keep the file's."""
+    import pandas as pd
+    import pyarrow.parquet as pq
+
+    gdf = gpd.GeoDataFrame(
+        {"id": ["a"], "when": pd.to_datetime(["2024-05-01 09:00"]).tz_localize("Asia/Tokyo")},
+        geometry=[box(X0 + 10, Y0 + 10, X0 + 40, Y0 + 40)],
+        crs=UTM,
+    )
+    source = tmp_path / "tokyo.parquet"
+    gdf.to_parquet(source)
+
+    write_chip_fields(source, dataset)
+
+    out = pq.read_table(chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024"))
+    assert out.schema.field("when").type == pq.read_schema(source).field("when").type
+    assert out.schema.field("when").type.tz == "Asia/Tokyo"
+    assert out.column("when")[0].as_py() == gdf["when"].iloc[0]
+
+
 def test_skip_existing_rewrites_after_the_fields_change(tmp_path: Path, dataset: Path) -> None:
     fields = _fields(tmp_path)
     write_chip_fields(fields, dataset)
@@ -224,6 +247,29 @@ def test_a_failing_chip_is_reported_not_raised(
     assert result.failed == [("ftw-a_2024", "RuntimeError: bad shape")]
     assert "failed for 1 chip(s)" in chip_fields.summary_lines(result)[-1]
     assert not chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024").exists()
+
+
+def test_outlines_skip_the_gpio_writer(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Its per-call setup made the outlines the slowest step on big datasets."""
+    import geoparquet_io as gpio
+
+    def boom(*_a, **_k):
+        raise AssertionError("gpio writer used")
+
+    fields = _fields(tmp_path)
+    monkeypatch.setattr(gpio.Table, "write", boom)
+
+    result = write_chip_fields(fields, dataset)
+
+    assert (result.written, result.failed) == (1, [])
+    path = chip_fields_path(dataset / "chips" / "32UMA" / "ftw-a_2024")
+    out = gpd.read_parquet(path)
+    assert (out.crs, list(out["id"])) == (UTM, ["a", "b"])
+    geo = json.loads(pq.read_schema(path).metadata[b"geo"])["columns"]["geometry"]
+    assert geo["bbox"] == pytest.approx(list(out.total_bounds))
+    assert pq.ParquetFile(path).metadata.row_group(0).column(0).compression == "ZSTD"
 
 
 def test_remove_chip_fields(tmp_path: Path, dataset: Path) -> None:
