@@ -778,6 +778,8 @@ def _add_field_embeddings(ctx: PipelineContext) -> None:
         )
     if field_embeddings.is_current(path, ctx.output_fields_path, year=ctx.effective_year):
         logger.info(f"Keeping {path.name}: same fields, year and products")
+        # Recorded by the reproject stage for a rewrite that turned out to change nothing.
+        field_embeddings.snapshot_path(path).unlink(missing_ok=True)
         return
     ctx.field_embeddings_result = field_embeddings.add_field_embeddings(
         ctx.output_fields_path, path, year=ctx.effective_year

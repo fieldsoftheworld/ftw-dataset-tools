@@ -1940,10 +1940,13 @@ class TestChipsStageFieldEmbeddings:
             return True
 
         monkeypatch.setattr(field_embeddings, "is_current", current)
+        snapshot = field_embeddings.snapshot_path(ctx.field_embeddings_path)
+        snapshot.write_bytes(b"left by the reproject stage")
         pipeline.stage_chips(ctx)
 
         assert calls == []
         assert seen == [(ctx.field_embeddings_path, ctx.output_fields_path, 2024)]
+        assert not snapshot.exists()
 
     def test_a_stale_file_is_rebuilt(self, tmp_path: Path, monkeypatch) -> None:
         from ftw_dataset_tools.api import field_embeddings

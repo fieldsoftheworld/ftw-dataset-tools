@@ -1133,8 +1133,9 @@ def snapshot_fields(
 
     Only when ``output_file`` holds the statistics of exactly these fields: the next
     :func:`add_field_embeddings` on the rewritten file then keeps every field whose id
-    and geometry are unchanged and computes only the others. Returns whether a snapshot
-    was written.
+    and geometry are unchanged and computes only the others. The digests leave the CRS
+    out; the snapshot keeps the earlier fingerprint, whose CRS digest must match the
+    new fields'. Returns whether a snapshot was written.
     """
     output_file, fields_file = Path(output_file), Path(fields_file)
     try:
@@ -1167,7 +1168,16 @@ def _snapshot_matches(output_path: Path, description: dict) -> bool:
     if any(previous.get(k) != description.get(k) for k in _REUSE_KEYS):
         return False
     recorded = (pq.read_metadata(snapshot).metadata or {}).get(_SNAPSHOT_KEY.encode())
-    return recorded is not None and recorded.decode() == previous.get("fields_fingerprint")
+    if recorded is None or recorded.decode() != previous.get("fields_fingerprint"):
+        return False
+    # The digests leave the CRS out: the fingerprints' middle part is its digest, so
+    # fields in another CRS (the same coordinates meaning other places) reuse nothing.
+    return _crs_digest(recorded.decode()) == _crs_digest(description.get("fields_fingerprint"))
+
+
+def _crs_digest(fingerprint: str | None) -> str | None:
+    parts = (fingerprint or "").split(":")
+    return parts[1] if len(parts) == 3 else None
 
 
 def _reuse_previous(
@@ -1178,27 +1188,56 @@ def _reuse_previous(
     output_path: Path,
     parts: _Parts,
 ) -> int:
-    """Save the earlier output's rows for fields with the same id and geometry as a part.
+    """Save the earlier output's rows for fields with the same id and geometry as parts.
 
-    Ids repeated on either side are left to be computed. Returns the fields reused.
+    Streamed into parts of ``PART_ROWS``, under the sort's memory limit and a few
+    threads: a national dataset reuses millions of rows of statistics. Ids repeated on
+    either side are left to be computed. Returns the fields reused.
     """
     unique = "QUALIFY count(*) OVER (PARTITION BY id) = 1"
     stats = ", ".join(f'old."{c}"' for c in OUTPUT_COLUMNS)
-    table = con.execute(f"""
-        WITH new AS (
-            SELECT file_row_number AS rid, {_digest_sql(geom_col, id_col)}
-            FROM {fields_sql} {unique}),
-        snap AS (SELECT * FROM read_parquet('{sql_path(snapshot_path(output_path))}') {unique}),
-        old AS (
-            SELECT CAST("{id_col}" AS VARCHAR) AS id, * EXCLUDE ("{id_col}")
-            FROM read_parquet('{sql_path(output_path)}') {unique})
-        SELECT new.rid, {stats}
-        FROM new JOIN snap USING (id, digest) JOIN old USING (id)
-        WHERE new.rid IN (SELECT rid FROM _keys)
-        ORDER BY new.rid""").fetch_arrow_table()
-    if table.num_rows:
-        parts.write(table.select(SCHEMA.names).cast(SCHEMA).to_batches())
-    return table.num_rows
+    reused = 0
+    with sort_memory(con), _bounded_scan(con, _PLAN_THREADS):
+        reader = con.execute(f"""
+            WITH new AS (
+                SELECT file_row_number AS rid, {_digest_sql(geom_col, id_col)}
+                FROM {fields_sql} {unique}),
+            snap AS (
+                SELECT * FROM read_parquet('{sql_path(snapshot_path(output_path))}') {unique}),
+            old AS (
+                SELECT CAST("{id_col}" AS VARCHAR) AS id, * EXCLUDE ("{id_col}")
+                FROM read_parquet('{sql_path(output_path)}') {unique})
+            SELECT new.rid, {stats}
+            FROM new JOIN snap USING (id, digest) JOIN old USING (id)
+            WHERE new.rid IN (SELECT rid FROM _keys)""").fetch_record_batch(PART_ROWS)
+        for batch in reader:
+            if batch.num_rows:
+                table = pa.Table.from_batches([batch]).select(SCHEMA.names).cast(SCHEMA)
+                parts.write(table.to_batches())
+                reused += batch.num_rows
+    return reused
+
+
+def _try_reuse(
+    con: duckdb.DuckDBPyConnection,
+    fields_sql: str,
+    geom_col: str,
+    id_col: str,
+    output_path: Path,
+    parts: _Parts,
+) -> int:
+    """:func:`_reuse_previous`, or 0 when it fails; the snapshot is gone either way.
+
+    Rows saved before a failure are complete parts and stay, so the run goes on to
+    compute the rest, and a rerun never retries the reuse.
+    """
+    try:
+        return _reuse_previous(con, fields_sql, geom_col, id_col, output_path, parts)
+    except duckdb.Error as err:
+        logger.warning(f"Could not reuse the earlier statistics ({err}); computing them")
+        return 0
+    finally:
+        snapshot_path(output_path).unlink(missing_ok=True)
 
 
 def add_field_embeddings(
@@ -1253,7 +1292,7 @@ def add_field_embeddings(
             _warn_on_ids(con, fields_sql, id_col)
             total = _plan(con, fields_sql, geom_col, crs)
             if parts.count == 0 and _snapshot_matches(output_path, description):
-                reused = _reuse_previous(con, fields_sql, geom_col, id_col, output_path, parts)
+                reused = _try_reuse(con, fields_sql, geom_col, id_col, output_path, parts)
                 logger.info(f"Keeping {reused:,} of {total:,} fields' statistics: unchanged")
             resumed = parts.skip_done(con)
             if resumed:

@@ -571,6 +571,53 @@ class TestReuseUnchangedFields:
         assert fe.is_current(out, fields, year=2022)
         assert not fe.snapshot_path(out).exists()
 
+    def test_reused_rows_are_streamed_into_parts(self, tmp_path: Path, monkeypatch) -> None:
+        fields, out = self._first_run(tmp_path)
+        assert fe.snapshot_fields(out, fields, year=2022)
+        monkeypatch.setattr(fe, "PART_ROWS", 1)
+        written: list[int] = []
+        write = fe._Parts.write
+
+        def counting(self, batches):
+            written.append(sum(b.num_rows for b in batches))
+            write(self, batches)
+
+        monkeypatch.setattr(fe._Parts, "write", counting)
+        again = FakeSource(0)
+        sources = {"aef": again, "olmoearth": FakeSource(1)}
+        add_field_embeddings(fields, out, year=2022, workers=1, sources=sources)
+
+        assert written[:4] == [1, 1, 1, 1]  # four reused fields, one part each
+        assert again.reads == []
+        assert fe.is_current(out, fields, year=2022)
+
+    def test_a_failed_reuse_computes_everything_once(self, tmp_path: Path, monkeypatch) -> None:
+        fields, out = self._first_run(tmp_path)
+        assert fe.snapshot_fields(out, fields, year=2022)
+
+        def broken(*_args):
+            raise duckdb.OutOfMemoryException("out of memory")
+
+        monkeypatch.setattr(fe, "_reuse_previous", broken)
+        again = FakeSource(0)
+        sources = {"aef": again, "olmoearth": FakeSource(1)}
+        add_field_embeddings(fields, out, year=2022, workers=1, sources=sources)
+
+        assert len(again.reads) == len(REUSE_GEOMS)
+        assert not fe.snapshot_path(out).exists()  # a rerun won't try again
+        assert fe.is_current(out, fields, year=2022)
+
+    def test_fields_in_another_crs_reuse_nothing(self, tmp_path: Path) -> None:
+        fields, out = self._first_run(tmp_path)
+        assert fe.snapshot_fields(out, fields, year=2022)
+        # Same ids and coordinates, another CRS: other places.
+        write_fields(fields, REUSE_GEOMS, crs="EPSG:32632")
+        again = FakeSource(0)
+        sources = {"aef": again, "olmoearth": FakeSource(1)}
+        add_field_embeddings(fields, out, year=2022, workers=1, sources=sources)
+        assert len(again.reads) > 0
+        assert rows_by_id(out)["f0"]["aef_pixels"] in (0, None)
+
     def test_no_snapshot_without_current_embeddings(self, tmp_path: Path) -> None:
         fields, out = self._first_run(tmp_path)
         assert not fe.snapshot_fields(out, fields, year=2023)
