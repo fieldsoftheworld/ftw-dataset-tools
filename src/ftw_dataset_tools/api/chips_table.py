@@ -91,6 +91,10 @@ LICENSES = {
     "CC-BY-SA-4.0": "share-alike",
     "CC-BY-SA-3.0": "share-alike",
     "https://go.planet.com/nicfi-pla-2024": "non-commercial",  # NICFI imagery terms
+    # Lithuania's National Paying Agency: "Tik nekomerciniam naudojimui / Non-commercial use
+    # only", copyright (its geoportal.lt metadata record's use limitation)
+    "https://www.geoportal.lt/metadata-catalog/catalog/search/resource/details.page"
+    "?uuid=%7B7AF3F5B2-DC58-4EC5-916C-813E994B2DCF%7D": "non-commercial",
     # St. Gallen: free public apps only; passing the data on needs approval
     "https://www.sg.ch/bauen/geoinformation/datenbezug/agb.html": "restricted",
 }

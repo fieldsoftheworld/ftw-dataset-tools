@@ -583,6 +583,11 @@ def test_license_categories() -> None:
     assert cat("CC0-1.0", None) == "public-domain"
     assert cat("CC-BY-SA-4.0", None) == "share-alike"
     assert cat("other", "https://go.planet.com/nicfi-pla-2024") == "non-commercial"
+    nma = (
+        "https://www.geoportal.lt/metadata-catalog/catalog/search/resource/details.page"
+        "?uuid=%7B7AF3F5B2-DC58-4EC5-916C-813E994B2DCF%7D"
+    )
+    assert cat("other", nma) == "non-commercial"
     assert cat("other", "https://example.com/terms") == "unknown"
     assert cat(None, None) == "unknown"
     assert cat("MIT-ish", None) == "unknown"
