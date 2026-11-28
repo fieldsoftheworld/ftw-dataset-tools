@@ -803,6 +803,40 @@ class TestSingleCollectionLayout:
         assert coll["assets"]["fields_filtered"]["href"] == "./ds_fields_filtered.parquet"
         assert coll["assets"]["fields_filtered"]["roles"] == ["data"]
 
+    def test_filtered_fields_asset_counts_dropped_hidden_fields(self, tmp_path: Path) -> None:
+        from datetime import UTC, datetime
+
+        import geopandas as gpd
+        import pystac
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api import hidden_fields
+        from ftw_dataset_tools.api.stac import HIDDEN_FIELDS_DROPPED, _add_filtered_fields
+
+        def collection() -> pystac.Collection:
+            extent = pystac.Extent(
+                pystac.SpatialExtent([[0, 0, 1, 1]]),
+                pystac.TemporalExtent([[datetime(2024, 1, 1, tzinfo=UTC), None]]),
+            )
+            return pystac.Collection("ds", "d", extent)
+
+        path = tmp_path / "ds_fields_filtered.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1, 2]}, geometry=[box(0, 0, 1, 1)] * 2, crs="EPSG:4326"
+        ).to_parquet(path)
+        plain = collection()
+        _add_filtered_fields(plain, path, checksums=False)
+        asset = plain.assets["fields_filtered"]
+        assert asset.title == "Field polygons after the class filter"
+        assert HIDDEN_FIELDS_DROPPED not in asset.extra_fields
+
+        hidden_fields.drop_hidden_fields(path, path)
+        dropped = collection()
+        _add_filtered_fields(dropped, path, checksums=False)
+        asset = dropped.assets["fields_filtered"]
+        assert asset.title == "Field polygons the masks were drawn from"
+        assert asset.extra_fields[HIDDEN_FIELDS_DROPPED] == 1
+
     def test_no_items_means_no_mirror(self, tmp_path: Path) -> None:
         import json
 

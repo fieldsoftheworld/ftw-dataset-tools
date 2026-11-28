@@ -135,6 +135,12 @@ stages:
     # masks all reflect the filter. Omit for datasets without crop-type info.
     # See configs/examples/class_filter.yaml.
     # class_filter: class_filter.yaml
+    # Drop the fields the instance mask cannot show: duplicates and nested slivers
+    # with at least hidden_field_share of their area under fields burned over them.
+    # They get no pixels, boundary lines or outlines; the field that shows stays.
+    # Partial overlaps stay. The masks then read <name>_fields_filtered.parquet.
+    drop_hidden_fields: false
+    # hidden_field_share: 0.95
 
   stac:
     # Compute file:checksum (multihash sha256) for every asset. Optional and slow

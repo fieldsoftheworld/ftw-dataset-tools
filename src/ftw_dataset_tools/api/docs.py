@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 
-from ftw_dataset_tools.api import field_ids
+from ftw_dataset_tools.api import field_ids, hidden_fields
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.imagery.catalog_ops import chip_item_files, iter_chip_dirs
 from ftw_dataset_tools.api.logging_config import get_logger
@@ -140,7 +140,8 @@ FIELD_COLUMN_NOTES = {
     "identical rows were kept once, the parts of one field were merged into one row, "
     "and of several declarations for the same polygon one was kept (one the class "
     "filter includes, if the build has one); any other rows sharing an id became "
-    "`<id>_1`, `<id>_2`, ...",
+    "`<id>_1`, `<id>_2` and so on. An id ending in `~<n>` (`115462620~1`) came so from "
+    "the source, which numbered rows it gave one id; those are separate fields here",
     "source_id": "the field's id in the source dataset; differs from `id` only for rows "
     "renumbered `<id>_<n>` because the source gave several different fields one id",
     "other_crop_names": "for a parcel the source declared more than once with different "
@@ -504,7 +505,7 @@ def _split_type(collection: dict, config_dict: dict) -> str | None:
 
 
 def _all_fields_file(collection: dict, output_dir: Path, fields: Path) -> Path | None:
-    """The collection's full fields file when the masks used another (the class filter's)."""
+    """The collection's full fields file when the masks used another (filtered) one."""
     href = (collection.get("assets") or {}).get("fields", {}).get("href")
     if not href or "://" in str(href):
         return None
@@ -512,6 +513,20 @@ def _all_fields_file(collection: dict, output_dir: Path, fields: Path) -> Path |
     if not path.is_file() or (fields.exists() and path.resolve() == fields.resolve()):
         return None
     return path
+
+
+def _class_filtered(collection: dict, hidden: dict | None, all_fields_total: int | None) -> bool:
+    """Whether the masks' fields passed a class filter.
+
+    A ``fields_filtered`` asset comes from the class filter, from dropping hidden fields,
+    or both. The drop records how many fields it started from: all of the source's
+    fields means no class filter ran before it.
+    """
+    if "fields_filtered" not in (collection.get("assets") or {}):
+        return False
+    if hidden is None or all_fields_total is None:
+        return hidden is None or hidden.get("rows_in") is None
+    return hidden.get("rows_in") != all_fields_total
 
 
 def collect_stats(
@@ -527,6 +542,7 @@ def collect_stats(
 
     all_fields = _all_fields_file(collection, output_dir, fields)
     top_crops, crop_basis = _top_crops(chips, fields)
+    hidden = hidden_fields.recorded(fields) if fields.exists() else None
 
     con = _connect()
     try:
@@ -551,7 +567,7 @@ def collect_stats(
         "fields_file": fields.name,
         "all_fields_total": all_fields_total,
         "all_fields_file": all_fields.name if all_fields else None,
-        "class_filtered": "fields_filtered" in (collection.get("assets") or {}),
+        "class_filtered": _class_filtered(collection, hidden, all_fields_total),
         "top_crops": top_crops,
         "crop_basis": crop_basis,
         "imagery": imagery,
@@ -559,6 +575,7 @@ def collect_stats(
         "chip_columns": chip_columns,
         "field_columns": field_columns,
         "field_ids_unique": ids_unique,
+        "hidden_fields": hidden,
         "item_properties": item_properties,
         "split_type": _split_type(collection, config_dict or {}),
         "chip_files": chip_files,
@@ -716,6 +733,8 @@ def _field_count(stats: dict) -> str | None:
         return f"{_polygons(total)} from the source (`{all_file}`)" if total and all_file else None
     if not used_file:
         return _polygons(used)
+    if stats.get("hidden_fields"):
+        return _field_count_without_hidden(stats)
     if total is not None and all_file:
         return (
             f"{_polygons(total)} from the source (`{all_file}`), {used:,} of which "
@@ -728,6 +747,22 @@ def _field_count(stats: dict) -> str | None:
             f"{verbs[1]} the masks"
         )
     return f"{_polygons(used)} (`{used_file}`), all of them used for the masks"
+
+
+def _field_count_without_hidden(stats: dict) -> str:
+    """The field count of a build that dropped hidden fields, class filter and drop apart."""
+    used, used_file = stats["fields_total"], stats["fields_file"]
+    total, all_file = stats.get("all_fields_total"), stats.get("all_fields_file")
+    hidden = stats["hidden_fields"]
+    dropped, passed = int(hidden.get("dropped", 0)), hidden.get("rows_in")
+    steps = []
+    if total is not None and all_file:
+        steps.append(f"{_polygons(total)} from the source (`{all_file}`)")
+    if stats.get("class_filtered") and passed is not None:
+        steps.append(f"{passed:,} of which pass the class filter")
+    steps.append(f"{dropped:,} hidden under other fields left out")
+    verb = "makes" if used == 1 else "make"
+    return f"{', '.join(steps)}, leaving {used:,} (`{used_file}`) that {verb} the masks"
 
 
 def _counts(stats: dict) -> str:
@@ -857,6 +892,7 @@ def _mask_notes(stats: dict, *, grid: bool = True) -> list[str]:
         _decode_note(stats, facts),
         *_chip_file_notes(stats),
         _narrow_field_note(stats, facts),
+        _hidden_fields_note(stats),
     ]
     return [note for note in notes if note]
 
@@ -887,6 +923,21 @@ def _narrow_field_note(stats: dict, facts: dict) -> str | None:
     if "instance_labels" in chip_files:
         text += ", but not in `<chip>_instance_labels.json`"
     return text + "."
+
+
+def _hidden_fields_note(stats: dict) -> str | None:
+    """How many fields were dropped because the instance mask could not show them."""
+    hidden = stats.get("hidden_fields")
+    if not hidden:
+        return None
+    count, share = int(hidden.get("dropped", 0)), float(hidden.get("share", 0))
+    fields = "field was" if count == 1 else "fields were"
+    return (
+        f"{count:,} {fields} left out of the masks, boundary lines, per-chip outlines and "
+        f"chip statistics because at least {share:.0%} of each lay under fields drawn over "
+        "it in the instance mask (duplicate or nested polygons it could not show). The "
+        "full fields table (`fields`) still has them."
+    )
 
 
 def _chip_file_notes(stats: dict) -> list[str]:

@@ -30,7 +30,7 @@ from pystac.extensions.version import VersionExtension
 from pystac.layout import TemplateLayoutStrategy
 from pystac.utils import datetime_to_str
 
-from ftw_dataset_tools.api import admin_names, field_embeddings, land_cover
+from ftw_dataset_tools.api import admin_names, field_embeddings, hidden_fields, land_cover
 from ftw_dataset_tools.api.assets import (
     add_file_info,
     add_mask_classification,
@@ -997,13 +997,7 @@ def _create_collection(
     )
 
     if filtered_fields_file is not None:
-        _add_parquet_asset(
-            collection,
-            "fields_filtered",
-            filtered_fields_file,
-            "Field polygons after the class filter",
-            checksums=checksums,
-        )
+        _add_filtered_fields(collection, Path(filtered_fields_file), checksums=checksums)
 
     _add_parquet_asset(
         collection,
@@ -1037,6 +1031,25 @@ def _create_collection(
     add_render_schema(collection)
 
     return collection
+
+
+#: On the fields_filtered asset: how many fields were dropped as hidden.
+HIDDEN_FIELDS_DROPPED = "ftw:hidden_fields_dropped"
+
+
+def _add_filtered_fields(collection: Collection, path: Path, *, checksums: bool) -> None:
+    """The fields_filtered asset; with the count of hidden fields when they were dropped.
+
+    Its title keeps naming the class filter unless hidden fields were dropped, which
+    the file records itself (see ``api/hidden_fields.py``).
+    """
+    hidden = hidden_fields.recorded(path)
+    title = "Field polygons after the class filter"
+    if hidden is not None:
+        title = "Field polygons the masks were drawn from"
+    _add_parquet_asset(collection, "fields_filtered", path, title, checksums=checksums)
+    if hidden is not None:
+        collection.assets["fields_filtered"].extra_fields[HIDDEN_FIELDS_DROPPED] = hidden["dropped"]
 
 
 def _create_chip_item(

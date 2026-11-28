@@ -248,6 +248,11 @@ describing how the whole dataset was built:
 | `ftw:buffer_expansion_size` | integer | Days added to the buffer on each expansion (present only when scene selection is configured) |
 | `ftw:config` | object | Config provenance for the run that produced the dataset (defaults resolved; file references as the config wrote them) |
 
+With `stages.masks.drop_hidden_fields`, the `fields_filtered` asset carries
+`ftw:hidden_fields_dropped` (integer): how many fields were left out of the masks,
+boundary lines, per-chip outlines and chip statistics because at least `hidden_field_share` of their area
+lay under fields the instance mask burns over them.
+
 `license`, `providers`, `keywords`, `version` (from the
 [version extension](https://github.com/stac-extensions/version)) and `updated` are not
 `ftw:` properties; they come from the config's `metadata` block (see
@@ -514,7 +519,7 @@ The output directory is a self-contained STAC collection. `collection.json` sits
 {name}/
 ├── collection.json                   # STAC collection root
 ├── {name}_fields.parquet             # Field boundaries in EPSG:4326
-├── {name}_fields_filtered.parquet    # Filtered fields (if class filter applied)
+├── {name}_fields_filtered.parquet    # Filtered fields (class filter, drop_hidden_fields)
 ├── {name}_chips.parquet              # Chip definitions with field coverage stats
 ├── {name}_boundary_lines.parquet     # Boundary lines from vector data
 ├── items.parquet                     # Collection mirror (STAC items as Parquet; only if any chip has masks)
