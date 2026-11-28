@@ -583,10 +583,37 @@ def test_license_categories() -> None:
     assert cat("CC0-1.0", None) == "public-domain"
     assert cat("CC-BY-SA-4.0", None) == "share-alike"
     assert cat("other", "https://go.planet.com/nicfi-pla-2024") == "non-commercial"
+    nma = (
+        "https://www.geoportal.lt/metadata-catalog/catalog/search/resource/details.page"
+        "?uuid=%7B7AF3F5B2-DC58-4EC5-916C-813E994B2DCF%7D"
+    )
+    assert cat("other", nma) == "non-commercial"
+    assert cat("other", "https://rkg.gov.si/vstop/") == "attribution"
+    catalonia = (
+        "https://administraciodigital.gencat.cat/ca/dades/dades-obertes/informacio-practica/"
+        "llicencies/"
+    )
+    assert cat("other", catalonia) == "attribution"
+    no_conditions = (
+        "http://inspire.ec.europa.eu/metadata-codelist/ConditionsApplyingToAccessAndUse/"
+        "noConditionsApply"
+    )
+    assert cat("other", no_conditions) == "public-domain"
     assert cat("other", "https://example.com/terms") == "unknown"
     assert cat(None, None) == "unknown"
     assert cat("MIT-ish", None) == "unknown"
     assert set(chips_table.LICENSES.values()) <= set(chips_table.LICENSE_CATEGORIES)
+    assert set(chips_table.LICENSE_LABELS) <= set(chips_table.LICENSE_CATEGORIES)
+
+
+def test_license_labels_name_only_the_limits() -> None:
+    label = chips_table.license_label
+    assert label("other", "https://go.planet.com/nicfi-pla-2024") == "Non-commercial use only"
+    assert label("other", "https://www.sg.ch/bauen/geoinformation/datenbezug/agb.html") == (
+        "Restricted use"
+    )
+    assert label("CC-BY-4.0", None) is None
+    assert label("other", "https://example.com/terms") is None
 
 
 def test_license_links() -> None:

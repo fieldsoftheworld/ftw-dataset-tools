@@ -703,7 +703,11 @@ def _license_link(collection: dict) -> str:
         return _link(license_id, f"https://spdx.org/licenses/{license_id}.html")
     rel_link = _license_rel_link(collection)
     if rel_link:
-        return _link(*rel_link)
+        # Name the limit even for a collection whose license link is still titled "License".
+        from ftw_dataset_tools.api.chips_table import license_label  # heavy; only here
+
+        title = license_label(license_id, rel_link[1]) or rel_link[0]
+        return _link(title, rel_link[1])
     return license_id
 
 
