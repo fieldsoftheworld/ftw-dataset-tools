@@ -16,6 +16,7 @@ from pathlib import Path
 import duckdb
 import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 import rasterio
 import shapely
 from rasterio.warp import transform_bounds
@@ -116,7 +117,18 @@ def _load(fields_file: Path, geom_col: str, columns: list[str]) -> tuple[pa.Tabl
     finally:
         con.close()
     bounds = np.column_stack([table.column(c).to_numpy() for c in ("__x0", "__y0", "__x1", "__y1")])
-    return table.drop_columns(["__x0", "__y0", "__x1", "__y1"]), bounds
+    table = _source_zones(table.drop_columns(["__x0", "__y0", "__x1", "__y1"]), fields_file)
+    return table, bounds
+
+
+def _source_zones(table: pa.Table, fields_file: Path) -> pa.Table:
+    """Timestamps in the zone the file gives them: DuckDB returns them in the machine's."""
+    source = pq.read_schema(fields_file)
+    for i, f in enumerate(table.schema):
+        want = source.field(f.name).type if f.name in source.names else None
+        if pa.types.is_timestamp(f.type) and want is not None and want != f.type:
+            table = table.set_column(i, f.with_type(want), table.column(i).cast(want))
+    return table
 
 
 def _source(fields_file: Path) -> _Source:
@@ -208,13 +220,16 @@ def _with_geo_metadata(table: pa.Table, geom_col: str, crs) -> pa.Table:
 
 
 def _write(table: pa.Table, geom_col: str, crs, out: Path) -> None:
-    import geoparquet_io as gpio
     from pyproj import CRS
 
     tmp = out.with_name(f".{out.name}.tmp")
     try:
         geo_table = _with_geo_metadata(table, geom_col, CRS.from_user_input(crs))
-        gpio.Table(geo_table, geom_col).write(str(tmp), overwrite=True)
+        # pyarrow, not gpio: gpio's DuckDB writer opens a connection and loads the spatial
+        # extension on every call, ~90 ms for a chip's few rows and ~9 files/s across
+        # threads, which made this step take hours on big datasets. Its in-memory writer
+        # needs DuckDB 1.5. The table already carries its full 'geo' metadata.
+        pq.write_table(geo_table, tmp, compression="zstd")
         tmp.replace(out)
     finally:
         tmp.unlink(missing_ok=True)
