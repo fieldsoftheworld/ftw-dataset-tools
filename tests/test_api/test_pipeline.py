@@ -565,6 +565,118 @@ class TestReprojectStage:
             pipeline.stage_reproject(ctx)
 
 
+class TestInvalidFieldGeometries:
+    """Invalid source polygons are repaired once, so no line crosses a field's interior."""
+
+    # A spike runs from the left edge into the field and back: ST_Boundary of the
+    # invalid ring draws it as a line across the field.
+    SPIKE = (
+        "POLYGON ((18.002 40.002, 18.006 40.002, 18.006 40.006, 18.002 40.006, "
+        "18.002 40.004, 18.0045 40.004, 18.002 40.004, 18.002 40.002))"
+    )
+    BOW_TIE = (
+        "POLYGON ((18.007 40.002, 18.009 40.004, 18.009 40.002, 18.007 40.004, 18.007 40.002))"
+    )
+
+    def _ctx(self, tmp_path: Path) -> pipeline.PipelineContext:
+        import shapely
+
+        fields = tmp_path / "src.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1, 2]},
+            geometry=[shapely.from_wkt(self.SPIKE), shapely.from_wkt(self.BOW_TIE)],
+            crs="EPSG:4326",
+        ).to_parquet(fields)
+        config = _config(
+            fields,
+            tmp_path / "out",
+            year=2024,
+            stages={
+                "masks": {
+                    "mask_types": ["instance", "semantic_3_class"],
+                    "resolution": 2.5,
+                    "workers": 1,
+                }
+            },
+        )
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        ctx.chips_base_dir.mkdir()
+        gpd.GeoDataFrame(
+            {"id": ["cell_001"], "field_coverage_pct": [20.0]},
+            geometry=[box(18.0, 40.0, 18.01, 40.01)],
+            crs="EPSG:4326",
+        ).to_parquet(ctx.chips_path)
+        return ctx
+
+    def test_hidden_fields_are_found_on_the_repaired_shapes(self, tmp_path: Path) -> None:
+        import shapely
+
+        fields = tmp_path / "dup.parquet"
+        spike = shapely.from_wkt(self.SPIKE)
+        gpd.GeoDataFrame(
+            {"id": [1, 2]}, geometry=[spike, box(18.002, 40.002, 18.006, 40.006)], crs="EPSG:4326"
+        ).to_parquet(fields)
+        config = _config(
+            fields, tmp_path / "out", year=2024, stages={"masks": {"drop_hidden_fields": True}}
+        )
+        ctx = pipeline.build_context(config)
+        pipeline.run_pipeline(ctx, ["reproject", "filter"])
+
+        # Repaired, field 1 is field 2's square, which is burned over it.
+        assert ctx.repair_result.repaired == 1
+        assert ctx.hidden_result.dropped == 1
+        kept = gpd.read_parquet(ctx.field_polygons_path)
+        assert kept["id"].tolist() == [2]
+        assert kept.is_valid.all()
+
+    def test_reproject_repairs_the_fields(self, tmp_path: Path) -> None:
+        import shapely
+
+        ctx = self._ctx(tmp_path)
+        pipeline.stage_reproject(ctx)
+        assert ctx.repair_result is not None
+        assert ctx.repair_result.repaired == 2
+        written = gpd.read_parquet(ctx.output_fields_path)
+        assert written.is_valid.all()
+        assert written.geometry[0].equals(box(18.002, 40.002, 18.006, 40.006))
+        assert shapely.get_num_geometries(written.geometry[1]) == 2
+
+    def test_no_line_pixels_inside_a_repaired_field(self, tmp_path: Path) -> None:
+        import numpy as np
+        import rasterio
+        import shapely
+        from rasterio.features import geometry_mask
+
+        from ftw_dataset_tools.api.chip_grid import reprojector
+
+        ctx = self._ctx(tmp_path)
+        pipeline.run_pipeline(ctx, ["reproject", "boundaries", "masks"])
+
+        chip = next(ctx.chips_base_dir.rglob("*_semantic_3_class.tif")).parent
+        with rasterio.open(next(chip.glob("*_semantic_3_class.tif"))) as src:
+            semantic, transform, crs = src.read(1), src.transform, src.crs
+        with rasterio.open(next(chip.glob("*_instance.tif"))) as src:
+            instance = src.read(1)
+        # The shapes the repair gives: the field without its spike, the bow tie's triangles.
+        expected = {
+            1: box(18.002, 40.002, 18.006, 40.006),
+            2: shapely.from_wkt(
+                "MULTIPOLYGON (((18.007 40.002, 18.008 40.003, 18.007 40.004, 18.007 40.002)), "
+                "((18.009 40.002, 18.009 40.004, 18.008 40.003, 18.009 40.002)))"
+            ),
+        }
+        to_mask = reprojector("EPSG:4326", crs)
+        for field_id, shape in expected.items():
+            # Two pixels in from the field's edge: no boundary line may reach here.
+            interior = shapely.transform(shape, to_mask).buffer(-5.0)
+            inside = ~geometry_mask([interior], semantic.shape, transform)
+            assert inside.sum() > 100
+            assert not (semantic[inside] == 2).any(), field_id
+            assert (instance[inside] == field_id).all(), field_id
+        assert np.isin(np.unique(instance), [0, 1, 2]).all()
+
+
 class TestRunPipelineProvenance:
     """End-to-end (no network): run only the reproject stage via run_pipeline."""
 
@@ -1964,6 +2076,32 @@ def _embeddings_ctx(tmp_path: Path, monkeypatch, *, on: bool) -> pipeline.Pipeli
 
 
 class TestChipsStageFieldEmbeddings:
+    def test_reproject_records_the_previous_fields_first(
+        self, sample_geoparquet_4326: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The snapshot sees the earlier run's fields file, before reproject rewrites it."""
+        from ftw_dataset_tools.api import field_embeddings
+
+        config = _config(
+            sample_geoparquet_4326,
+            tmp_path / "out",
+            year=2023,
+            stages={"chips": {"field_embeddings": True}},
+        )
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        ctx.output_fields_path.write_bytes(b"previous run")
+        seen: list[tuple] = []
+
+        def snapshot(out, fields, *, year):
+            seen.append((Path(out), Path(fields).read_bytes(), year))
+            return True
+
+        monkeypatch.setattr(field_embeddings, "snapshot_fields", snapshot)
+        pipeline.stage_reproject(ctx)
+
+        assert seen == [(ctx.field_embeddings_path, b"previous run", 2023)]
+
     def _record(self, monkeypatch) -> list[tuple]:
         from ftw_dataset_tools.api import field_embeddings
 
@@ -1997,10 +2135,13 @@ class TestChipsStageFieldEmbeddings:
             return True
 
         monkeypatch.setattr(field_embeddings, "is_current", current)
+        snapshot = field_embeddings.snapshot_path(ctx.field_embeddings_path)
+        snapshot.write_bytes(b"left by the reproject stage")
         pipeline.stage_chips(ctx)
 
         assert calls == []
         assert seen == [(ctx.field_embeddings_path, ctx.output_fields_path, 2024)]
+        assert not snapshot.exists()
 
     def test_a_stale_file_is_rebuilt(self, tmp_path: Path, monkeypatch) -> None:
         from ftw_dataset_tools.api import field_embeddings

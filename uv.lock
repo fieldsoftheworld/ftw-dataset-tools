@@ -862,7 +862,7 @@ requires-dist = [
     { name = "rasterio", specifier = ">=1.3.0" },
     { name = "rustac", extras = ["arrow"], specifier = ">=0.3.0" },
     { name = "scipy", specifier = ">=1.11.0" },
-    { name = "shapely", specifier = ">=2.0.0" },
+    { name = "shapely", specifier = ">=2.1.0" },
     { name = "tqdm", specifier = ">=4.66.0" },
     { name = "zarr", specifier = ">=3.1" },
 ]

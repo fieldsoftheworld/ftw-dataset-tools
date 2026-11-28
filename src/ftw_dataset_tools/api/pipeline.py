@@ -8,7 +8,7 @@ context and execute the same stages.
 Intermediate outputs live in the output directory under a fixed naming
 convention, so any stage can be re-run on its own as long as its inputs exist:
 
-    {output_dir}/{name}_fields.parquet          (reproject, with unique ids)
+    {output_dir}/{name}_fields.parquet          (reproject: unique ids, valid polygons)
     {output_dir}/{name}_chips.parquet           (chips, scale, splits)
     {output_dir}/{name}_boundary_lines.parquet  (boundaries)
     {output_dir}/collection.json                 (stac)
@@ -34,6 +34,7 @@ from ftw_dataset_tools.api import (
     crop_stats,
     docs,
     field_embeddings,
+    field_geometry,
     field_ids,
     field_stats,
     hidden_fields,
@@ -186,6 +187,7 @@ class PipelineContext:
     was_reprojected: bool = False
     source_crs: str | None = None
     dedup_result: field_ids.DedupResult | None = None
+    repair_result: field_geometry.RepairResult | None = None
     hidden_result: hidden_fields.HiddenFieldsResult | None = None
     chips_result: field_stats.FieldStatsResult | None = None
     crop_stats_result: crop_stats.CropStatsResult | None = None
@@ -587,6 +589,7 @@ def stage_reproject(ctx: PipelineContext) -> None:
             "Stage 'reproject' needs the source input, but this context was built "
             "without resolving it. Rebuild the context including the reproject stage."
         )
+    _snapshot_field_embeddings(ctx)
     logger.info("Checking CRS...")
     geom_col = detect_geometry_column(ctx.fields_input) or "geometry"
     crs_info = detect_crs(ctx.fields_input, geom_col)
@@ -619,7 +622,27 @@ def stage_reproject(ctx: PipelineContext) -> None:
             f"Field ids are whole numbers written as floats ('123.0'); stored all "
             f"{stripped:,} without the fraction"
         )
+    # Every later stage reads these polygons: repaired once here, the boundary lines,
+    # the mask fill and the per-chip outlines all follow the same valid shape. Before
+    # the dedupe, so it compares valid shapes and keeps a row that has an area.
+    ctx.repair_result = field_geometry.repair_geometries(ctx.output_fields_path)
     _dedupe_field_ids(ctx)
+
+
+def _snapshot_field_embeddings(ctx: PipelineContext) -> None:
+    """Record the fields an earlier run's embeddings are for, before they are rewritten.
+
+    The chips stage then keeps the statistics of every field whose id and geometry
+    are unchanged and reads only the others, rather than the whole dataset again.
+    """
+    if not ctx.config.stages.chips.field_embeddings or ctx.effective_year is None:
+        return
+    if not ctx.output_fields_path.exists():
+        return
+    if field_embeddings.snapshot_fields(
+        ctx.field_embeddings_path, ctx.output_fields_path, year=ctx.effective_year
+    ):
+        logger.info(f"Recorded the fields {ctx.field_embeddings_path.name} was computed for")
 
 
 def _dedupe_field_ids(ctx: PipelineContext) -> None:
@@ -808,6 +831,7 @@ def _add_field_embeddings(ctx: PipelineContext) -> None:
             path.unlink()
             logger.info(f"Removed {path.name} (stages.chips.field_embeddings is off)")
         shutil.rmtree(path.with_name(path.name + ".partial"), ignore_errors=True)
+        field_embeddings.snapshot_path(path).unlink(missing_ok=True)
         return
     if ctx.effective_year is None:
         raise StageInputError(
@@ -815,6 +839,8 @@ def _add_field_embeddings(ctx: PipelineContext) -> None:
         )
     if field_embeddings.is_current(path, ctx.output_fields_path, year=ctx.effective_year):
         logger.info(f"Keeping {path.name}: same fields, year and products")
+        # Recorded by the reproject stage for a rewrite that turned out to change nothing.
+        field_embeddings.snapshot_path(path).unlink(missing_ok=True)
         return
     ctx.field_embeddings_result = field_embeddings.add_field_embeddings(
         ctx.output_fields_path, path, year=ctx.effective_year
