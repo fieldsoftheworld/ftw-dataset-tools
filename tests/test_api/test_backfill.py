@@ -413,6 +413,19 @@ class TestRewriteDocs:
         assert "## Field embeddings" in readme
         assert "`admin1_name`" in agents
 
+    def test_fixes_a_temporal_extent_the_chips_no_longer_reach(self, tmp_path: Path) -> None:
+        """Builds before selection refreshed it kept the crop season's next-year end."""
+        root, doc = _published(tmp_path)
+        doc["extent"]["temporal"]["interval"] = [["2024-01-01T00:00:00Z", "2025-06-21T23:59:59Z"]]
+        doc["ftw:config"] = {"config": {"year": 2024}}
+        (root / "collection.json").write_text(json.dumps(doc))
+
+        backfill.rewrite_docs(root, root / "collection.json")
+
+        assert _collection(root)["extent"]["temporal"]["interval"] == [
+            ["2024-01-01T00:00:00Z", "2024-12-31T23:59:59Z"]
+        ]
+
     def test_honours_the_build_config_turning_a_document_off(self, tmp_path: Path) -> None:
         root, doc = _published(tmp_path)
         doc["ftw:config"] = {"config": {"stages": {"docs": {"agents": False}}}}

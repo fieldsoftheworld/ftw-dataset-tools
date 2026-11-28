@@ -12,7 +12,8 @@ documents instead, and leave everything else in them as it was:
   may have gained crop names, see ``crop_names.add_crop_names``), and a record of the
   backfill in ``ftw:config``;
 - ``rewrite_docs``: the styles, README.md and AGENTS.md, measured from the updated files,
-  and the style assets listed on the collection.
+  the style assets listed on the collection, and its temporal extent, made to span the
+  chip items as they are now.
 
 Running a function again gives the same result, apart from the time stamp in the
 backfill record, so a backfill can be repeated. The benchmark catalog's
@@ -334,11 +335,15 @@ def rewrite_docs(output_dir: Path | str, collection_json: Path | str) -> list[Pa
     Uses the tile archives the collection already names, so no tiles are rebuilt, and
     the build's own config from ``ftw:config``. As in the docs stage, styles are
     written only when there are tile archives, and the collection's style assets are
-    made to match the styles written; its tile assets are left as they are. Returns
-    the documents written.
+    made to match the styles written; its tile assets are left as they are. The
+    collection's temporal extent is first made to span its chip items as they are
+    (:func:`stac.refresh_temporal_extent`). Returns the documents written.
     """
     output_dir = Path(output_dir)
     collection_json = Path(collection_json)
+    # Builds from before selection refreshed the extent kept the stac stage's
+    # crop-season extent; a docs rebuild is the pass every existing dataset gets.
+    stac.refresh_temporal_extent(output_dir, collection_json)
     doc = json.loads(collection_json.read_text(encoding="utf-8"))
     chips = asset_path(doc, "chips", output_dir)
     fields = field_polygons_file(doc, output_dir)

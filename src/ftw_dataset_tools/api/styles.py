@@ -232,6 +232,25 @@ def top_codes(
     return [(int(code), name, float(w or 0.0)) for code, name, w in rows]
 
 
+def total_weight(parquet: Path | str, weight: str = "count") -> float:
+    """The weight of every row in a file, coded or not, as :func:`top_codes` measures it.
+
+    The denominator for a share of the whole file: ``"count"`` is the row count,
+    ``"area"`` the summed geometry area in the file's native units.
+    """
+    parquet = Path(parquet)
+    con = _connect()
+    try:
+        geom_col = detect_geometry_column(parquet, con) or "geometry"
+        weight_expr = "COUNT(*)" if weight == "count" else f'SUM(ST_Area("{geom_col}"))'
+        row = con.execute(
+            f"SELECT {weight_expr} FROM read_parquet('{sql_path(parquet)}')"
+        ).fetchone()
+    finally:
+        con.close()
+    return float(row[0] or 0.0) if row else 0.0
+
+
 def _base(name: str, tiles_href: str, description: str) -> dict:
     return {
         "version": 8,

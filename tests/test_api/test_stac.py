@@ -569,6 +569,102 @@ class TestCropCalendarExtent:
         coll = json.loads(result.collection_path.read_text())
         assert coll["extent"]["temporal"]["interval"][0][1] == "2025-03-01T23:59:59Z"
 
+    def _narrow_to_imagery(self, tmp_path: Path) -> None:
+        """What selection does to the chip: its range becomes its imagery's (Q1-Q4 2024)."""
+        import json
+
+        chip_id = "ftw-33UXP0410_2024"
+        path = tmp_path / "chips" / "33UXP" / chip_id / f"{chip_id}.json"
+        item = json.loads(path.read_text())
+        item["properties"]["start_datetime"] = "2024-01-01T00:00:00Z"
+        item["properties"]["end_datetime"] = "2024-12-31T23:59:59Z"
+        path.write_text(json.dumps(item))
+
+    def test_extent_follows_the_chips_once_imagery_narrows_them(
+        self, tmp_path: Path, stac_crop_calendar
+    ) -> None:
+        """lacuna_2019 kept the stac stage's 2020-06-21 end after mosaics made it 2019."""
+        import json
+
+        from ftw_dataset_tools.api.stac import refresh_temporal_extent
+
+        self._use_season(stac_crop_calendar, 300, 60)
+        result = build_catalog(tmp_path, provenance={"config": {"year": 2024}})
+        self._narrow_to_imagery(tmp_path)
+
+        assert refresh_temporal_extent(tmp_path) is True
+        coll = json.loads(result.collection_path.read_text())
+        assert coll["extent"]["temporal"]["interval"] == [
+            ["2024-01-01T00:00:00Z", "2024-12-31T23:59:59Z"]
+        ]
+        assert refresh_temporal_extent(tmp_path) is False  # already current
+
+    def test_extent_is_kept_without_the_fields_extent(
+        self, tmp_path: Path, stac_crop_calendar
+    ) -> None:
+        """No dates and no year to start from: the stac stage's extent is left alone."""
+        import json
+
+        from ftw_dataset_tools.api.stac import refresh_temporal_extent
+
+        self._use_season(stac_crop_calendar, 300, 60)
+        result = build_catalog(tmp_path)  # no ftw:config, so no year
+        self._narrow_to_imagery(tmp_path)
+
+        assert refresh_temporal_extent(tmp_path) is False
+        after = json.loads(result.collection_path.read_text())
+        assert after["extent"]["temporal"]["interval"][0][1] == "2025-03-01T23:59:59Z"
+
+    def test_extent_keeps_the_fields_dates(self, tmp_path: Path, stac_crop_calendar) -> None:
+        """The fields' own dates stay in the extent, as the stac stage starts from them."""
+        import json
+
+        import geopandas as gpd
+        import pandas as pd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api.stac import refresh_temporal_extent
+
+        fields_path = tmp_path / "ds_fields.parquet"
+        gpd.GeoDataFrame(
+            {
+                "id": [1, 2],
+                "determination_datetime": pd.to_datetime(
+                    ["2023-11-15T00:00:00Z", "2024-08-01T00:00:00Z"]
+                ),
+            },
+            geometry=[box(0, 0, 1, 1), box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(fields_path)
+        self._use_season(stac_crop_calendar, 300, 60)
+        result = build_catalog(tmp_path, fields_path=fields_path)
+        self._narrow_to_imagery(tmp_path)
+
+        refresh_temporal_extent(tmp_path)
+        coll = json.loads(result.collection_path.read_text())
+        assert coll["extent"]["temporal"]["interval"] == [
+            ["2023-11-15T00:00:00Z", "2024-12-31T23:59:59Z"]
+        ]
+
+    def test_selection_refreshes_the_extent(self, tmp_path: Path, stac_crop_calendar) -> None:
+        import json
+        from unittest.mock import patch
+
+        from ftw_dataset_tools.api.imagery import selection_workflow
+
+        self._use_season(stac_crop_calendar, 300, 60)
+        result = build_catalog(tmp_path, provenance={"config": {"year": 2024}})
+
+        def select(**_kwargs: object) -> object:
+            self._narrow_to_imagery(tmp_path)
+            return None
+
+        with patch.object(selection_workflow, "_select_mode", side_effect=select):
+            selection_workflow.select_imagery_modes_for_catalog(tmp_path, "scenes", year=2024)
+
+        coll = json.loads(result.collection_path.read_text())
+        assert coll["extent"]["temporal"]["interval"][0][1] == "2024-12-31T23:59:59Z"
+
     def test_outside_calendar_keeps_year(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -706,6 +802,40 @@ class TestSingleCollectionLayout:
         coll = json.loads(result.collection_path.read_text())
         assert coll["assets"]["fields_filtered"]["href"] == "./ds_fields_filtered.parquet"
         assert coll["assets"]["fields_filtered"]["roles"] == ["data"]
+
+    def test_filtered_fields_asset_counts_dropped_hidden_fields(self, tmp_path: Path) -> None:
+        from datetime import UTC, datetime
+
+        import geopandas as gpd
+        import pystac
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api import hidden_fields
+        from ftw_dataset_tools.api.stac import HIDDEN_FIELDS_DROPPED, _add_filtered_fields
+
+        def collection() -> pystac.Collection:
+            extent = pystac.Extent(
+                pystac.SpatialExtent([[0, 0, 1, 1]]),
+                pystac.TemporalExtent([[datetime(2024, 1, 1, tzinfo=UTC), None]]),
+            )
+            return pystac.Collection("ds", "d", extent)
+
+        path = tmp_path / "ds_fields_filtered.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1, 2]}, geometry=[box(0, 0, 1, 1)] * 2, crs="EPSG:4326"
+        ).to_parquet(path)
+        plain = collection()
+        _add_filtered_fields(plain, path, checksums=False)
+        asset = plain.assets["fields_filtered"]
+        assert asset.title == "Field polygons after the class filter"
+        assert HIDDEN_FIELDS_DROPPED not in asset.extra_fields
+
+        hidden_fields.drop_hidden_fields(path, path)
+        dropped = collection()
+        _add_filtered_fields(dropped, path, checksums=False)
+        asset = dropped.assets["fields_filtered"]
+        assert asset.title == "Field polygons the masks were drawn from"
+        assert asset.extra_fields[HIDDEN_FIELDS_DROPPED] == 1
 
     def test_no_items_means_no_mirror(self, tmp_path: Path) -> None:
         import json
@@ -1094,9 +1224,28 @@ class TestCollectionMetadata:
                 "rel": "via",
                 "href": "https://x/collection.json",
                 "type": "application/json",
-                "title": "Source field boundary collection",
+                "title": "Field boundary collection the chips were cut from",
             }
         ]
+
+    def test_via_link_takes_the_configured_source_title(self, tmp_path: Path) -> None:
+        import json
+
+        from ftw_dataset_tools.api.config import DatasetConfig
+
+        config = DatasetConfig.from_dict(
+            {
+                "fields_file": "unused.parquet",
+                "source_via": "https://x/collection.json",
+                "source_title": "Mapping Africa: crop field boundary labels",
+                "metadata": {"license": "CC0-1.0"},
+            }
+        )
+        result = build_catalog(tmp_path, config=config)
+
+        coll = json.loads(result.collection_path.read_text())
+        titles = [link["title"] for link in coll["links"] if link["rel"] == "via"]
+        assert titles == ["Mapping Africa: crop field boundary labels"]
 
     @pytest.mark.parametrize("enabled", [True, False])
     def test_land_cover_product_and_source_link(self, tmp_path: Path, enabled: bool) -> None:

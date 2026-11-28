@@ -119,6 +119,35 @@ class TestCollectStats:
         assert "unique in this table" not in agents
         assert "`source_id`" not in agents
 
+    def test_dropped_hidden_fields_are_reported(self, tmp_path: Path) -> None:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api import hidden_fields
+        from ftw_dataset_tools.api.docs import collect_stats, render_agents, render_readme
+
+        _, chips, fields = _collection_dir(tmp_path)
+        assert collect_stats(tmp_path, chips, fields)["hidden_fields"] is None
+        text = render_agents(
+            {"title": "T", "links": []}, collect_stats(tmp_path, chips, fields), []
+        )
+        assert "left out of the masks" not in text
+
+        gpd.GeoDataFrame(
+            {"id": [1, 2, 3]}, geometry=[box(0, 0, 1, 1)] * 2 + [box(1, 0, 2, 1)], crs="EPSG:4326"
+        ).to_parquet(fields)
+        hidden_fields.drop_hidden_fields(fields, fields)
+        stats = collect_stats(tmp_path, chips, fields)
+
+        assert stats["hidden_fields"]["dropped"] == 1
+        line = (
+            "1 field was left out of the masks, boundary lines, per-chip outlines and chip "
+            "statistics because at least 95% of each lay under fields drawn over it in the "
+            "instance mask"
+        )
+        assert line in render_agents({"title": "T", "links": []}, stats, [])
+        assert line in render_readme({"links": []}, stats, [], {})
+
     def test_split_type_from_collection_or_config(self, tmp_path: Path) -> None:
         from ftw_dataset_tools.api.docs import collect_stats
 
@@ -1438,3 +1467,208 @@ class TestV2MaskFacts:
         stats["mask_types"] = ["instance_mask"]
 
         assert "unknown" not in render_agents({"title": "T", "links": []}, stats, [])
+
+
+class TestCropShares:
+    """Shares are of all the field area (or all chips), not of the listed crops alone."""
+
+    def _fields(self, path: Path, codes: list[int | None]) -> None:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        names = {3301010101: "Winter wheat", 3302000000: "Pasture", 3301010301: "Barley"}
+        gpd.GeoDataFrame(
+            {
+                "id": list(range(len(codes))),
+                "hcat:code": codes,
+                "hcat:name_en": [names.get(c) for c in codes],
+            },
+            geometry=[box(i, 0, i + 1, 1) for i in range(len(codes))],
+            crs="EPSG:4326",
+        ).to_parquet(path)
+
+    def test_field_shares_leave_out_what_the_list_does_not_cover(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ftw_dataset_tools.api import docs
+
+        _, chips, fields = _collection_dir(tmp_path)
+        # Two wheat, one pasture, one barley and one uncoded field of equal area.
+        self._fields(fields, [3301010101, 3301010101, 3302000000, 3301010301, None])
+        monkeypatch.setattr(docs, "TOP_CROP_LIMIT", 2)
+
+        stats = docs.collect_stats(tmp_path, chips, fields)
+
+        assert stats["top_crops"] == [
+            (3301010101, "Winter wheat", pytest.approx(0.4)),
+            (3301010301, "Barley", pytest.approx(0.2)),  # ties go to the lower code
+        ]
+        crops = docs._readme_crops(stats)
+        assert "| Winter wheat | 3301010101 | 40.0% |" in crops
+        assert "Each share is of that whole area; together these classes cover 60.0% of it" in crops
+
+    def test_chip_shares_are_of_all_chips(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api import docs
+
+        _, chips, fields = _collection_dir(tmp_path)
+        gpd.GeoDataFrame({"id": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326").to_parquet(
+            fields
+        )
+        monkeypatch.setattr(docs, "TOP_CROP_LIMIT", 1)
+
+        stats = docs.collect_stats(tmp_path, chips, fields)
+
+        assert stats["crop_basis"] == "chips"
+        assert stats["top_crops"] == [(3301010101, "Winter wheat", pytest.approx(0.5))]
+        assert "together these classes are dominant in 50.0% of them" in docs._readme_crops(stats)
+
+
+class TestFieldCounts:
+    """Each count says which file it counts: all source fields, or the ones in the masks."""
+
+    def _with_filtered(self, tmp_path: Path) -> tuple[Path, Path, Path]:
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        coll_path, chips, _fields = _collection_dir(tmp_path)
+        filtered = tmp_path / "ds_fields_filtered.parquet"
+        gpd.GeoDataFrame(
+            {"id": [1], "hcat:code": [3301010101], "hcat:name_en": ["Winter wheat"]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(filtered)
+        doc = json.loads(coll_path.read_text())
+        doc["assets"]["fields_filtered"] = {"href": "./ds_fields_filtered.parquet"}
+        coll_path.write_text(json.dumps(doc))
+        return coll_path, chips, filtered
+
+    def test_a_class_filtered_build_counts_both_files(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import write_docs
+
+        coll_path, chips, filtered = self._with_filtered(tmp_path)
+        write_docs(tmp_path, coll_path, chips, filtered, [], {})
+
+        expected = (
+            "2 field polygons from the source (`ds_fields.parquet`), 1 of which pass the class "
+            "filter (`ds_fields_filtered.parquet`) and make the masks"
+        )
+        readme = (tmp_path / "README.md").read_text()
+        assert f"This collection holds 2 chips and {expected}." in readme
+        assert f"It contains 2 chips and {expected}." in (tmp_path / "AGENTS.md").read_text()
+
+    def _with_hidden(self, tmp_path: Path, *, class_filter: bool) -> tuple[Path, Path, Path]:
+        """The full fields: a field, its duplicate and a third; drop the hidden copy."""
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from ftw_dataset_tools.api import hidden_fields
+
+        coll_path, chips, fields = _collection_dir(tmp_path)
+        gpd.GeoDataFrame(
+            {"id": [1, 2, 3], "hcat:code": [3301010101] * 2 + [3302000000]},
+            geometry=[box(0, 0, 1, 1), box(0, 0, 1, 1), box(1, 0, 2, 1)],
+            crs="EPSG:4326",
+        ).to_parquet(fields)
+        filtered = tmp_path / "ds_fields_filtered.parquet"
+        source = fields
+        if class_filter:  # the class filter keeps the wheat: the pair
+            gpd.read_parquet(fields).iloc[:2].to_parquet(filtered)
+            source = filtered
+        hidden_fields.drop_hidden_fields(source, filtered)
+        doc = json.loads(coll_path.read_text())
+        doc["assets"]["fields_filtered"] = {"href": "./ds_fields_filtered.parquet"}
+        coll_path.write_text(json.dumps(doc))
+        return coll_path, chips, filtered
+
+    def test_dropped_hidden_fields_are_not_credited_to_a_class_filter(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import write_docs
+
+        coll_path, chips, filtered = self._with_hidden(tmp_path, class_filter=False)
+        write_docs(tmp_path, coll_path, chips, filtered, [], {})
+
+        readme = (tmp_path / "README.md").read_text()
+        assert (
+            "3 field polygons from the source (`ds_fields.parquet`), 1 hidden under other "
+            "fields left out, leaving 2 (`ds_fields_filtered.parquet`) that make the masks"
+        ) in readme
+        assert "class filter" not in readme
+
+    def test_class_filter_and_hidden_fields_are_counted_apart(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import write_docs
+
+        coll_path, chips, filtered = self._with_hidden(tmp_path, class_filter=True)
+        write_docs(tmp_path, coll_path, chips, filtered, [], {})
+
+        assert (
+            "3 field polygons from the source (`ds_fields.parquet`), 2 of which pass the "
+            "class filter, 1 hidden under other fields left out, leaving 1 "
+            "(`ds_fields_filtered.parquet`) that makes the masks"
+        ) in (tmp_path / "AGENTS.md").read_text()
+
+    def test_a_filtered_build_without_its_full_fields_file_says_it_was_filtered(
+        self, tmp_path: Path
+    ) -> None:
+        from ftw_dataset_tools.api.docs import write_docs
+
+        coll_path, chips, filtered = self._with_filtered(tmp_path)
+        (tmp_path / "ds_fields.parquet").unlink()
+        write_docs(tmp_path, coll_path, chips, filtered, [], {})
+
+        expected = (
+            "1 field polygon that passes the class filter (`ds_fields_filtered.parquet`) "
+            "and makes the masks"
+        )
+        assert expected in (tmp_path / "README.md").read_text()
+        assert "all of them used" not in (tmp_path / "README.md").read_text()
+
+    def test_without_the_filtered_file_the_source_count_is_given(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import write_docs
+
+        coll_path, chips, filtered = self._with_filtered(tmp_path)
+        filtered.unlink()
+        write_docs(tmp_path, coll_path, chips, filtered, [], {})
+
+        readme = (tmp_path / "README.md").read_text()
+        assert "2 chips and 2 field polygons from the source (`ds_fields.parquet`)." in readme
+
+    def test_an_unfiltered_build_names_its_one_file(self, tmp_path: Path) -> None:
+        from ftw_dataset_tools.api.docs import write_docs
+
+        coll_path, chips, fields = _collection_dir(tmp_path)
+        write_docs(tmp_path, coll_path, chips, fields, [], {})
+
+        expected = "2 field polygons (`ds_fields.parquet`), all of them used for the masks"
+        assert expected in (tmp_path / "README.md").read_text()
+        assert expected in (tmp_path / "AGENTS.md").read_text()
+
+
+class TestPresenceOnlyLimitations:
+    def test_presence_only_labels_get_their_own_caveats(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents, render_readme
+
+        collection = {"title": "T", "description": "d", "links": []}
+        stats = _stats(mask_facts={"unknown": "presence_only"})
+        for text in (
+            render_readme(collection, stats, [], {}),
+            render_agents(collection, stats, []),
+        ):
+            assert "boundaries declared" not in text
+            assert "unmapped, not" not in text
+            assert "digitised over imagery" in text
+            assert "not only at the edge of the source dataset" in text
+
+    def test_declared_boundaries_keep_theirs(self) -> None:
+        from ftw_dataset_tools.api.docs import render_agents, render_readme
+
+        collection = {"title": "T", "description": "d", "links": []}
+        stats = _stats(mask_facts={"unknown": "label_extent"})
+        readme = render_readme(collection, stats, [], {})
+        assert "declared for a given year" in readme
+        assert "unmapped, not fieldless" in readme
+        assert "digitised" not in readme
+        assert "unmapped, not necessarily fieldless" in render_agents(collection, stats, [])

@@ -16,11 +16,11 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 
-from ftw_dataset_tools.api import field_ids
+from ftw_dataset_tools.api import field_ids, hidden_fields
 from ftw_dataset_tools.api.geo import ensure_spatial_loaded, sql_path
 from ftw_dataset_tools.api.imagery.catalog_ops import chip_item_files, iter_chip_dirs
 from ftw_dataset_tools.api.logging_config import get_logger
-from ftw_dataset_tools.api.styles import split_counts, top_codes
+from ftw_dataset_tools.api.styles import split_counts, top_codes, total_weight
 
 if TYPE_CHECKING:
     from ftw_dataset_tools.api.styles import StyleResult
@@ -140,7 +140,8 @@ FIELD_COLUMN_NOTES = {
     "identical rows were kept once, the parts of one field were merged into one row, "
     "and of several declarations for the same polygon one was kept (one the class "
     "filter includes, if the build has one); any other rows sharing an id became "
-    "`<id>_1`, `<id>_2`, ...",
+    "`<id>_1`, `<id>_2` and so on. An id ending in `~<n>` (`115462620~1`) came so from "
+    "the source, which numbered rows it gave one id; those are separate fields here",
     "source_id": "the field's id in the source dataset; differs from `id` only for rows "
     "renumbered `<id>_<n>` because the source gave several different fields one id",
     "other_crop_names": "for a parcel the source declared more than once with different "
@@ -258,16 +259,31 @@ def _coverage_quantiles(con: duckdb.DuckDBPyConnection, chips: Path) -> dict[int
     return {q: float(v) for q, v in zip(QUANTILES, row[0], strict=False)}
 
 
-def _top_crops(chips: Path, fields: Path) -> list[tuple[int, str | None, float]]:
-    """The most prominent crops as ``(code, name, share)``, fields first then chips."""
-    rows: list[tuple[int, str | None, float]] = []
+def _top_crops(chips: Path, fields: Path) -> tuple[list[tuple[int, str | None, float]], str]:
+    """The most prominent crops as ``(code, name, share)``, fields first then chips.
+
+    Shares are of the whole file, every field's area (or every chip) counted, so the
+    listed crops add up to what they actually cover rather than to 100%. The second
+    value names what the shares are of: ``"field area"`` or ``"chips"``.
+    """
     if fields.exists():
         rows = top_codes(fields, "hcat:code", "hcat:name_en", "area", TOP_CROP_LIMIT)
-    if not rows and chips.exists():
+        if rows:
+            return _shares(rows, total_weight(fields, "area")), "field area"
+    if chips.exists():
         rows = top_codes(
             chips, "hcat_dominant_code", "hcat_dominant_name_en", "count", TOP_CROP_LIMIT
         )
-    total = sum(weight for _, _, weight in rows) or 1.0
+        if rows:
+            return _shares(rows, total_weight(chips, "count")), "chips"
+    return [], "field area"
+
+
+def _shares(
+    rows: list[tuple[int, str | None, float]], total: float
+) -> list[tuple[int, str | None, float]]:
+    # The rows are part of the total, so it is never smaller than their sum.
+    total = max(total, sum(weight for _, _, weight in rows)) or 1.0
     return [(code, name, weight / total) for code, name, weight in rows]
 
 
@@ -488,6 +504,31 @@ def _split_type(collection: dict, config_dict: dict) -> str | None:
     return str(split_type) if split_type else None
 
 
+def _all_fields_file(collection: dict, output_dir: Path, fields: Path) -> Path | None:
+    """The collection's full fields file when the masks used another (filtered) one."""
+    href = (collection.get("assets") or {}).get("fields", {}).get("href")
+    if not href or "://" in str(href):
+        return None
+    path = output_dir / str(href).removeprefix("./")
+    if not path.is_file() or (fields.exists() and path.resolve() == fields.resolve()):
+        return None
+    return path
+
+
+def _class_filtered(collection: dict, hidden: dict | None, all_fields_total: int | None) -> bool:
+    """Whether the masks' fields passed a class filter.
+
+    A ``fields_filtered`` asset comes from the class filter, from dropping hidden fields,
+    or both. The drop records how many fields it started from: all of the source's
+    fields means no class filter ran before it.
+    """
+    if "fields_filtered" not in (collection.get("assets") or {}):
+        return False
+    if hidden is None or all_fields_total is None:
+        return hidden is None or hidden.get("rows_in") is None
+    return hidden.get("rows_in") != all_fields_total
+
+
 def collect_stats(
     output_dir: Path | str,
     chips_parquet: Path | str,
@@ -499,10 +540,15 @@ def collect_stats(
     chips, fields = Path(chips_parquet), Path(fields_parquet)
     collection = _read_json(output_dir / "collection.json")
 
+    all_fields = _all_fields_file(collection, output_dir, fields)
+    top_crops, crop_basis = _top_crops(chips, fields)
+    hidden = hidden_fields.recorded(fields) if fields.exists() else None
+
     con = _connect()
     try:
         chips_total = _count(con, chips) if chips.exists() else 0
         fields_total = _count(con, fields) if fields.exists() else 0
+        all_fields_total = _count(con, all_fields) if all_fields else None
         quantiles = _coverage_quantiles(con, chips) if chips.exists() else {}
         chip_columns = _columns(con, chips) if chips.exists() else []
         field_columns = _columns(con, fields) if fields.exists() else []
@@ -518,12 +564,18 @@ def collect_stats(
         "split_counts": split_counts(chips) if chips.exists() else {},
         "coverage_quantiles": quantiles,
         "fields_total": fields_total,
-        "top_crops": _top_crops(chips, fields),
+        "fields_file": fields.name,
+        "all_fields_total": all_fields_total,
+        "all_fields_file": all_fields.name if all_fields else None,
+        "class_filtered": _class_filtered(collection, hidden, all_fields_total),
+        "top_crops": top_crops,
+        "crop_basis": crop_basis,
         "imagery": imagery,
         "mask_types": _mask_types(collection, output_dir),
         "chip_columns": chip_columns,
         "field_columns": field_columns,
         "field_ids_unique": ids_unique,
+        "hidden_fields": hidden,
         "item_properties": item_properties,
         "split_type": _split_type(collection, config_dict or {}),
         "chip_files": chip_files,
@@ -668,12 +720,61 @@ def _readme_title(collection: dict) -> str:
     return "\n\n".join(parts)
 
 
-def _contents_paragraph(stats: dict) -> str:
+def _polygons(count: int) -> str:
+    return f"{count:,} field polygon{'' if count == 1 else 's'}"
+
+
+def _field_count(stats: dict) -> str | None:
+    """The field polygons, saying which file holds them and which ones made the masks."""
+    used, used_file = stats["fields_total"], stats.get("fields_file")
+    total, all_file = stats.get("all_fields_total"), stats.get("all_fields_file")
+    if not used:
+        # The masks' fields file is missing; the source's count is still worth giving.
+        return f"{_polygons(total)} from the source (`{all_file}`)" if total and all_file else None
+    if not used_file:
+        return _polygons(used)
+    if stats.get("hidden_fields"):
+        return _field_count_without_hidden(stats)
+    if total is not None and all_file:
+        return (
+            f"{_polygons(total)} from the source (`{all_file}`), {used:,} of which "
+            f"pass the class filter (`{used_file}`) and make the masks"
+        )
+    if stats.get("class_filtered"):
+        verbs = ("passes", "makes") if used == 1 else ("pass", "make")
+        return (
+            f"{_polygons(used)} that {verbs[0]} the class filter (`{used_file}`) and "
+            f"{verbs[1]} the masks"
+        )
+    return f"{_polygons(used)} (`{used_file}`), all of them used for the masks"
+
+
+def _field_count_without_hidden(stats: dict) -> str:
+    """The field count of a build that dropped hidden fields, class filter and drop apart."""
+    used, used_file = stats["fields_total"], stats["fields_file"]
+    total, all_file = stats.get("all_fields_total"), stats.get("all_fields_file")
+    hidden = stats["hidden_fields"]
+    dropped, passed = int(hidden.get("dropped", 0)), hidden.get("rows_in")
+    steps = []
+    if total is not None and all_file:
+        steps.append(f"{_polygons(total)} from the source (`{all_file}`)")
+    if stats.get("class_filtered") and passed is not None:
+        steps.append(f"{passed:,} of which pass the class filter")
+    steps.append(f"{dropped:,} hidden under other fields left out")
+    verb = "makes" if used == 1 else "make"
+    return f"{', '.join(steps)}, leaving {used:,} (`{used_file}`) that {verb} the masks"
+
+
+def _counts(stats: dict) -> str:
     counts = [f"{stats['chips_total']:,} chips"]
-    if stats["fields_total"]:
-        counts.append(f"{stats['fields_total']:,} field polygons")
+    if fields := _field_count(stats):
+        counts.append(fields)
+    return _sentence_list(counts)
+
+
+def _contents_paragraph(stats: dict) -> str:
     return (
-        f"This collection holds {_sentence_list(counts)}. Each chip is a square STAC item "
+        f"This collection holds {_counts(stats)}. Each chip is a square STAC item "
         "carrying the label masks rasterized from the field boundaries that fall inside it."
     )
 
@@ -791,6 +892,7 @@ def _mask_notes(stats: dict, *, grid: bool = True) -> list[str]:
         _decode_note(stats, facts),
         *_chip_file_notes(stats),
         _narrow_field_note(stats, facts),
+        _hidden_fields_note(stats),
     ]
     return [note for note in notes if note]
 
@@ -821,6 +923,21 @@ def _narrow_field_note(stats: dict, facts: dict) -> str | None:
     if "instance_labels" in chip_files:
         text += ", but not in `<chip>_instance_labels.json`"
     return text + "."
+
+
+def _hidden_fields_note(stats: dict) -> str | None:
+    """How many fields were dropped because the instance mask could not show them."""
+    hidden = stats.get("hidden_fields")
+    if not hidden:
+        return None
+    count, share = int(hidden.get("dropped", 0)), float(hidden.get("share", 0))
+    fields = "field was" if count == 1 else "fields were"
+    return (
+        f"{count:,} {fields} left out of the masks, boundary lines, per-chip outlines and "
+        f"chip statistics because at least {share:.0%} of each lay under fields drawn over "
+        "it in the instance mask (duplicate or nested polygons it could not show). The "
+        "full fields table (`fields`) still has them."
+    )
 
 
 def _chip_file_notes(stats: dict) -> list[str]:
@@ -916,10 +1033,19 @@ def _readme_crops(stats: dict) -> str:
     if not crops:
         return ""
     rows = [[name or f"HCAT {code}", str(code), f"{share:.1%}"] for code, name, share in crops]
-    return (
-        "## Crops\n\n"
-        "Crops are harmonized to the EuroCrops HCAT taxonomy. The classes covering most "
-        "of this collection:\n\n" + _table(["crop", "HCAT code", "share"], rows)
+    covered = sum(share for _, _, share in crops)
+    if stats.get("crop_basis") == "chips":
+        lead = (
+            "The classes that are the dominant crop of the most chips. Each share is of "
+            f"all chips; together these classes are dominant in {covered:.1%} of them:"
+        )
+    else:
+        lead = (
+            "The classes covering most of the area of the fields that make the masks. Each "
+            f"share is of that whole area; together these classes cover {covered:.1%} of it:"
+        )
+    return f"## Crops\n\nCrops are harmonized to the EuroCrops HCAT taxonomy. {lead}\n\n" + _table(
+        ["crop", "HCAT code", "share"], rows
     )
 
 
@@ -1037,16 +1163,30 @@ def _readme_uses(stats: dict) -> str:
 
 def _limitation_lines(stats: dict) -> list[str]:
     """Caveats true of every FTW chip collection, plus the ones this collection earns."""
-    lines = [
-        "- Masks are derived from field boundaries declared for a given year; parcels that "
-        "changed shape, were subdivided or merged after that declaration are not reflected."
-    ]
+    presence_only = (stats.get("mask_facts") or {}).get("unknown") == "presence_only"
+    lines = [_PRESENCE_ONLY_SOURCE if presence_only else _DECLARED_SOURCE]
     lines += _imagery_caveats(stats.get("imagery"), stats.get("item_properties") or [])
-    lines.append(
-        "- Chips on the border of the source dataset may be only partly covered by field "
-        "boundaries, and empty area there means unmapped, not fieldless."
-    )
+    lines.append(_PRESENCE_ONLY_GAPS if presence_only else _DECLARED_GAPS)
     return lines
+
+
+_DECLARED_SOURCE = (
+    "- Masks are derived from field boundaries declared for a given year; parcels that "
+    "changed shape, were subdivided or merged after that declaration are not reflected."
+)
+_DECLARED_GAPS = (
+    "- Chips on the border of the source dataset may be only partly covered by field "
+    "boundaries, and empty area there means unmapped, not fieldless."
+)
+_PRESENCE_ONLY_SOURCE = (
+    "- Masks are derived from field outlines mapped for a given year, such as fields "
+    "digitised over imagery. They hold only the fields that were mapped: a field that was "
+    "missed, or that changed after it was mapped, is not reflected."
+)
+_PRESENCE_ONLY_GAPS = (
+    "- The labels say where fields are, not where they are not, so unlabelled area in any "
+    "chip, not only at the edge of the source dataset, may or may not be field."
+)
 
 
 def _imagery_caveats(imagery: dict | None, item_properties: list[str]) -> list[str]:
@@ -1162,10 +1302,7 @@ def render_readme(
 def _agents_overview(collection: dict, stats: dict) -> str:
     title = collection.get("title") or collection.get("id") or "Collection"
     lines = [f"# {title}", "", "## Overview", "", str(collection.get("description") or title)]
-    counts = [f"{stats['chips_total']:,} chips"]
-    if stats["fields_total"]:
-        counts.append(f"{stats['fields_total']:,} field polygons")
-    detail = f"It contains {_sentence_list(counts)}."
+    detail = f"It contains {_counts(stats)}."
     if stats["split_counts"]:
         splits = ", ".join(f"{name} {count:,}" for name, count in stats["split_counts"].items())
         detail += f" Chips are pre-assigned to benchmark splits ({splits})."
@@ -1305,12 +1442,15 @@ def _agents_quality(stats: dict) -> str:
             f"the bottom 5% sit at or below {low:.1f}%. Filter on `field_coverage_pct` when "
             "sparse chips would skew an evaluation."
         )
-    lines += [
-        "- Masks are derived from boundaries declared for one year; later parcel changes are "
-        "not reflected.",
-        "- Empty area inside a chip means unmapped, not necessarily fieldless.",
-        "- Chips on the dataset border may be only partly covered by the source boundaries.",
-    ]
+    if (stats.get("mask_facts") or {}).get("unknown") == "presence_only":
+        lines += [_PRESENCE_ONLY_SOURCE, _PRESENCE_ONLY_GAPS]
+    else:
+        lines += [
+            "- Masks are derived from boundaries declared for one year; later parcel changes "
+            "are not reflected.",
+            "- Empty area inside a chip means unmapped, not necessarily fieldless.",
+            "- Chips on the dataset border may be only partly covered by the source boundaries.",
+        ]
     lines += _imagery_caveats(stats.get("imagery"), stats.get("item_properties") or [])
     if stats.get("split_counts"):
         note = _split_quality_note(stats.get("split_type"))

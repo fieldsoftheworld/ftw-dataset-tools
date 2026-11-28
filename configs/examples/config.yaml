@@ -24,6 +24,7 @@ fields_file: austria_fields.parquet
 # downloaded once into the fetch cache and reused on later runs:
 # fields_file: https://data.source.coop/ftw/harmonized-field-data/lu/latest/lu.parquet
 # source_via: https://data.source.coop/ftw/harmonized-field-data/lu/collection.json  # written as a rel:via link
+# source_title: "Luxembourg field boundaries"  # the via link's title (needs source_via)
 
 # Output directory. If omitted, defaults to "{input_stem}-dataset".
 output_dir: ./austria-dataset
@@ -134,6 +135,12 @@ stages:
     # masks all reflect the filter. Omit for datasets without crop-type info.
     # See configs/examples/class_filter.yaml.
     # class_filter: class_filter.yaml
+    # Drop the fields the instance mask cannot show: duplicates and nested slivers
+    # with at least hidden_field_share of their area under fields burned over them.
+    # They get no pixels, boundary lines or outlines; the field that shows stays.
+    # Partial overlaps stay. The masks then read <name>_fields_filtered.parquet.
+    drop_hidden_fields: false
+    # hidden_field_share: 0.95
 
   stac:
     # Compute file:checksum (multihash sha256) for every asset. Optional and slow

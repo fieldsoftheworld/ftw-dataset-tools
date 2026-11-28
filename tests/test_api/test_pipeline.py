@@ -837,6 +837,180 @@ class TestFilterStage:
             pipeline.stage_stac(ctx)
 
 
+class TestDropHiddenFields:
+    """stages.masks.drop_hidden_fields: fields the instance mask can't show get no lines."""
+
+    HOST = box(18.002, 40.002, 18.006, 40.006)
+    # Nested inside HOST and burned before it, so HOST paints over it.
+    SLIVER = box(18.0035, 40.0035, 18.0045, 40.0045)
+    DUPLICATE = box(18.007, 40.002, 18.009, 40.004)
+
+    def _ctx(
+        self, tmp_path: Path, name: str, ids: tuple = (1, 2, 3, 4), **masks: object
+    ) -> pipeline.PipelineContext:
+        fields = tmp_path / f"src_{name}.parquet"
+        gpd.GeoDataFrame(
+            {"id": list(ids), "crop": ["wheat", "wheat", "maize", "rye"]},
+            geometry=[self.SLIVER, self.HOST, self.DUPLICATE, self.DUPLICATE],
+            crs="EPSG:4326",
+        ).to_parquet(fields)
+        mask_cfg = {
+            "mask_types": ["instance", "semantic_3_class"],
+            "resolution": 2.5,
+            "workers": 1,
+            **masks,
+        }
+        config = _config(fields, tmp_path / name, name="ds", year=2024, stages={"masks": mask_cfg})
+        ctx = pipeline.build_context(config)
+        ctx.output_dir.mkdir(parents=True)
+        ctx.chips_base_dir.mkdir()
+        gpd.GeoDataFrame(
+            {"id": ["cell_001"], "field_coverage_pct": [20.0]},
+            geometry=[box(18.0, 40.0, 18.01, 40.01)],
+            crs="EPSG:4326",
+        ).to_parquet(ctx.chips_path)
+        return ctx
+
+    @staticmethod
+    def _masks(ctx: pipeline.PipelineContext) -> dict:
+        import rasterio
+
+        chip = next(ctx.chips_base_dir.rglob("*_instance.tif")).parent
+        out = {"dir": chip}
+        for kind in ("instance", "semantic_3_class"):
+            with rasterio.open(next(chip.glob(f"*_{kind}.tif"))) as src:
+                out[kind], out["transform"], out["crs"] = src.read(1), src.transform, src.crs
+        return out
+
+    @staticmethod
+    def _inside(masks: dict, shape, inset_m: float = 5.0):
+        import shapely
+        from rasterio.features import geometry_mask
+
+        from ftw_dataset_tools.api.chip_grid import reprojector
+
+        interior = shapely.transform(shape, reprojector("EPSG:4326", masks["crs"]))
+        interior = interior.buffer(-inset_m)
+        return ~geometry_mask([interior], masks["instance"].shape, masks["transform"])
+
+    def test_off_changes_nothing(self, tmp_path: Path) -> None:
+        ctx = self._ctx(tmp_path, "off")
+        assert ctx.field_polygons_path == ctx.output_fields_path
+        assert "filter" not in pipeline.resolve_stages(config=ctx.config)
+        masks = ctx.config.config_dict()["stages"]["masks"]
+        assert "drop_hidden_fields" not in masks
+        assert "hidden_field_share" not in masks
+
+    def test_filter_stage_drops_hidden_fields(self, tmp_path: Path) -> None:
+        ctx = self._ctx(tmp_path, "on", drop_hidden_fields=True)
+        assert ctx.field_polygons_path.name == "ds_fields_filtered.parquet"
+        assert ctx.field_polygons_producer == "filter"
+        assert "filter" in pipeline.resolve_stages(config=ctx.config)
+
+        pipeline.run_pipeline(ctx, ["reproject", "filter"])
+
+        assert ctx.hidden_result is not None
+        assert ctx.hidden_result.dropped == 2
+        assert gpd.read_parquet(ctx.field_polygons_path)["id"].tolist() == [2, 4]
+        assert gpd.read_parquet(ctx.output_fields_path)["id"].tolist() == [1, 2, 3, 4]
+
+    def test_later_stages_refuse_fields_filtered_with_another_setting(self, tmp_path: Path) -> None:
+        ctx = self._ctx(tmp_path, "stale")
+        ctx.config.class_filter = ClassFilter("crop", ["wheat", "maize", "rye"], [])
+        pipeline.run_pipeline(ctx, ["reproject", "filter"])
+        pipeline.stage_boundaries(ctx)  # class filter only: nothing recorded, matches
+
+        # Turned on without rerunning the filter stage.
+        ctx.config.stages.masks.drop_hidden_fields = True
+        with pytest.raises(StageInputError, match="without dropping hidden fields"):
+            pipeline.stage_boundaries(ctx)
+        pipeline.run_pipeline(ctx, ["filter", "boundaries"])
+
+        # A different share, or turned off again.
+        ctx.config.stages.masks.hidden_field_share = 0.5
+        with pytest.raises(StageInputError, match="Rerun from the 'filter' stage"):
+            pipeline.stage_masks(ctx)
+        ctx.config.stages.masks.drop_hidden_fields = False
+        ctx.config.stages.masks.hidden_field_share = 0.95
+        with pytest.raises(StageInputError, match="Rerun from the 'filter' stage"):
+            pipeline.stage_chips(ctx)
+
+    def test_class_filter_runs_first(self, tmp_path: Path) -> None:
+        """A field the class filter drops is never burned, so it hides nothing."""
+        ctx = self._ctx(tmp_path, "both", drop_hidden_fields=True)
+        ctx.config.class_filter = ClassFilter("crop", ["wheat", "maize"], ["rye"])
+        pipeline.run_pipeline(ctx, ["reproject", "filter"])
+        # Without "rye" (id 4) over it, the duplicate with id 3 shows and stays.
+        assert gpd.read_parquet(ctx.field_polygons_path)["id"].tolist() == [2, 3]
+
+    def test_hidden_fields_get_no_lines_and_visible_pixels_stay(self, tmp_path: Path) -> None:
+        stages = ["reproject", "filter", "boundaries", "masks"]
+        off = self._ctx(tmp_path, "off")
+        pipeline.run_pipeline(off, [s for s in stages if s != "filter"])
+        on = self._ctx(tmp_path, "on", drop_hidden_fields=True)
+        pipeline.run_pipeline(on, stages)
+        before, after = self._masks(off), self._masks(on)
+
+        host = self._inside(after, self.HOST)
+        # Off, the sliver's outline is burned inside the field that shows.
+        assert (before["semantic_3_class"][host] == 2).any()
+        assert not (after["semantic_3_class"][host] == 2).any()
+        assert (after["instance"][host] == 2).all()
+        # The duplicate that shows keeps every pixel it had.
+        dup = self._inside(after, self.DUPLICATE, inset_m=0.0)
+        assert (before["instance"][dup] == 4).sum() > 100
+        assert (after["instance"][dup] == before["instance"][dup]).all()
+        # And the dropped fields are not among the chip's outlines.
+        outlines = next(after["dir"].glob("*_fields.parquet"))
+        assert sorted(gpd.read_parquet(outlines)["id"]) == [2, 4]
+
+    def test_skip_existing_rebuilds_masks_when_the_setting_changes(self, tmp_path: Path) -> None:
+        import rasterio
+
+        from ftw_dataset_tools.api import masks as masks_module
+
+        off = self._ctx(tmp_path, "run", skip_existing=True)
+        pipeline.run_pipeline(off, ["reproject", "boundaries", "masks"])
+        before = self._masks(off)
+        host = self._inside(before, self.HOST)
+        assert (before["semantic_3_class"][host] == 2).any()
+
+        config = off.config
+        config.stages.masks.drop_hidden_fields = True
+        on = pipeline.build_context(config)
+        pipeline.run_pipeline(on, ["filter", "boundaries", "masks"])
+        after = self._masks(on)
+
+        assert not (after["semantic_3_class"][host] == 2).any()
+        tif = next(after["dir"].glob("*_instance.tif"))
+        with rasterio.open(tif) as src:
+            tag = src.tags()[masks_module.HIDDEN_FIELDS_TAG]
+        assert json.loads(tag) == {"crop_column": None, "share": 0.95}
+        assert on.masks_results["instance"].masks_existing == 0
+
+        # Rerun unchanged: every mask is kept.
+        pipeline.run_pipeline(on, ["masks"])
+        assert on.masks_results["instance"].total_created == 0
+        assert on.masks_results["instance"].masks_existing == 1
+
+    def test_with_a_crop_column_the_field_that_shows_stays(self, tmp_path: Path) -> None:
+        """With a crop column the masks burn by id; the kept duplicate is the one shown."""
+        stages = ["reproject", "filter", "boundaries", "masks"]
+        # The duplicates are in the file as id 4, then id 3: by id, 4 is burned last.
+        ids = (1, 2, 4, 3)
+        off = self._ctx(tmp_path, "off", ids, crop_column="crop")
+        pipeline.run_pipeline(off, [s for s in stages if s != "filter"])
+        on = self._ctx(tmp_path, "on", ids, crop_column="crop", drop_hidden_fields=True)
+        pipeline.run_pipeline(on, stages)
+        before, after = self._masks(off), self._masks(on)
+
+        dup = self._inside(after, self.DUPLICATE, inset_m=0.0)
+        assert (after["instance"][dup] == before["instance"][dup]).all()
+        labels = json.loads(next(after["dir"].glob("*_instance_labels.json")).read_text())
+        shown = {row["field_id"] for row in labels["instances"]}
+        assert shown == {"2", "4"}
+
+
 class TestMasksStage:
     """stage_masks wiring: one pass over the chips, one result per requested type."""
 
