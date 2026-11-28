@@ -84,10 +84,23 @@ LICENSES = {
     "DL-DE-ZERO-2.0": "public-domain",
     "https://inspire.ec.europa.eu/metadata-codelist/ConditionsApplyingToAccessAndUse/"
     "noConditionsApply": "public-domain",
+    # The same INSPIRE code as metadata records write it (Croatia's ARKOD archives)
+    "http://inspire.ec.europa.eu/metadata-codelist/ConditionsApplyingToAccessAndUse/"
+    "noConditionsApply": "public-domain",
     "CC-BY-4.0": "attribution",
     "DL-DE-BY-2.0": "attribution",
     "https://etalab.gouv.fr/licence-ouverte-open-licence": "attribution",
     "https://data.vlaanderen.be/id/licentie/modellicentie-gratis-hergebruik/v1.0": "attribution",
+    # Catalonia's open information licence (reuse incl. commercial, cite the source); the old
+    # page and the one it now redirects to
+    "https://administraciodigital.gencat.cat/ca/dades/dades-obertes/informacio-practica/"
+    "llicencies/": "attribution",
+    "https://web.gencat.cat/ca/generalitat/dades-indicadors/dades-obertes/llicencies": (
+        "attribution"
+    ),
+    # Slovenia's crop data (KMRS): "Javno dostopni podatki, ni omejitve uporabe, citiranje vira
+    # obvezno" (eprostor.gov.si record 21ecba4a-1214-4617-8bf4-020d2f235a25)
+    "https://rkg.gov.si/vstop/": "attribution",
     "CC-BY-SA-4.0": "share-alike",
     "CC-BY-SA-3.0": "share-alike",
     "https://go.planet.com/nicfi-pla-2024": "non-commercial",  # NICFI imagery terms
@@ -98,6 +111,17 @@ LICENSES = {
     # St. Gallen: free public apps only; passing the data on needs approval
     "https://www.sg.ch/bauen/geoinformation/datenbezug/agb.html": "restricted",
 }
+
+# How a license link is titled for the categories that limit use; open terms keep "License".
+LICENSE_LABELS = {
+    "non-commercial": "Non-commercial use only",
+    "restricted": "Restricted use",
+}
+
+
+def license_label(license: str | None, license_url: str | None) -> str | None:
+    """A title saying how a dataset's terms limit use, or None for open or unknown terms."""
+    return LICENSE_LABELS.get(license_category(license, license_url))
 
 
 class ChipsTableError(Exception):

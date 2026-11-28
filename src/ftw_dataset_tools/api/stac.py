@@ -503,7 +503,10 @@ def _apply_collection_metadata(
     if metadata.license:
         collection.license = metadata.license
     if metadata.license_url:
-        collection.add_link(Link(rel="license", target=metadata.license_url, title="License"))
+        from ftw_dataset_tools.api.chips_table import license_label  # heavy; only here
+
+        title = license_label(metadata.license, metadata.license_url) or "License"
+        collection.add_link(Link(rel="license", target=metadata.license_url, title=title))
     if metadata.keywords:
         collection.keywords = list(metadata.keywords)
     if metadata.providers:

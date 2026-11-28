@@ -1068,6 +1068,17 @@ class TestCollectionMetadata:
         assert coll["license"] == "other"
         links = [link for link in coll["links"] if link["rel"] == "license"]
         assert links and links[0]["href"] == "https://rkg.gov.si/vstop/"
+        assert links[0]["title"] == "License"
+
+    def test_license_link_names_a_non_commercial_limit(self, tmp_path: Path) -> None:
+        import json
+
+        config = self._config(license="other", license_url="https://go.planet.com/nicfi-pla-2024")
+        result = build_catalog(tmp_path, config=config)
+
+        coll = json.loads(result.collection_path.read_text())
+        links = [link for link in coll["links"] if link["rel"] == "license"]
+        assert links[0]["title"] == "Non-commercial use only"
 
     def test_boundary_width_on_collection(self) -> None:
         from ftw_dataset_tools.api.config import DatasetConfig

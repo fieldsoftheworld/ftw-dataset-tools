@@ -898,6 +898,22 @@ class TestLicenseLink:
 
         assert "[Custom Terms](https://x.example/terms)" in text
 
+    def test_non_commercial_license_says_so_even_with_a_generic_link_title(self) -> None:
+        from ftw_dataset_tools.api.docs import _readme_provenance
+
+        nma = (
+            "https://www.geoportal.lt/metadata-catalog/catalog/search/resource/details.page"
+            "?uuid=%7B7AF3F5B2-DC58-4EC5-916C-813E994B2DCF%7D"
+        )
+        collection = {
+            "license": "other",
+            "links": [{"rel": "license", "href": nma, "title": "License"}],
+        }
+
+        text = _readme_provenance(collection, {})
+
+        assert f"[Non-commercial use only]({nma})" in text
+
     def test_other_license_with_untitled_rel_link_uses_a_generic_title(self) -> None:
         from ftw_dataset_tools.api.docs import _readme_provenance
 
