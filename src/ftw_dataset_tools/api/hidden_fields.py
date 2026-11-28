@@ -27,6 +27,7 @@ import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 
 import duckdb
@@ -252,7 +253,7 @@ def _exact_pairs(pairs: np.ndarray, wkbs: dict[int, bytes], share: float) -> np.
     """
     pairs = pairs[np.argsort(pairs[:, 0], kind="stable")]
     cuts = _task_cuts(pairs[:, 0])
-    tasks = [pairs[a:b] for a, b in zip(cuts[:-1], cuts[1:], strict=True)]
+    tasks = [pairs[a:b] for a, b in pairwise(cuts)]
     with ThreadPoolExecutor(min(_THREADS, os.cpu_count() or 1)) as pool:
         results = list(pool.map(lambda task: _overlaps(task, wkbs), tasks))
     overlap = np.concatenate([o for o, _ in results])
